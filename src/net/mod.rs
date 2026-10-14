@@ -2,8 +2,9 @@ pub mod icmp;
 pub mod ports;
 pub mod targets;
 
+use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -46,7 +47,7 @@ pub enum TcpState {
 /// TCP connect probe. Returns state and the connect time.
 pub fn tcp_probe(addr: SocketAddr, timeout: Duration) -> (TcpState, f64) {
     let start = Instant::now();
-    let r = TcpStream::connect_timeout(&addr, timeout);
+    let r = connect(addr, timeout);
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     let state = match r {
         Ok(_) => TcpState::Open,
@@ -57,6 +58,43 @@ pub fn tcp_probe(addr: SocketAddr, timeout: Duration) -> (TcpState, f64) {
         },
     };
     (state, ms)
+}
+
+fn connect(addr: SocketAddr, timeout: Duration) -> io::Result<()> {
+    let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    #[cfg(windows)]
+    no_syn_retransmit(&sock);
+    sock.connect_timeout(&addr.into(), timeout)
+}
+
+/// Windows resends the SYN after an RST (~2 s by default), so a refused
+/// port looks like a timeout. Disable SYN retransmission so RST fails fast.
+/// Unsupported before Windows 10 RS3; failure here just keeps the default.
+#[cfg(windows)]
+fn no_syn_retransmit(sock: &Socket) {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        SIO_TCP_INITIAL_RTO, TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS, TCP_INITIAL_RTO_PARAMETERS,
+        WSAIoctl,
+    };
+    let params = TCP_INITIAL_RTO_PARAMETERS {
+        Rtt: u16::MAX, // TCP_INITIAL_RTO_UNSPECIFIED_RTT: keep the default RTT
+        MaxSynRetransmissions: TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS as u8,
+    };
+    let mut returned = 0u32;
+    unsafe {
+        WSAIoctl(
+            sock.as_raw_socket() as _,
+            SIO_TCP_INITIAL_RTO,
+            (&params as *const TCP_INITIAL_RTO_PARAMETERS).cast(),
+            std::mem::size_of::<TCP_INITIAL_RTO_PARAMETERS>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+            None,
+        );
+    }
 }
 
 /// Run `f` over `items` on up to `workers` threads, stopping early on cancel.
