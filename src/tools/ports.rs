@@ -103,6 +103,10 @@ impl PortTool {
             .iter()
             .filter(|r| r.1 == TcpState::Open)
             .count();
+        let first_err = self.results.iter().find_map(|r| match &r.1 {
+            TcpState::Error(e) => Some(e.as_str()),
+            _ => None,
+        });
         ui.horizontal(|ui| {
             if let Some(ip) = self.target {
                 ui.label(RichText::new(ip.to_string()).strong());
@@ -114,6 +118,11 @@ impl PortTool {
                 widgets::copy_button(ui, || self.report());
             });
         });
+        if let Some(e) = first_err {
+            // Errors (no route, bad address, out of sockets) are always shown:
+            // hiding them would make a broken scan look like "0 open".
+            ui.label(RichText::new(format!("⚠ some probes failed: {e}")).color(BAD));
+        }
         if running && self.total > 0 {
             ui.add(
                 egui::ProgressBar::new(self.results.len() as f32 / self.total as f32)
@@ -121,41 +130,50 @@ impl PortTool {
             );
         }
 
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                egui::Grid::new("ports")
-                    .striped(true)
-                    .min_col_width(70.0)
-                    .show(ui, |ui| {
-                        for h in ["Port", "State", "Service", "Time"] {
-                            ui.strong(h);
-                        }
-                        ui.end_row();
-                        for (port, state, ms) in &self.results {
-                            if *state != TcpState::Open && !self.show_closed {
-                                continue;
-                            }
-                            ui.monospace(port.to_string());
-                            let (txt, c) = state_label(state);
-                            ui.label(RichText::new(txt).color(c));
-                            ui.label(service_name(*port));
-                            ui.label(if *state == TcpState::Open {
-                                widgets::fmt_ms(*ms)
-                            } else {
-                                String::new()
-                            });
-                            ui.end_row();
-                        }
+        // Virtualized: a full 1-65535 scan with closed ports shown stays fast.
+        let rows: Vec<&(u16, TcpState, f64)> = self
+            .results
+            .iter()
+            .filter(|r| self.show_closed || !matches!(r.1, TcpState::Closed | TcpState::Filtered))
+            .collect();
+        let cols = [70.0, 80.0, 120.0, 80.0];
+        ui.horizontal(|ui| {
+            for (h, w) in ["Port", "State", "Service", "Time"].iter().zip(cols) {
+                ui.add_sized([w, 18.0], egui::Label::new(RichText::new(*h).strong()));
+            }
+        });
+        let row_h = 18.0 + ui.spacing().item_spacing.y;
+        egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+            ui,
+            row_h,
+            rows.len(),
+            |ui, range| {
+                for (port, state, ms) in &rows[range] {
+                    let (txt, c) = state_label(state);
+                    let time = if *state == TcpState::Open {
+                        widgets::fmt_ms(*ms)
+                    } else {
+                        String::new()
+                    };
+                    ui.horizontal(|ui| {
+                        let cell = |ui: &mut Ui, w: f32, t: RichText| {
+                            ui.add_sized([w, 18.0], egui::Label::new(t));
+                        };
+                        cell(ui, cols[0], RichText::new(port.to_string()).monospace());
+                        cell(ui, cols[1], RichText::new(txt).color(c));
+                        cell(ui, cols[2], RichText::new(service_name(*port)));
+                        cell(ui, cols[3], RichText::new(time));
                     });
-            });
+                }
+            },
+        );
     }
 
     fn report(&self) -> String {
         let host = self.target.map(|i| i.to_string()).unwrap_or_default();
         let mut s = format!("Port scan of {} ({host})\n", self.host.trim());
         for (port, state, _) in &self.results {
-            if *state == TcpState::Open || self.show_closed {
+            if self.show_closed || !matches!(state, TcpState::Closed | TcpState::Filtered) {
                 s += &format!(
                     "{port:>5}  {:<9} {}\n",
                     state_label(state).0,

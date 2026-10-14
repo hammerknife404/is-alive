@@ -3,6 +3,7 @@ use crate::net::icmp::{self, EchoStatus};
 use crate::net::{self, TcpState};
 use crate::widgets::{self, Action, BAD, OK, WARN};
 use eframe::egui::{self, RichText, Ui};
+use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,37 @@ use std::time::{Duration, Instant};
 enum Mode {
     Icmp,
     Tcp,
+}
+
+/// Log lines kept for display/copy; stats cover the whole run regardless.
+const MAX_LINES: usize = 10_000;
+const CHART_POINTS: usize = 120;
+
+#[derive(Default)]
+struct Stats {
+    sent: usize,
+    recv: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+}
+
+impl Stats {
+    fn add(&mut self, rtt: Option<f64>) {
+        self.sent += 1;
+        if let Some(r) = rtt {
+            if self.recv == 0 || r < self.min {
+                self.min = r;
+            }
+            self.max = self.max.max(r);
+            self.sum += r;
+            self.recv += 1;
+        }
+    }
+
+    fn min_avg_max(&self) -> Option<(f64, f64, f64)> {
+        (self.recv > 0).then(|| (self.min, self.sum / self.recv as f64, self.max))
+    }
 }
 
 enum Ev {
@@ -29,8 +61,9 @@ pub struct PingTool {
     prefer_v6: bool,
     job: Option<Job<Ev>>,
     target: Option<IpAddr>,
-    lines: Vec<(bool, String)>,
-    samples: Vec<Option<f64>>,
+    lines: VecDeque<(bool, String)>,
+    samples: VecDeque<Option<f64>>,
+    stats: Stats,
     err: Option<String>,
 }
 
@@ -47,8 +80,9 @@ impl Default for PingTool {
             prefer_v6: false,
             job: None,
             target: None,
-            lines: Vec::new(),
-            samples: Vec::new(),
+            lines: VecDeque::new(),
+            samples: VecDeque::new(),
+            stats: Stats::default(),
             err: None,
         }
     }
@@ -59,8 +93,10 @@ impl PingTool {
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip) => self.target = Some(ip),
             Ev::Reply { ok, rtt, text } => {
-                self.samples.push(ok.then_some(rtt));
-                self.lines.push((ok, text));
+                let rtt = ok.then_some(rtt);
+                self.stats.add(rtt);
+                push_capped(&mut self.samples, rtt, CHART_POINTS);
+                push_capped(&mut self.lines, (ok, text), MAX_LINES);
             }
             Ev::Error(e) => self.err = Some(e),
         });
@@ -95,34 +131,24 @@ impl PingTool {
         ui.separator();
 
         self.stats_row(ui);
-        let tail = &self.samples[self.samples.len().saturating_sub(120)..];
-        widgets::latency_chart(ui, tail, 70.0);
+        widgets::latency_chart(ui, self.samples.make_contiguous(), 70.0);
         ui.add_space(4.0);
 
+        let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for (ok, line) in &self.lines {
+            .show_rows(ui, row_h, self.lines.len(), |ui, range| {
+                for (ok, line) in self.lines.range(range) {
                     let c = if *ok { ui.visuals().text_color() } else { BAD };
-                    ui.label(RichText::new(line).monospace().color(c));
+                    // No wrapping: show_rows needs a fixed row height.
+                    ui.add(egui::Label::new(RichText::new(line).monospace().color(c)).extend());
                 }
             });
     }
 
-    fn stats(&self) -> (usize, usize, Option<(f64, f64, f64)>) {
-        let sent = self.samples.len();
-        let rtts: Vec<f64> = self.samples.iter().flatten().copied().collect();
-        let mm = (!rtts.is_empty()).then(|| {
-            let min = rtts.iter().copied().fold(f64::MAX, f64::min);
-            let max = rtts.iter().copied().fold(0.0, f64::max);
-            (min, rtts.iter().sum::<f64>() / rtts.len() as f64, max)
-        });
-        (sent, rtts.len(), mm)
-    }
-
     fn stats_row(&self, ui: &mut Ui) {
-        let (sent, recv, mm) = self.stats();
+        let (sent, recv, mm) = (self.stats.sent, self.stats.recv, self.stats.min_avg_max());
         ui.horizontal(|ui| {
             if let Some(ip) = self.target {
                 ui.label(RichText::new(ip.to_string()).strong());
@@ -157,7 +183,10 @@ impl PingTool {
 
     fn report(&self) -> String {
         let mut s: String = self.lines.iter().map(|(_, l)| format!("{l}\n")).collect();
-        let (sent, recv, mm) = self.stats();
+        let (sent, recv, mm) = (self.stats.sent, self.stats.recv, self.stats.min_avg_max());
+        if sent > self.lines.len() {
+            s = format!("(showing last {} of {sent} replies)\n", self.lines.len()) + &s;
+        }
         s += &format!("\nSent {sent}, Received {recv}");
         if let Some((min, avg, max)) = mm {
             s += &format!(", Min {min:.1} ms, Avg {avg:.1} ms, Max {max:.1} ms");
@@ -170,6 +199,7 @@ impl PingTool {
         self.target = None;
         self.lines.clear();
         self.samples.clear();
+        self.stats = Stats::default();
         let host = self.host.trim().to_string();
         if host.is_empty() {
             self.err = Some("enter a host".into());
@@ -241,4 +271,36 @@ fn tcp_line(addr: SocketAddr, seq: u32, timeout: u32) -> Ev {
         TcpState::Error(e) => (false, format!("#{seq:<5} {addr} error: {e}")),
     };
     Ev::Reply { ok, rtt: ms, text }
+}
+
+fn push_capped<T>(q: &mut VecDeque<T>, v: T, cap: usize) {
+    if q.len() == cap {
+        q.pop_front();
+    }
+    q.push_back(v);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_track_whole_run() {
+        let mut s = Stats::default();
+        for r in [None, Some(5.0), Some(1.0), None, Some(3.0)] {
+            s.add(r);
+        }
+        assert_eq!((s.sent, s.recv), (5, 3));
+        assert_eq!(s.min_avg_max(), Some((1.0, 3.0, 5.0)));
+        assert_eq!(Stats::default().min_avg_max(), None);
+    }
+
+    #[test]
+    fn capped_queue_drops_oldest() {
+        let mut q = VecDeque::new();
+        for i in 0..5 {
+            push_capped(&mut q, i, 3);
+        }
+        assert_eq!(q, [2, 3, 4]);
+    }
 }
