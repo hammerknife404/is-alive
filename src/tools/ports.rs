@@ -1,0 +1,207 @@
+use crate::job::{Job, pump};
+use crate::net::ports::{PRESETS, parse_ports, service_name};
+use crate::net::{self, TcpState};
+use crate::widgets::{self, Action, BAD, OK, WARN};
+use eframe::egui::{self, RichText, Ui};
+use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
+
+enum Ev {
+    Resolved(IpAddr, usize),
+    Result(u16, TcpState, f64),
+    Error(String),
+}
+
+pub struct PortTool {
+    host: String,
+    ports: String,
+    timeout_ms: u32,
+    threads: usize,
+    show_closed: bool,
+    prefer_v6: bool,
+    job: Option<Job<Ev>>,
+    target: Option<IpAddr>,
+    total: usize,
+    results: Vec<(u16, TcpState, f64)>,
+    err: Option<String>,
+}
+
+impl Default for PortTool {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            ports: PRESETS[0].1.into(),
+            timeout_ms: 1500,
+            threads: 128,
+            show_closed: false,
+            prefer_v6: false,
+            job: None,
+            target: None,
+            total: 0,
+            results: Vec::new(),
+            err: None,
+        }
+    }
+}
+
+impl PortTool {
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let mut got = false;
+        let running = pump(&mut self.job, |ev| match ev {
+            Ev::Resolved(ip, n) => (self.target, self.total) = (Some(ip), n),
+            Ev::Result(p, s, ms) => {
+                self.results.push((p, s, ms));
+                got = true;
+            }
+            Ev::Error(e) => self.err = Some(e),
+        });
+        if got {
+            self.results.sort_by_key(|r| r.0);
+        }
+
+        let mut enter = false;
+        ui.horizontal(|ui| {
+            enter |= widgets::field(ui, "Host", &mut self.host, 220.0, "hostname or IP");
+            ui.separator();
+            match widgets::run_button(ui, running, enter) {
+                Action::Start => self.start(ui.ctx()),
+                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::None => {}
+            }
+        });
+        ui.horizontal(|ui| {
+            enter = widgets::field(
+                ui,
+                "Ports",
+                &mut self.ports,
+                ui.available_width() - 120.0,
+                "22,80,443,8000-8100",
+            );
+            ui.menu_button("Presets ▾", |ui| {
+                for (name, spec) in PRESETS {
+                    if ui.button(*name).on_hover_text(*spec).clicked() {
+                        self.ports = spec.to_string();
+                        ui.close();
+                    }
+                }
+            });
+        });
+        if enter && !running {
+            self.start(ui.ctx());
+        }
+        ui.horizontal(|ui| {
+            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
+            widgets::num(ui, "Threads", &mut self.threads, 1..=1024, "");
+            ui.checkbox(&mut self.show_closed, "Show closed/filtered");
+            ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+        });
+        widgets::error(ui, &self.err);
+        ui.separator();
+
+        let open = self
+            .results
+            .iter()
+            .filter(|r| r.1 == TcpState::Open)
+            .count();
+        ui.horizontal(|ui| {
+            if let Some(ip) = self.target {
+                ui.label(RichText::new(ip.to_string()).strong());
+                ui.separator();
+            }
+            ui.label(RichText::new(format!("{open} open")).color(OK));
+            ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::copy_button(ui, || self.report());
+            });
+        });
+        if running && self.total > 0 {
+            ui.add(
+                egui::ProgressBar::new(self.results.len() as f32 / self.total as f32)
+                    .show_percentage(),
+            );
+        }
+
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                egui::Grid::new("ports")
+                    .striped(true)
+                    .min_col_width(70.0)
+                    .show(ui, |ui| {
+                        for h in ["Port", "State", "Service", "Time"] {
+                            ui.strong(h);
+                        }
+                        ui.end_row();
+                        for (port, state, ms) in &self.results {
+                            if *state != TcpState::Open && !self.show_closed {
+                                continue;
+                            }
+                            ui.monospace(port.to_string());
+                            let (txt, c) = state_label(state);
+                            ui.label(RichText::new(txt).color(c));
+                            ui.label(service_name(*port));
+                            ui.label(if *state == TcpState::Open {
+                                widgets::fmt_ms(*ms)
+                            } else {
+                                String::new()
+                            });
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    fn report(&self) -> String {
+        let host = self.target.map(|i| i.to_string()).unwrap_or_default();
+        let mut s = format!("Port scan of {} ({host})\n", self.host.trim());
+        for (port, state, _) in &self.results {
+            if *state == TcpState::Open || self.show_closed {
+                s += &format!(
+                    "{port:>5}  {:<9} {}\n",
+                    state_label(state).0,
+                    service_name(*port)
+                );
+            }
+        }
+        s
+    }
+
+    fn start(&mut self, ctx: &egui::Context) {
+        self.err = None;
+        self.target = None;
+        self.results.clear();
+        self.total = 0;
+        let host = self.host.trim().to_string();
+        if host.is_empty() {
+            self.err = Some("enter a host".into());
+            return;
+        }
+        let ports = match parse_ports(&self.ports) {
+            Ok(p) => p,
+            Err(e) => return self.err = Some(e),
+        };
+        let timeout = Duration::from_millis(self.timeout_ms as u64);
+        let (threads, v6) = (self.threads, self.prefer_v6);
+
+        self.job = Some(Job::spawn(ctx, move |tx| {
+            let ip = match net::resolve(&host, v6) {
+                Ok(ip) => ip,
+                Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
+            };
+            tx.send(Ev::Resolved(ip, ports.len()));
+            net::par_for(&ports, threads, tx.cancel_flag(), |&p| {
+                let (state, ms) = net::tcp_probe(SocketAddr::new(ip, p), timeout);
+                tx.send(Ev::Result(p, state, ms));
+            });
+        }));
+    }
+}
+
+fn state_label(s: &TcpState) -> (&'static str, egui::Color32) {
+    match s {
+        TcpState::Open => ("open", OK),
+        TcpState::Closed => ("closed", BAD),
+        TcpState::Filtered => ("filtered", WARN),
+        TcpState::Error(_) => ("error", BAD),
+    }
+}

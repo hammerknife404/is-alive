@@ -1,0 +1,173 @@
+use crate::job::{Job, pump};
+use crate::net::icmp;
+use crate::net::{self, targets};
+use crate::widgets::{self, Action, OK};
+use eframe::egui::{self, RichText, Ui};
+use std::net::{IpAddr, Ipv4Addr};
+
+struct Host {
+    ip: Ipv4Addr,
+    rtt: f64,
+    ttl: Option<u8>,
+    name: Option<String>,
+}
+
+enum Ev {
+    Probed,
+    Alive(Host),
+}
+
+pub struct SweepTool {
+    range: String,
+    timeout_ms: u32,
+    threads: usize,
+    resolve_names: bool,
+    job: Option<Job<Ev>>,
+    total: usize,
+    probed: usize,
+    alive: Vec<Host>,
+    err: Option<String>,
+}
+
+impl Default for SweepTool {
+    fn default() -> Self {
+        Self {
+            range: "192.168.1.0/24".into(),
+            timeout_ms: 750,
+            threads: 64,
+            resolve_names: true,
+            job: None,
+            total: 0,
+            probed: 0,
+            alive: Vec::new(),
+            err: None,
+        }
+    }
+}
+
+impl SweepTool {
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let mut got = false;
+        let running = pump(&mut self.job, |ev| match ev {
+            Ev::Probed => self.probed += 1,
+            Ev::Alive(h) => {
+                self.alive.push(h);
+                got = true;
+            }
+        });
+        if got {
+            self.alive.sort_by_key(|h| h.ip);
+        }
+
+        let mut enter = false;
+        ui.horizontal(|ui| {
+            enter |= widgets::field(
+                ui,
+                "Range",
+                &mut self.range,
+                220.0,
+                "10.0.0.0/24 or 10.0.0.1-254",
+            );
+            ui.separator();
+            match widgets::run_button(ui, running, enter) {
+                Action::Start => self.start(ui.ctx()),
+                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::None => {}
+            }
+        });
+        ui.horizontal(|ui| {
+            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
+            widgets::num(ui, "Threads", &mut self.threads, 1..=512, "");
+            ui.checkbox(&mut self.resolve_names, "Resolve names");
+        });
+        widgets::error(ui, &self.err);
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{} alive", self.alive.len()))
+                    .color(OK)
+                    .strong(),
+            );
+            ui.label(format!("· {} / {} probed", self.probed, self.total));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::copy_button(ui, || self.report());
+            });
+        });
+        if running && self.total > 0 {
+            ui.add(
+                egui::ProgressBar::new(self.probed as f32 / self.total as f32).show_percentage(),
+            );
+        }
+
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                egui::Grid::new("sweep")
+                    .striped(true)
+                    .min_col_width(70.0)
+                    .show(ui, |ui| {
+                        for h in ["Address", "Time", "TTL", "Name"] {
+                            ui.strong(h);
+                        }
+                        ui.end_row();
+                        for h in &self.alive {
+                            ui.monospace(h.ip.to_string());
+                            ui.monospace(widgets::fmt_ms(h.rtt));
+                            ui.monospace(h.ttl.map(|t| t.to_string()).unwrap_or_default());
+                            ui.label(h.name.as_deref().unwrap_or(""));
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    fn report(&self) -> String {
+        let mut s = format!(
+            "Sweep of {}: {} alive\n",
+            self.range.trim(),
+            self.alive.len()
+        );
+        for h in &self.alive {
+            s += &format!(
+                "{:<15}  {:>6.1} ms  {}\n",
+                h.ip,
+                h.rtt,
+                h.name.as_deref().unwrap_or("")
+            );
+        }
+        s
+    }
+
+    fn start(&mut self, ctx: &egui::Context) {
+        self.err = None;
+        self.alive.clear();
+        self.probed = 0;
+        let ips = match targets::parse_range(&self.range) {
+            Ok(v) => v,
+            Err(e) => return self.err = Some(e),
+        };
+        self.total = ips.len();
+        let (timeout, threads, names) = (self.timeout_ms, self.threads, self.resolve_names);
+
+        self.job = Some(Job::spawn(ctx, move |tx| {
+            net::par_for(&ips, threads, tx.cancel_flag(), |&ip| {
+                let r = icmp::echo(IpAddr::V4(ip), 128, timeout, 32);
+                if r.is_reply() {
+                    let name = if names {
+                        net::reverse(IpAddr::V4(ip))
+                    } else {
+                        None
+                    };
+                    tx.send(Ev::Alive(Host {
+                        ip,
+                        rtt: r.rtt_ms,
+                        ttl: r.ttl,
+                        name,
+                    }));
+                }
+                tx.send(Ev::Probed);
+            });
+        }));
+    }
+}
