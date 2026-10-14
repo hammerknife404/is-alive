@@ -30,10 +30,23 @@ pub fn lookup_all(host: &str) -> io::Result<Vec<IpAddr>> {
     Ok(v)
 }
 
+/// PTR lookup. The answer comes from whoever controls the reverse zone,
+/// so control and bidi-override characters are stripped before display.
 pub fn reverse(ip: IpAddr) -> Option<String> {
     dns_lookup::lookup_addr(&ip)
         .ok()
-        .filter(|n| n != &ip.to_string())
+        .map(|n| sanitize(&n))
+        .filter(|n| !n.is_empty() && n != &ip.to_string())
+}
+
+fn sanitize(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(255)
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +139,16 @@ mod tests {
         assert_eq!(tcp_probe(open, Duration::from_secs(1)).0, TcpState::Open);
         drop(l);
         assert_eq!(tcp_probe(open, Duration::from_secs(1)).0, TcpState::Closed);
+    }
+
+    #[test]
+    fn sanitizes_ptr_names() {
+        assert_eq!(
+            sanitize("host.example\u{202E}moc.lapyap"),
+            "host.examplemoc.lapyap"
+        );
+        assert_eq!(sanitize("a\r\nb\x1b[31m"), "ab[31m");
+        assert_eq!(sanitize(&"x".repeat(300)).len(), 255);
     }
 
     #[test]
