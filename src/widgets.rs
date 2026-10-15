@@ -57,6 +57,36 @@ pub fn copy_button(ui: &mut Ui, text: impl FnOnce() -> String) {
     }
 }
 
+/// Save button: opens a native save dialog off the UI thread and writes `text`.
+pub fn save_button(ui: &mut Ui, stem: &str, text: impl FnOnce() -> String) {
+    if ui
+        .button("Save")
+        .on_hover_text("Save results to a text file")
+        .clicked()
+    {
+        save_text(format!("is-alive-{stem}.txt"), text());
+    }
+}
+
+pub fn save_text(file_name: String, text: String) {
+    std::thread::spawn(move || {
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&file_name)
+            .add_filter("Text", &["txt", "log"])
+            .save_file()
+        else {
+            return;
+        };
+        if let Err(e) = std::fs::write(&path, text) {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Save failed")
+                .set_description(format!("{}: {e}", path.display()))
+                .show();
+        }
+    });
+}
+
 pub fn error(ui: &mut Ui, err: &Option<String>) {
     if let Some(e) = err {
         ui.label(RichText::new(format!("⚠ {e}")).color(BAD));

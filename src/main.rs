@@ -1,6 +1,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod job;
+mod log;
 mod net;
 mod tools;
 mod widgets;
@@ -14,6 +15,7 @@ enum Tab {
     Trace,
     Sweep,
     Dns,
+    Results,
 }
 
 const TABS: &[(Tab, &str)] = &[
@@ -22,6 +24,7 @@ const TABS: &[(Tab, &str)] = &[
     (Tab::Trace, "Traceroute"),
     (Tab::Sweep, "Subnet Sweep"),
     (Tab::Dns, "DNS Lookup"),
+    (Tab::Results, "Results"),
 ];
 
 struct App {
@@ -31,10 +34,17 @@ struct App {
     trace: tools::trace::TraceTool,
     sweep: tools::sweep::SweepTool,
     dns: tools::dns::DnsTool,
+    log: log::Log,
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ping.poll();
+        self.ports.poll();
+        self.trace.poll();
+        self.sweep.poll();
+        self.dns.poll();
+        self.collect();
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -46,15 +56,125 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        // Jobs on hidden tabs keep running; their results queue until shown.
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Ping => self.ping.ui(ui),
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
             Tab::Sweep => self.sweep.ui(ui),
             Tab::Dns => self.dns.ui(ui),
+            Tab::Results => self.results_ui(ui),
         });
     }
+}
+
+impl App {
+    /// Move finished runs into the log.
+    fn collect(&mut self) {
+        let done = [
+            ("Ping", self.ping.take_finished()),
+            ("Port Check", self.ports.take_finished()),
+            ("Traceroute", self.trace.take_finished()),
+            ("Subnet Sweep", self.sweep.take_finished()),
+            ("DNS Lookup", self.dns.take_finished()),
+        ];
+        for (tool, run) in done {
+            if let Some((started, text)) = run {
+                self.log.push(log::Entry {
+                    tool,
+                    started,
+                    ended: log::now(),
+                    text,
+                });
+            }
+        }
+    }
+
+    /// Runs still in progress, with their live output.
+    fn running(&self) -> Vec<(&'static str, String, String)> {
+        [
+            ("Ping", self.ping.running_since(), self.ping.output()),
+            (
+                "Port Check",
+                self.ports.running_since(),
+                self.ports.output(),
+            ),
+            (
+                "Traceroute",
+                self.trace.running_since(),
+                self.trace.output(),
+            ),
+            (
+                "Subnet Sweep",
+                self.sweep.running_since(),
+                self.sweep.output(),
+            ),
+            ("DNS Lookup", self.dns.running_since(), self.dns.output()),
+        ]
+        .into_iter()
+        .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
+        .collect()
+    }
+
+    fn results_ui(&mut self, ui: &mut egui::Ui) {
+        let running = self.running();
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "{} logged run(s){}",
+                self.log.entries.len(),
+                if running.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} running", running.len())
+                }
+            ));
+            if self.log.dropped > 0 {
+                ui.weak(format!("({} oldest dropped)", self.log.dropped));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(!self.log.entries.is_empty(), |ui| {
+                    if ui.button("Clear").on_hover_text("Clear the log").clicked() {
+                        self.log.clear();
+                    }
+                    widgets::save_button(ui, "log", || self.log.render());
+                    widgets::copy_button(ui, || self.log.render());
+                });
+            });
+        });
+        ui.separator();
+        if self.log.entries.is_empty() && running.is_empty() {
+            ui.weak("No results yet. Finished runs from every tab are logged here with start/end times.");
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for (i, e) in self.log.entries.iter().enumerate() {
+                    entry_ui(ui, i, &e.header(), &e.text, || e.render());
+                }
+                for (tool, since, text) in &running {
+                    let header = format!("{tool}  started {since}, running…");
+                    entry_ui(ui, usize::MAX - tool.len(), &header, text, || {
+                        format!("=== {header} ===\n{}\n", text.trim_end())
+                    });
+                }
+            });
+    }
+}
+
+fn entry_ui(ui: &mut egui::Ui, id: usize, header: &str, text: &str, full: impl Fn() -> String) {
+    egui::CollapsingHeader::new(egui::RichText::new(header).strong())
+        .id_salt(("log", id))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                widgets::save_button(ui, "result", &full);
+                widgets::copy_button(ui, &full);
+            });
+            ui.add(
+                egui::Label::new(egui::RichText::new(text.trim_end()).monospace()).selectable(true),
+            );
+        });
 }
 
 fn main() -> eframe::Result {
@@ -77,6 +197,7 @@ fn main() -> eframe::Result {
                 trace: Default::default(),
                 sweep: Default::default(),
                 dns: Default::default(),
+                log: Default::default(),
             }))
         }),
     )

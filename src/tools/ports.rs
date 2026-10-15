@@ -20,6 +20,7 @@ pub struct PortTool {
     show_closed: bool,
     prefer_v6: bool,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     target: Option<IpAddr>,
     total: usize,
     results: Vec<(u16, TcpState, f64)>,
@@ -36,6 +37,7 @@ impl Default for PortTool {
             show_closed: false,
             prefer_v6: false,
             job: None,
+            run_started: None,
             target: None,
             total: 0,
             results: Vec::new(),
@@ -45,7 +47,9 @@ impl Default for PortTool {
 }
 
 impl PortTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
         let mut got = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip, n) => (self.target, self.total) = (Some(ip), n),
@@ -58,6 +62,11 @@ impl PortTool {
         if got {
             self.results.sort_by_key(|r| r.0);
         }
+        running
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -115,6 +124,7 @@ impl PortTool {
             ui.label(RichText::new(format!("{open} open")).color(OK));
             ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "ports", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
@@ -169,6 +179,25 @@ impl PortTool {
         );
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (!self.results.is_empty()).then(|| self.report())
+    }
+
     fn report(&self) -> String {
         let host = self.target.map(|i| i.to_string()).unwrap_or_default();
         let mut s = format!("Port scan of {} ({host})\n", self.host.trim());
@@ -201,6 +230,7 @@ impl PortTool {
         let timeout = Duration::from_millis(self.timeout_ms as u64);
         let (threads, v6) = (self.threads, self.prefer_v6);
 
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,

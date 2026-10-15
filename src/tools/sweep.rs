@@ -19,10 +19,12 @@ enum Ev {
 
 pub struct SweepTool {
     range: String,
+    detected: bool,
     timeout_ms: u32,
     threads: usize,
     resolve_names: bool,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     total: usize,
     probed: usize,
     alive: Vec<Host>,
@@ -33,10 +35,12 @@ impl Default for SweepTool {
     fn default() -> Self {
         Self {
             range: "192.168.1.0/24".into(),
+            detected: false,
             timeout_ms: 750,
             threads: 64,
             resolve_names: true,
             job: None,
+            run_started: None,
             total: 0,
             probed: 0,
             alive: Vec::new(),
@@ -46,7 +50,9 @@ impl Default for SweepTool {
 }
 
 impl SweepTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
         let mut got = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Probed => self.probed += 1,
@@ -58,6 +64,18 @@ impl SweepTool {
         if got {
             self.alive.sort_by_key(|h| h.ip);
         }
+        running
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        // First time the tab is shown: prefill with the host's own subnet.
+        if !self.detected {
+            self.detected = true;
+            if let Some(r) = targets::local_subnet() {
+                self.range = r;
+            }
+        }
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -91,6 +109,7 @@ impl SweepTool {
             );
             ui.label(format!("· {} / {} probed", self.probed, self.total));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "sweep", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
@@ -122,6 +141,25 @@ impl SweepTool {
             });
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (self.total > 0).then(|| self.report())
+    }
+
     fn report(&self) -> String {
         let mut s = format!(
             "Sweep of {}: {} alive\n",
@@ -150,6 +188,7 @@ impl SweepTool {
         self.total = ips.len();
         let (timeout, threads, names) = (self.timeout_ms, self.threads, self.resolve_names);
 
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             net::par_for(&ips, threads, tx.cancel_flag(), |&ip| {
                 let r = icmp::echo(IpAddr::V4(ip), 128, timeout, 32);

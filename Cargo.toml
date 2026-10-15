@@ -1,6 +1,6 @@
 [package]
 name = "is-alive"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, subnet sweep, DNS"
 license = "MIT"
@@ -9,6 +9,9 @@ license = "MIT"
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 dns-lookup = "4"
 socket2 = "0.6"
+if-addrs = "0.15"
+rfd = "0.17"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

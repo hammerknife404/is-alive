@@ -60,6 +60,7 @@ pub struct PingTool {
     size: u16,
     prefer_v6: bool,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     target: Option<IpAddr>,
     lines: VecDeque<(bool, String)>,
     samples: VecDeque<Option<f64>>,
@@ -79,6 +80,7 @@ impl Default for PingTool {
             size: 32,
             prefer_v6: false,
             job: None,
+            run_started: None,
             target: None,
             lines: VecDeque::new(),
             samples: VecDeque::new(),
@@ -89,8 +91,10 @@ impl Default for PingTool {
 }
 
 impl PingTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let running = pump(&mut self.job, |ev| match ev {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
+        pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip) => self.target = Some(ip),
             Ev::Reply { ok, rtt, text } => {
                 let rtt = ok.then_some(rtt);
@@ -99,7 +103,11 @@ impl PingTool {
                 push_capped(&mut self.lines, (ok, text), MAX_LINES);
             }
             Ev::Error(e) => self.err = Some(e),
-        });
+        })
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -176,9 +184,29 @@ impl PingTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "ping", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
+    }
+
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (self.stats.sent > 0).then(|| self.report())
     }
 
     fn report(&self) -> String {
@@ -210,6 +238,7 @@ impl PingTool {
         let interval = Duration::from_millis(self.interval_ms as u64);
         let timeout = self.timeout_ms;
 
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,

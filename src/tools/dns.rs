@@ -15,18 +15,25 @@ enum Ev {
 pub struct DnsTool {
     query: String,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     records: Vec<(String, String)>,
     took: Option<f64>,
     err: Option<String>,
 }
 
 impl DnsTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let running = pump(&mut self.job, |ev| match ev {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
+        pump(&mut self.job, |ev| match ev {
             Ev::Record(k, v) => self.records.push((k, v)),
             Ev::Done(ms) => self.took = Some(ms),
             Ev::Error(e) => self.err = Some(e),
-        });
+        })
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -57,12 +64,8 @@ impl DnsTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::copy_button(ui, || {
-                    self.records
-                        .iter()
-                        .map(|(k, v)| format!("{k:<5} {v}\n"))
-                        .collect()
-                });
+                widgets::save_button(ui, "dns", || self.report());
+                widgets::copy_button(ui, || self.report());
             });
         });
         egui::ScrollArea::vertical()
@@ -81,6 +84,33 @@ impl DnsTool {
             });
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (!self.records.is_empty()).then(|| self.report())
+    }
+
+    fn report(&self) -> String {
+        let mut s = format!("DNS lookup of {}\n", self.query.trim());
+        for (k, v) in &self.records {
+            s += &format!("{k:<5} {v}\n");
+        }
+        s
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.took = None;
@@ -90,6 +120,7 @@ impl DnsTool {
             self.err = Some("enter a name or IP".into());
             return;
         }
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();
             if let Ok(ip) = q.parse::<IpAddr>() {
