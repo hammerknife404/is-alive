@@ -53,13 +53,19 @@ impl Default for TraceTool {
 }
 
 impl TraceTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let running = pump(&mut self.job, |ev| match ev {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
+        pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip) => self.target = Some(ip),
             Ev::Hop(h) => self.hops.push(h),
             Ev::Done(r) => self.reached = Some(r),
             Ev::Error(e) => self.err = Some(e),
-        });
+        })
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -90,6 +96,7 @@ impl TraceTool {
                 None => {}
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "traceroute", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
@@ -119,6 +126,11 @@ impl TraceTool {
                         }
                     });
             });
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (!self.hops.is_empty()).then(|| self.report())
     }
 
     fn report(&self) -> String {

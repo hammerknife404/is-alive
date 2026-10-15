@@ -14,6 +14,7 @@ enum Tab {
     Trace,
     Sweep,
     Dns,
+    Results,
 }
 
 const TABS: &[(Tab, &str)] = &[
@@ -22,6 +23,7 @@ const TABS: &[(Tab, &str)] = &[
     (Tab::Trace, "Traceroute"),
     (Tab::Sweep, "Subnet Sweep"),
     (Tab::Dns, "DNS Lookup"),
+    (Tab::Results, "Results"),
 ];
 
 struct App {
@@ -35,6 +37,11 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ping.poll();
+        self.ports.poll();
+        self.trace.poll();
+        self.sweep.poll();
+        self.dns.poll();
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -46,14 +53,74 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        // Jobs on hidden tabs keep running; their results queue until shown.
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Ping => self.ping.ui(ui),
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
             Tab::Sweep => self.sweep.ui(ui),
             Tab::Dns => self.dns.ui(ui),
+            Tab::Results => self.results_ui(ui),
         });
+    }
+}
+
+impl App {
+    /// Every tool's current output, in tab order; tools that haven't run are skipped.
+    fn outputs(&self) -> Vec<(&'static str, String)> {
+        [
+            ("Ping", self.ping.output()),
+            ("Port Check", self.ports.output()),
+            ("Traceroute", self.trace.output()),
+            ("Subnet Sweep", self.sweep.output()),
+            ("DNS Lookup", self.dns.output()),
+        ]
+        .into_iter()
+        .filter_map(|(name, out)| Some((name, out?)))
+        .collect()
+    }
+
+    fn results_ui(&mut self, ui: &mut egui::Ui) {
+        let outputs = self.outputs();
+        let all = || {
+            outputs
+                .iter()
+                .map(|(name, text)| format!("=== {name} ===\n{}\n", text.trim_end()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        ui.horizontal(|ui| {
+            ui.label(format!("{} tool(s) with results", outputs.len()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_enabled_ui(!outputs.is_empty(), |ui| {
+                    widgets::save_button(ui, "results", all);
+                    widgets::copy_button(ui, all);
+                });
+            });
+        });
+        ui.separator();
+        if outputs.is_empty() {
+            ui.weak("No results yet. Run something in another tab and it shows up here.");
+            return;
+        }
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                for (name, text) in &outputs {
+                    egui::CollapsingHeader::new(egui::RichText::new(*name).strong())
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let stem = name.to_lowercase().replace(' ', "-");
+                                widgets::save_button(ui, &stem, || text.clone());
+                                widgets::copy_button(ui, || text.clone());
+                            });
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(text.trim_end()).monospace())
+                                    .selectable(true),
+                            );
+                        });
+                }
+            });
     }
 }
 

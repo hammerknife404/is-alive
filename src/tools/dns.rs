@@ -21,12 +21,18 @@ pub struct DnsTool {
 }
 
 impl DnsTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let running = pump(&mut self.job, |ev| match ev {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
+        pump(&mut self.job, |ev| match ev {
             Ev::Record(k, v) => self.records.push((k, v)),
             Ev::Done(ms) => self.took = Some(ms),
             Ev::Error(e) => self.err = Some(e),
-        });
+        })
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -57,12 +63,8 @@ impl DnsTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::copy_button(ui, || {
-                    self.records
-                        .iter()
-                        .map(|(k, v)| format!("{k:<5} {v}\n"))
-                        .collect()
-                });
+                widgets::save_button(ui, "dns", || self.report());
+                widgets::copy_button(ui, || self.report());
             });
         });
         egui::ScrollArea::vertical()
@@ -79,6 +81,19 @@ impl DnsTool {
                         }
                     });
             });
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (!self.records.is_empty()).then(|| self.report())
+    }
+
+    fn report(&self) -> String {
+        let mut s = format!("DNS lookup of {}\n", self.query.trim());
+        for (k, v) in &self.records {
+            s += &format!("{k:<5} {v}\n");
+        }
+        s
     }
 
     fn start(&mut self, ctx: &egui::Context) {

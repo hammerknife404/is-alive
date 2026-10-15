@@ -89,8 +89,10 @@ impl Default for PingTool {
 }
 
 impl PingTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        let running = pump(&mut self.job, |ev| match ev {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
+        pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip) => self.target = Some(ip),
             Ev::Reply { ok, rtt, text } => {
                 let rtt = ok.then_some(rtt);
@@ -99,7 +101,11 @@ impl PingTool {
                 push_capped(&mut self.lines, (ok, text), MAX_LINES);
             }
             Ev::Error(e) => self.err = Some(e),
-        });
+        })
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -176,9 +182,15 @@ impl PingTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "ping", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (self.stats.sent > 0).then(|| self.report())
     }
 
     fn report(&self) -> String {

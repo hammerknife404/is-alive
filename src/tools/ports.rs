@@ -45,7 +45,9 @@ impl Default for PortTool {
 }
 
 impl PortTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
         let mut got = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip, n) => (self.target, self.total) = (Some(ip), n),
@@ -58,6 +60,11 @@ impl PortTool {
         if got {
             self.results.sort_by_key(|r| r.0);
         }
+        running
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -115,6 +122,7 @@ impl PortTool {
             ui.label(RichText::new(format!("{open} open")).color(OK));
             ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "ports", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
@@ -167,6 +175,11 @@ impl PortTool {
                 }
             },
         );
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (!self.results.is_empty()).then(|| self.report())
     }
 
     fn report(&self) -> String {

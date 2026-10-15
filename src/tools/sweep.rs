@@ -48,14 +48,9 @@ impl Default for SweepTool {
 }
 
 impl SweepTool {
-    pub fn ui(&mut self, ui: &mut Ui) {
-        // First time the tab is shown: prefill with the host's own subnet.
-        if !self.detected {
-            self.detected = true;
-            if let Some(r) = targets::local_subnet() {
-                self.range = r;
-            }
-        }
+    /// Drain worker messages. Called every frame so results stay current
+    /// while another tab is shown.
+    pub fn poll(&mut self) -> bool {
         let mut got = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Probed => self.probed += 1,
@@ -67,6 +62,18 @@ impl SweepTool {
         if got {
             self.alive.sort_by_key(|h| h.ip);
         }
+        running
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        // First time the tab is shown: prefill with the host's own subnet.
+        if !self.detected {
+            self.detected = true;
+            if let Some(r) = targets::local_subnet() {
+                self.range = r;
+            }
+        }
+        let running = self.poll();
 
         let mut enter = false;
         ui.horizontal(|ui| {
@@ -100,6 +107,7 @@ impl SweepTool {
             );
             ui.label(format!("· {} / {} probed", self.probed, self.total));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                widgets::save_button(ui, "sweep", || self.report());
                 widgets::copy_button(ui, || self.report());
             });
         });
@@ -129,6 +137,11 @@ impl SweepTool {
                         }
                     });
             });
+    }
+
+    /// Report text for the Results tab; None until something has run.
+    pub fn output(&self) -> Option<String> {
+        (self.total > 0).then(|| self.report())
     }
 
     fn report(&self) -> String {
