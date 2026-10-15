@@ -11,6 +11,7 @@ dns-lookup = "4"
 socket2 = "0.6"
 if-addrs = "0.15"
 rfd = "0.17"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

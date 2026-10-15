@@ -24,6 +24,7 @@ pub struct SweepTool {
     threads: usize,
     resolve_names: bool,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     total: usize,
     probed: usize,
     alive: Vec<Host>,
@@ -39,6 +40,7 @@ impl Default for SweepTool {
             threads: 64,
             resolve_names: true,
             job: None,
+            run_started: None,
             total: 0,
             probed: 0,
             alive: Vec::new(),
@@ -139,6 +141,20 @@ impl SweepTool {
             });
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
     /// Report text for the Results tab; None until something has run.
     pub fn output(&self) -> Option<String> {
         (self.total > 0).then(|| self.report())
@@ -172,6 +188,7 @@ impl SweepTool {
         self.total = ips.len();
         let (timeout, threads, names) = (self.timeout_ms, self.threads, self.resolve_names);
 
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             net::par_for(&ips, threads, tx.cancel_flag(), |&ip| {
                 let r = icmp::echo(IpAddr::V4(ip), 128, timeout, 32);

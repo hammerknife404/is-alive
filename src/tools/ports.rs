@@ -20,6 +20,7 @@ pub struct PortTool {
     show_closed: bool,
     prefer_v6: bool,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     target: Option<IpAddr>,
     total: usize,
     results: Vec<(u16, TcpState, f64)>,
@@ -36,6 +37,7 @@ impl Default for PortTool {
             show_closed: false,
             prefer_v6: false,
             job: None,
+            run_started: None,
             target: None,
             total: 0,
             results: Vec::new(),
@@ -177,6 +179,20 @@ impl PortTool {
         );
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
     /// Report text for the Results tab; None until something has run.
     pub fn output(&self) -> Option<String> {
         (!self.results.is_empty()).then(|| self.report())
@@ -214,6 +230,7 @@ impl PortTool {
         let timeout = Duration::from_millis(self.timeout_ms as u64);
         let (threads, v6) = (self.threads, self.prefer_v6);
 
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,

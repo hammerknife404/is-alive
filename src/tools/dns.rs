@@ -15,6 +15,7 @@ enum Ev {
 pub struct DnsTool {
     query: String,
     job: Option<Job<Ev>>,
+    run_started: Option<String>,
     records: Vec<(String, String)>,
     took: Option<f64>,
     err: Option<String>,
@@ -83,6 +84,20 @@ impl DnsTool {
             });
     }
 
+    /// Start time and logged text of a run that has just ended, once.
+    pub fn take_finished(&mut self) -> Option<(String, String)> {
+        if self.job.is_some() {
+            return None;
+        }
+        let started = self.run_started.take()?;
+        Some((started, crate::log::body(self.output(), &self.err)))
+    }
+
+    /// Start time of the run in progress.
+    pub fn running_since(&self) -> Option<&str> {
+        self.job.as_ref().and(self.run_started.as_deref())
+    }
+
     /// Report text for the Results tab; None until something has run.
     pub fn output(&self) -> Option<String> {
         (!self.records.is_empty()).then(|| self.report())
@@ -105,6 +120,7 @@ impl DnsTool {
             self.err = Some("enter a name or IP".into());
             return;
         }
+        self.run_started = Some(crate::log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();
             if let Ok(ip) = q.parse::<IpAddr>() {
