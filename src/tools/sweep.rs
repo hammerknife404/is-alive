@@ -19,6 +19,7 @@ enum Ev {
 
 pub struct SweepTool {
     range: String,
+    detected: bool,
     timeout_ms: u32,
     threads: usize,
     resolve_names: bool,
@@ -33,6 +34,7 @@ impl Default for SweepTool {
     fn default() -> Self {
         Self {
             range: "192.168.1.0/24".into(),
+            detected: false,
             timeout_ms: 750,
             threads: 64,
             resolve_names: true,
@@ -47,6 +49,13 @@ impl Default for SweepTool {
 
 impl SweepTool {
     pub fn ui(&mut self, ui: &mut Ui) {
+        // First time the tab is shown: prefill with the host's own subnet.
+        if !self.detected {
+            self.detected = true;
+            if let Some(r) = targets::local_subnet() {
+                self.range = r;
+            }
+        }
         let mut got = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Probed => self.probed += 1,
