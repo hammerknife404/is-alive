@@ -177,6 +177,17 @@ impl SweepTool {
         s
     }
 
+    /// Start a run with the given target (used by the full scan).
+    pub fn run(&mut self, ctx: &egui::Context, range: &str) {
+        self.range = range.into();
+        self.detected = true;
+        self.start(ctx);
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.job.is_some()
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.alive.clear();

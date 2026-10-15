@@ -5,26 +5,14 @@ use std::net::Ipv4Addr;
 pub const MAX_HOSTS: usize = 65_536;
 
 /// The host's subnet on its default-route interface, as CIDR. Networks
-/// wider than /24 are narrowed to the host's /24 so a first sweep stays quick.
+/// wider than /22 (1022 hosts) are narrowed to the host's /22 so a sweep stays quick.
 pub fn local_subnet() -> Option<String> {
-    // Connecting a UDP socket only does a route lookup; nothing is sent.
-    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("192.0.2.1:9").ok()?;
-    let std::net::IpAddr::V4(ip) = sock.local_addr().ok()?.ip() else {
-        return None;
-    };
-    let mask = if_addrs::get_if_addrs()
-        .ok()?
-        .into_iter()
-        .find_map(|i| match i.addr {
-            if_addrs::IfAddr::V4(a) if a.ip == ip => Some(a.netmask),
-            _ => None,
-        })?;
-    Some(subnet_cidr(ip, mask))
+    let (ip, bits) = super::hostinfo::lan()?;
+    Some(subnet_cidr(ip, bits))
 }
 
-fn subnet_cidr(ip: Ipv4Addr, mask: Ipv4Addr) -> String {
-    let bits = u32::from(mask).leading_ones().clamp(24, 32);
+pub fn subnet_cidr(ip: Ipv4Addr, prefix: u32) -> String {
+    let bits = prefix.clamp(22, 32);
     let net = u32::from(ip) & (u32::MAX << (32 - bits));
     format!("{}/{bits}", Ipv4Addr::from(net))
 }
@@ -90,18 +78,10 @@ mod tests {
     #[test]
     fn subnet_cidr_narrows_wide_networks() {
         let ip = Ipv4Addr::new(10, 1, 2, 3);
-        assert_eq!(
-            subnet_cidr(ip, Ipv4Addr::new(255, 255, 255, 0)),
-            "10.1.2.0/24"
-        );
-        assert_eq!(
-            subnet_cidr(ip, Ipv4Addr::new(255, 255, 255, 240)),
-            "10.1.2.0/28"
-        );
-        assert_eq!(
-            subnet_cidr(ip, Ipv4Addr::new(255, 255, 0, 0)),
-            "10.1.2.0/24"
-        );
+        assert_eq!(subnet_cidr(ip, 24), "10.1.2.0/24");
+        assert_eq!(subnet_cidr(ip, 28), "10.1.2.0/28");
+        assert_eq!(subnet_cidr(ip, 23), "10.1.2.0/23");
+        assert_eq!(subnet_cidr(ip, 16), "10.1.0.0/22");
     }
 
     #[test]

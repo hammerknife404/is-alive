@@ -1,3 +1,4 @@
+pub mod hostinfo;
 pub mod icmp;
 pub mod ports;
 pub mod targets;
