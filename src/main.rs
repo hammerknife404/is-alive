@@ -148,6 +148,14 @@ impl App {
         self.info.gateway = local.gateway;
         self.refresh_info(ctx);
 
+        let now = log::now();
+        self.log.push(log::Entry {
+            tool: "Host info",
+            started: now.clone(),
+            ended: now,
+            text: self.info.summary(),
+        });
+
         let gw = local.gateway.map(|g| g.to_string());
         self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
         if let Some(gw) = &gw {

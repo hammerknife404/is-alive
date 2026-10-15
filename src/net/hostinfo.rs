@@ -21,6 +21,17 @@ impl HostInfo {
         }
     }
 
+    pub fn summary(&self) -> String {
+        let na = || "unknown".to_string();
+        format!(
+            "LAN      {}\nGateway  {}\nWAN      {}\n",
+            self.lan
+                .map_or_else(na, |(ip, bits)| format!("{ip}/{bits}")),
+            self.gateway.map_or_else(na, |g| g.to_string()),
+            self.wan.map_or_else(na, |w| w.to_string()),
+        )
+    }
+
     /// Everything, including one DNS query for the public address.
     pub fn fetch() -> Self {
         Self {
