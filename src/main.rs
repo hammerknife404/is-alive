@@ -7,6 +7,14 @@ mod tools;
 mod widgets;
 
 use eframe::egui;
+use job::{Job, pump};
+use net::hostinfo::HostInfo;
+
+/// Internet target for the full scan's traceroute (and ping when there's no gateway).
+const WAN_TARGET: &str = "1.1.1.1";
+const DNS_TEST_NAME: &str = "cloudflare.com";
+const FULL_SCAN_TIP: &str = "Full scan: pings your gateway, checks its common ports, traces the route to the \
+internet, tests DNS and sweeps your LAN, all at once. Opens Results to watch them run.";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -35,6 +43,8 @@ struct App {
     sweep: tools::sweep::SweepTool,
     dns: tools::dns::DnsTool,
     log: log::Log,
+    info: HostInfo,
+    info_job: Option<Job<HostInfo>>,
 }
 
 impl eframe::App for App {
@@ -45,16 +55,66 @@ impl eframe::App for App {
         self.sweep.poll();
         self.dns.poll();
         self.collect();
+        pump(&mut self.info_job, |i| self.info = i);
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.heading("is-alive");
+                let busy = self.any_running();
+                let tip = if busy {
+                    "Wait for running tools to finish (or stop them) to run a full scan."
+                } else {
+                    FULL_SCAN_TIP
+                };
+                let b = ui
+                    .add_enabled(
+                        !busy,
+                        egui::Button::new(egui::RichText::new("is-alive").heading()),
+                    )
+                    .on_hover_text(tip)
+                    .on_disabled_hover_text(tip);
+                if b.clicked() {
+                    self.full_scan(ui.ctx());
+                }
                 ui.separator();
                 for (tab, name) in TABS {
                     ui.selectable_value(&mut self.tab, *tab, *name);
                 }
             });
             ui.add_space(2.0);
+        });
+        egui::Panel::bottom("footer").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let i = &self.info;
+                let na = || "unknown".to_string();
+                ui.label(format!(
+                    "LAN {}",
+                    i.lan.map_or_else(na, |(ip, bits)| format!("{ip}/{bits}"))
+                ));
+                ui.separator();
+                ui.label(format!(
+                    "Gateway {}",
+                    i.gateway.map_or_else(na, |g| g.to_string())
+                ));
+                ui.separator();
+                let wan = match (i.wan, self.info_job.is_some()) {
+                    (Some(w), _) => w.to_string(),
+                    (None, true) => "looking up…".into(),
+                    (None, false) => na(),
+                };
+                ui.label(format!("WAN {wan}"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            self.info_job.is_none(),
+                            egui::Button::new("Refresh").small(),
+                        )
+                        .on_hover_text("Re-read LAN, gateway and public IP")
+                        .clicked()
+                    {
+                        self.refresh_info(ui.ctx());
+                    }
+                });
+            });
         });
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Ping => self.ping.ui(ui),
@@ -68,6 +128,39 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn refresh_info(&mut self, ctx: &egui::Context) {
+        self.info_job = Some(Job::spawn(ctx, |tx| tx.send(HostInfo::fetch())));
+    }
+
+    fn any_running(&self) -> bool {
+        self.ping.is_running()
+            || self.ports.is_running()
+            || self.trace.is_running()
+            || self.sweep.is_running()
+            || self.dns.is_running()
+    }
+
+    /// Run every tool against this machine's network and switch to Results.
+    fn full_scan(&mut self, ctx: &egui::Context) {
+        // LAN and gateway are re-read now; the WAN address refreshes alongside.
+        let local = HostInfo::local();
+        self.info.lan = local.lan;
+        self.info.gateway = local.gateway;
+        self.refresh_info(ctx);
+
+        let gw = local.gateway.map(|g| g.to_string());
+        self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
+        if let Some(gw) = &gw {
+            self.ports.run(ctx, gw);
+        }
+        self.trace.run(ctx, WAN_TARGET);
+        self.dns.run(ctx, DNS_TEST_NAME);
+        if let Some((ip, bits)) = local.lan {
+            self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
+        }
+        self.tab = Tab::Results;
+    }
+
     /// Move finished runs into the log.
     fn collect(&mut self) {
         let done = [
@@ -189,8 +282,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "is-alive",
         options,
-        Box::new(|_cc| {
-            Ok(Box::new(App {
+        Box::new(|cc| {
+            let mut app = App {
                 tab: Tab::Ping,
                 ping: Default::default(),
                 ports: Default::default(),
@@ -198,7 +291,11 @@ fn main() -> eframe::Result {
                 sweep: Default::default(),
                 dns: Default::default(),
                 log: Default::default(),
-            }))
+                info: HostInfo::local(),
+                info_job: None,
+            };
+            app.refresh_info(&cc.egui_ctx);
+            Ok(Box::new(app))
         }),
     )
 }

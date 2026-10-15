@@ -167,6 +167,16 @@ impl TraceTool {
         s
     }
 
+    /// Start a run with the given target (used by the full scan).
+    pub fn run(&mut self, ctx: &egui::Context, host: &str) {
+        self.host = host.into();
+        self.start(ctx);
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.job.is_some()
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.target = None;
