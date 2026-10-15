@@ -1,7 +1,8 @@
 //! ICMP echo. On Windows this uses the IP Helper API (IcmpSendEcho2 /
 //! Icmp6SendEcho2), which needs no admin rights and no raw sockets.
-//! Other platforms shell out to the system `ping` so the app can be
-//! developed and tested off Windows.
+//! On Linux it uses unprivileged ICMP datagram ("ping") sockets, falling
+//! back to the system `ping` when `net.ipv4.ping_group_range` excludes
+//! the user. Other platforms shell out to `ping`.
 
 use std::net::IpAddr;
 
@@ -201,8 +202,350 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 mod imp {
+    use super::{EchoResult, EchoStatus};
+    use std::io;
+    use std::mem::{size_of, zeroed};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// Set once ping sockets are refused; later probes go straight to `ping`.
+    static NO_PING_SOCKET: AtomicBool = AtomicBool::new(false);
+    static SEQ: AtomicU16 = AtomicU16::new(1);
+
+    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
+        if !NO_PING_SOCKET.load(Ordering::Relaxed) {
+            match socket_echo(dest, ttl, timeout_ms, size) {
+                Ok(r) => return r,
+                Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => {
+                    NO_PING_SOCKET.store(true, Ordering::Relaxed);
+                }
+                Err(e) => return fail(e.to_string()),
+            }
+        }
+        super::cmd::echo(dest, ttl, timeout_ms, size)
+    }
+
+    fn cvt(r: libc::c_int) -> io::Result<libc::c_int> {
+        if r < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(r)
+        }
+    }
+
+    fn setopt(fd: &OwnedFd, level: i32, name: i32, val: i32) -> io::Result<()> {
+        cvt(unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                level,
+                name,
+                (&val as *const i32).cast(),
+                size_of::<i32>() as libc::socklen_t,
+            )
+        })
+        .map(drop)
+    }
+
+    fn socket_echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> io::Result<EchoResult> {
+        let v6 = dest.is_ipv6();
+        let (domain, proto) = if v6 {
+            (libc::AF_INET6, libc::IPPROTO_ICMPV6)
+        } else {
+            (libc::AF_INET, libc::IPPROTO_ICMP)
+        };
+        let fd =
+            cvt(unsafe { libc::socket(domain, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, proto) })?;
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        if v6 {
+            setopt(&fd, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, ttl as i32)?;
+            setopt(&fd, libc::IPPROTO_IPV6, libc::IPV6_RECVERR, 1)?;
+            setopt(&fd, libc::IPPROTO_IPV6, libc::IPV6_RECVHOPLIMIT, 1)?;
+        } else {
+            setopt(&fd, libc::IPPROTO_IP, libc::IP_TTL, ttl as i32)?;
+            setopt(&fd, libc::IPPROTO_IP, libc::IP_RECVERR, 1)?;
+            setopt(&fd, libc::IPPROTO_IP, libc::IP_RECVTTL, 1)?;
+        }
+
+        // The kernel fills in the identifier and checksum.
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut pkt = vec![b'a'; 8 + size as usize];
+        pkt[..8].fill(0);
+        pkt[0] = if v6 { 128 } else { 8 };
+        pkt[6..8].copy_from_slice(&seq.to_be_bytes());
+
+        let (addr, alen) = sockaddr(dest);
+        let start = Instant::now();
+        let sent = unsafe {
+            libc::sendto(
+                fd.as_raw_fd(),
+                pkt.as_ptr().cast(),
+                pkt.len(),
+                0,
+                (&addr as *const libc::sockaddr_storage).cast(),
+                alen,
+            )
+        };
+        if sent < 0 {
+            let e = io::Error::last_os_error();
+            return match e.raw_os_error() {
+                Some(libc::EACCES | libc::EPERM) => Err(e),
+                Some(libc::ENETUNREACH | libc::EHOSTUNREACH) => Ok(EchoResult {
+                    from: None,
+                    rtt_ms: 0.0,
+                    ttl: None,
+                    status: EchoStatus::Unreachable(e.to_string().to_lowercase()),
+                }),
+                _ => Ok(fail(format!("send: {e}"))),
+            };
+        }
+
+        let deadline = start + Duration::from_millis(timeout_ms as u64);
+        let mut buf = vec![0u8; pkt.len() + 512];
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(timeout(start));
+            }
+            let mut pfd = libc::pollfd {
+                fd: fd.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let n = unsafe { libc::poll(&mut pfd, 1, left.as_millis().max(1) as i32) };
+            if n < 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Ok(fail(format!("poll: {e}")));
+            }
+            if n == 0 {
+                return Ok(timeout(start));
+            }
+            if pfd.revents & libc::POLLERR != 0 {
+                if let Some(r) = read_error(&fd, v6, start) {
+                    return Ok(r);
+                }
+                continue;
+            }
+            if let Some(r) = read_reply(&fd, &mut buf, v6, seq, dest, start) {
+                return Ok(r);
+            }
+        }
+    }
+
+    fn rtt(start: Instant) -> f64 {
+        start.elapsed().as_secs_f64() * 1000.0
+    }
+
+    /// Echo replies arrive as bare ICMP (no IP header). Anything that is not
+    /// our sequence number is a stale reply and is skipped.
+    fn read_reply(
+        fd: &OwnedFd,
+        buf: &mut [u8],
+        v6: bool,
+        seq: u16,
+        dest: IpAddr,
+        start: Instant,
+    ) -> Option<EchoResult> {
+        let mut cbuf = [0u64; 16];
+        let mut iov = libc::iovec {
+            iov_base: buf.as_mut_ptr().cast(),
+            iov_len: buf.len(),
+        };
+        let mut msg: libc::msghdr = unsafe { zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cbuf.as_mut_ptr().cast();
+        msg.msg_controllen = size_of_val(&cbuf) as _;
+        let n = unsafe { libc::recvmsg(fd.as_raw_fd(), &mut msg, libc::MSG_DONTWAIT) };
+        let elapsed = rtt(start);
+        if n < 8 {
+            return None;
+        }
+        let reply_type = if v6 { 129 } else { 0 };
+        if buf[0] != reply_type || u16::from_be_bytes([buf[6], buf[7]]) != seq {
+            return None;
+        }
+        let mut ttl = None;
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                let (lvl, ty) = ((*c).cmsg_level, (*c).cmsg_type);
+                if (lvl == libc::IPPROTO_IP && ty == libc::IP_TTL)
+                    || (lvl == libc::IPPROTO_IPV6 && ty == libc::IPV6_HOPLIMIT)
+                {
+                    let v = std::ptr::read_unaligned(libc::CMSG_DATA(c).cast::<i32>());
+                    ttl = u8::try_from(v).ok();
+                }
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+        }
+        Some(EchoResult {
+            from: Some(dest),
+            rtt_ms: elapsed,
+            ttl,
+            status: EchoStatus::Reply,
+        })
+    }
+
+    /// ICMP errors (TTL exceeded, unreachable) land on the error queue via
+    /// IP_RECVERR, with the sending router as the offender address.
+    fn read_error(fd: &OwnedFd, v6: bool, start: Instant) -> Option<EchoResult> {
+        let mut data = [0u8; 576];
+        let mut cbuf = [0u64; 64];
+        let mut iov = libc::iovec {
+            iov_base: data.as_mut_ptr().cast(),
+            iov_len: data.len(),
+        };
+        let mut msg: libc::msghdr = unsafe { zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cbuf.as_mut_ptr().cast();
+        msg.msg_controllen = size_of_val(&cbuf) as _;
+        let n = unsafe {
+            libc::recvmsg(
+                fd.as_raw_fd(),
+                &mut msg,
+                libc::MSG_ERRQUEUE | libc::MSG_DONTWAIT,
+            )
+        };
+        let elapsed = rtt(start);
+        if n < 0 {
+            return None;
+        }
+        unsafe {
+            let mut c = libc::CMSG_FIRSTHDR(&msg);
+            while !c.is_null() {
+                let (lvl, ty) = ((*c).cmsg_level, (*c).cmsg_type);
+                if (lvl == libc::IPPROTO_IP && ty == libc::IP_RECVERR)
+                    || (lvl == libc::IPPROTO_IPV6 && ty == libc::IPV6_RECVERR)
+                {
+                    let ee_ptr = libc::CMSG_DATA(c).cast::<libc::sock_extended_err>();
+                    let ee = std::ptr::read_unaligned(ee_ptr);
+                    let from = offender(ee_ptr);
+                    let status = classify(&ee, v6);
+                    return Some(EchoResult {
+                        from,
+                        rtt_ms: elapsed,
+                        ttl: None,
+                        status,
+                    });
+                }
+                c = libc::CMSG_NXTHDR(&msg, c);
+            }
+        }
+        None
+    }
+
+    unsafe fn offender(ee: *const libc::sock_extended_err) -> Option<IpAddr> {
+        unsafe {
+            let sa = libc::SO_EE_OFFENDER(ee);
+            match (*sa).sa_family as i32 {
+                libc::AF_INET => {
+                    let s = std::ptr::read_unaligned(sa.cast::<libc::sockaddr_in>());
+                    let ip = Ipv4Addr::from(u32::from_be(s.sin_addr.s_addr));
+                    (!ip.is_unspecified()).then_some(IpAddr::V4(ip))
+                }
+                libc::AF_INET6 => {
+                    let s = std::ptr::read_unaligned(sa.cast::<libc::sockaddr_in6>());
+                    let ip = Ipv6Addr::from(s.sin6_addr.s6_addr);
+                    (!ip.is_unspecified()).then_some(IpAddr::V6(ip))
+                }
+                _ => None,
+            }
+        }
+    }
+
+    fn classify(ee: &libc::sock_extended_err, v6: bool) -> EchoStatus {
+        let unreach = |s: &str| EchoStatus::Unreachable(s.into());
+        match (ee.ee_origin, v6, ee.ee_type, ee.ee_code) {
+            (libc::SO_EE_ORIGIN_ICMP, false, 11, _) | (libc::SO_EE_ORIGIN_ICMP6, true, 3, _) => {
+                EchoStatus::TtlExpired
+            }
+            (libc::SO_EE_ORIGIN_ICMP, false, 3, code) => match code {
+                0 | 6 | 11 => unreach("destination net unreachable"),
+                1 | 7 | 12 => unreach("destination host unreachable"),
+                2 => unreach("destination protocol unreachable"),
+                3 => unreach("destination port unreachable"),
+                4 => EchoStatus::Error("packet too big".into()),
+                9 | 10 | 13 => unreach("communication administratively prohibited"),
+                c => unreach(&format!("destination unreachable (code {c})")),
+            },
+            (libc::SO_EE_ORIGIN_ICMP6, true, 1, code) => match code {
+                0 => unreach("no route to destination"),
+                1 => unreach("communication administratively prohibited"),
+                3 => unreach("destination host unreachable"),
+                4 => unreach("destination port unreachable"),
+                c => unreach(&format!("destination unreachable (code {c})")),
+            },
+            (libc::SO_EE_ORIGIN_ICMP6, true, 2, _) => EchoStatus::Error("packet too big".into()),
+            (libc::SO_EE_ORIGIN_LOCAL, ..) => unreach(
+                &io::Error::from_raw_os_error(ee.ee_errno as i32)
+                    .to_string()
+                    .to_lowercase(),
+            ),
+            (_, _, t, c) => EchoStatus::Error(format!("ICMP type {t} code {c}")),
+        }
+    }
+
+    fn sockaddr(ip: IpAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+        let mut ss: libc::sockaddr_storage = unsafe { zeroed() };
+        let len = match ip {
+            IpAddr::V4(v4) => {
+                let sin = libc::sockaddr_in {
+                    sin_family: libc::AF_INET as libc::sa_family_t,
+                    sin_port: 0,
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from(v4).to_be(),
+                    },
+                    sin_zero: [0; 8],
+                };
+                unsafe { std::ptr::write((&mut ss as *mut libc::sockaddr_storage).cast(), sin) };
+                size_of::<libc::sockaddr_in>()
+            }
+            IpAddr::V6(v6) => {
+                let mut sin6: libc::sockaddr_in6 = unsafe { zeroed() };
+                sin6.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+                sin6.sin6_addr.s6_addr = v6.octets();
+                unsafe { std::ptr::write((&mut ss as *mut libc::sockaddr_storage).cast(), sin6) };
+                size_of::<libc::sockaddr_in6>()
+            }
+        };
+        (ss, len as libc::socklen_t)
+    }
+
+    fn timeout(start: Instant) -> EchoResult {
+        EchoResult {
+            from: None,
+            rtt_ms: rtt(start),
+            ttl: None,
+            status: EchoStatus::Timeout,
+        }
+    }
+
+    fn fail(msg: String) -> EchoResult {
+        EchoResult {
+            from: None,
+            rtt_ms: 0.0,
+            ttl: None,
+            status: EchoStatus::Error(msg),
+        }
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
+mod imp {
+    pub use super::cmd::echo;
+}
+
+/// Fallback: shell out to the system `ping`.
+#[cfg(not(windows))]
+mod cmd {
     use super::{EchoResult, EchoStatus};
     use std::net::IpAddr;
     use std::process::Command;
@@ -270,5 +613,21 @@ mod imp {
             ttl: None,
             status: EchoStatus::Timeout,
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    fn ping_socket_loopback() {
+        // Skip where ping sockets are disabled (net.ipv4.ping_group_range).
+        let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, libc::IPPROTO_ICMP) };
+        if fd < 0 {
+            return;
+        }
+        unsafe { libc::close(fd) };
+        let r = super::echo("127.0.0.1".parse().unwrap(), 64, 1000, 32);
+        assert!(r.is_reply(), "{r:?}");
+        assert!(r.ttl.is_some());
     }
 }

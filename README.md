@@ -1,6 +1,6 @@
 # is-alive
 
-Native Windows network tester written in Rust. Single portable `.exe`, no installer, no admin rights.
+Native network tester written in Rust. Single portable `.exe` on Windows, single `.AppImage` on Linux — no installer, no admin rights.
 
 | Tab | What it does |
 |---|---|
@@ -24,6 +24,17 @@ cargo build --release
 Cross-compile from Linux: `rustup target add x86_64-pc-windows-gnu`, install `mingw-w64`, then
 `cargo build --release --target x86_64-pc-windows-gnu`.
 
-CI builds the `.exe` on every push/PR (Actions artifact). Push a `v*` tag to attach it to a GitHub release.
+### Linux AppImage
 
-On non-Windows platforms ICMP falls back to the system `ping` command (dev/testing only).
+```sh
+packaging/linux/build-appimage.sh
+# -> target/appimage/is-alive-x86_64.AppImage
+```
+
+Downloads `appimagetool` on first run (or set `APPIMAGETOOL=/path/to/appimagetool`). Only glibc is linked; GL, X11/Wayland and xkbcommon load from the host at runtime, so the AppImage runs on any desktop distro with glibc ≥ the build host's (CI builds on Ubuntu 22.04 → glibc 2.35).
+
+On Linux, ICMP uses unprivileged ping sockets (`SOCK_DGRAM`/`IPPROTO_ICMP`) — no root, no capabilities. That needs your group inside `net.ipv4.ping_group_range`, the default on Fedora, Ubuntu, Arch and most systemd distros. If it's not, the app falls back to the system `ping` command.
+
+CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts). Push a `v*` tag to attach both to a GitHub release.
+
+On other platforms (macOS etc.) ICMP falls back to the system `ping` command (dev/testing only).

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=is-alive
+GenericName=Network Tester
+Comment=Ping, port check, traceroute, subnet sweep and DNS lookup
+Exec=is-alive
+Icon=is-alive
+Terminal=false
+Categories=Network;Utility;
+Keywords=ping;port;scan;traceroute;dns;sweep;
+StartupWMClass=is-alive

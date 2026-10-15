@@ -1336,6 +1336,7 @@ version = "0.1.0"
 dependencies = [
  "dns-lookup",
  "eframe",
+ "libc",
  "socket2",
  "windows-sys 0.61.2",
 ]
