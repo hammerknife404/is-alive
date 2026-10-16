@@ -37,7 +37,7 @@ impl Default for SweepTool {
             range: "192.168.1.0/24".into(),
             detected: false,
             timeout_ms: 750,
-            threads: 64,
+            threads: 16,
             resolve_names: true,
             job: None,
             run_started: None,

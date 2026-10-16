@@ -33,7 +33,7 @@ impl Default for PortTool {
             host: String::new(),
             ports: PRESETS[0].1.into(),
             timeout_ms: 1500,
-            threads: 128,
+            threads: 32,
             show_closed: false,
             prefer_v6: false,
             job: None,
