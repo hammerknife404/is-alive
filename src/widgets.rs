@@ -12,17 +12,103 @@ pub enum Action {
     Stop,
 }
 
-/// Start/Stop button pair. `enter` lets a text field's Enter key start the run.
+/// Start/Stop button pair. `enter` lets a text field's Enter key start the run;
+/// Esc stops it.
 pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
     if running {
         ui.spinner();
-        if ui.button("■ Stop").clicked() {
+        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if ui.button("■ Stop").on_hover_text("Stop (Esc)").clicked() || esc {
             return Action::Stop;
         }
-    } else if ui.button("▶ Start").clicked() || enter {
+    } else if ui
+        .button("▶ Start")
+        .on_hover_text("Start (Enter)")
+        .clicked()
+        || enter
+    {
         return Action::Start;
     }
     Action::None
+}
+
+/// Scan speed presets: (name, threads, probes per second, tooltip).
+/// Threads only cap how many probes are in flight; against targets that answer
+/// fast (RST, live hosts) the rate limit is what keeps a scan from bursting.
+pub const SPEEDS: &[(&str, usize, u32, &str)] = &[
+    (
+        "Gentle",
+        4,
+        10,
+        "10 probes/s, 4 in flight. Slowest; least load and least scan-like to IDS/EDR.",
+    ),
+    ("Normal", 16, 50, "50 probes/s, 16 in flight."),
+    (
+        "Fast",
+        64,
+        500,
+        "500 probes/s, 64 in flight. Expect IDS/EDR scan alerts.",
+    ),
+    (
+        "Unthrottled",
+        256,
+        0,
+        "No rate limit, 256 in flight. Tens of thousands of probes/s on a LAN; \
+will be flagged as a scan.",
+    ),
+];
+pub const DEFAULT_SPEED: usize = 1;
+
+/// Speed preset picker plus the raw threads / rate values it sets.
+pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
+    let current = SPEEDS
+        .iter()
+        .find(|s| s.1 == *threads && s.2 == *rate)
+        .map_or("Custom", |s| s.0);
+    ui.label("Speed");
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            for (name, t, r, tip) in SPEEDS {
+                let sel = ui
+                    .selectable_label(current == *name, *name)
+                    .on_hover_text(*tip);
+                if sel.clicked() {
+                    (*threads, *rate) = (*t, *r);
+                }
+            }
+        });
+    ui.add(egui::DragValue::new(rate).range(0..=100_000).suffix(" /s"))
+        .on_hover_text("Max probes started per second across all threads (0 = unlimited)");
+    ui.add(egui::DragValue::new(threads).range(1..=1024).suffix(" thr"))
+        .on_hover_text("Max probes in flight at once");
+}
+
+/// Progress bar with live rate and time left.
+pub fn progress(ui: &mut Ui, done: usize, total: usize, since: std::time::Instant) {
+    let secs = since.elapsed().as_secs_f64();
+    let rate = if secs > 0.5 { done as f64 / secs } else { 0.0 };
+    let mut text = format!("{done} / {total}");
+    if rate > 0.0 {
+        let left = (total - done.min(total)) as f64 / rate;
+        text += &format!("  ·  {rate:.0}/s  ·  ~{} left", fmt_secs(left));
+    }
+    ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(text));
+}
+
+fn fmt_secs(s: f64) -> String {
+    let s = s.ceil() as u64;
+    if s < 60 {
+        format!("{s} s")
+    } else {
+        format!("{}m {:02}s", s / 60, s % 60)
+    }
+}
+
+/// Muted placeholder for an empty result view.
+pub fn empty_hint(ui: &mut Ui, text: &str) {
+    ui.add_space(12.0);
+    ui.vertical_centered(|ui| ui.weak(text));
 }
 
 /// Single-line text field; returns true if Enter was pressed in it.

@@ -4,6 +4,7 @@ use crate::net::{self, targets};
 use crate::widgets::{self, Action, OK};
 use eframe::egui::{self, RichText, Ui};
 use std::net::{IpAddr, Ipv4Addr};
+use std::time::Instant;
 
 struct Host {
     ip: Ipv4Addr,
@@ -22,9 +23,11 @@ pub struct SweepTool {
     detected: bool,
     timeout_ms: u32,
     threads: usize,
+    rate: u32,
     resolve_names: bool,
     job: Option<Job<Ev>>,
     run_started: Option<String>,
+    started_at: Instant,
     total: usize,
     probed: usize,
     alive: Vec<Host>,
@@ -37,10 +40,12 @@ impl Default for SweepTool {
             range: "192.168.1.0/24".into(),
             detected: false,
             timeout_ms: 750,
-            threads: 16,
+            threads: widgets::SPEEDS[widgets::DEFAULT_SPEED].1,
+            rate: widgets::SPEEDS[widgets::DEFAULT_SPEED].2,
             resolve_names: true,
             job: None,
             run_started: None,
+            started_at: Instant::now(),
             total: 0,
             probed: 0,
             alive: Vec::new(),
@@ -95,28 +100,39 @@ impl SweepTool {
         });
         ui.horizontal(|ui| {
             widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
-            widgets::num(ui, "Threads", &mut self.threads, 1..=512, "");
+            widgets::speed(ui, "sweep_speed", &mut self.threads, &mut self.rate);
             ui.checkbox(&mut self.resolve_names, "Resolve names");
         });
         widgets::error(ui, &self.err);
         ui.separator();
 
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{} alive", self.alive.len()))
-                    .color(OK)
-                    .strong(),
-            );
-            ui.label(format!("· {} / {} probed", self.probed, self.total));
+            if self.total > 0 {
+                ui.label(
+                    RichText::new(format!("{} alive", self.alive.len()))
+                        .color(OK)
+                        .strong(),
+                );
+                ui.label(format!("· {} / {} probed", self.probed, self.total));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::save_button(ui, "sweep", || self.report());
-                widgets::copy_button(ui, || self.report());
+                ui.add_enabled_ui(self.total > 0, |ui| {
+                    widgets::save_button(ui, "sweep", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
             });
         });
         if running && self.total > 0 {
-            ui.add(
-                egui::ProgressBar::new(self.probed as f32 / self.total as f32).show_percentage(),
-            );
+            widgets::progress(ui, self.probed, self.total, self.started_at);
+        }
+        if self.alive.is_empty() && !running {
+            let hint = if self.total > 0 {
+                "No hosts answered. Firewalls often drop ping; try Port Check on a known host."
+            } else {
+                "Enter a CIDR or range and press Enter."
+            };
+            widgets::empty_hint(ui, hint);
+            return;
         }
 
         egui::ScrollArea::vertical()
@@ -197,11 +213,13 @@ impl SweepTool {
             Err(e) => return self.err = Some(e),
         };
         self.total = ips.len();
-        let (timeout, threads, names) = (self.timeout_ms, self.threads, self.resolve_names);
+        let (timeout, threads, rate, names) =
+            (self.timeout_ms, self.threads, self.rate, self.resolve_names);
 
         self.run_started = Some(crate::log::now());
+        self.started_at = Instant::now();
         self.job = Some(Job::spawn(ctx, move |tx| {
-            net::par_for(&ips, threads, tx.cancel_flag(), |&ip| {
+            net::par_for(&ips, threads, rate, tx.cancel_flag(), |&ip| {
                 let r = icmp::echo(IpAddr::V4(ip), 128, timeout, 32);
                 if r.is_reply() {
                     let name = if names {
