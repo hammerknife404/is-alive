@@ -77,7 +77,13 @@ impl eframe::App for App {
                 }
                 ui.separator();
                 for (tab, name) in TABS {
-                    ui.selectable_value(&mut self.tab, *tab, *name);
+                    // Jobs keep running on hidden tabs; mark them so they aren't forgotten.
+                    let label = if self.tab_running(*tab) {
+                        egui::RichText::new(format!("{name} ⏺")).color(widgets::OK)
+                    } else {
+                        egui::RichText::new(*name)
+                    };
+                    ui.selectable_value(&mut self.tab, *tab, label);
                 }
             });
             ui.add_space(2.0);
@@ -130,6 +136,17 @@ impl eframe::App for App {
 impl App {
     fn refresh_info(&mut self, ctx: &egui::Context) {
         self.info_job = Some(Job::spawn(ctx, |tx| tx.send(HostInfo::fetch())));
+    }
+
+    fn tab_running(&self, tab: Tab) -> bool {
+        match tab {
+            Tab::Ping => self.ping.is_running(),
+            Tab::Ports => self.ports.is_running(),
+            Tab::Trace => self.trace.is_running(),
+            Tab::Sweep => self.sweep.is_running(),
+            Tab::Dns => self.dns.is_running(),
+            Tab::Results => false,
+        }
     }
 
     fn any_running(&self) -> bool {

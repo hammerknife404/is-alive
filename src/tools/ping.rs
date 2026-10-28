@@ -142,6 +142,13 @@ impl PingTool {
         widgets::latency_chart(ui, self.samples.make_contiguous(), 70.0);
         ui.add_space(4.0);
 
+        if self.lines.is_empty() && !running {
+            widgets::empty_hint(
+                ui,
+                "Enter a host and press Enter. Count 0 pings until stopped.",
+            );
+            return;
+        }
         let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
@@ -184,8 +191,10 @@ impl PingTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::save_button(ui, "ping", || self.report());
-                widgets::copy_button(ui, || self.report());
+                ui.add_enabled_ui(sent > 0, |ui| {
+                    widgets::save_button(ui, "ping", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
             });
         });
     }

@@ -4,7 +4,7 @@ use crate::net::{self, TcpState};
 use crate::widgets::{self, Action, BAD, OK, WARN};
 use eframe::egui::{self, RichText, Ui};
 use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 enum Ev {
     Resolved(IpAddr, usize),
@@ -17,10 +17,12 @@ pub struct PortTool {
     ports: String,
     timeout_ms: u32,
     threads: usize,
+    rate: u32,
     show_closed: bool,
     prefer_v6: bool,
     job: Option<Job<Ev>>,
     run_started: Option<String>,
+    started_at: Instant,
     target: Option<IpAddr>,
     total: usize,
     results: Vec<(u16, TcpState, f64)>,
@@ -33,11 +35,13 @@ impl Default for PortTool {
             host: String::new(),
             ports: PRESETS[0].1.into(),
             timeout_ms: 1500,
-            threads: 32,
+            threads: widgets::SPEEDS[widgets::DEFAULT_SPEED].1,
+            rate: widgets::SPEEDS[widgets::DEFAULT_SPEED].2,
             show_closed: false,
             prefer_v6: false,
             job: None,
             run_started: None,
+            started_at: Instant::now(),
             target: None,
             total: 0,
             results: Vec::new(),
@@ -86,7 +90,7 @@ impl PortTool {
                 ui.available_width() - 120.0,
                 "22,80,443,8000-8100",
             );
-            ui.menu_button("Presets ▾", |ui| {
+            ui.menu_button("Presets ⏷", |ui| {
                 for (name, spec) in PRESETS {
                     if ui.button(*name).on_hover_text(*spec).clicked() {
                         self.ports = spec.to_string();
@@ -100,7 +104,7 @@ impl PortTool {
         }
         ui.horizontal(|ui| {
             widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
-            widgets::num(ui, "Threads", &mut self.threads, 1..=1024, "");
+            widgets::speed(ui, "port_speed", &mut self.threads, &mut self.rate);
             ui.checkbox(&mut self.show_closed, "Show closed/filtered");
             ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
         });
@@ -121,11 +125,20 @@ impl PortTool {
                 ui.label(RichText::new(ip.to_string()).strong());
                 ui.separator();
             }
-            ui.label(RichText::new(format!("{open} open")).color(OK));
-            ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
+            if self.total > 0 {
+                let c = if open > 0 {
+                    OK
+                } else {
+                    ui.visuals().text_color()
+                };
+                ui.label(RichText::new(format!("{open} open")).color(c).strong());
+                ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::save_button(ui, "ports", || self.report());
-                widgets::copy_button(ui, || self.report());
+                ui.add_enabled_ui(!self.results.is_empty(), |ui| {
+                    widgets::save_button(ui, "ports", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
             });
         });
         if let Some(e) = first_err {
@@ -134,10 +147,16 @@ impl PortTool {
             ui.label(RichText::new(format!("⚠ some probes failed: {e}")).color(BAD));
         }
         if running && self.total > 0 {
-            ui.add(
-                egui::ProgressBar::new(self.results.len() as f32 / self.total as f32)
-                    .show_percentage(),
-            );
+            widgets::progress(ui, self.results.len(), self.total, self.started_at);
+        }
+        if self.results.is_empty() {
+            if !running {
+                widgets::empty_hint(
+                    ui,
+                    "Enter a host and press Enter. Pick ports or a preset above.",
+                );
+            }
+            return;
         }
 
         // Virtualized: a full 1-65535 scan with closed ports shown stays fast.
@@ -146,6 +165,13 @@ impl PortTool {
             .iter()
             .filter(|r| self.show_closed || !matches!(r.1, TcpState::Closed | TcpState::Filtered))
             .collect();
+        if rows.is_empty() && !running {
+            widgets::empty_hint(
+                ui,
+                "No open ports. Tick \"Show closed/filtered\" to see every result.",
+            );
+            return;
+        }
         let cols = [70.0, 80.0, 120.0, 80.0];
         ui.horizontal(|ui| {
             for (h, w) in ["Port", "State", "Service", "Time"].iter().zip(cols) {
@@ -158,13 +184,21 @@ impl PortTool {
             row_h,
             rows.len(),
             |ui, range| {
-                for (port, state, ms) in &rows[range] {
+                for (i, (port, state, ms)) in range.clone().zip(&rows[range]) {
                     let (txt, c) = state_label(state);
                     let time = if *state == TcpState::Open {
                         widgets::fmt_ms(*ms)
                     } else {
                         String::new()
                     };
+                    if i % 2 == 1 {
+                        // Painted first so it sits behind the row: matches the striped grids.
+                        let top = ui.cursor().top();
+                        let rect =
+                            egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 18.0);
+                        ui.painter()
+                            .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                    }
                     ui.horizontal(|ui| {
                         let cell = |ui: &mut Ui, w: f32, t: RichText| {
                             ui.add_sized([w, 18.0], egui::Label::new(t));
@@ -239,16 +273,17 @@ impl PortTool {
             Err(e) => return self.err = Some(e),
         };
         let timeout = Duration::from_millis(self.timeout_ms as u64);
-        let (threads, v6) = (self.threads, self.prefer_v6);
+        let (threads, rate, v6) = (self.threads, self.rate, self.prefer_v6);
 
         self.run_started = Some(crate::log::now());
+        self.started_at = Instant::now();
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,
                 Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
             };
             tx.send(Ev::Resolved(ip, ports.len()));
-            net::par_for(&ports, threads, tx.cancel_flag(), |&p| {
+            net::par_for(&ports, threads, rate, tx.cancel_flag(), |&p| {
                 let (state, ms) = net::tcp_probe(SocketAddr::new(ip, p), timeout);
                 tx.send(Ev::Result(p, state, ms));
             });

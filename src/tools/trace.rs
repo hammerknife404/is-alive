@@ -98,10 +98,16 @@ impl TraceTool {
                 None => {}
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::save_button(ui, "traceroute", || self.report());
-                widgets::copy_button(ui, || self.report());
+                ui.add_enabled_ui(!self.hops.is_empty(), |ui| {
+                    widgets::save_button(ui, "traceroute", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
             });
         });
+        if self.hops.is_empty() && !running {
+            widgets::empty_hint(ui, "Enter a host and press Enter.");
+            return;
+        }
 
         egui::ScrollArea::vertical()
             .auto_shrink(false)

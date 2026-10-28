@@ -64,10 +64,16 @@ impl DnsTool {
                 ));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                widgets::save_button(ui, "dns", || self.report());
-                widgets::copy_button(ui, || self.report());
+                ui.add_enabled_ui(!self.records.is_empty(), |ui| {
+                    widgets::save_button(ui, "dns", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
             });
         });
+        if self.records.is_empty() && !running {
+            widgets::empty_hint(ui, "Enter a name or IP and press Enter.");
+            return;
+        }
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
@@ -148,7 +154,7 @@ impl DnsTool {
                         // Reverse each address: shows where a name really lands.
                         for ip in ips {
                             if let Some(n) = net::reverse(ip) {
-                                tx.send(Ev::Record("PTR".into(), format!("{ip} → {n}")));
+                                tx.send(Ev::Record("PTR".into(), format!("{ip} ➡ {n}")));
                             }
                         }
                     }

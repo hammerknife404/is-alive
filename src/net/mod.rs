@@ -6,6 +6,7 @@ pub mod targets;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -111,14 +112,61 @@ fn no_syn_retransmit(sock: &Socket) {
     }
 }
 
-/// Run `f` over `items` on up to `workers` threads, stopping early on cancel.
-pub fn par_for<T: Sync>(items: &[T], workers: usize, cancel: &AtomicBool, f: impl Fn(&T) + Sync) {
+/// Spaces out probe starts across all workers: at most `per_sec` per second,
+/// evenly spaced (no bursts). 0 means unlimited.
+pub struct Pacer {
+    interval: Option<Duration>,
+    next: Mutex<Instant>,
+}
+
+impl Pacer {
+    pub fn new(per_sec: u32) -> Self {
+        Self {
+            interval: (per_sec > 0).then(|| Duration::from_secs_f64(1.0 / per_sec as f64)),
+            next: Mutex::new(Instant::now()),
+        }
+    }
+
+    /// Block until this caller's slot. Returns false if cancelled while waiting.
+    pub fn wait(&self, cancel: &AtomicBool) -> bool {
+        let Some(interval) = self.interval else {
+            return !cancel.load(Ordering::Relaxed);
+        };
+        let slot = {
+            let mut next = self.next.lock().unwrap_or_else(|e| e.into_inner());
+            let slot = (*next).max(Instant::now());
+            *next = slot + interval;
+            slot
+        };
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let left = slot.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return true;
+            }
+            std::thread::sleep(left.min(Duration::from_millis(50)));
+        }
+    }
+}
+
+/// Run `f` over `items` on up to `workers` threads, at most `per_sec` starts
+/// per second (0 = unlimited), stopping early on cancel.
+pub fn par_for<T: Sync>(
+    items: &[T],
+    workers: usize,
+    per_sec: u32,
+    cancel: &AtomicBool,
+    f: impl Fn(&T) + Sync,
+) {
     let next = AtomicUsize::new(0);
+    let pacer = Pacer::new(per_sec);
     let workers = workers.clamp(1, items.len().max(1));
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
-                while !cancel.load(Ordering::Relaxed) {
+                while pacer.wait(cancel) {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(item) = items.get(i) else { break };
                     f(item);
@@ -140,6 +188,25 @@ mod tests {
         assert_eq!(tcp_probe(open, Duration::from_secs(1)).0, TcpState::Open);
         drop(l);
         assert_eq!(tcp_probe(open, Duration::from_secs(1)).0, TcpState::Closed);
+    }
+
+    #[test]
+    fn pacer_caps_rate() {
+        let cancel = AtomicBool::new(false);
+        let items: Vec<u32> = (0..21).collect();
+        let t0 = Instant::now();
+        // 21 starts at 100/s = 20 gaps of 10 ms, despite 8 workers.
+        par_for(&items, 8, 100, &cancel, |_| {});
+        let took = t0.elapsed();
+        assert!(took >= Duration::from_millis(195), "{took:?}");
+        assert!(took < Duration::from_millis(600), "{took:?}");
+    }
+
+    #[test]
+    fn pacer_stops_on_cancel() {
+        let cancel = AtomicBool::new(true);
+        assert!(!Pacer::new(1).wait(&cancel));
+        assert!(!Pacer::new(0).wait(&cancel));
     }
 
     #[test]
