@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "is-alive"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "dns-lookup",
