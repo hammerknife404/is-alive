@@ -548,16 +548,32 @@ mod imp {
 mod cmd {
     use super::{EchoResult, EchoStatus};
     use std::net::IpAddr;
-    use std::process::Command;
-    use std::time::Instant;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
-        let secs = timeout_ms.div_ceil(1000).max(1).to_string();
         let start = Instant::now();
-        let out = Command::new("ping")
-            .args(["-n", "-c", "1", "-W", &secs, "-t", &ttl.to_string()])
+        let child = Command::new(program(dest))
+            .args(args(dest, ttl, timeout_ms))
             .args(["-s", &size.to_string(), &dest.to_string()])
-            .output();
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        // Not every ping takes a per-reply timeout (BSD ping6 has none, iputils
+        // rounds up to whole seconds), so enforce the deadline here.
+        let deadline =
+            Duration::from_millis(u64::from(timeout_ms.div_ceil(1000).max(1)) * 1000 + 500);
+        let out = child.and_then(|mut c| {
+            while c.try_wait()?.is_none() {
+                if start.elapsed() >= deadline {
+                    _ = c.kill();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            c.wait_with_output()
+        });
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         let out = match out {
             Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
@@ -573,6 +589,32 @@ mod cmd {
         parse(&out, dest, elapsed)
     }
 
+    pub(super) fn program(dest: IpAddr) -> &'static str {
+        // BSD/macOS keep a separate ping6; iputils' ping does both.
+        if cfg!(target_os = "linux") || dest.is_ipv4() {
+            "ping"
+        } else {
+            "ping6"
+        }
+    }
+
+    /// TTL and timeout flags differ: iputils uses -t TTL / -W seconds, BSD and
+    /// macOS use -m TTL / -W milliseconds (-t there is a total timeout), and
+    /// BSD ping6 takes the hop limit as -h.
+    pub(super) fn args(dest: IpAddr, ttl: u8, timeout_ms: u32) -> Vec<String> {
+        let ttl = ttl.to_string();
+        let mut a = vec!["-n".to_string(), "-c".into(), "1".into()];
+        if cfg!(target_os = "linux") {
+            let secs = timeout_ms.div_ceil(1000).max(1).to_string();
+            a.extend(["-W".into(), secs, "-t".into(), ttl]);
+        } else if dest.is_ipv4() {
+            a.extend(["-W".into(), timeout_ms.to_string(), "-m".into(), ttl]);
+        } else {
+            a.extend(["-h".into(), ttl]);
+        }
+        a
+    }
+
     fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         let i = line.find(key)? + key.len();
         line[i..]
@@ -580,7 +622,16 @@ mod cmd {
             .next()
     }
 
-    fn parse(out: &str, dest: IpAddr, elapsed: f64) -> EchoResult {
+    /// The address after `key`, e.g. "From 10.0.0.1 icmp_seq" (iputils) or
+    /// "bytes from 10.0.0.1: Time to live exceeded" (BSD/macOS).
+    fn addr(line: &str, key: &str) -> Option<IpAddr> {
+        let i = line.find(key)? + key.len();
+        let a = line[i..].split_whitespace().next()?;
+        let a = a.strip_suffix([':', ',']).unwrap_or(a);
+        a.parse().ok()
+    }
+
+    pub(super) fn parse(out: &str, dest: IpAddr, elapsed: f64) -> EchoResult {
         for line in out.lines() {
             if let Some(t) = field(line, "time=") {
                 return EchoResult {
@@ -590,22 +641,31 @@ mod cmd {
                     status: EchoStatus::Reply,
                 };
             }
-            if line.starts_with("From ") {
-                let from = field(line, "From ").and_then(|a| a.parse().ok());
-                let status = if line.contains("Time to live exceeded") {
-                    EchoStatus::TtlExpired
-                } else {
-                    let msg = line.split_once("icmp_seq=").map_or(line, |(_, r)| r);
-                    let msg = msg.split_once(' ').map_or(msg, |(_, r)| r);
-                    EchoStatus::Unreachable(msg.to_lowercase())
-                };
-                return EchoResult {
-                    from,
-                    rtt_ms: elapsed,
-                    ttl: None,
-                    status,
-                };
-            }
+            // An ICMP error: iputils "From <ip> icmp_seq=1 <msg>",
+            // BSD/macOS "<n> bytes from <ip>: <msg>".
+            let (key, msg) = if line.starts_with("From ") {
+                let msg = line.split_once("icmp_seq=").map_or(line, |(_, r)| r);
+                ("From ", msg.split_once(' ').map_or(msg, |(_, r)| r))
+            } else if let Some((_, r)) = line.split_once(" bytes from ") {
+                (" bytes from ", r.split_once(": ").map_or(r, |(_, m)| m))
+            } else {
+                continue;
+            };
+            let lower = msg.to_lowercase();
+            let status = if lower.contains("time to live exceeded")
+                || lower.contains("time exceeded")
+                || lower.contains("hop limit")
+            {
+                EchoStatus::TtlExpired
+            } else {
+                EchoStatus::Unreachable(lower)
+            };
+            return EchoResult {
+                from: addr(line, key),
+                rtt_ms: elapsed,
+                ttl: None,
+                status,
+            };
         }
         EchoResult {
             from: None,
@@ -618,6 +678,53 @@ mod cmd {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn iputils_ping_flags() {
+        let ip = "192.0.2.1".parse().unwrap();
+        assert_eq!(super::cmd::program(ip), "ping");
+        assert_eq!(
+            super::cmd::args(ip, 7, 1500),
+            ["-n", "-c", "1", "-W", "2", "-t", "7"]
+        );
+    }
+
+    #[test]
+    fn ping_output_errors() {
+        use super::EchoStatus;
+        let dest = "192.0.2.1".parse().unwrap();
+        let hop: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        for out in [
+            "From 10.0.0.1 icmp_seq=1 Time to live exceeded\n",
+            "92 bytes from 10.0.0.1: Time to live exceeded\n",
+        ] {
+            let r = super::cmd::parse(out, dest, 5.0);
+            assert_eq!(r.status, EchoStatus::TtlExpired, "{out}");
+            assert_eq!(r.from, Some(hop), "{out}");
+        }
+        let v6 = super::cmd::parse(
+            "From 2001:db8::1 icmp_seq=1 Time exceeded: Hop limit\n",
+            dest,
+            5.0,
+        );
+        assert_eq!(v6.status, EchoStatus::TtlExpired);
+        assert_eq!(v6.from, "2001:db8::1".parse().ok());
+        let un = super::cmd::parse(
+            "From 10.0.0.1 icmp_seq=1 Destination Host Unreachable\n",
+            dest,
+            5.0,
+        );
+        assert_eq!(
+            un.status,
+            EchoStatus::Unreachable("destination host unreachable".into())
+        );
+        let ok = super::cmd::parse(
+            "64 bytes from 192.0.2.1: icmp_seq=0 ttl=57 time=10.5 ms\n",
+            dest,
+            5.0,
+        );
+        assert!(ok.is_reply() && ok.ttl == Some(57) && ok.rtt_ms == 10.5);
+    }
+
     #[test]
     fn ping_socket_loopback() {
         // Skip where ping sockets are disabled (net.ipv4.ping_group_range).

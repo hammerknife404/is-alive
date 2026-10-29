@@ -54,19 +54,15 @@ impl PortTool {
     /// Drain worker messages. Called every frame so results stay current
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
-        let mut got = false;
-        let running = pump(&mut self.job, |ev| match ev {
+        pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip, n) => (self.target, self.total) = (Some(ip), n),
+            // Keep port order without re-sorting the whole list each frame.
             Ev::Result(p, s, ms) => {
-                self.results.push((p, s, ms));
-                got = true;
+                let at = self.results.partition_point(|r| r.0 < p);
+                self.results.insert(at, (p, s, ms));
             }
             Ev::Error(e) => self.err = Some(e),
-        });
-        if got {
-            self.results.sort_by_key(|r| r.0);
-        }
-        running
+        })
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
