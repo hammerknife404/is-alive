@@ -1,3 +1,5 @@
+pub mod dnsq;
+pub mod domain;
 pub mod hostinfo;
 pub mod icmp;
 pub mod ports;
@@ -42,12 +44,21 @@ pub fn reverse(ip: IpAddr) -> Option<String> {
 }
 
 fn sanitize(s: &str) -> String {
+    clean(s, 255)
+}
+
+/// As `sanitize`, for long TXT data (SPF, DKIM keys).
+fn sanitize_long(s: &str) -> String {
+    clean(s, 4096)
+}
+
+fn clean(s: &str, max: usize) -> String {
     s.chars()
         .filter(|&c| {
             !c.is_control()
                 && !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
         })
-        .take(255)
+        .take(max)
         .collect()
 }
 

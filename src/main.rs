@@ -23,6 +23,7 @@ enum Tab {
     Trace,
     Sweep,
     Dns,
+    Advanced,
     Results,
 }
 
@@ -32,6 +33,7 @@ const TABS: &[(Tab, &str)] = &[
     (Tab::Trace, "Traceroute"),
     (Tab::Sweep, "Subnet Sweep"),
     (Tab::Dns, "DNS Lookup"),
+    (Tab::Advanced, "Advanced"),
     (Tab::Results, "Results"),
 ];
 
@@ -42,6 +44,7 @@ struct App {
     trace: tools::trace::TraceTool,
     sweep: tools::sweep::SweepTool,
     dns: tools::dns::DnsTool,
+    advanced: tools::advanced::AdvancedTool,
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
@@ -54,6 +57,7 @@ impl eframe::App for App {
         self.trace.poll();
         self.sweep.poll();
         self.dns.poll();
+        self.advanced.poll();
         self.collect();
         pump(&mut self.info_job, |i| self.info = i);
         egui::Panel::top("tabs").show(ui, |ui| {
@@ -128,6 +132,7 @@ impl eframe::App for App {
             Tab::Trace => self.trace.ui(ui),
             Tab::Sweep => self.sweep.ui(ui),
             Tab::Dns => self.dns.ui(ui),
+            Tab::Advanced => self.advanced.ui(ui),
             Tab::Results => self.results_ui(ui),
         });
     }
@@ -145,6 +150,7 @@ impl App {
             Tab::Trace => self.trace.is_running(),
             Tab::Sweep => self.sweep.is_running(),
             Tab::Dns => self.dns.is_running(),
+            Tab::Advanced => self.advanced.is_running(),
             Tab::Results => false,
         }
     }
@@ -155,6 +161,7 @@ impl App {
             || self.trace.is_running()
             || self.sweep.is_running()
             || self.dns.is_running()
+            || self.advanced.is_running()
     }
 
     /// Run every tool against this machine's network and switch to Results.
@@ -194,6 +201,7 @@ impl App {
             ("Traceroute", self.trace.take_finished()),
             ("Subnet Sweep", self.sweep.take_finished()),
             ("DNS Lookup", self.dns.take_finished()),
+            ("Advanced", self.advanced.take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text)) = run {
@@ -227,6 +235,11 @@ impl App {
                 self.sweep.output(),
             ),
             ("DNS Lookup", self.dns.running_since(), self.dns.output()),
+            (
+                "Advanced",
+                self.advanced.running_since(),
+                self.advanced.output(),
+            ),
         ]
         .into_iter()
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
@@ -315,6 +328,7 @@ fn main() -> eframe::Result {
                 trace: Default::default(),
                 sweep: Default::default(),
                 dns: Default::default(),
+                advanced: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
