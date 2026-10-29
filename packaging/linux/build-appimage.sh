@@ -2,8 +2,10 @@
 # Build is-alive-<arch>.AppImage from a release build.
 #   packaging/linux/build-appimage.sh            # builds, then packages
 #   APPIMAGETOOL=/path/to/appimagetool ...       # use a local appimagetool
-# The binary links only glibc (GL, X11, Wayland are loaded at runtime), so
-# nothing else is bundled. Build on the oldest glibc you want to support.
+# The binary links only glibc; GL, X11 and Wayland are loaded at runtime from
+# the host. libxkbcommon-x11 (and its libxcb-xkb dependency) is bundled: winit
+# needs it on X11 sessions and stock Ubuntu desktops don't ship it.
+# Build on the oldest glibc you want to support.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,9 +23,21 @@ install -Dm644 "$here/is-alive.svg" "$appdir/usr/share/icons/hicolor/scalable/ap
 ln -s usr/share/applications/is-alive.desktop "$appdir/is-alive.desktop"
 ln -s usr/share/icons/hicolor/scalable/apps/is-alive.svg "$appdir/is-alive.svg"
 ln -s is-alive.svg "$appdir/.DirIcon"
+
+for lib in libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
+    src=$(ldconfig -p | awk -v l="$lib" -v a="$arch" '$1 == l && $NF ~ a { print $NF; exit }')
+    if [ -z "$src" ]; then
+        echo "error: $lib not found; install libxkbcommon-x11-0 and libxcb-xkb1" >&2
+        exit 1
+    fi
+    install -Dm644 "$(readlink -f "$src")" "$appdir/usr/lib/$lib"
+done
+
 cat > "$appdir/AppRun" <<'RUN'
 #!/bin/sh
-exec "$(dirname "$(readlink -f "$0")")/usr/bin/is-alive" "$@"
+here="$(dirname "$(readlink -f "$0")")"
+export LD_LIBRARY_PATH="$here/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$here/usr/bin/is-alive" "$@"
 RUN
 chmod 755 "$appdir/AppRun"
 
