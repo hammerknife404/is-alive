@@ -13,6 +13,9 @@ use net::hostinfo::HostInfo;
 /// Internet target for the full scan's traceroute (and ping when there's no gateway).
 const WAN_TARGET: &str = "1.1.1.1";
 const DNS_TEST_NAME: &str = "cloudflare.com";
+/// Shown in the title bar, the footer and the full scan's Host info entry,
+/// so a screenshot or pasted log always says which build produced it.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const FULL_SCAN_TIP: &str = "Full scan: pings your gateway, checks its common ports, traces the route to the \
 internet, tests DNS and sweeps your LAN, all at once. Opens Results to watch them run.";
 
@@ -123,6 +126,7 @@ impl eframe::App for App {
                     {
                         self.refresh_info(ui.ctx());
                     }
+                    ui.weak(format!("v{VERSION}"));
                 });
             });
         });
@@ -177,7 +181,7 @@ impl App {
             tool: "Host info",
             started: now.clone(),
             ended: now,
-            text: self.info.summary(),
+            text: format!("is-alive {VERSION}\n{}", self.info.summary()),
         });
 
         let gw = local.gateway.map(|g| g.to_string());
@@ -312,7 +316,7 @@ fn entry_ui(ui: &mut egui::Ui, id: usize, header: &str, text: &str, full: impl F
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("is-alive — network tester")
+            .with_title(format!("is-alive {VERSION} — network tester"))
             .with_app_id("is-alive")
             .with_inner_size([860.0, 600.0])
             .with_min_inner_size([620.0, 400.0]),
