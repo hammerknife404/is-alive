@@ -182,6 +182,8 @@ pub fn run(
 pub struct MxInfo {
     pub hosts: Vec<String>,
     pub ips: Vec<IpAddr>,
+    /// (MX host, CNAME target) for MX hosts that are aliases.
+    pub aliases: Vec<(String, String)>,
 }
 
 /// MX host suffixes of Microsoft 365 and Google Workspace / Gmail.
@@ -195,6 +197,7 @@ const FILTER_MX: &[&str] = &[
     ".pphosted.com",
     ".ppe-hosted.com",
     ".barracudanetworks.com",
+    ".mx.cloudflare.net", // Cloudflare Email Routing
 ];
 
 fn ends_any(h: &str, suffixes: &[&str]) -> bool {
@@ -202,27 +205,42 @@ fn ends_any(h: &str, suffixes: &[&str]) -> bool {
 }
 
 impl MxInfo {
+    /// The names an MX host goes by: itself and its CNAME target, if any.
+    fn names<'a>(&'a self, h: &'a str) -> impl Iterator<Item = &'a str> {
+        std::iter::once(h).chain(
+            self.aliases
+                .iter()
+                .filter(move |(a, _)| a == h)
+                .map(|(_, t)| t.as_str()),
+        )
+    }
+    fn any(&self, suffixes: &[&str]) -> bool {
+        self.hosts
+            .iter()
+            .any(|h| self.names(h).any(|n| ends_any(n, suffixes)))
+    }
     fn m365(&self) -> bool {
-        self.hosts.iter().any(|h| ends_any(h, M365_MX))
+        self.any(M365_MX)
     }
     /// Every MX is a hosted mail/filtering service, whose inbound relays
     /// don't send the domain's mail, so their reverse DNS doesn't matter here.
     fn hosted(&self) -> bool {
         !self.hosts.is_empty()
-            && self
-                .hosts
-                .iter()
-                .all(|h| ends_any(h, M365_MX) || ends_any(h, GOOGLE_MX) || ends_any(h, FILTER_MX))
+            && self.hosts.iter().all(|h| {
+                self.names(h).any(|n| {
+                    ends_any(n, M365_MX) || ends_any(n, GOOGLE_MX) || ends_any(n, FILTER_MX)
+                })
+            })
     }
     fn google(&self) -> bool {
-        self.hosts.iter().any(|h| ends_any(h, GOOGLE_MX))
+        self.any(GOOGLE_MX)
     }
 }
 
-/// A and AAAA addresses of `host`, plus whether the name is a CNAME.
-fn addrs(c: &Client, host: &str) -> io::Result<(Vec<IpAddr>, bool)> {
+/// A and AAAA addresses of `host`, plus the final CNAME target if it is an alias.
+fn addrs(c: &Client, host: &str) -> io::Result<(Vec<IpAddr>, Option<String>)> {
     let a = c.ask(host, dnsq::A)?;
-    let cname = !a.names(dnsq::CNAME).is_empty();
+    let cname = a.names(dnsq::CNAME).pop();
     let mut ips = a.ips();
     ips.extend(c.ask(host, dnsq::AAAA)?.ips());
     Ok((ips, cname))
@@ -259,6 +277,15 @@ fn tag<'a>(t: &'a [(String, String)], key: &str) -> Option<&'a str> {
 /// The zone apex holding `name` (the owner of the SOA that answers for it).
 fn zone_of(c: &Client, name: &str) -> io::Result<String> {
     let m = c.ask(name, dnsq::SOA)?;
+    // An alias answers with its target's SOA, but the name itself is
+    // published in the zone above it (mail.yahoo.com lives in yahoo.com).
+    if m.answers
+        .iter()
+        .any(|r| r.rtype == dnsq::CNAME && r.name == name)
+        && let Some(p) = parent(name)
+    {
+        return zone_of(c, p);
+    }
     Ok(m.answers
         .iter()
         .chain(&m.authority)
@@ -341,6 +368,13 @@ mod tests {
                         ans.extend(hit);
                         break;
                     }
+                    // Wildcard: *.<parent> answers for any name under it.
+                    let wc = format!("*.{}", name.split_once('.').map_or("", |p| p.1));
+                    let hit: Vec<_> = zone.iter().filter(|r| r.0 == wc && r.1 == qtype).collect();
+                    if !hit.is_empty() {
+                        ans.extend(hit);
+                        break;
+                    }
                     let Some(cn) = zone.iter().find(|r| r.0 == name && r.1 == dnsq::CNAME) else {
                         break;
                     };
@@ -351,8 +385,17 @@ mod tests {
                         .collect();
                 }
                 let mut r = q[..i + 5].to_vec();
-                // Names under "fail." answer SERVFAIL.
-                let rcode = if labels[0] == "fail" { 2 } else { 0 };
+                // Names with a "fail" label answer SERVFAIL; "bogus.*" names act
+                // like a broken DNSSEC zone: SERVFAIL unless CD is set.
+                let bogus = labels[0] == "bogus" && q[3] & 0x10 == 0;
+                let rcode = if labels.iter().any(|l| l == "fail") || bogus {
+                    2
+                } else {
+                    0
+                };
+                if rcode != 0 {
+                    ans.clear();
+                }
                 r[2..4].copy_from_slice(&[0x81, 0x80 | rcode]);
                 r[6..8].copy_from_slice(&(ans.len() as u16).to_be_bytes());
                 r[10..12].copy_from_slice(&[0, 0]);
@@ -376,6 +419,19 @@ mod tests {
             v.extend(l.as_bytes());
         }
         v.push(0);
+        v
+    }
+
+    fn soa(mname: &str) -> Vec<u8> {
+        let mut v = wire(mname);
+        v.extend(wire("hostmaster.test"));
+        v.extend([0, 0, 0, 1].repeat(5)); // serial, refresh, retry, expire, minimum
+        v
+    }
+
+    fn mx_to(host: &str) -> Vec<u8> {
+        let mut v = vec![0, 10];
+        v.extend(wire(host));
         v
     }
 
@@ -459,6 +515,41 @@ mod tests {
             ),
             ("_mta-sts.example.test", dnsq::TXT, txt("v=STSv1; id=1")),
             ("_mta-sts.sts.test", dnsq::TXT, txt("v=STSv1; id=1")),
+            // DKIM wildcard revoking every selector (example.com style).
+            ("*._domainkey.wild.test", dnsq::TXT, txt("v=DKIM1; p=")),
+            // Microsoft 365: selector1 standby, selector2 active 1024-bit.
+            (
+                "selector1._domainkey.m365.test",
+                dnsq::CNAME,
+                wire("selector1-m365-test._domainkey.m365test.onmicrosoft.com"),
+            ),
+            (
+                "selector2._domainkey.m365.test",
+                dnsq::CNAME,
+                wire("selector2-m365-test._domainkey.m365test.onmicrosoft.com"),
+            ),
+            (
+                "selector2-m365-test._domainkey.m365test.onmicrosoft.com",
+                dnsq::TXT,
+                txt(&format!("v=DKIM1; k=rsa; p={key}")),
+            ),
+            // A CNAMEd name: its zone is the parent, not the target's zone.
+            ("alias.zone.test", dnsq::CNAME, wire("host.other.test")),
+            ("zone.test", dnsq::SOA, soa("ns.zone.test")),
+            ("host.other.test", dnsq::SOA, soa("ns.other.test")),
+            // MX that is a CNAME to a hosted filter.
+            ("ali.test", dnsq::MX, mx_to("mx.ali.test")),
+            (
+                "mx.ali.test",
+                dnsq::CNAME,
+                wire("mxa.global.inbound.cf-emailsecurity.net"),
+            ),
+            (
+                "mxa.global.inbound.cf-emailsecurity.net",
+                dnsq::A,
+                vec![127, 0, 0, 7],
+            ),
+            ("bogus.test", dnsq::SOA, soa("ns.bogus.test")),
             (
                 "default._bimi.bimi.test",
                 dnsq::TXT,
@@ -576,8 +667,59 @@ mod tests {
         let hosted = MxInfo {
             hosts: vec!["example-test.mail.protection.outlook.com".into()],
             ips: info.ips.clone(),
+            aliases: vec![],
         };
         assert_eq!(mx_ptr(&c, &hosted).status(), Status::Info);
+
+        let w = dkim(&c, "wild.test", &[]);
+        assert_eq!(w.status(), Status::Info, "{w:?}");
+        assert!(has(&w, Status::Info, "signs no mail"), "{w:?}");
+        assert!(
+            !w.findings.iter().any(|f| f.1.starts_with("selector1")),
+            "{w:?}"
+        );
+
+        let ms = dkim(&c, "m365.test", &[]);
+        assert!(
+            has(&ms, Status::Info, "selector1: standby Microsoft 365"),
+            "{ms:?}"
+        );
+        assert!(
+            has(
+                &ms,
+                Status::Warn,
+                "selector2: 1024-bit key; rotate it in Microsoft Defender"
+            ),
+            "{ms:?}"
+        );
+
+        // Every selector failing the same way is one line, not thirteen.
+        let bad = dkim(&c, "x.fail.test", &[]);
+        assert_eq!(bad.findings.len(), 1, "{bad:?}");
+        assert!(
+            has(
+                &bad,
+                Status::Fail,
+                "(all 13 selectors failed, starting with"
+            ),
+            "{bad:?}"
+        );
+
+        assert_eq!(zone_of(&c, "alias.zone.test").unwrap(), "zone.test");
+
+        let (am, ainfo) = mx(&c, "ali.test");
+        assert!(
+            has(
+                &am,
+                Status::Warn,
+                "CNAME (to mxa.global.inbound.cf-emailsecurity.net)"
+            ),
+            "{am:?}"
+        );
+        assert_eq!(mx_ptr(&c, &ainfo).status(), Status::Info);
+
+        let ds = dnssec(&c, "bogus.test");
+        assert!(has(&ds, Status::Fail, "bogus"), "{ds:?}");
 
         let ad = autodiscover(&c, d, &info);
         assert_eq!(ad.status(), Status::Info, "{ad:?}");
