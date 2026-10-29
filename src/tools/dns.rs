@@ -4,7 +4,8 @@ use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// Where a lookup is sent.
 #[derive(Clone, Copy, PartialEq)]
@@ -286,17 +287,38 @@ impl DnsTool {
             } else {
                 vec![source]
             };
-            let results: Vec<(String, Rows)> = std::thread::scope(|s| {
-                let hs: Vec<_> = sources
-                    .iter()
-                    .map(|&src| {
-                        let (q, types) = (&q, &types);
-                        s.spawn(move || lookup(src, q, types))
-                    })
-                    .collect();
-                hs.into_iter().filter_map(|h| h.join().ok()).collect()
-            });
             let compare = sources.len() > 1;
+            // Detached, so Stop returns at once instead of waiting out
+            // timeouts (several seconds per dead nameserver).
+            let (rtx, rrx) = mpsc::channel();
+            let (q2, types2) = (q.clone(), types.clone());
+            std::thread::spawn(move || {
+                let results: Vec<(String, Rows)> = std::thread::scope(|s| {
+                    let hs: Vec<_> = sources
+                        .iter()
+                        .map(|&src| {
+                            let (q, types) = (&q2, &types2);
+                            s.spawn(move || lookup(src, q, types))
+                        })
+                        .collect();
+                    hs.into_iter().filter_map(|h| h.join().ok()).collect()
+                });
+                let _ = rtx.send(results);
+            });
+            let results = loop {
+                if tx.cancelled() {
+                    tx.send(Ev::Error("stopped".into()));
+                    return;
+                }
+                match rrx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(r) => break r,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        tx.send(Ev::Error("lookup failed".into()));
+                        return;
+                    }
+                }
+            };
             let mut sets = Vec::new();
             for (label, r) in &results {
                 match r {
@@ -477,9 +499,9 @@ fn direct(c: dnsq::Client, q: &str, types: &[u16]) -> Rows {
             return Err(format!("{name} {NXDOMAIN}"));
         }
         for rr in m.answers {
-            // Signatures on every type of a signed zone are noise in All;
-            // DNSKEY and DS already show the zone is signed.
-            if rr.rtype == dnsq::RRSIG && types.len() > 2 {
+            // Signatures are noise beside A + AAAA or All (one per type);
+            // a single-type lookup keeps them, and DNSKEY/DS show signing.
+            if rr.rtype == dnsq::RRSIG && types.len() > 1 {
                 continue;
             }
             let row = (dnsq::type_name(rr.rtype), rr.data.to_string());
