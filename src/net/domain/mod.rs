@@ -127,6 +127,20 @@ pub fn normalize(input: &str) -> String {
     s.trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// Why a normalized input can't be checked, if it can't. An IP would be
+/// walked up to the DNS root and "checked" there, which means nothing.
+pub fn invalid(d: &str) -> Option<&'static str> {
+    if d.trim_matches(['[', ']']).parse::<IpAddr>().is_ok() {
+        Some(
+            "that's an IP address: these checks need a domain (use DNS Lookup for a reverse lookup)",
+        )
+    } else if d.is_empty() || !d.contains('.') {
+        Some("enter a domain like example.com")
+    } else {
+        None
+    }
+}
+
 /// Run every check, reporting each as it finishes via `on(index, check)`.
 pub fn run(
     c: &Client,
@@ -472,6 +486,14 @@ mod tests {
 
     fn has(k: &Check, s: Status, needle: &str) -> bool {
         k.findings.iter().any(|f| f.0 == s && f.1.contains(needle))
+    }
+
+    #[test]
+    fn rejects_ips_and_bare_names() {
+        assert!(invalid("8.8.8.8").unwrap().starts_with("that's an IP"));
+        assert!(invalid("[2001:db8::1]").is_some());
+        assert!(invalid("localhost").is_some());
+        assert_eq!(invalid("example.com"), None);
     }
 
     #[test]

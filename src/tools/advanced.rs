@@ -206,8 +206,8 @@ impl AdvancedTool {
         self.took = None;
         self.checks.clear();
         let d = domain::normalize(&self.domain);
-        if d.is_empty() || !d.contains('.') {
-            self.err = Some("enter a domain like example.com".into());
+        if let Some(why) = domain::invalid(&d) {
+            self.err = Some(why.into());
             return;
         }
         let res = if self.resolver.trim().is_empty() {
