@@ -39,6 +39,9 @@ impl Source {
     }
 }
 
+/// Ends the error for a name that doesn't exist, so Compare can count it.
+const NXDOMAIN: &str = "does not exist (NXDOMAIN)";
+
 /// One source's answer: (type, value) rows, or why it failed.
 type Rows = Result<Vec<(String, String)>, String>;
 
@@ -301,14 +304,8 @@ impl DnsTool {
                     }
                     Err(e) => tx.send(Ev::Error(e.clone())),
                 }
-                if let Ok(rows) = r {
-                    let set = answer_set(rows, &types);
-                    // An authoritative server answers an alias with just the
-                    // CNAME when the target is in another zone: not a difference.
-                    let alias_only = set.is_empty() && rows.iter().any(|(k, _)| k == "CNAME");
-                    if !alias_only {
-                        sets.push((label, set));
-                    }
+                if let Some(set) = comparable(r, &types) {
+                    sets.push((label, set));
                 }
             }
             if compare {
@@ -318,6 +315,23 @@ impl DnsTool {
             }
             tx.send(Ev::Done(t0.elapsed().as_secs_f64() * 1000.0));
         }));
+    }
+}
+
+/// What a source's answer counts as in Compare, or None to leave it out.
+/// "Doesn't exist" is an answer (a name known only inside is the classic
+/// split-DNS case); timeouts and SERVFAIL are not, and an authoritative
+/// server answering an alias with just the CNAME (target in another zone)
+/// isn't a difference either.
+fn comparable(r: &Rows, types: &[u16]) -> Option<BTreeSet<String>> {
+    match r {
+        Ok(rows) => {
+            let set = answer_set(rows, types);
+            let alias_only = set.is_empty() && rows.iter().any(|(k, _)| k == "CNAME");
+            (!alias_only).then_some(set)
+        }
+        Err(e) if e.ends_with(NXDOMAIN) => Some(BTreeSet::new()),
+        Err(_) => None,
     }
 }
 
@@ -423,7 +437,7 @@ fn direct(c: dnsq::Client, q: &str, types: &[u16]) -> Rows {
     for &t in types {
         let m = c.ask(&name, t).map_err(|e| e.to_string())?;
         if m.rcode == dnsq::NXDOMAIN {
-            return Err(format!("{name} does not exist (NXDOMAIN)"));
+            return Err(format!("{name} {NXDOMAIN}"));
         }
         for rr in m.answers {
             let row = (dnsq::type_name(rr.rtype), rr.data.to_string());
@@ -472,6 +486,24 @@ mod tests {
         );
         assert!(no_records("_imaps._tcp.gmail.com", "A/AAAA").ends_with("set Type to SRV"));
         assert!(!no_records("_imaps._tcp.gmail.com", "SRV").contains("set Type"));
+    }
+
+    #[test]
+    fn nxdomain_counts_in_compare() {
+        let types = [dnsq::A, dnsq::AAAA];
+        let nx: Rows = Err(format!("localhost {NXDOMAIN}"));
+        let timeout: Rows = Err("no answer from 1.1.1.1".into());
+        let alias: Rows = Ok(vec![("CNAME".into(), "x.cdn.test".into())]);
+        assert_eq!(comparable(&nx, &types), Some(BTreeSet::new()));
+        assert_eq!(comparable(&timeout, &types), None);
+        assert_eq!(comparable(&alias, &types), None);
+        let sys: Rows = Ok(vec![("A".into(), "127.0.0.1".into())]);
+        let (ls, lc) = ("System".to_string(), "Cloudflare 1.1.1.1".to_string());
+        let d = differences(&[
+            (&ls, comparable(&sys, &types).unwrap()),
+            (&lc, comparable(&nx, &types).unwrap()),
+        ]);
+        assert_eq!(d.len(), 1, "a name missing outside is flagged");
     }
 
     #[test]
