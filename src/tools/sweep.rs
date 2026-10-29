@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net::icmp;
 use crate::net::{self, targets};
 use crate::widgets::{self, Action, OK};
@@ -158,12 +159,14 @@ impl SweepTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -193,6 +196,27 @@ impl SweepTool {
         s
     }
 
+    /// Alive hosts only; the dead ones are the gaps.
+    fn table(&self) -> Option<Table> {
+        let rows = self
+            .alive
+            .iter()
+            .map(|h| {
+                vec![
+                    self.range.trim().to_string(),
+                    h.ip.to_string(),
+                    log::ms(h.rtt),
+                    log::cell(h.ttl),
+                    h.name.clone().unwrap_or_default(),
+                ]
+            })
+            .collect();
+        Some(Table {
+            columns: &["range", "ip", "rtt_ms", "ttl", "name"],
+            rows,
+        })
+    }
+
     /// Start a run with the given target (used by the full scan).
     pub fn run(&mut self, ctx: &egui::Context, range: &str) {
         self.range = range.into();
@@ -216,7 +240,7 @@ impl SweepTool {
         let (timeout, threads, rate, names) =
             (self.timeout_ms, self.threads, self.rate, self.resolve_names);
 
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.started_at = Instant::now();
         self.job = Some(Job::spawn(ctx, move |tx| {
             net::par_for(&ips, threads, rate, tx.cancel_flag(), |&ip| {

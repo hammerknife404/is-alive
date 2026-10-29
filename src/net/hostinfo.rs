@@ -32,6 +32,22 @@ impl HostInfo {
         )
     }
 
+    pub fn table(&self, version: &str) -> crate::log::Table {
+        let row = |k: &str, v: String| vec![k.to_string(), v];
+        crate::log::Table {
+            columns: &["field", "value"],
+            rows: vec![
+                row("version", version.to_string()),
+                row(
+                    "lan",
+                    crate::log::cell(self.lan.map(|(ip, bits)| format!("{ip}/{bits}"))),
+                ),
+                row("gateway", crate::log::cell(self.gateway)),
+                row("wan", crate::log::cell(self.wan)),
+            ],
+        }
+    }
+
     /// Everything, including one DNS query for the public address.
     pub fn fetch() -> Self {
         Self {

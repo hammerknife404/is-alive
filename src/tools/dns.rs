@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net::{self, dnsq};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
@@ -198,12 +199,14 @@ impl DnsTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -226,6 +229,25 @@ impl DnsTool {
             s += &format!("{src:<w$}  {k:<6} {v}\n");
         }
         s
+    }
+
+    /// Records, then Compare's notes as rows of type "note".
+    fn table(&self) -> Option<Table> {
+        let q = self.ran.clone();
+        let rows = self
+            .records
+            .iter()
+            .map(|(src, k, v)| vec![q.clone(), src.clone(), k.clone(), v.clone()])
+            .chain(
+                self.notes
+                    .iter()
+                    .map(|n| vec![q.clone(), String::new(), "note".into(), n.clone()]),
+            )
+            .collect();
+        Some(Table {
+            columns: &["lookup", "source", "type", "value"],
+            rows,
+        })
     }
 
     /// Start a run with the given target (used by the full scan).
@@ -278,7 +300,7 @@ impl DnsTool {
             self.rtype
         };
         self.ran = format!("{q} ({shown}) via {}", source.label());
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();
             let sources: Vec<Source> = if source == Source::Compare {

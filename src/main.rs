@@ -184,6 +184,7 @@ impl App {
             started: now.clone(),
             ended: now,
             text: format!("is-alive {VERSION}\n{}", self.info.summary()),
+            table: Some(self.info.table(VERSION)),
         });
 
         let gw = local.gateway.map(|g| g.to_string());
@@ -210,12 +211,13 @@ impl App {
             ("Advanced", self.advanced.take_finished()),
         ];
         for (tool, run) in done {
-            if let Some((started, text)) = run {
+            if let Some((started, text, table)) = run {
                 self.log.push(log::Entry {
                     tool,
                     started,
                     ended: log::now(),
                     text,
+                    table,
                 });
             }
         }

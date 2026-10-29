@@ -22,6 +22,26 @@ pub struct Entry {
     pub started: String,
     pub ended: String,
     pub text: String,
+    /// The run's data as rows, for CSV; None for a run that only has text
+    /// (one that failed before producing anything).
+    pub table: Option<Table>,
+}
+
+/// Structured results of one run. Columns are fixed per tool, so runs of the
+/// same tool stack into one CSV.
+pub struct Table {
+    pub columns: &'static [&'static str],
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Cell for an optional value: empty when absent.
+pub fn cell<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map(|v| v.to_string()).unwrap_or_default()
+}
+
+/// Milliseconds with fixed precision, no unit, for spreadsheet columns.
+pub fn ms(v: f64) -> String {
+    format!("{v:.2}")
 }
 
 impl Entry {
@@ -106,7 +126,10 @@ impl Format {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Format::Csv => "One row per run (tool, started, ended, output); opens in Excel",
+            Format::Csv => {
+                "One row per result with each tool's columns (port, state, RTT…); \
+filter on the tool column when several tools are exported"
+            }
             Format::Json => "Array of runs, for scripts and other tools",
             Format::Markdown => "Headings and code blocks; pastes into tickets, wikis and chat",
             Format::Html => "Self-contained page; opens in any browser or attaches to an email",
@@ -115,16 +138,7 @@ impl Format {
 
     pub fn export(self, entries: &[&Entry]) -> String {
         match self {
-            Format::Csv => {
-                // BOM so Excel reads UTF-8 (…, ✓) correctly; CRLF per RFC 4180.
-                let mut s = String::from("\u{feff}tool,started,ended,output\r\n");
-                for e in entries {
-                    let row = [e.tool, &e.started, &e.ended, e.text.trim_end()];
-                    s += &row.map(csv_field).join(",");
-                    s += "\r\n";
-                }
-                s
-            }
+            Format::Csv => csv(entries),
             Format::Json => {
                 let runs: Vec<_> = entries
                     .iter()
@@ -178,6 +192,75 @@ pre{background:#f4f4f4;padding:.8em;overflow-x:auto}\
     }
 }
 
+// BOM so Excel reads UTF-8 (…, ✓) correctly; CRLF per RFC 4180.
+const CSV_START: &str = "\u{feff}";
+
+fn csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
+    let cells: Vec<String> = cells.into_iter().map(csv_field).collect();
+    cells.join(",") + "\r\n"
+}
+
+/// One file for any mix of runs. Runs of a single tool get just that tool's
+/// columns; a mix gets a tool column and the union of every tool's columns
+/// (shared names like ip and rtt_ms line up), blank where a tool has none.
+/// Runs with no table (failed early) put their text in an output column.
+fn csv(entries: &[&Entry]) -> String {
+    let mut columns: Vec<&str> = Vec::new();
+    for c in entries
+        .iter()
+        .flat_map(|e| e.table.iter().flat_map(|t| t.columns))
+    {
+        if !columns.contains(c) {
+            columns.push(c);
+        }
+    }
+    let single = entries.windows(2).all(|w| w[0].tool == w[1].tool);
+    let text_only = entries.iter().any(|e| e.table.is_none());
+    let mut head: Vec<&str> = Vec::new();
+    if !single || text_only {
+        head.push("tool");
+    }
+    head.push("started");
+    head.extend(&columns);
+    if text_only {
+        head.push("output");
+    }
+
+    let mut s = String::from(CSV_START);
+    s += &csv_row(head.iter().copied());
+    for e in entries {
+        let mut prefix: Vec<&str> = Vec::new();
+        if !single || text_only {
+            prefix.push(e.tool);
+        }
+        prefix.push(&e.started);
+        match &e.table {
+            Some(t) => {
+                for r in &t.rows {
+                    let mut row = prefix.clone();
+                    row.extend(columns.iter().map(|c| {
+                        t.columns
+                            .iter()
+                            .position(|tc| tc == c)
+                            .map_or("", |i| r[i].as_str())
+                    }));
+                    if text_only {
+                        row.push("");
+                    }
+                    s += &csv_row(row);
+                }
+            }
+            None => {
+                let mut row = prefix.clone();
+                row.extend(columns.iter().map(|_| ""));
+                row.push(e.text.trim_end());
+                s += &csv_row(row);
+            }
+        }
+    }
+    s
+}
+
 fn csv_field(v: &str) -> String {
     if v.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", v.replace('"', "\"\""))
@@ -212,6 +295,7 @@ mod tests {
             started: "a".into(),
             ended: "b".into(),
             text: "x".repeat(n),
+            table: None,
         }
     }
 
@@ -241,14 +325,58 @@ mod tests {
             started: "a".into(),
             ended: "b".into(),
             text: "x, \"y\"\n<z> ```\n".into(),
+            table: None,
         };
         let csv = Format::Csv.export(&[&e]);
-        assert!(csv.ends_with("DNS Lookup,a,b,\"x, \"\"y\"\"\n<z> ```\"\r\n"));
+        assert!(csv.ends_with("DNS Lookup,a,\"x, \"\"y\"\"\n<z> ```\"\r\n"));
 
         let json: serde_json::Value = serde_json::from_str(&Format::Json.export(&[&e])).unwrap();
         assert_eq!(json[0]["output"], "x, \"y\"\n<z> ```");
 
         assert!(Format::Markdown.export(&[&e]).contains("````\nx, "));
         assert!(Format::Html.export(&[&e]).contains("&lt;z&gt;"));
+    }
+
+    fn run(tool: &'static str, started: &str, rows: &[&[&str]]) -> Entry {
+        Entry {
+            tool,
+            started: started.into(),
+            ended: "e".into(),
+            text: "text".into(),
+            table: Some(Table {
+                columns: &["port", "state"],
+                rows: rows
+                    .iter()
+                    .map(|r| r.iter().map(|c| c.to_string()).collect())
+                    .collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn csv_uses_tool_columns() {
+        let a = run("Port Check", "t1", &[&["22", "open"], &["80", "closed"]]);
+        let b = run("Port Check", "t2", &[&["443", "open"]]);
+        assert_eq!(
+            Format::Csv.export(&[&a, &b]),
+            "\u{feff}started,port,state\r\nt1,22,open\r\nt1,80,closed\r\nt2,443,open\r\n"
+        );
+    }
+
+    #[test]
+    fn csv_mixes_tools_in_one_file() {
+        let a = run("Port Check", "t1", &[&["22", "open"]]);
+        let mut b = run("Subnet Sweep", "t2", &[&["10.0.0.1", "1.5"]]);
+        b.table.as_mut().unwrap().columns = &["ip", "rtt_ms"];
+        let mut c = run("Ping", "t3", &[]);
+        c.table = None;
+        c.text = "error: no route".into();
+        assert_eq!(
+            Format::Csv.export(&[&a, &b, &c]),
+            "\u{feff}tool,started,port,state,ip,rtt_ms,output\r\n\
+Port Check,t1,22,open,,,\r\n\
+Subnet Sweep,t2,,,10.0.0.1,1.5,\r\n\
+Ping,t3,,,,,error: no route\r\n"
+        );
     }
 }

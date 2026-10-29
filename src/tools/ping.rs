@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net::icmp::{self, EchoStatus};
 use crate::net::{self, TcpState};
 use crate::widgets::{self, Action, BAD, OK, WARN};
@@ -46,7 +47,13 @@ impl Stats {
 
 enum Ev {
     Resolved(IpAddr),
-    Reply { ok: bool, rtt: f64, text: String },
+    /// `row` holds the TABLE columns.
+    Reply {
+        ok: bool,
+        rtt: f64,
+        text: String,
+        row: Vec<String>,
+    },
     Error(String),
 }
 
@@ -63,6 +70,8 @@ pub struct PingTool {
     run_started: Option<String>,
     target: Option<IpAddr>,
     lines: VecDeque<(bool, String)>,
+    /// Same replies as `lines`, as table rows.
+    rows: VecDeque<Vec<String>>,
     samples: VecDeque<Option<f64>>,
     stats: Stats,
     err: Option<String>,
@@ -83,6 +92,7 @@ impl Default for PingTool {
             run_started: None,
             target: None,
             lines: VecDeque::new(),
+            rows: VecDeque::new(),
             samples: VecDeque::new(),
             stats: Stats::default(),
             err: None,
@@ -96,11 +106,12 @@ impl PingTool {
     pub fn poll(&mut self) -> bool {
         pump(&mut self.job, |ev| match ev {
             Ev::Resolved(ip) => self.target = Some(ip),
-            Ev::Reply { ok, rtt, text } => {
+            Ev::Reply { ok, rtt, text, row } => {
                 let rtt = ok.then_some(rtt);
                 self.stats.add(rtt);
                 push_capped(&mut self.samples, rtt, CHART_POINTS);
                 push_capped(&mut self.lines, (ok, text), MAX_LINES);
+                push_capped(&mut self.rows, row, MAX_LINES);
             }
             Ev::Error(e) => self.err = Some(e),
         })
@@ -200,12 +211,14 @@ impl PingTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -231,6 +244,15 @@ impl PingTool {
         s
     }
 
+    fn table(&self) -> Option<Table> {
+        Some(Table {
+            columns: &[
+                "target", "mode", "port", "seq", "from", "status", "rtt_ms", "ttl", "bytes",
+            ],
+            rows: self.rows.iter().cloned().collect(),
+        })
+    }
+
     /// Start a run with the given target (used by the full scan).
     pub fn run(&mut self, ctx: &egui::Context, host: &str, count: u32) {
         self.host = host.into();
@@ -247,6 +269,7 @@ impl PingTool {
         self.err = None;
         self.target = None;
         self.lines.clear();
+        self.rows.clear();
         self.samples.clear();
         self.stats = Stats::default();
         let host = self.host.trim().to_string();
@@ -259,7 +282,7 @@ impl PingTool {
         let interval = Duration::from_millis(self.interval_ms as u64);
         let timeout = self.timeout_ms;
 
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,
@@ -302,16 +325,35 @@ fn icmp_line(ip: IpAddr, seq: u32, size: u16, timeout: u32) -> Ev {
         EchoStatus::Unreachable(m) => (false, format!("#{seq:<5} {from}: {m}")),
         EchoStatus::Error(m) => (false, format!("#{seq:<5} error: {m}")),
     };
+    let status = match &r.status {
+        EchoStatus::Reply => "reply".to_string(),
+        EchoStatus::Timeout => "timeout".into(),
+        EchoStatus::TtlExpired => "ttl expired".into(),
+        EchoStatus::Unreachable(m) => format!("unreachable: {m}"),
+        EchoStatus::Error(m) => format!("error: {m}"),
+    };
+    let row = vec![
+        ip.to_string(),
+        "ICMP".into(),
+        String::new(),
+        seq.to_string(),
+        r.from.map(|a| a.to_string()).unwrap_or_default(),
+        status,
+        if ok { log::ms(r.rtt_ms) } else { String::new() },
+        log::cell(r.ttl),
+        size.to_string(),
+    ];
     Ev::Reply {
         ok,
         rtt: r.rtt_ms,
         text,
+        row,
     }
 }
 
 fn tcp_line(addr: SocketAddr, seq: u32, timeout: u32) -> Ev {
     let (state, ms) = net::tcp_probe(addr, Duration::from_millis(timeout as u64));
-    let (ok, text) = match state {
+    let (ok, text) = match &state {
         TcpState::Open => (
             true,
             format!("#{seq:<5} connected to {addr} time={}", widgets::fmt_ms(ms)),
@@ -320,7 +362,29 @@ fn tcp_line(addr: SocketAddr, seq: u32, timeout: u32) -> Ev {
         TcpState::Filtered => (false, format!("#{seq:<5} {addr} timed out (filtered?)")),
         TcpState::Error(e) => (false, format!("#{seq:<5} {addr} error: {e}")),
     };
-    Ev::Reply { ok, rtt: ms, text }
+    let status = match &state {
+        TcpState::Open => "open".to_string(),
+        TcpState::Closed => "closed".into(),
+        TcpState::Filtered => "filtered".into(),
+        TcpState::Error(e) => format!("error: {e}"),
+    };
+    let row = vec![
+        addr.ip().to_string(),
+        "TCP".into(),
+        addr.port().to_string(),
+        seq.to_string(),
+        String::new(),
+        status,
+        if ok { log::ms(ms) } else { String::new() },
+        String::new(),
+        String::new(),
+    ];
+    Ev::Reply {
+        ok,
+        rtt: ms,
+        text,
+        row,
+    }
 }
 
 fn push_capped<T>(q: &mut VecDeque<T>, v: T, cap: usize) {
@@ -343,6 +407,20 @@ mod tests {
         assert_eq!((s.sent, s.recv), (5, 3));
         assert_eq!(s.min_avg_max(), Some((1.0, 3.0, 5.0)));
         assert_eq!(Stats::default().min_avg_max(), None);
+    }
+
+    #[test]
+    fn rows_match_columns() {
+        let cols = PingTool::default().table().unwrap().columns.len();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 1));
+        let Ev::Reply { row, .. } = tcp_line(addr, 1, 200) else {
+            panic!("expected a reply");
+        };
+        assert_eq!(row.len(), cols);
+        let Ev::Reply { row, .. } = icmp_line(addr.ip(), 1, 32, 200) else {
+            panic!("expected a reply");
+        };
+        assert_eq!(row.len(), cols);
     }
 
     #[test]
