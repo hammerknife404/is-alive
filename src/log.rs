@@ -127,8 +127,8 @@ impl Format {
     pub fn hint(self) -> &'static str {
         match self {
             Format::Csv => {
-                "Each tool's own columns (port, state, RTT…), one row per result; \
-runs of several tools save one file per tool into a folder"
+                "One row per result with each tool's columns (port, state, RTT…); \
+filter on the tool column when several tools are exported"
             }
             Format::Json => "Array of runs, for scripts and other tools",
             Format::Markdown => "Headings and code blocks; pastes into tickets, wikis and chat",
@@ -136,43 +136,9 @@ runs of several tools save one file per tool into a folder"
         }
     }
 
-    /// Files to write as (file name, contents). One file, except CSV across
-    /// several tools: their columns differ, so each tool gets its own file.
-    pub fn files(self, entries: &[&Entry], stem: &str) -> Vec<(String, String)> {
-        let name = |s: &str| format!("is-alive-{s}.{}", self.ext());
-        if self != Format::Csv {
-            return vec![(name(stem), self.export(entries))];
-        }
-        // Group by tool in first-seen order; runs without a table share one file.
-        let mut groups: Vec<(Option<&'static str>, Vec<&Entry>)> = Vec::new();
-        for e in entries {
-            let key = e.table.as_ref().map(|_| e.tool);
-            match groups.iter_mut().find(|g| g.0 == key) {
-                Some(g) => g.1.push(e),
-                None => groups.push((key, vec![e])),
-            }
-        }
-        let single = groups.len() == 1;
-        groups
-            .into_iter()
-            .map(|(tool, es)| {
-                let file = match tool {
-                    _ if single => name(stem),
-                    Some(t) => name(&format!("{stem}-{}", slug(t))),
-                    None => name(&format!("{stem}-runs")),
-                };
-                let body = match tool {
-                    Some(_) => csv_table(&es),
-                    None => csv_runs(&es),
-                };
-                (file, body)
-            })
-            .collect()
-    }
-
     pub fn export(self, entries: &[&Entry]) -> String {
         match self {
-            Format::Csv => csv_runs(entries),
+            Format::Csv => csv(entries),
             Format::Json => {
                 let runs: Vec<_> = entries
                     .iter()
@@ -234,40 +200,65 @@ fn csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
     cells.join(",") + "\r\n"
 }
 
-/// Runs of one tool: the tool's own columns, each row tagged with its run's start.
-fn csv_table(entries: &[&Entry]) -> String {
-    let Some(columns) = entries
+/// One file for any mix of runs. Runs of a single tool get just that tool's
+/// columns; a mix gets a tool column and the union of every tool's columns
+/// (shared names like ip and rtt_ms line up), blank where a tool has none.
+/// Runs with no table (failed early) put their text in an output column.
+fn csv(entries: &[&Entry]) -> String {
+    let mut columns: Vec<&str> = Vec::new();
+    for c in entries
         .iter()
-        .find_map(|e| e.table.as_ref().map(|t| t.columns))
-    else {
-        return csv_runs(entries);
-    };
+        .flat_map(|e| e.table.iter().flat_map(|t| t.columns))
+    {
+        if !columns.contains(c) {
+            columns.push(c);
+        }
+    }
+    let single = entries.windows(2).all(|w| w[0].tool == w[1].tool);
+    let text_only = entries.iter().any(|e| e.table.is_none());
+    let mut head: Vec<&str> = Vec::new();
+    if !single || text_only {
+        head.push("tool");
+    }
+    head.push("started");
+    head.extend(&columns);
+    if text_only {
+        head.push("output");
+    }
+
     let mut s = String::from(CSV_START);
-    s += &csv_row(["started"].into_iter().chain(columns.iter().copied()));
+    s += &csv_row(head.iter().copied());
     for e in entries {
-        for row in e.table.iter().flat_map(|t| &t.rows) {
-            s += &csv_row(
-                [e.started.as_str()]
-                    .into_iter()
-                    .chain(row.iter().map(String::as_str)),
-            );
+        let mut prefix: Vec<&str> = Vec::new();
+        if !single || text_only {
+            prefix.push(e.tool);
+        }
+        prefix.push(&e.started);
+        match &e.table {
+            Some(t) => {
+                for r in &t.rows {
+                    let mut row = prefix.clone();
+                    row.extend(columns.iter().map(|c| {
+                        t.columns
+                            .iter()
+                            .position(|tc| tc == c)
+                            .map_or("", |i| r[i].as_str())
+                    }));
+                    if text_only {
+                        row.push("");
+                    }
+                    s += &csv_row(row);
+                }
+            }
+            None => {
+                let mut row = prefix.clone();
+                row.extend(columns.iter().map(|_| ""));
+                row.push(e.text.trim_end());
+                s += &csv_row(row);
+            }
         }
     }
     s
-}
-
-/// One row per run with its text output, for runs with no table.
-fn csv_runs(entries: &[&Entry]) -> String {
-    let mut s = String::from(CSV_START);
-    s += &csv_row(["tool", "started", "ended", "output"]);
-    for e in entries {
-        s += &csv_row([e.tool, &e.started, &e.ended, e.text.trim_end()]);
-    }
-    s
-}
-
-fn slug(tool: &str) -> String {
-    tool.to_lowercase().replace(' ', "-")
 }
 
 fn csv_field(v: &str) -> String {
@@ -337,7 +328,7 @@ mod tests {
             table: None,
         };
         let csv = Format::Csv.export(&[&e]);
-        assert!(csv.ends_with("DNS Lookup,a,b,\"x, \"\"y\"\"\n<z> ```\"\r\n"));
+        assert!(csv.ends_with("DNS Lookup,a,\"x, \"\"y\"\"\n<z> ```\"\r\n"));
 
         let json: serde_json::Value = serde_json::from_str(&Format::Json.export(&[&e])).unwrap();
         assert_eq!(json[0]["output"], "x, \"y\"\n<z> ```");
@@ -366,34 +357,26 @@ mod tests {
     fn csv_uses_tool_columns() {
         let a = run("Port Check", "t1", &[&["22", "open"], &["80", "closed"]]);
         let b = run("Port Check", "t2", &[&["443", "open"]]);
-        let files = Format::Csv.files(&[&a, &b], "log");
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].0, "is-alive-log.csv");
         assert_eq!(
-            files[0].1,
+            Format::Csv.export(&[&a, &b]),
             "\u{feff}started,port,state\r\nt1,22,open\r\nt1,80,closed\r\nt2,443,open\r\n"
         );
     }
 
     #[test]
-    fn csv_splits_tools_into_files() {
+    fn csv_mixes_tools_in_one_file() {
         let a = run("Port Check", "t1", &[&["22", "open"]]);
-        let b = run("Subnet Sweep", "t2", &[]);
+        let mut b = run("Subnet Sweep", "t2", &[&["10.0.0.1", "1.5"]]);
+        b.table.as_mut().unwrap().columns = &["ip", "rtt_ms"];
         let mut c = run("Ping", "t3", &[]);
         c.table = None;
-        let names: Vec<String> = Format::Csv
-            .files(&[&a, &b, &c], "log")
-            .into_iter()
-            .map(|f| f.0)
-            .collect();
+        c.text = "error: no route".into();
         assert_eq!(
-            names,
-            [
-                "is-alive-log-port-check.csv",
-                "is-alive-log-subnet-sweep.csv",
-                "is-alive-log-runs.csv"
-            ]
+            Format::Csv.export(&[&a, &b, &c]),
+            "\u{feff}tool,started,port,state,ip,rtt_ms,output\r\n\
+Port Check,t1,22,open,,,\r\n\
+Subnet Sweep,t2,,,10.0.0.1,1.5,\r\n\
+Ping,t3,,,,,error: no route\r\n"
         );
-        assert_eq!(Format::Json.files(&[&a, &b], "log").len(), 1);
     }
 }

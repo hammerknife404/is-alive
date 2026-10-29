@@ -27,7 +27,7 @@ CSV export uses each tool's own columns, one row per result, with the run's star
 | Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
 | Host info | field, value |
 
-Exporting runs of several tools asks for a folder and writes one CSV per tool; runs that failed before producing results go to `-runs.csv` with their text.
+Exporting the whole log gives one CSV: a `tool` column plus every tool's columns (shared ones like `ip` and `rtt_ms` line up), so filter on `tool` in Excel. Runs that failed before producing results carry their text in an `output` column.
 
 ### Advanced (domain health)
 
