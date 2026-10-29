@@ -15,6 +15,20 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
+CSV export uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel:
+
+| Tool | Columns |
+|---|---|
+| Ping | target, mode, port, seq, from, status, rtt_ms, ttl, bytes |
+| Port Check | host, ip, port, state, service, rtt_ms, error (closed/filtered included) |
+| Traceroute | host, ip, hop, address, name, rtt1_ms, rtt2_ms, rtt3_ms, note |
+| Subnet Sweep | range, ip, rtt_ms, ttl, name (alive hosts) |
+| DNS Lookup | lookup, source, type, value (Compare notes as type `note`) |
+| Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
+| Host info | field, value |
+
+Exporting runs of several tools asks for a folder and writes one CSV per tool; runs that failed before producing results go to `-runs.csv` with their text.
+
 ### Advanced (domain health)
 
 Enter a domain (`example.com`, `user@example.com` or a URL all work) and press Enter. The checks run in parallel against a public resolver queried directly (default `1.1.1.1`, any IP accepted) rather than the system one, so you see what the internet sees, not hosts-file or split-DNS answers. Each check reports PASS / WARN / FAIL / INFO with the reason and the raw records; checks with warnings or failures open automatically. **Stop** ends a run immediately, and results go to Copy, Save and the Results log like every other tab.

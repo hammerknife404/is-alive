@@ -22,6 +22,26 @@ pub struct Entry {
     pub started: String,
     pub ended: String,
     pub text: String,
+    /// The run's data as rows, for CSV; None for a run that only has text
+    /// (one that failed before producing anything).
+    pub table: Option<Table>,
+}
+
+/// Structured results of one run. Columns are fixed per tool, so runs of the
+/// same tool stack into one CSV.
+pub struct Table {
+    pub columns: &'static [&'static str],
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Cell for an optional value: empty when absent.
+pub fn cell<T: std::fmt::Display>(v: Option<T>) -> String {
+    v.map(|v| v.to_string()).unwrap_or_default()
+}
+
+/// Milliseconds with fixed precision, no unit, for spreadsheet columns.
+pub fn ms(v: f64) -> String {
+    format!("{v:.2}")
 }
 
 impl Entry {
@@ -106,25 +126,53 @@ impl Format {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Format::Csv => "One row per run (tool, started, ended, output); opens in Excel",
+            Format::Csv => {
+                "Each tool's own columns (port, state, RTT…), one row per result; \
+runs of several tools save one file per tool into a folder"
+            }
             Format::Json => "Array of runs, for scripts and other tools",
             Format::Markdown => "Headings and code blocks; pastes into tickets, wikis and chat",
             Format::Html => "Self-contained page; opens in any browser or attaches to an email",
         }
     }
 
+    /// Files to write as (file name, contents). One file, except CSV across
+    /// several tools: their columns differ, so each tool gets its own file.
+    pub fn files(self, entries: &[&Entry], stem: &str) -> Vec<(String, String)> {
+        let name = |s: &str| format!("is-alive-{s}.{}", self.ext());
+        if self != Format::Csv {
+            return vec![(name(stem), self.export(entries))];
+        }
+        // Group by tool in first-seen order; runs without a table share one file.
+        let mut groups: Vec<(Option<&'static str>, Vec<&Entry>)> = Vec::new();
+        for e in entries {
+            let key = e.table.as_ref().map(|_| e.tool);
+            match groups.iter_mut().find(|g| g.0 == key) {
+                Some(g) => g.1.push(e),
+                None => groups.push((key, vec![e])),
+            }
+        }
+        let single = groups.len() == 1;
+        groups
+            .into_iter()
+            .map(|(tool, es)| {
+                let file = match tool {
+                    _ if single => name(stem),
+                    Some(t) => name(&format!("{stem}-{}", slug(t))),
+                    None => name(&format!("{stem}-runs")),
+                };
+                let body = match tool {
+                    Some(_) => csv_table(&es),
+                    None => csv_runs(&es),
+                };
+                (file, body)
+            })
+            .collect()
+    }
+
     pub fn export(self, entries: &[&Entry]) -> String {
         match self {
-            Format::Csv => {
-                // BOM so Excel reads UTF-8 (…, ✓) correctly; CRLF per RFC 4180.
-                let mut s = String::from("\u{feff}tool,started,ended,output\r\n");
-                for e in entries {
-                    let row = [e.tool, &e.started, &e.ended, e.text.trim_end()];
-                    s += &row.map(csv_field).join(",");
-                    s += "\r\n";
-                }
-                s
-            }
+            Format::Csv => csv_runs(entries),
             Format::Json => {
                 let runs: Vec<_> = entries
                     .iter()
@@ -178,6 +226,50 @@ pre{background:#f4f4f4;padding:.8em;overflow-x:auto}\
     }
 }
 
+// BOM so Excel reads UTF-8 (…, ✓) correctly; CRLF per RFC 4180.
+const CSV_START: &str = "\u{feff}";
+
+fn csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
+    let cells: Vec<String> = cells.into_iter().map(csv_field).collect();
+    cells.join(",") + "\r\n"
+}
+
+/// Runs of one tool: the tool's own columns, each row tagged with its run's start.
+fn csv_table(entries: &[&Entry]) -> String {
+    let Some(columns) = entries
+        .iter()
+        .find_map(|e| e.table.as_ref().map(|t| t.columns))
+    else {
+        return csv_runs(entries);
+    };
+    let mut s = String::from(CSV_START);
+    s += &csv_row(["started"].into_iter().chain(columns.iter().copied()));
+    for e in entries {
+        for row in e.table.iter().flat_map(|t| &t.rows) {
+            s += &csv_row(
+                [e.started.as_str()]
+                    .into_iter()
+                    .chain(row.iter().map(String::as_str)),
+            );
+        }
+    }
+    s
+}
+
+/// One row per run with its text output, for runs with no table.
+fn csv_runs(entries: &[&Entry]) -> String {
+    let mut s = String::from(CSV_START);
+    s += &csv_row(["tool", "started", "ended", "output"]);
+    for e in entries {
+        s += &csv_row([e.tool, &e.started, &e.ended, e.text.trim_end()]);
+    }
+    s
+}
+
+fn slug(tool: &str) -> String {
+    tool.to_lowercase().replace(' ', "-")
+}
+
 fn csv_field(v: &str) -> String {
     if v.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", v.replace('"', "\"\""))
@@ -212,6 +304,7 @@ mod tests {
             started: "a".into(),
             ended: "b".into(),
             text: "x".repeat(n),
+            table: None,
         }
     }
 
@@ -241,6 +334,7 @@ mod tests {
             started: "a".into(),
             ended: "b".into(),
             text: "x, \"y\"\n<z> ```\n".into(),
+            table: None,
         };
         let csv = Format::Csv.export(&[&e]);
         assert!(csv.ends_with("DNS Lookup,a,b,\"x, \"\"y\"\"\n<z> ```\"\r\n"));
@@ -250,5 +344,56 @@ mod tests {
 
         assert!(Format::Markdown.export(&[&e]).contains("````\nx, "));
         assert!(Format::Html.export(&[&e]).contains("&lt;z&gt;"));
+    }
+
+    fn run(tool: &'static str, started: &str, rows: &[&[&str]]) -> Entry {
+        Entry {
+            tool,
+            started: started.into(),
+            ended: "e".into(),
+            text: "text".into(),
+            table: Some(Table {
+                columns: &["port", "state"],
+                rows: rows
+                    .iter()
+                    .map(|r| r.iter().map(|c| c.to_string()).collect())
+                    .collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn csv_uses_tool_columns() {
+        let a = run("Port Check", "t1", &[&["22", "open"], &["80", "closed"]]);
+        let b = run("Port Check", "t2", &[&["443", "open"]]);
+        let files = Format::Csv.files(&[&a, &b], "log");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "is-alive-log.csv");
+        assert_eq!(
+            files[0].1,
+            "\u{feff}started,port,state\r\nt1,22,open\r\nt1,80,closed\r\nt2,443,open\r\n"
+        );
+    }
+
+    #[test]
+    fn csv_splits_tools_into_files() {
+        let a = run("Port Check", "t1", &[&["22", "open"]]);
+        let b = run("Subnet Sweep", "t2", &[]);
+        let mut c = run("Ping", "t3", &[]);
+        c.table = None;
+        let names: Vec<String> = Format::Csv
+            .files(&[&a, &b, &c], "log")
+            .into_iter()
+            .map(|f| f.0)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "is-alive-log-port-check.csv",
+                "is-alive-log-subnet-sweep.csv",
+                "is-alive-log-runs.csv"
+            ]
+        );
+        assert_eq!(Format::Json.files(&[&a, &b], "log").len(), 1);
     }
 }

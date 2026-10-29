@@ -176,14 +176,58 @@ pub fn export_menu<'a>(
     .response
     .on_hover_text("Save as CSV, JSON, Markdown or HTML");
     if let Some(f) = picked {
-        let text = f.export(&entries());
-        save_file(
-            format!("is-alive-{stem}.{}", f.ext()),
-            f.name(),
-            vec![f.ext()],
-            text,
-        );
+        let mut files = f.files(&entries(), stem);
+        if files.len() == 1 {
+            let (name, text) = files.remove(0);
+            save_file(name, f.name(), vec![f.ext()], text);
+        } else {
+            save_folder(files);
+        }
     }
+}
+
+/// Folder picker for a multi-file export; asks before overwriting.
+fn save_folder(files: Vec<(String, String)>) {
+    std::thread::spawn(move || {
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title(format!("Folder for {} CSV files", files.len()))
+            .pick_folder()
+        else {
+            return;
+        };
+        let existing: Vec<&str> = files
+            .iter()
+            .filter(|(n, _)| dir.join(n).exists())
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if !existing.is_empty() {
+            let ok = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title("Replace files?")
+                .set_description(format!("Already in that folder:\n{}", existing.join("\n")))
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .show();
+            if ok != rfd::MessageDialogResult::Ok {
+                return;
+            }
+        }
+        let errs: Vec<String> = files
+            .iter()
+            .filter_map(|(n, text)| {
+                let path = dir.join(n);
+                std::fs::write(&path, text)
+                    .err()
+                    .map(|e| format!("{}: {e}", path.display()))
+            })
+            .collect();
+        if !errs.is_empty() {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Error)
+                .set_title("Save failed")
+                .set_description(errs.join("\n"))
+                .show();
+        }
+    });
 }
 
 fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {

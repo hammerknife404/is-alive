@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net::dnsq::{self, Client};
 use crate::net::domain::{self, CORE, Check, NAMES, Status};
 use crate::widgets::{self, Action};
@@ -151,12 +152,14 @@ impl AdvancedTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -197,6 +200,48 @@ impl AdvancedTool {
         s
     }
 
+    /// One row per finding and per raw record, tagged with its check.
+    fn table(&self) -> Option<Table> {
+        let mut rows = Vec::new();
+        for (i, name) in NAMES.iter().enumerate() {
+            let Some(Some(c)) = self.checks.get(i) else {
+                continue;
+            };
+            let section = if i < CORE { "core" } else { "nice-to-have" };
+            let row = |kind: &str, status: &str, text: &str| {
+                vec![
+                    self.ran.0.clone(),
+                    self.ran.1.clone(),
+                    section.to_string(),
+                    name.to_string(),
+                    c.status().tag().to_string(),
+                    kind.to_string(),
+                    status.to_string(),
+                    text.to_string(),
+                ]
+            };
+            for (st, f) in &c.findings {
+                rows.push(row("finding", st.tag(), f));
+            }
+            for r in &c.records {
+                rows.push(row("record", "", r));
+            }
+        }
+        Some(Table {
+            columns: &[
+                "domain",
+                "resolver",
+                "section",
+                "check",
+                "check_status",
+                "kind",
+                "status",
+                "text",
+            ],
+            rows,
+        })
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
     }
@@ -228,7 +273,7 @@ impl AdvancedTool {
             .map(|s| s.trim().trim_end_matches("._domainkey").to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();
             let c = Client::new(server);

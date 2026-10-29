@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net;
 use crate::net::icmp::{self, EchoStatus};
 use crate::widgets::{self, Action, OK, WARN};
@@ -137,12 +138,14 @@ impl TraceTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -173,6 +176,31 @@ impl TraceTool {
         s
     }
 
+    fn table(&self) -> Option<Table> {
+        let rows = self
+            .hops
+            .iter()
+            .map(|h| {
+                let mut row = vec![
+                    self.host.trim().to_string(),
+                    log::cell(self.target),
+                    h.ttl.to_string(),
+                    log::cell(h.addr),
+                    h.name.clone().unwrap_or_default(),
+                ];
+                row.extend(h.rtts.iter().map(|r| r.map(log::ms).unwrap_or_default()));
+                row.push(h.note.clone());
+                row
+            })
+            .collect();
+        Some(Table {
+            columns: &[
+                "host", "ip", "hop", "address", "name", "rtt1_ms", "rtt2_ms", "rtt3_ms", "note",
+            ],
+            rows,
+        })
+    }
+
     /// Start a run with the given target (used by the full scan).
     pub fn run(&mut self, ctx: &egui::Context, host: &str) {
         self.host = host.into();
@@ -200,7 +228,7 @@ impl TraceTool {
             self.prefer_v6,
         );
 
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
                 Ok(ip) => ip,

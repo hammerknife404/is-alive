@@ -1,4 +1,5 @@
 use crate::job::{Job, pump};
+use crate::log::{self, Table};
 use crate::net::ports::{PRESETS, parse_ports, service_name};
 use crate::net::{self, TcpState};
 use crate::widgets::{self, Action, BAD, OK, WARN};
@@ -210,12 +211,14 @@ impl PortTool {
     }
 
     /// Start time and logged text of a run that has just ended, once.
-    pub fn take_finished(&mut self) -> Option<(String, String)> {
+    pub fn take_finished(&mut self) -> Option<(String, String, Option<Table>)> {
         if self.job.is_some() {
             return None;
         }
         let started = self.run_started.take()?;
-        Some((started, crate::log::body(self.output(), &self.err)))
+        let out = self.output();
+        let table = out.as_ref().and_then(|_| self.table());
+        Some((started, log::body(out, &self.err), table))
     }
 
     /// Start time of the run in progress.
@@ -241,6 +244,38 @@ impl PortTool {
             }
         }
         s
+    }
+
+    /// Every result, closed and filtered included: filter in the spreadsheet.
+    fn table(&self) -> Option<Table> {
+        let ip = log::cell(self.target);
+        let rows = self
+            .results
+            .iter()
+            .map(|(port, state, ms)| {
+                let (st, err) = match state {
+                    TcpState::Error(e) => ("error", e.as_str()),
+                    s => (state_label(s).0, ""),
+                };
+                vec![
+                    self.host.trim().to_string(),
+                    ip.clone(),
+                    port.to_string(),
+                    st.to_string(),
+                    service_name(*port).to_string(),
+                    if *state == TcpState::Open {
+                        log::ms(*ms)
+                    } else {
+                        String::new()
+                    },
+                    err.to_string(),
+                ]
+            })
+            .collect();
+        Some(Table {
+            columns: &["host", "ip", "port", "state", "service", "rtt_ms", "error"],
+            rows,
+        })
     }
 
     /// Start a run with the given target (used by the full scan).
@@ -271,7 +306,7 @@ impl PortTool {
         let timeout = Duration::from_millis(self.timeout_ms as u64);
         let (threads, rate, v6) = (self.threads, self.rate, self.prefer_v6);
 
-        self.run_started = Some(crate::log::now());
+        self.run_started = Some(log::now());
         self.started_at = Instant::now();
         self.job = Some(Job::spawn(ctx, move |tx| {
             let ip = match net::resolve(&host, v6) {
