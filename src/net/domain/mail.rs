@@ -75,7 +75,7 @@ pub(super) fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
 /// SPF evaluation cost (RFC 7208 §4.6.4): terms that query DNS count on
 /// every evaluation (an include reached twice costs twice), and queries
 /// that return nothing are void lookups (limit 2).
-pub(super) struct SpfWalk<'a> {
+struct SpfWalk<'a> {
     c: &'a Client,
     /// SPF records per name, so repeated includes are counted but not re-queried.
     cache: HashMap<String, Vec<String>>,
@@ -276,7 +276,7 @@ pub(super) fn spf(c: &Client, d: &str) -> Check {
 
 /// DMARC record for `d`, falling back to parent domains (org-domain policy).
 /// Returns the record and the domain it was found on.
-pub(super) fn dmarc_record(c: &Client, d: &str) -> io::Result<Option<(String, String)>> {
+fn dmarc_record(c: &Client, d: &str) -> io::Result<Option<(String, String)>> {
     let mut name = d;
     loop {
         let recs = txt_with(c, &format!("_dmarc.{name}"), "v=DMARC1")?;
@@ -291,7 +291,7 @@ pub(super) fn dmarc_record(c: &Client, d: &str) -> io::Result<Option<(String, St
     }
 }
 
-pub(super) fn same_org(a: &str, b: &str) -> bool {
+fn same_org(a: &str, b: &str) -> bool {
     a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
 }
 
@@ -375,7 +375,7 @@ pub(super) fn dmarc(c: &Client, d: &str) -> Check {
 }
 
 /// RSA modulus size in bits from a DKIM p= key (SubjectPublicKeyInfo or bare RSAPublicKey).
-pub(super) fn rsa_bits(p: &str) -> Option<usize> {
+fn rsa_bits(p: &str) -> Option<usize> {
     let der = base64(p)?;
     // Returns (tag, contents, rest).
     fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
@@ -417,7 +417,7 @@ pub(super) fn rsa_bits(p: &str) -> Option<usize> {
     Some(m.len() * 8 - m.first()?.leading_zeros() as usize)
 }
 
-pub(super) fn base64(s: &str) -> Option<Vec<u8>> {
+fn base64(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let (mut acc, mut n) = (0u32, 0);
     for c in s.bytes() {
@@ -546,7 +546,7 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
 }
 
 /// MX host `h` matches an MTA-STS `mx:` pattern (exact, or `*.` one label).
-pub(super) fn sts_match(pattern: &str, h: &str) -> bool {
+fn sts_match(pattern: &str, h: &str) -> bool {
     let p = pattern.trim_end_matches('.').to_ascii_lowercase();
     match p.strip_prefix("*.") {
         Some(rest) => h.split_once('.').is_some_and(|(_, tail)| tail == rest),
@@ -665,7 +665,9 @@ pub(super) fn bimi(c: &Client, d: &str) -> Check {
                 if l.starts_with("https://")
                     && l.split(['?', '#'])
                         .next()
-                        .is_some_and(|p| p.to_ascii_lowercase().ends_with(".svg")) =>
+                        .unwrap_or(l)
+                        .to_ascii_lowercase()
+                        .ends_with(".svg") =>
             {
                 k.pass("logo is an HTTPS SVG")
             }
@@ -768,6 +770,7 @@ pub(super) fn mx_ptr(c: &Client, mx: &MxInfo) -> Check {
                         ));
                     }
                 }
+                Err(e) if hosted => k.info(format!("{ip}: {e}")),
                 Err(e) => k.warn(format!("{ip}: {e}")),
             }
         }
@@ -809,4 +812,43 @@ pub(super) fn autodiscover(c: &Client, d: &str, mx: &MxInfo) -> Check {
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rsa_key_sizes() {
+        let k1024 = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGpt/taRejdyKY59ZXnJz/a8gbnjW4kSwMiMc9x2J+kFNyT88QG5IbpHEx6uMrRvS6y5AOq/QUDBFNnccruUJSwmddtFUKlD7SpfXiPJeYvs77/ey81FUbbHHSL3QJsKz8ZKJOi0CX+iy6IO/VzHjJMUWmqXr677n1RwXhGR7qPQIDAQAB";
+        let k2048 = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsyI2421XCbXzxvX4+DhVzaIE0lEdP3TqPuvPfybCvFAXUJJk+ubpjTF+IVm7sgK/IPWjxViNQjso/mamLKHFIoQQR204HvGO1fKhzbIoWaNmYZNomx6sqrXLdHYGonb/Oig0iBmQUm5oroBdqyjrfNpc1GblNDyokWLNzBruZFRoK1KRksYcYrJR1wZ3ZX2rmtfVVNzaFrQKxNI7xsxZXwjuYOde8Igv+Scy8v4ysClsBibksTmQoFjS479xJtY0F/+M+cE9Ymi3k/qLKf2+1JMXQKLaIhJgurtgltnpmqVlr6/5c1+HjAYSdIrdL7QKg8nbCNUsV4tTnIRiSZyTeQIDAQAB";
+        assert_eq!(rsa_bits(k1024), Some(1024));
+        assert_eq!(rsa_bits(k2048), Some(2048));
+        assert_eq!(rsa_bits("not base64!"), None);
+        assert_eq!(rsa_bits("AAAA"), None);
+    }
+
+    #[test]
+    fn decodes_base64() {
+        assert_eq!(base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64("aGVs bG8").unwrap(), b"hello");
+    }
+
+    #[test]
+    fn sts_patterns() {
+        assert!(sts_match("mail.example.com", "mail.example.com"));
+        assert!(sts_match(
+            "*.mail.protection.outlook.com",
+            "example-com.mail.protection.outlook.com"
+        ));
+        assert!(!sts_match("*.example.com", "a.b.example.com"));
+        assert!(!sts_match("mail.example.com", "mx.example.com"));
+    }
+
+    #[test]
+    fn org_matching() {
+        assert!(same_org("example.com", "example.com"));
+        assert!(same_org("reports.example.com", "example.com"));
+        assert!(!same_org("dmarc.vendor.net", "example.com"));
+    }
 }

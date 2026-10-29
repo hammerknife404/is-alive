@@ -5,13 +5,13 @@ mod mail;
 mod zone;
 
 use super::dnsq::{self, Client};
-use mail::*;
+use mail::{autodiscover, bimi, dkim, dmarc, mta_sts, mx, mx_ptr, spf, tls_rpt};
 use std::io;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use zone::*;
+use zone::{caa, dnssec, expiry, nameservers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Status {
@@ -184,35 +184,38 @@ pub struct MxInfo {
     pub ips: Vec<IpAddr>,
 }
 
+/// MX host suffixes of Microsoft 365 and Google Workspace / Gmail.
+const M365_MX: &[&str] = &[".mail.protection.outlook.com"];
+const GOOGLE_MX: &[&str] = &[".google.com", ".googlemail.com"];
+/// Hosted inbound filters: Cloudflare Email Security, Mimecast, Proofpoint,
+/// Barracuda.
+const FILTER_MX: &[&str] = &[
+    ".cf-emailsecurity.net",
+    ".mimecast.com",
+    ".pphosted.com",
+    ".ppe-hosted.com",
+    ".barracudanetworks.com",
+];
+
+fn ends_any(h: &str, suffixes: &[&str]) -> bool {
+    suffixes.iter().any(|s| h.ends_with(s))
+}
+
 impl MxInfo {
     fn m365(&self) -> bool {
-        self.hosts
-            .iter()
-            .any(|h| h.ends_with(".mail.protection.outlook.com"))
+        self.hosts.iter().any(|h| ends_any(h, M365_MX))
     }
     /// Every MX is a hosted mail/filtering service, whose inbound relays
     /// don't send the domain's mail, so their reverse DNS doesn't matter here.
     fn hosted(&self) -> bool {
-        const HOSTED: &[&str] = &[
-            ".mail.protection.outlook.com", // Microsoft 365
-            ".google.com",                  // Google Workspace / Gmail
-            ".googlemail.com",
-            ".cf-emailsecurity.net", // Cloudflare Email Security
-            ".mimecast.com",
-            ".pphosted.com", // Proofpoint
-            ".ppe-hosted.com",
-            ".barracudanetworks.com",
-        ];
         !self.hosts.is_empty()
             && self
                 .hosts
                 .iter()
-                .all(|h| HOSTED.iter().any(|s| h.ends_with(s)))
+                .all(|h| ends_any(h, M365_MX) || ends_any(h, GOOGLE_MX) || ends_any(h, FILTER_MX))
     }
     fn google(&self) -> bool {
-        self.hosts
-            .iter()
-            .any(|h| h.ends_with(".google.com") || h.ends_with(".googlemail.com"))
+        self.hosts.iter().any(|h| ends_any(h, GOOGLE_MX))
     }
 }
 
@@ -310,40 +313,6 @@ mod tests {
         assert_eq!(tag(&t, "p"), Some("reject"));
         assert_eq!(tag(&t, "pct"), Some("50"));
         assert_eq!(tag(&t, "sp"), None);
-    }
-
-    #[test]
-    fn rsa_key_sizes() {
-        let k1024 = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGpt/taRejdyKY59ZXnJz/a8gbnjW4kSwMiMc9x2J+kFNyT88QG5IbpHEx6uMrRvS6y5AOq/QUDBFNnccruUJSwmddtFUKlD7SpfXiPJeYvs77/ey81FUbbHHSL3QJsKz8ZKJOi0CX+iy6IO/VzHjJMUWmqXr677n1RwXhGR7qPQIDAQAB";
-        let k2048 = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsyI2421XCbXzxvX4+DhVzaIE0lEdP3TqPuvPfybCvFAXUJJk+ubpjTF+IVm7sgK/IPWjxViNQjso/mamLKHFIoQQR204HvGO1fKhzbIoWaNmYZNomx6sqrXLdHYGonb/Oig0iBmQUm5oroBdqyjrfNpc1GblNDyokWLNzBruZFRoK1KRksYcYrJR1wZ3ZX2rmtfVVNzaFrQKxNI7xsxZXwjuYOde8Igv+Scy8v4ysClsBibksTmQoFjS479xJtY0F/+M+cE9Ymi3k/qLKf2+1JMXQKLaIhJgurtgltnpmqVlr6/5c1+HjAYSdIrdL7QKg8nbCNUsV4tTnIRiSZyTeQIDAQAB";
-        assert_eq!(rsa_bits(k1024), Some(1024));
-        assert_eq!(rsa_bits(k2048), Some(2048));
-        assert_eq!(rsa_bits("not base64!"), None);
-        assert_eq!(rsa_bits("AAAA"), None);
-    }
-
-    #[test]
-    fn decodes_base64() {
-        assert_eq!(base64("aGVsbG8=").unwrap(), b"hello");
-        assert_eq!(base64("aGVs bG8").unwrap(), b"hello");
-    }
-
-    #[test]
-    fn sts_patterns() {
-        assert!(sts_match("mail.example.com", "mail.example.com"));
-        assert!(sts_match(
-            "*.mail.protection.outlook.com",
-            "example-com.mail.protection.outlook.com"
-        ));
-        assert!(!sts_match("*.example.com", "a.b.example.com"));
-        assert!(!sts_match("mail.example.com", "mx.example.com"));
-    }
-
-    #[test]
-    fn org_matching() {
-        assert!(same_org("example.com", "example.com"));
-        assert!(same_org("reports.example.com", "example.com"));
-        assert!(!same_org("dmarc.vendor.net", "example.com"));
     }
 
     /// Tiny UDP DNS server answering from a fixed zone, following one CNAME.

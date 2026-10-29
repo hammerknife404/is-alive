@@ -2,11 +2,11 @@
 
 use super::dnsq::{self, Client, Data};
 use super::{Check, addrs, http_get, parent, zone_of};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::OnceLock;
 
-pub(super) fn norm_set(v: &[String]) -> Vec<String> {
+fn norm_set(v: &[String]) -> Vec<String> {
     let mut v: Vec<String> = v
         .iter()
         .map(|s| s.trim_end_matches('.').to_ascii_lowercase())
@@ -252,24 +252,30 @@ pub(super) fn caa(c: &Client, d: &str) -> Check {
     })
 }
 
-/// RDAP base URL for a TLD from the IANA bootstrap file.
-pub(super) fn rdap_base(bootstrap: &str, tld: &str) -> Option<String> {
+/// TLD (lowercase) to RDAP base URL, from the IANA bootstrap file.
+fn rdap_services(bootstrap: &str) -> Option<HashMap<String, String>> {
     let j: serde_json::Value = serde_json::from_str(bootstrap).ok()?;
-    j["services"].as_array()?.iter().find_map(|s| {
-        let tlds = s.get(0)?.as_array()?;
-        tlds.iter()
-            .any(|t| t.as_str().is_some_and(|t| t.eq_ignore_ascii_case(tld)))
-            .then(|| s.get(1)?.get(0)?.as_str().map(String::from))?
-    })
+    let mut m = HashMap::new();
+    for s in j["services"].as_array()? {
+        let (Some(tlds), Some(url)) = (s[0].as_array(), s[1][0].as_str()) else {
+            continue;
+        };
+        for t in tlds.iter().filter_map(|t| t.as_str()) {
+            m.entry(t.to_ascii_lowercase())
+                .or_insert_with(|| url.to_string());
+        }
+    }
+    // An empty map would be cached and make every TLD read "no RDAP".
+    (!m.is_empty()).then_some(m)
 }
 
-pub(super) struct Rdap {
+struct Rdap {
     expires: Option<String>,
     registrar: Option<String>,
     status: Vec<String>,
 }
 
-pub(super) fn parse_rdap(body: &str) -> Option<Rdap> {
+fn parse_rdap(body: &str) -> Option<Rdap> {
     let j: serde_json::Value = serde_json::from_str(body).ok()?;
     let expires = j["events"].as_array().and_then(|ev| {
         ev.iter().find_map(|e| {
@@ -307,21 +313,26 @@ pub(super) fn parse_rdap(body: &str) -> Option<Rdap> {
 pub(super) fn expiry(d: &str) -> Check {
     let mut k = Check::default();
     let tld = d.rsplit('.').next().unwrap_or(d);
-    // The IANA bootstrap file changes rarely; fetch it once per session.
-    static BOOTSTRAP: OnceLock<String> = OnceLock::new();
-    let boot = match BOOTSTRAP.get() {
-        Some(b) => Ok(b.clone()),
-        None => http_get("https://data.iana.org/rdap/dns.json", true)
-            .inspect(|b| _ = BOOTSTRAP.set(b.clone())),
+    // The IANA bootstrap file changes rarely; fetch it once per session, and
+    // cache it only once it parses (a captive portal page must not stick).
+    static SERVICES: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let services = match SERVICES.get() {
+        Some(s) => s,
+        None => match http_get("https://data.iana.org/rdap/dns.json", true) {
+            Ok(b) => match rdap_services(&b) {
+                Some(s) => SERVICES.get_or_init(|| s),
+                None => {
+                    k.warn("the IANA RDAP registry answer couldn't be parsed");
+                    return k;
+                }
+            },
+            Err(e) => {
+                k.warn(format!("couldn't reach the IANA RDAP registry: {e}"));
+                return k;
+            }
+        },
     };
-    let base = match boot {
-        Ok(b) => rdap_base(&b, tld),
-        Err(e) => {
-            k.warn(format!("couldn't reach the IANA RDAP registry: {e}"));
-            return k;
-        }
-    };
-    let Some(base) = base else {
+    let Some(base) = services.get(&tld.to_ascii_lowercase()) else {
         k.info(format!(".{tld} has no RDAP service; check WHOIS manually"));
         return k;
     };
@@ -386,11 +397,14 @@ mod tests {
     #[test]
     fn rdap_bootstrap_and_record() {
         let boot = r#"{"services":[[["net","com"],["https://rdap.verisign.com/com/v1/"]]]}"#;
+        let m = rdap_services(boot).unwrap();
         assert_eq!(
-            rdap_base(boot, "COM").as_deref(),
+            m.get("com").map(String::as_str),
             Some("https://rdap.verisign.com/com/v1/")
         );
-        assert_eq!(rdap_base(boot, "org"), None);
+        assert_eq!(m.get("org"), None);
+        assert!(rdap_services("<html>captive portal</html>").is_none());
+        assert!(rdap_services(r#"{"services":[]}"#).is_none());
         let body = r#"{"status":["client transfer prohibited"],
             "events":[{"eventAction":"registration","eventDate":"1997-09-15T04:00:00Z"},
                       {"eventAction":"expiration","eventDate":"2028-09-14T04:00:00Z"}],
