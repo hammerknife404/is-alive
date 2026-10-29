@@ -1,6 +1,6 @@
 [package]
 name = "is-alive"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, subnet sweep, DNS, domain/mail health"
 license = "MIT"
