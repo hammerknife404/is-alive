@@ -16,6 +16,7 @@ pub const PTR: u16 = 12;
 pub const MX: u16 = 15;
 pub const TXT: u16 = 16;
 pub const AAAA: u16 = 28;
+pub const SRV: u16 = 33;
 const OPT: u16 = 41;
 pub const DS: u16 = 43;
 pub const DNSKEY: u16 = 48;
@@ -51,6 +52,12 @@ pub enum Data {
     Dnskey {
         flags: u16,
         alg: u8,
+    },
+    Srv {
+        prio: u16,
+        weight: u16,
+        port: u16,
+        target: String,
     },
     Other,
 }
@@ -385,6 +392,12 @@ fn parse_data(r: &[u8], start: usize, d: &[u8], rtype: u16) -> io::Result<Data> 
             flags: u16_at(d, 0)?,
             alg: d[3],
         },
+        SRV => Data::Srv {
+            prio: u16_at(d, 0)?,
+            weight: u16_at(d, 2)?,
+            port: u16_at(d, 4)?,
+            target: read_name(r, start + 6)?.0,
+        },
         _ => Data::Other,
     })
 }
@@ -404,6 +417,118 @@ pub fn reverse_name(ip: IpAddr) -> String {
             s + "ip6.arpa"
         }
     }
+}
+
+impl std::fmt::Display for Data {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Data::A(ip) => write!(f, "{ip}"),
+            Data::Aaaa(ip) => write!(f, "{ip}"),
+            Data::Name(n) => write!(f, "{n}"),
+            Data::Mx(pref, host) => write!(f, "{pref} {host}"),
+            Data::Txt(t) => write!(f, "\"{t}\""),
+            Data::Soa { mname, serial } => write!(f, "{mname}  serial {serial}"),
+            Data::Caa { flags, tag, value } => write!(f, "{flags} {tag} \"{value}\""),
+            Data::Ds {
+                key_tag,
+                alg,
+                digest_type,
+            } => write!(f, "tag {key_tag}  alg {alg}  digest {digest_type}"),
+            Data::Dnskey { flags, alg } => {
+                let role = if flags & 1 == 1 { "KSK" } else { "ZSK" };
+                write!(f, "{role}  alg {alg}")
+            }
+            Data::Srv {
+                prio,
+                weight,
+                port,
+                target,
+            } => write!(f, "{prio} {weight} {port} {target}"),
+            Data::Other => write!(f, "(unparsed)"),
+        }
+    }
+}
+
+/// Record types offered in the DNS Lookup tab, by name.
+pub const TYPES: &[(&str, u16)] = &[
+    ("A", A),
+    ("AAAA", AAAA),
+    ("MX", MX),
+    ("TXT", TXT),
+    ("CNAME", CNAME),
+    ("NS", NS),
+    ("SOA", SOA),
+    ("SRV", SRV),
+    ("CAA", CAA),
+    ("PTR", PTR),
+    ("DS", DS),
+    ("DNSKEY", DNSKEY),
+];
+
+pub fn type_name(rtype: u16) -> String {
+    TYPES
+        .iter()
+        .find(|t| t.1 == rtype)
+        .map_or_else(|| format!("TYPE{rtype}"), |t| t.0.to_string())
+}
+
+/// The DNS servers this machine is configured to use.
+pub fn system_servers() -> Vec<IpAddr> {
+    let mut v = imp_servers();
+    v.dedup();
+    v
+}
+
+#[cfg(unix)]
+fn imp_servers() -> Vec<IpAddr> {
+    std::fs::read_to_string("/etc/resolv.conf")
+        .map(|t| parse_resolv_conf(&t))
+        .unwrap_or_default()
+}
+
+#[cfg(any(unix, test))]
+fn parse_resolv_conf(t: &str) -> Vec<IpAddr> {
+    t.lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            (w.next()? == "nameserver").then(|| w.next()?.parse::<IpAddr>().ok())?
+        })
+        // A scoped link-local server (fe80::1%eth0) doesn't parse as a plain
+        // IpAddr and can't be reached without its interface: skip it.
+        .collect()
+}
+
+#[cfg(windows)]
+fn imp_servers() -> Vec<IpAddr> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{FIXED_INFO_W2KSP1, GetNetworkParams};
+    // First call reports the size needed (ERROR_BUFFER_OVERFLOW).
+    let mut len = 0u32;
+    unsafe { GetNetworkParams(std::ptr::null_mut(), &mut len) };
+    let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
+    let info = buf.as_mut_ptr().cast::<FIXED_INFO_W2KSP1>();
+    if unsafe { GetNetworkParams(info, &mut len) } != 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut node = unsafe { std::ptr::addr_of!((*info).DnsServerList) };
+    while !node.is_null() {
+        let raw = unsafe { (*node).IpAddress.String };
+        let text: Vec<u8> = raw
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8)
+            .collect();
+        if let Ok(ip) = String::from_utf8_lossy(&text).trim().parse() {
+            out.push(ip);
+        }
+        node = unsafe { (*node).Next };
+    }
+    out
+}
+
+#[cfg(not(any(unix, windows)))]
+fn imp_servers() -> Vec<IpAddr> {
+    Vec::new()
 }
 
 /// Parse "1.1.1.1", "1.1.1.1:53", "2606:4700::1111" or "[2606:4700::1111]:53".
@@ -471,6 +596,28 @@ mod tests {
             reverse_name("2001:db8::1".parse().unwrap())
                 .starts_with("1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2")
         );
+    }
+
+    #[test]
+    fn resolv_conf() {
+        let t = "# comment\nnameserver 127.0.0.53\nsearch lan\nnameserver fe80::1%eth0\nnameserver 2606:4700::1111\n";
+        assert_eq!(
+            parse_resolv_conf(t),
+            vec![
+                "127.0.0.53".parse::<IpAddr>().unwrap(),
+                "2606:4700::1111".parse().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn displays_records() {
+        assert_eq!(
+            Data::Mx(10, "mx.example".into()).to_string(),
+            "10 mx.example"
+        );
+        assert_eq!(type_name(MX), "MX");
+        assert_eq!(type_name(99), "TYPE99");
     }
 
     #[test]
