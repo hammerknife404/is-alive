@@ -256,6 +256,8 @@ impl DnsTool {
                 .collect()
         };
         let source = self.source;
+        let what: Vec<String> = types.iter().map(|&t| dnsq::type_name(t)).collect();
+        let what = what.join("/");
         let shown = if types == [dnsq::PTR] {
             "PTR"
         } else {
@@ -288,9 +290,7 @@ impl DnsTool {
                     Ok(rows) if rows.is_empty() && compare => {
                         tx.send(Ev::Note(format!("{label}: no records")))
                     }
-                    Ok(rows) if rows.is_empty() => {
-                        tx.send(Ev::Error("no records of that type".into()))
-                    }
+                    Ok(rows) if rows.is_empty() => tx.send(Ev::Error(no_records(&q, &what))),
                     Ok(rows) => {
                         for (k, v) in rows {
                             tx.send(Ev::Record(label.clone(), k.clone(), v.clone()));
@@ -387,7 +387,7 @@ fn system_lookup(q: &str) -> Rows {
             .map(|n| vec![("PTR".into(), n)])
             .unwrap_or_default());
     }
-    let ips = net::lookup_all(q).map_err(|e| format!("lookup failed: {e}"))?;
+    let ips = net::lookup_all(q).map_err(|e| format!("{} ({e})", no_records(q, "A/AAAA")))?;
     let mut rows: Vec<(String, String)> = ips
         .iter()
         .map(|ip| {
@@ -402,6 +402,15 @@ fn system_lookup(q: &str) -> Rows {
         }
     }
     Ok(rows)
+}
+
+/// "No records" message, steering `_service._proto` names toward SRV.
+fn no_records(q: &str, what: &str) -> String {
+    let mut s = format!("{q} has no {what} records");
+    if q.starts_with('_') && what != "SRV" {
+        s += "; names like _service._tcp hold SRV records, set Type to SRV";
+    }
+    s
 }
 
 /// Raw query of each type; answers include any CNAME chain on the way.
@@ -454,6 +463,16 @@ fn authoritative(q: &str) -> Result<(String, dnsq::Client), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hints_srv_for_service_names() {
+        assert_eq!(
+            no_records("example.com", "MX"),
+            "example.com has no MX records"
+        );
+        assert!(no_records("_imaps._tcp.gmail.com", "A/AAAA").ends_with("set Type to SRV"));
+        assert!(!no_records("_imaps._tcp.gmail.com", "SRV").contains("set Type"));
+    }
 
     #[test]
     fn compares_answer_sets() {
