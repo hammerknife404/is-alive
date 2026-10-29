@@ -287,7 +287,7 @@ fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
         if info.m365() {
             k.info("mail goes to Microsoft 365 (Exchange Online Protection)");
         } else if info.google() {
-            k.info("mail goes to Google Workspace");
+            k.info("mail goes to Google (Gmail / Google Workspace)");
         }
         Ok(())
     });
@@ -360,16 +360,47 @@ fn spf(c: &Client, d: &str) -> Check {
             .split_whitespace()
             .map(|t| t.to_ascii_lowercase())
             .collect();
-        let all = terms
-            .iter()
-            .find(|t| t.trim_start_matches(['+', '-', '~', '?']) == "all");
-        match all.map(String::as_str) {
-            Some("-all") => k.pass("ends in -all (hard fail)"),
-            Some("~all") => k.pass("ends in ~all (soft fail); fine with DMARC enforcing"),
-            Some("?all") => k.warn("?all (neutral): SPF never fails, it gives no protection"),
-            Some(_) => k.fail("+all: authorizes every server on the internet to send as you"),
-            None if terms.iter().any(|t| t.starts_with("redirect=")) => {}
-            None => k.warn("no 'all' mechanism: unmatched senders get neutral, no protection"),
+        // The effective 'all' may live behind redirect= (e.g. gmail.com).
+        let (mut cur, mut via, mut hops) = (terms.clone(), String::new(), 0);
+        let all = loop {
+            let all = cur
+                .iter()
+                .find(|t| t.trim_start_matches(['+', '-', '~', '?']) == "all");
+            if let Some(a) = all {
+                break Some(a.clone());
+            }
+            let Some(target) = cur.iter().find_map(|t| t.strip_prefix("redirect=")) else {
+                break None;
+            };
+            // A missing redirect target is reported by the lookup walk below.
+            if target.contains('%') || hops >= 5 {
+                break Some(String::new());
+            }
+            let Some(next) = txt_with(c, target, "v=spf1")?.into_iter().next() else {
+                break Some(String::new());
+            };
+            via += &format!(" ➡ redirect={target}");
+            hops += 1;
+            cur = next
+                .split_whitespace()
+                .map(|t| t.to_ascii_lowercase())
+                .collect();
+        };
+        match all.as_deref() {
+            Some("") => {}
+            Some("-all") => k.pass(format!("ends in -all (hard fail){via}")),
+            Some("~all") => k.pass(format!(
+                "ends in ~all (soft fail); fine with DMARC enforcing{via}"
+            )),
+            Some("?all") => k.warn(format!(
+                "?all (neutral): SPF never fails, it gives no protection{via}"
+            )),
+            Some(_) => k.fail(format!(
+                "+all: authorizes every server on the internet to send as you{via}"
+            )),
+            None => k.warn(format!(
+                "no 'all' mechanism: unmatched senders get neutral, no protection{via}"
+            )),
         }
         if terms.iter().any(|t| {
             t.trim_start_matches(['+', '-', '~', '?'])
@@ -1421,6 +1452,7 @@ mod tests {
             ("example.test", dnsq::TXT, txt("google-site-verification=x")),
             ("a.test", dnsq::TXT, txt("v=spf1 a mx include:b.test -all")),
             ("b.test", dnsq::TXT, txt("v=spf1 ip4:192.0.2.1 -all")),
+            ("redir.test", dnsq::TXT, txt("v=spf1 redirect=b.test")),
             (
                 "_dmarc.example.test",
                 dnsq::TXT,
@@ -1441,6 +1473,13 @@ mod tests {
         let (m, info) = mx(&c, d);
         assert!(has(&m, Status::Pass, "1 MX host"), "{m:?}");
         assert_eq!(info.ips, vec![IpAddr::from([127, 0, 0, 9])]);
+
+        let r = spf(&c, "redir.test");
+        assert!(
+            has(&r, Status::Pass, "-all (hard fail) ➡ redirect=b.test"),
+            "{r:?}"
+        );
+        assert!(has(&r, Status::Pass, "1/10 DNS lookups"), "{r:?}");
 
         let s = spf(&c, d);
         assert!(has(&s, Status::Fail, "missing.test"), "{s:?}");

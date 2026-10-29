@@ -84,7 +84,8 @@ impl AdvancedTool {
             }
         });
         ui.horizontal(|ui| {
-            enter |= widgets::field(
+            // Enter here starts a run too; the Start button above has already been drawn.
+            let enter = widgets::field(
                 ui,
                 "Extra DKIM selectors",
                 &mut self.selectors,
@@ -93,6 +94,9 @@ impl AdvancedTool {
             );
             ui.weak("(common ones are always probed)")
                 .on_hover_text(domain::SELECTORS.join(", "));
+            if enter && !running {
+                self.start(ui.ctx());
+            }
         });
         ui.weak(
             "Mail and DNS health: asks the resolver above directly, not the system one, so you see what the internet sees.",
