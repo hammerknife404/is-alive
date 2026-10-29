@@ -48,6 +48,8 @@ Downloads `appimagetool` on first run (or set `APPIMAGETOOL=/path/to/appimagetoo
 
 On Linux, ICMP uses unprivileged ping sockets (`SOCK_DGRAM`/`IPPROTO_ICMP`) — no root, no capabilities. That needs your group inside `net.ipv4.ping_group_range`, the default on Fedora, Ubuntu, Arch and most systemd distros. If it's not, the app falls back to the system `ping` command.
 
-CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts). Push a `v*` tag to attach both to a GitHub release.
+CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts).
+
+To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) in a PR and merge it to `main`: CI tags `v<version>`, publishes a GitHub release with both binaries and checksums, and generates release notes from the PRs merged since the last release. Pushing a `v*` tag by hand does the same, as long as it matches `Cargo.toml`.
 
 On other platforms (macOS etc.) ICMP falls back to the system `ping` command (dev/testing only).
