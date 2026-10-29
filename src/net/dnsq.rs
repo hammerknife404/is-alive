@@ -491,8 +491,10 @@ fn parse_resolv_conf(t: &str) -> Vec<IpAddr> {
     t.lines()
         .filter_map(|l| {
             let mut w = l.split_whitespace();
-            (w.next()? == "nameserver").then(|| w.next()?.split('%').next()?.parse().ok())?
+            (w.next()? == "nameserver").then(|| w.next()?.parse::<IpAddr>().ok())?
         })
+        // A scoped link-local server (fe80::1%eth0) doesn't parse as a plain
+        // IpAddr and can't be reached without its interface: skip it.
         .collect()
 }
 
@@ -598,12 +600,12 @@ mod tests {
 
     #[test]
     fn resolv_conf() {
-        let t = "# comment\nnameserver 127.0.0.53\nsearch lan\nnameserver fe80::1%eth0\n";
+        let t = "# comment\nnameserver 127.0.0.53\nsearch lan\nnameserver fe80::1%eth0\nnameserver 2606:4700::1111\n";
         assert_eq!(
             parse_resolv_conf(t),
             vec![
                 "127.0.0.53".parse::<IpAddr>().unwrap(),
-                "fe80::1".parse().unwrap()
+                "2606:4700::1111".parse().unwrap()
             ]
         );
     }

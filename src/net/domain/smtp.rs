@@ -4,7 +4,7 @@
 
 use super::super::sanitize;
 use super::dnsq::Client;
-use super::{Check, MxInfo, addrs};
+use super::{Check, MxInfo, addrs, tlv};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConnection, DigitallySignedStruct, SignatureScheme, StreamOwned};
@@ -125,6 +125,8 @@ struct Probe {
     cert: Option<(String, Option<chrono::DateTime<chrono::Utc>>)>,
     /// None: couldn't test (MAIL FROM refused).
     open_relay: Option<bool>,
+    /// The relay test broke off (connection dropped or stalled).
+    relay_error: Option<String>,
 }
 
 fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
@@ -144,13 +146,31 @@ fn relay_test<S: Read + Write>(s: &mut Session<S>, helo: &str) -> io::Result<Opt
         return Ok(None);
     }
     let (rcpt, _) = s.cmd("RCPT TO:<is-alive-relay-test@gmail.com>")?;
-    let _ = s.cmd("RSET");
     let _ = s.cmd("QUIT");
     Ok(Some(matches!(rcpt, 250 | 251)))
 }
 
+/// Connect, then talk SMTP. Only a connect timeout keeps the TimedOut kind:
+/// a server that answered the connection but then stalled is not a blocked
+/// port 25.
 fn probe(host: &str, addr: SocketAddr) -> io::Result<Probe> {
     let tcp = connect(addr)?;
+    talk(host, tcp).map_err(|e| {
+        if matches!(
+            e.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ) {
+            io::Error::other(format!(
+                "connected, but no reply within {}s",
+                READ.as_secs()
+            ))
+        } else {
+            e
+        }
+    })
+}
+
+fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     // An address literal is always a valid EHLO name.
     let helo = match tcp.local_addr()?.ip() {
         IpAddr::V4(ip) => format!("[{ip}]"),
@@ -169,7 +189,7 @@ fn probe(host: &str, addr: SocketAddr) -> io::Result<Probe> {
     let (code, caps) = s.cmd(&format!("EHLO {helo}"))?;
     p.starttls = code == 250 && caps.iter().any(|c| c.eq_ignore_ascii_case("STARTTLS"));
     if !p.starttls {
-        p.open_relay = relay_test(&mut s, &helo)?;
+        p.relay(relay_test(&mut s, &helo));
         return Ok(p);
     }
     let (code, _) = s.cmd("STARTTLS")?;
@@ -221,8 +241,18 @@ fn probe(host: &str, addr: SocketAddr) -> io::Result<Probe> {
         s: StreamOwned::new(conn, tcp),
         buf: Vec::new(),
     };
-    p.open_relay = relay_test(&mut s, &helo)?;
+    p.relay(relay_test(&mut s, &helo));
     Ok(p)
+}
+
+impl Probe {
+    /// Keep what was learned so far when the relay test breaks off.
+    fn relay(&mut self, r: io::Result<Option<bool>>) {
+        match r {
+            Ok(v) => self.open_relay = v,
+            Err(e) => self.relay_error = Some(e.to_string()),
+        }
+    }
 }
 
 pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
@@ -271,6 +301,7 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
             return Ok(());
         }
         let mut good = 0;
+        let mut relay_untested = 0;
         for (h, r) in &results {
             let p = match r {
                 Ok(p) => p,
@@ -315,6 +346,10 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
                 ));
             }
             match p.open_relay {
+                _ if p.relay_error.is_some() => k.info(format!(
+                    "{h}: the relay test broke off ({}), so relaying couldn't be tested",
+                    p.relay_error.as_deref().unwrap_or_default()
+                )),
                 Some(true) => {
                     ok = false;
                     k.fail(format!(
@@ -328,11 +363,20 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
             }
             if ok {
                 good += 1;
+                if p.open_relay != Some(false) {
+                    relay_untested += 1;
+                }
             }
         }
         if good > 0 {
+            // Only claim "not an open relay" when every passing host was tested.
+            let relay = if relay_untested == 0 {
+                ", not an open relay"
+            } else {
+                ""
+            };
             k.pass(format!(
-                "{good}/{} MX host(s): greeting, STARTTLS with a valid certificate, not an open relay",
+                "{good}/{} MX host(s): greeting, STARTTLS with a valid certificate{relay}",
                 results.len()
             ));
         }
@@ -405,26 +449,6 @@ fn parse_time(tag: u8, t: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
         .map(|n| n.and_utc())
 }
 
-/// One DER element: (tag, contents, rest).
-fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let tag = *b.first()?;
-    let l = *b.get(1)? as usize;
-    let (len, h) = if l < 0x80 {
-        (l, 2)
-    } else {
-        let n = l & 0x7f;
-        if n == 0 || n > 3 {
-            return None;
-        }
-        let len = b
-            .get(2..2 + n)?
-            .iter()
-            .fold(0usize, |a, &x| a << 8 | x as usize);
-        (len, 2 + n)
-    };
-    Some((tag, b.get(h..h + len)?, &b[h + len..]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,7 +481,6 @@ mod tests {
             "250-mx.test\r\n250 SIZE 1000\r\n",
             "250 ok\r\n",
             "550 relay denied\r\n",
-            "250 reset\r\n",
             "221 bye\r\n",
         ]);
         let p = probe("mx.test", addr).unwrap();
@@ -474,7 +497,6 @@ mod tests {
             "250 mx.test\r\n",
             "250 ok\r\n",
             "250 accepted\r\n",
-            "250 reset\r\n",
             "221 bye\r\n",
         ]);
         assert_eq!(probe("mx.test", addr).unwrap().open_relay, Some(true));

@@ -2,7 +2,7 @@
 //! DNS and Autodiscover.
 
 use super::dnsq::{self, Client, Data, Msg};
-use super::{Check, MxInfo, SELECTORS, addrs, http_get, parent, tag, tags, txt_with};
+use super::{Check, MxInfo, SELECTORS, addrs, http_get, parent, tag, tags, tlv, txt_with};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::IpAddr;
@@ -378,25 +378,6 @@ pub(super) fn dmarc(c: &Client, d: &str) -> Check {
 /// RSA modulus size in bits from a DKIM p= key (SubjectPublicKeyInfo or bare RSAPublicKey).
 fn rsa_bits(p: &str) -> Option<usize> {
     let der = base64(p)?;
-    // Returns (tag, contents, rest).
-    fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-        let tag = *b.first()?;
-        let l = *b.get(1)? as usize;
-        let (len, h) = if l < 0x80 {
-            (l, 2)
-        } else {
-            let n = l & 0x7f;
-            if n == 0 || n > 3 {
-                return None;
-            }
-            let len = b
-                .get(2..2 + n)?
-                .iter()
-                .fold(0usize, |a, &x| a << 8 | x as usize);
-            (len, 2 + n)
-        };
-        Some((tag, b.get(h..h + len)?, &b[h + len..]))
-    }
     let (t, outer, _) = tlv(&der)?;
     if t != 0x30 {
         return None;

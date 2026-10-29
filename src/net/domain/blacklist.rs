@@ -96,28 +96,37 @@ enum Answer {
 }
 
 /// What a list's answer means. Spamhaus signals refusals with 127.255.255.x,
-/// URIBL and SURBL with 127.0.0.1; listings are other 127.0.0.x codes.
+/// URIBL and SURBL with 127.0.0.1; listings are other 127.0.0.x codes. A list
+/// can answer with several codes at once (ZEN: PBL plus XBL), so every one
+/// counts: a refusal beats a listing, and a listing beats a PBL entry.
 fn classify(list: &List, ips: &[IpAddr]) -> Answer {
-    let Some(ip) = ips.iter().find_map(|ip| match ip {
-        IpAddr::V4(v4) => Some(*v4),
-        IpAddr::V6(_) => None,
-    }) else {
+    let v4: Vec<Ipv4Addr> = ips
+        .iter()
+        .filter_map(|ip| match ip {
+            IpAddr::V4(v4) => Some(*v4),
+            IpAddr::V6(_) => None,
+        })
+        .collect();
+    if v4.is_empty() {
         return Answer::Clean;
-    };
-    let o = ip.octets();
-    if o[0] != 127 {
+    }
+    let codes: Vec<Ipv4Addr> = v4.into_iter().filter(|ip| ip.octets()[0] == 127).collect();
+    if codes.is_empty() {
         return Answer::Bogus;
     }
-    if o[1] == 255 && o[2] == 255 {
+    let refused = |ip: &Ipv4Addr| {
+        let o = ip.octets();
+        (o[1] == 255 && o[2] == 255) || (list.domain && *ip == Ipv4Addr::new(127, 0, 0, 1))
+    };
+    if codes.iter().any(refused) {
         return Answer::Refused;
     }
-    if list.domain && ip == Ipv4Addr::new(127, 0, 0, 1) {
-        return Answer::Refused;
+    let policy =
+        |ip: &&Ipv4Addr| list.zone == "zen.spamhaus.org" && matches!(ip.octets()[3], 10 | 11);
+    match codes.iter().find(|ip| !policy(ip)) {
+        Some(&ip) => Answer::Listed(ip),
+        None => Answer::Policy,
     }
-    if list.zone == "zen.spamhaus.org" && matches!(o[3], 10 | 11) {
-        return Answer::Policy;
-    }
-    Answer::Listed(ip)
 }
 
 /// Query `name` on `c`; NXDOMAIN or an empty answer is clean.
@@ -127,18 +136,18 @@ fn ask(c: &Client, list: &List, name: &str) -> Result<Answer, String> {
 }
 
 /// Look up one name on a list: via the chosen resolver, then, if the list
-/// refuses it (Spamhaus and URIBL block public resolvers), via this
-/// machine's own DNS server.
-fn lookup(c: &Client, list: &List, name: &str) -> Result<Answer, String> {
+/// refuses it (Spamhaus and URIBL block public resolvers), via `fallback`,
+/// this machine's own DNS server.
+fn lookup(
+    c: &Client,
+    fallback: Option<&Client>,
+    list: &List,
+    name: &str,
+) -> Result<Answer, String> {
     let a = ask(c, list, name)?;
-    if a != Answer::Refused {
-        return Ok(a);
-    }
-    match dnsq::system_servers().first() {
-        Some(&ip) if SocketAddr::new(ip, 53) != c.server => {
-            ask(&Client::new(SocketAddr::new(ip, 53)), list, name)
-        }
-        _ => Ok(Answer::Refused),
+    match fallback {
+        Some(f) if a == Answer::Refused => ask(f, list, name),
+        _ => Ok(a),
     }
 }
 
@@ -179,14 +188,20 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                 }
             }
         }
+        // Before the SPF list, so the cap below can't drop it.
+        if let Some(w) = wan {
+            add(w, "this network's WAN");
+        }
         let spf = txt_with(c, d, "v=spf1").unwrap_or_default();
         for ip in spf.first().map(|r| spf_ip4(r)).unwrap_or_default() {
             add(ip, "SPF");
         }
-        if let Some(w) = wan {
-            add(w, "this network's WAN");
-        }
         ips.truncate(12);
+        let fallback = dnsq::system_servers()
+            .first()
+            .map(|&ip| Client::new(SocketAddr::new(ip, 53)))
+            .filter(|f| f.server != c.server);
+        let fallback = fallback.as_ref();
 
         // Every (IP, list) and (domain, list) pair, in parallel.
         let ip_lists: Vec<&List> = LISTS.iter().filter(|l| !l.domain).collect();
@@ -196,12 +211,15 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                 .iter()
                 .flat_map(|(ip, _)| ip_lists.iter().map(move |l| (*ip, *l)))
                 .map(|(ip, l)| {
-                    s.spawn(move || (ip, l, lookup(c, l, &format!("{}.{}", reversed(ip), l.zone))))
+                    s.spawn(move || {
+                        let name = format!("{}.{}", reversed(ip), l.zone);
+                        (ip, l, lookup(c, fallback, l, &name))
+                    })
                 })
                 .collect();
             let dom_hs: Vec<_> = dom_lists
                 .iter()
-                .map(|&l| s.spawn(move || (l, lookup(c, l, &format!("{d}.{}", l.zone)))))
+                .map(|&l| s.spawn(move || (l, lookup(c, fallback, l, &format!("{d}.{}", l.zone)))))
                 .collect();
             (
                 ip_hs
@@ -216,13 +234,18 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
         });
 
         let mut refused: Vec<&str> = Vec::new();
+        // Lists that timed out, failed, or came back rewritten by the resolver.
+        let mut unanswered: Vec<&str> = Vec::new();
         let mut clean_ips = 0;
         for (ip, why) in &ips {
             let label = format!("{ip} ({})", why.join(", "));
             let mut hits = Vec::new();
+            // A PBL entry alone (end-user range, not in SPF) isn't a problem.
+            let mut listed = false;
             for (_, l, r) in ip_results.iter().filter(|r| r.0 == *ip) {
                 match r {
                     Ok(Answer::Listed(code)) => {
+                        listed = true;
                         hits.push(l.name);
                         let msg = format!("{label} is listed on {} (code {code})", l.name);
                         if l.major {
@@ -237,17 +260,21 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                         let msg =
                             format!("{label} is on the Spamhaus PBL (end-user/dynamic range)");
                         if why.contains(&"SPF") {
+                            listed = true;
                             k.warn(format!("{msg}, but SPF authorizes it to send: receivers using ZEN reject direct mail from it"));
                         } else {
                             k.info(format!("{msg}: fine unless it sends mail directly"));
                         }
                     }
                     Ok(Answer::Refused) => refused.push(l.name),
-                    Ok(Answer::Clean | Answer::Bogus) | Err(_) => {}
+                    Ok(Answer::Bogus) | Err(_) => unanswered.push(l.name),
+                    Ok(Answer::Clean) => {}
                 }
             }
-            if hits.is_empty() {
+            if !listed {
                 clean_ips += 1;
+            }
+            if hits.is_empty() {
                 k.rec(format!("{label}  clean"));
             } else {
                 k.rec(format!("{label}  listed: {}", hits.join(", ")));
@@ -264,7 +291,8 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                     ));
                 }
                 Ok(Answer::Refused) => refused.push(l.name),
-                _ => {}
+                Ok(Answer::Bogus) | Err(_) => unanswered.push(l.name),
+                Ok(Answer::Clean | Answer::Policy) => {}
             }
         }
         k.rec(if dom_hits.is_empty() {
@@ -274,17 +302,26 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
         });
         refused.sort_unstable();
         refused.dedup();
+        unanswered.sort_unstable();
+        unanswered.dedup();
+        unanswered.retain(|n| !refused.contains(n));
         if !refused.is_empty() {
             k.info(format!(
                 "couldn't check {}: they refuse public resolvers; set Resolver to your ISP's DNS to include them",
                 refused.join(", ")
             ));
         }
-        if clean_ips == ips.len() && dom_hits.is_empty() {
+        if !unanswered.is_empty() {
+            k.info(format!(
+                "no usable answer from {} (timeout, server error, or a resolver rewriting NXDOMAIN): not counted as clean",
+                unanswered.join(", ")
+            ));
+        }
+        let checked = LISTS.len() - refused.len() - unanswered.len();
+        if clean_ips == ips.len() && dom_hits.is_empty() && checked > 0 {
             k.pass(format!(
-                "{} IP(s) and the domain are not listed on {} blocklists",
-                ips.len(),
-                LISTS.len()
+                "{} IP(s) and the domain are not listed on the {checked} blocklist(s) that answered",
+                ips.len()
             ));
         }
         Ok(())
@@ -312,6 +349,12 @@ mod tests {
         assert_eq!(classify(zen, &ip("127.255.255.254")), Answer::Refused);
         assert_eq!(classify(uribl, &ip("127.0.0.1")), Answer::Refused);
         assert_eq!(classify(zen, &ip("203.0.113.9")), Answer::Bogus);
+        // PBL plus XBL in one answer is a listing, whatever the order.
+        let both: Vec<IpAddr> = vec!["127.0.0.11".parse().unwrap(), "127.0.0.4".parse().unwrap()];
+        assert_eq!(
+            classify(zen, &both),
+            Answer::Listed(Ipv4Addr::new(127, 0, 0, 4))
+        );
         assert_eq!(reversed(Ipv4Addr::new(192, 0, 2, 5)), "5.2.0.192");
     }
 

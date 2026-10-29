@@ -284,13 +284,12 @@ impl DnsTool {
             let mut sets = Vec::new();
             for (label, r) in &results {
                 match r {
+                    // One error slot: in Compare each empty source gets a note.
+                    Ok(rows) if rows.is_empty() && compare => {
+                        tx.send(Ev::Note(format!("{label}: no records")))
+                    }
                     Ok(rows) if rows.is_empty() => {
-                        let msg = if compare {
-                            format!("{label}: no records")
-                        } else {
-                            "no records of that type".into()
-                        };
-                        tx.send(Ev::Error(msg));
+                        tx.send(Ev::Error("no records of that type".into()))
                     }
                     Ok(rows) => {
                         for (k, v) in rows {
@@ -351,7 +350,12 @@ fn differences(sets: &[(&String, BTreeSet<String>)]) -> Vec<String> {
 /// Query one source. Returns its display label and (type, value) rows.
 fn lookup(src: Source, q: &str, types: &[u16]) -> (String, Rows) {
     match src {
-        Source::System if types == [dnsq::A, dnsq::AAAA] || types == [dnsq::PTR] => {
+        // The OS resolver answers addresses and reverse lookups of an IP; a
+        // PTR query for a name (x.in-addr.arpa) goes to the DNS server.
+        Source::System
+            if types == [dnsq::A, dnsq::AAAA]
+                || (types == [dnsq::PTR] && q.parse::<IpAddr>().is_ok()) =>
+        {
             ("System".into(), system_lookup(q))
         }
         Source::System => match dnsq::system_servers().first() {
@@ -437,7 +441,11 @@ fn authoritative(q: &str) -> Result<(String, dnsq::Client), String> {
     for host in &ns {
         let ips = c.ask(host, dnsq::A).map(|m| m.ips()).unwrap_or_default();
         if let Some(&ip) = ips.first() {
-            return Ok((host.clone(), dnsq::Client::direct(ip)));
+            let direct = dnsq::Client::direct(ip);
+            // Skip a nameserver that is down rather than failing the lookup.
+            if direct.ask(&zone, dnsq::SOA).is_ok() {
+                return Ok((host.clone(), direct));
+            }
         }
     }
     Err(format!("no reachable nameserver for {zone}"))

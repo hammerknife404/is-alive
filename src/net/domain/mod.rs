@@ -254,6 +254,26 @@ fn addrs(c: &Client, host: &str) -> io::Result<(Vec<IpAddr>, Option<String>)> {
     Ok((ips, cname))
 }
 
+/// One DER element: (tag, contents, rest).
+fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let tag = *b.first()?;
+    let l = *b.get(1)? as usize;
+    let (len, h) = if l < 0x80 {
+        (l, 2)
+    } else {
+        let n = l & 0x7f;
+        if n == 0 || n > 3 {
+            return None;
+        }
+        let len = b
+            .get(2..2 + n)?
+            .iter()
+            .fold(0usize, |a, &x| a << 8 | x as usize);
+        (len, 2 + n)
+    };
+    Some((tag, b.get(h..h + len)?, &b[h + len..]))
+}
+
 /// TXT records at `name` that start with `prefix` (case-insensitive).
 fn txt_with(c: &Client, name: &str, prefix: &str) -> io::Result<Vec<String>> {
     Ok(c.ask(name, dnsq::TXT)?
