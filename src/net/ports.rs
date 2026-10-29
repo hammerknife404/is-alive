@@ -10,7 +10,9 @@ pub const PRESETS: &[(&str, &str)] = &[
         "53,88,135,139,389,445,464,636,3268,3269,3389,5985,5986,9389",
     ),
     ("Web", "80,443,8000,8008,8080,8443,8888"),
-    ("Firewall / VPN", "22,443,500,1194,1723,4433,4500,8443"),
+    // TCP only: IKE (500/4500) and OpenVPN's default 1194 are UDP, which a
+    // connect scan can't test, so they'd always read filtered.
+    ("Firewall / VPN", "22,443,1723,4433,8443,10443"),
     ("Mail", "25,110,143,465,587,993,995"),
     ("Well-known 1-1024", "1-1024"),
 ];
@@ -70,6 +72,7 @@ const SERVICES: &[(u16, &str)] = &[
     (8888, "http-alt"),
     (9100, "jetdirect"),
     (9389, "ad-web-svc"),
+    (10443, "fortinet-sslvpn"),
     (25565, "minecraft"),
     (27017, "mongodb"),
 ];

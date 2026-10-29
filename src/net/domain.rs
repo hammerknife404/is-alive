@@ -2,10 +2,11 @@
 //! most real problems are records that exist but are broken.
 
 use super::dnsq::{self, Client, Data, Msg};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -122,35 +123,53 @@ pub fn run(
     domain: &str,
     extra_selectors: &[String],
     cancel: &AtomicBool,
-    on: impl Fn(usize, Check) + Sync,
+    on: impl Fn(usize, Check),
 ) {
     // MX first: several checks need its hosts and addresses.
     let (check, mx) = mx(c, domain);
     on(0, check);
-    let mx = &mx;
-    let on = &on;
-    let jobs: [Box<dyn Fn() -> Check + Sync + '_>; 12] = [
-        Box::new(|| spf(c, domain)),
-        Box::new(|| dmarc(c, domain)),
-        Box::new(|| dkim(c, domain, extra_selectors)),
-        Box::new(|| nameservers(c, domain)),
-        Box::new(|| mta_sts(c, domain, mx)),
-        Box::new(|| tls_rpt(c, domain)),
-        Box::new(|| bimi(c, domain)),
-        Box::new(|| dnssec(c, domain)),
-        Box::new(|| caa(c, domain)),
-        Box::new(|| mx_ptr(c, mx)),
-        Box::new(|| autodiscover(c, domain, mx)),
-        Box::new(|| expiry(domain)),
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
+    type CheckFn = fn(&Client, &str, &[String], &MxInfo) -> Check;
+    let jobs: [CheckFn; 12] = [
+        |c, d, _, _| spf(c, d),
+        |c, d, _, _| dmarc(c, d),
+        |c, d, sels, _| dkim(c, d, sels),
+        |c, d, _, _| nameservers(c, d),
+        |c, d, _, mx| mta_sts(c, d, mx),
+        |c, d, _, _| tls_rpt(c, d),
+        |c, d, _, _| bimi(c, d),
+        |c, d, _, _| dnssec(c, d),
+        |c, d, _, _| caa(c, d),
+        |c, _, _, mx| mx_ptr(c, mx),
+        |c, d, _, mx| autodiscover(c, d, mx),
+        |_, d, _, _| expiry(d),
     ];
-    std::thread::scope(|s| {
-        for (i, job) in jobs.iter().enumerate() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            s.spawn(move || on(i + 1, job()));
+    // Detached threads, so Stop returns at once instead of waiting out
+    // timeouts; checks still in flight finish into a dropped channel.
+    let mx = Arc::new(mx);
+    let (tx, rx) = mpsc::channel();
+    for (i, job) in jobs.into_iter().enumerate() {
+        let (tx, c, d, sels, mx) = (
+            tx.clone(),
+            c.clone(),
+            domain.to_string(),
+            extra_selectors.to_vec(),
+            mx.clone(),
+        );
+        std::thread::spawn(move || {
+            let _ = tx.send((i + 1, job(&c, &d, &sels, &mx)));
+        });
+    }
+    drop(tx);
+    while !cancel.load(Ordering::Relaxed) {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok((i, check)) => on(i, check),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-    });
+    }
 }
 
 // ---------- shared lookups ----------
@@ -294,50 +313,117 @@ fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
     (check, info)
 }
 
-/// SPF terms that cost a DNS lookup (RFC 7208 §4.6.4).
-fn spf_lookups(
-    c: &Client,
-    name: &str,
-    depth: usize,
-    seen: &mut HashSet<String>,
-    k: &mut Check,
-) -> io::Result<usize> {
-    let recs = txt_with(c, name, "v=spf1")?;
-    let Some(rec) = recs.first() else {
-        k.fail(format!(
-            "{name} (included) has no SPF record: permerror for the whole SPF check"
-        ));
-        return Ok(0);
-    };
-    if depth > 0 && recs.len() > 1 {
-        k.fail(format!("{name} (included) has {} SPF records", recs.len()));
-    }
-    let mut n = 0;
-    for term in rec.split_whitespace().skip(1) {
-        let t = term.trim_start_matches(['+', '-', '~', '?']);
-        let mech: String = t
-            .chars()
-            .take_while(|c| !matches!(c, ':' | '=' | '/'))
-            .collect::<String>()
-            .to_ascii_lowercase();
-        let arg = t
-            .split_once([':', '='])
-            .map(|(_, a)| a.to_ascii_lowercase());
-        match mech.as_str() {
-            "a" | "mx" | "ptr" | "exists" => n += 1,
-            "include" | "redirect" => {
-                n += 1;
-                let Some(target) = arg else { continue };
-                if target.contains('%') {
-                    k.info(format!("{term}: macro, not expanded"));
-                } else if depth < 10 && seen.insert(target.clone()) {
-                    n += spf_lookups(c, &target, depth + 1, seen, k)?;
-                }
-            }
-            _ => {}
+/// SPF evaluation cost (RFC 7208 §4.6.4): terms that query DNS count on
+/// every evaluation (an include reached twice costs twice), and queries
+/// that return nothing are void lookups (limit 2).
+struct SpfWalk<'a> {
+    c: &'a Client,
+    /// SPF records per name, so repeated includes are counted but not re-queried.
+    cache: HashMap<String, Vec<String>>,
+    /// Names on the current include chain, for loop detection.
+    path: Vec<String>,
+    lookups: usize,
+    voids: usize,
+}
+
+impl<'a> SpfWalk<'a> {
+    fn new(c: &'a Client) -> Self {
+        Self {
+            c,
+            cache: HashMap::new(),
+            path: Vec::new(),
+            lookups: 0,
+            voids: 0,
         }
     }
-    Ok(n)
+
+    fn records(&mut self, name: &str) -> io::Result<Vec<String>> {
+        if let Some(r) = self.cache.get(name) {
+            return Ok(r.clone());
+        }
+        let r = txt_with(self.c, name, "v=spf1")?;
+        self.cache.insert(name.to_string(), r.clone());
+        Ok(r)
+    }
+
+    /// Whether an `a`/`mx`/`exists` target has anything to match.
+    fn has_answer(&self, mech: &str, target: &str) -> io::Result<bool> {
+        if mech == "mx" {
+            return Ok(self.c.ask(target, dnsq::MX)?.of(dnsq::MX).next().is_some());
+        }
+        Ok(!self.c.ask(target, dnsq::A)?.ips().is_empty()
+            || (mech == "a" && !self.c.ask(target, dnsq::AAAA)?.ips().is_empty()))
+    }
+
+    fn walk(&mut self, name: &str, k: &mut Check) -> io::Result<()> {
+        let recs = self.records(name)?;
+        let top = self.path.is_empty();
+        let Some(rec) = recs.first() else {
+            // The top-level record's absence is reported by spf().
+            if !top {
+                k.fail(format!(
+                    "{name} (included) has no SPF record: permerror for the whole SPF check"
+                ));
+            }
+            return Ok(());
+        };
+        if !top && recs.len() > 1 {
+            k.fail(format!("{name} (included) has {} SPF records", recs.len()));
+        }
+        self.path.push(name.to_string());
+        for term in rec.split_whitespace().skip(1) {
+            // Past the limit SPF has already failed; stop querying.
+            if self.lookups > 10 {
+                break;
+            }
+            let t = term.trim_start_matches(['+', '-', '~', '?']);
+            let mech: String = t
+                .chars()
+                .take_while(|c| !matches!(c, ':' | '=' | '/'))
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let arg = t
+                .split_once([':', '='])
+                .map(|(_, a)| a.to_ascii_lowercase());
+            match mech.as_str() {
+                "ptr" => self.lookups += 1,
+                "a" | "mx" | "exists" => {
+                    self.lookups += 1;
+                    // a:host/24, mx/24 (current domain), exists:host
+                    let target = arg
+                        .as_deref()
+                        .map(|a| a.split('/').next().unwrap_or(a).to_string())
+                        .unwrap_or_else(|| name.to_string());
+                    if target.contains('%') || (mech == "exists" && arg.is_none()) {
+                        continue;
+                    }
+                    if !self.has_answer(&mech, &target)? {
+                        self.voids += 1;
+                        k.warn(format!(
+                            "{term} in {name} matches nothing ({target} has no {} record): void lookup",
+                            if mech == "mx" { "MX" } else { "A" }
+                        ));
+                    }
+                }
+                "include" | "redirect" => {
+                    self.lookups += 1;
+                    let Some(target) = arg else { continue };
+                    if target.contains('%') {
+                        k.info(format!("{term}: macro, not expanded"));
+                    } else if self.path.contains(&target) {
+                        k.fail(format!(
+                            "{term} in {name} loops back to {target}: permerror"
+                        ));
+                    } else {
+                        self.walk(&target, k)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.path.pop();
+        Ok(())
+    }
 }
 
 fn spf(c: &Client, d: &str) -> Check {
@@ -408,16 +494,22 @@ fn spf(c: &Client, d: &str) -> Check {
         }) {
             k.warn("uses ptr: deprecated (RFC 7208), slow, and ignored by some receivers");
         }
-        let mut seen = HashSet::from([d.to_string()]);
-        let n = spf_lookups(c, d, 0, &mut seen, k)?;
-        match n {
-            0..=8 => k.pass(format!("{n}/10 DNS lookups")),
-            9..=10 => k.warn(format!(
+        let mut w = SpfWalk::new(c);
+        w.walk(d, k)?;
+        match w.lookups {
+            n @ 0..=8 => k.pass(format!("{n}/10 DNS lookups")),
+            n @ 9..=10 => k.warn(format!(
                 "{n}/10 DNS lookups: at the limit, one more include breaks SPF"
             )),
-            _ => k.fail(format!(
-                "{n}/10 DNS lookups: over the limit, receivers return permerror (SPF fails)"
+            n => k.fail(format!(
+                "over 10 DNS lookups (stopped counting at {n}): receivers return permerror (SPF fails)"
             )),
+        }
+        if w.voids > 2 {
+            k.fail(format!(
+                "{} void lookups (limit 2): receivers return permerror (SPF fails)",
+                w.voids
+            ));
         }
         Ok(())
     })
@@ -606,8 +698,16 @@ fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
             hs.into_iter().filter_map(|h| h.join().ok()).collect()
         });
         let (mut found, mut active, mut revoked) = (0, 0, 0);
+        // One lost packet shouldn't discard the selectors that did answer.
+        let mut failed = Vec::new();
         for (sel, r) in results {
-            let m = r?;
+            let m = match r {
+                Ok(m) => m,
+                Err(e) => {
+                    failed.push(format!("{sel} ({e})"));
+                    continue;
+                }
+            };
             let cname = m.names(dnsq::CNAME);
             let keys: Vec<String> = m.txt().into_iter().filter(|t| t.contains("p=")).collect();
             if keys.is_empty() {
@@ -666,10 +766,20 @@ fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
         if revoked > 0 && active == 0 {
             k.warn("no active DKIM key found, only revoked ones; the current selector isn't in the probe list (check a message's s= tag)");
         }
+        if failed.len() == sels.len() {
+            return Err(io::Error::other(failed.join(", ")));
+        }
+        if !failed.is_empty() {
+            k.warn(format!(
+                "{} selector lookup(s) failed, results may be incomplete: {}",
+                failed.len(),
+                failed.join(", ")
+            ));
+        }
         if found == 0 {
             k.warn(format!(
                 "no DKIM key on {} common selectors; check a received message's DKIM-Signature s= tag and add it above",
-                sels.len()
+                sels.len() - failed.len()
             ));
         }
         Ok(())
@@ -1417,7 +1527,9 @@ mod tests {
                         .collect();
                 }
                 let mut r = q[..i + 5].to_vec();
-                r[2..4].copy_from_slice(&[0x81, 0x80]);
+                // Names under "fail." answer SERVFAIL.
+                let rcode = if labels[0] == "fail" { 2 } else { 0 };
+                r[2..4].copy_from_slice(&[0x81, 0x80 | rcode]);
                 r[6..8].copy_from_slice(&(ans.len() as u16).to_be_bytes());
                 r[10..12].copy_from_slice(&[0, 0]);
                 for (owner, t, data) in ans {
@@ -1455,12 +1567,24 @@ mod tests {
     }
 
     #[test]
+    fn stop_skips_remaining_checks() {
+        let c = mock(vec![]);
+        let cancel = AtomicBool::new(true);
+        let got = std::sync::Mutex::new(Vec::new());
+        run(&c, "example.test", &[], &cancel, |i, _| {
+            got.lock().unwrap().push(i)
+        });
+        // Only the MX check (which the others depend on) ran.
+        assert_eq!(*got.lock().unwrap(), vec![0]);
+    }
+
+    #[test]
     fn mail_checks_against_mock_zone() {
         let key = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGpt/taRejdyKY59ZXnJz/a8gbnjW4kSwMiMc9x2J+kFNyT88QG5IbpHEx6uMrRvS6y5AOq/QUDBFNnccruUJSwmddtFUKlD7SpfXiPJeYvs77/ey81FUbbHHSL3QJsKz8ZKJOi0CX+iy6IO/VzHjJMUWmqXr677n1RwXhGR7qPQIDAQAB";
         let mut mx_rd = vec![0, 10];
         mx_rd.extend(wire("mx.example.test"));
         let c = mock(vec![
-            ("example.test", dnsq::MX, mx_rd),
+            ("example.test", dnsq::MX, mx_rd.clone()),
             ("mx.example.test", dnsq::A, vec![127, 0, 0, 9]),
             (
                 "example.test",
@@ -1470,6 +1594,29 @@ mod tests {
             ("example.test", dnsq::TXT, txt("google-site-verification=x")),
             ("a.test", dnsq::TXT, txt("v=spf1 a mx include:b.test -all")),
             ("b.test", dnsq::TXT, txt("v=spf1 ip4:192.0.2.1 -all")),
+            // b.test reached twice: each evaluation counts.
+            (
+                "dup.test",
+                dnsq::TXT,
+                txt("v=spf1 include:b.test include:c2.test -all"),
+            ),
+            ("c2.test", dnsq::TXT, txt("v=spf1 include:b.test -all")),
+            (
+                "loop1.test",
+                dnsq::TXT,
+                txt("v=spf1 include:loop2.test -all"),
+            ),
+            (
+                "loop2.test",
+                dnsq::TXT,
+                txt("v=spf1 include:loop1.test -all"),
+            ),
+            (
+                "void.test",
+                dnsq::TXT,
+                txt("v=spf1 a:gone1.test a:gone2.test mx:gone3.test mx -all"),
+            ),
+            ("void.test", dnsq::MX, mx_rd.clone()),
             ("redir.test", dnsq::TXT, txt("v=spf1 redirect=b.test")),
             (
                 "_dmarc.example.test",
@@ -1532,6 +1679,23 @@ mod tests {
         );
         assert!(has(&r, Status::Pass, "1/10 DNS lookups"), "{r:?}");
 
+        let s = spf(&c, "dup.test");
+        assert!(has(&s, Status::Pass, "3/10 DNS lookups"), "{s:?}");
+        let s = spf(&c, "loop1.test");
+        assert!(has(&s, Status::Fail, "loops back to loop1.test"), "{s:?}");
+        let s = spf(&c, "void.test");
+        assert!(
+            has(
+                &s,
+                Status::Warn,
+                "a:gone1.test in void.test matches nothing"
+            ),
+            "{s:?}"
+        );
+        assert!(has(&s, Status::Fail, "3 void lookups"), "{s:?}");
+        // The bare "mx" uses void.test's own MX, which exists.
+        assert!(!has(&s, Status::Warn, "mx in void.test"), "{s:?}");
+
         let s = spf(&c, d);
         assert!(has(&s, Status::Fail, "missing.test"), "{s:?}");
         assert!(has(&s, Status::Pass, "5/10 DNS lookups"), "{s:?}");
@@ -1547,6 +1711,14 @@ mod tests {
 
         let rv = dkim(&c, "revoked.test", &["old".into()]);
         assert!(has(&rv, Status::Warn, "no active DKIM key"), "{rv:?}");
+
+        // A failing selector is reported; the ones that answered still count.
+        let dk = dkim(&c, d, &["fail".into()]);
+        assert!(
+            has(&dk, Status::Warn, "1 selector lookup(s) failed"),
+            "{dk:?}"
+        );
+        assert!(has(&dk, Status::Warn, "google: 1024-bit"), "{dk:?}");
 
         let dk = dkim(&c, d, &[]);
         assert!(has(&dk, Status::Warn, "selector1: CNAME"), "{dk:?}");
