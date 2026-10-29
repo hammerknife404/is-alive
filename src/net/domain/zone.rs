@@ -138,6 +138,30 @@ pub(super) fn nameservers(c: &Client, d: &str) -> Check {
 
 pub(super) fn dnssec(c: &Client, d: &str) -> Check {
     Check::run(|k| {
+        // A bogus signature makes every lookup SERVFAIL; with checking
+        // disabled (CD) the same query answers. Test that before anything
+        // else, since zone_of() would fail on it too.
+        if c.query(d, dnsq::SOA, false)?.rcode == dnsq::SERVFAIL {
+            let cd = c.query(d, dnsq::SOA, true)?;
+            if cd.rcode == dnsq::SERVFAIL {
+                k.fail("resolver returns SERVFAIL even with DNSSEC checking off: the nameservers are failing, not DNSSEC");
+                return Ok(());
+            }
+            for r in c.query(d, dnsq::DS, true)?.of(dnsq::DS) {
+                if let Data::Ds {
+                    key_tag,
+                    alg,
+                    digest_type,
+                } = r
+                {
+                    k.rec(format!(
+                        "DS  tag {key_tag}  alg {alg}  digest {digest_type}"
+                    ));
+                }
+            }
+            k.fail("DNSSEC is broken (bogus): signatures don't validate, so validating resolvers (like this one) return SERVFAIL and the domain, mail included, is unreachable for them. That is why the other checks fail. Fix the zone signing or remove the DS at the registrar");
+            return Ok(());
+        }
         let zone = zone_of(c, d)?;
         let ds: Vec<Data> = c.ask(&zone, dnsq::DS)?.of(dnsq::DS).cloned().collect();
         let keys: Vec<Data> = c

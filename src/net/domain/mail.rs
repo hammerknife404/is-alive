@@ -45,10 +45,11 @@ pub(super) fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
             let (ips, cname) = addrs(c, host)?;
             let list: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
             k.rec(format!("{pref:>3} {host}  ➡ {}", list.join(", ")));
-            if cname {
+            if let Some(t) = cname {
                 k.warn(format!(
-                    "{host} is a CNAME; MX targets must be A/AAAA names (RFC 2181), some senders refuse it"
+                    "{host} is a CNAME (to {t}); MX targets must be A/AAAA names (RFC 2181), some senders refuse it"
                 ));
+                info.aliases.push((host.clone(), t));
             }
             if ips.is_empty() {
                 k.fail(format!("{host} does not resolve"));
@@ -440,15 +441,21 @@ fn base64(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Probed alongside the real selectors to detect a `*._domainkey` wildcard.
+const WILDCARD_PROBE: &str = "is-alive-wildcard-probe";
+
 pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
     Check::run(|k| {
         let mut sels: Vec<String> = extra.iter().map(|s| s.to_ascii_lowercase()).collect();
         sels.extend(SELECTORS.iter().map(|s| s.to_string()));
         let mut seen = HashSet::new();
         sels.retain(|s| !s.is_empty() && seen.insert(s.clone()));
+        // A selector nobody uses: if it answers, the zone has a *._domainkey
+        // wildcard and every probe would just echo it.
+        let probe = WILDCARD_PROBE.to_string();
         let results: Vec<(String, io::Result<Msg>)> = std::thread::scope(|s| {
-            let hs: Vec<_> = sels
-                .iter()
+            let hs: Vec<_> = std::iter::once(&probe)
+                .chain(&sels)
                 .map(|sel| {
                     let name = format!("{sel}._domainkey.{d}");
                     s.spawn(move || (sel.clone(), c.ask(&name, dnsq::TXT)))
@@ -459,23 +466,43 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
         let (mut found, mut active, mut revoked) = (0, 0, 0);
         // One lost packet shouldn't discard the selectors that did answer.
         let mut failed = Vec::new();
+        let mut wildcard: Option<String> = None;
+        // Keyless CNAMEs, judged once we know whether another selector is live.
+        let mut keyless = Vec::new();
         for (sel, r) in results {
+            let is_probe = sel == WILDCARD_PROBE;
             let m = match r {
                 Ok(m) => m,
+                Err(_) if is_probe => continue,
                 Err(e) => {
-                    failed.push(format!("{sel} ({e})"));
+                    failed.push((sel, e.to_string()));
                     continue;
                 }
             };
             let cname = m.names(dnsq::CNAME);
             let keys: Vec<String> = m.txt().into_iter().filter(|t| t.contains("p=")).collect();
+            if is_probe {
+                wildcard = keys.into_iter().next();
+                let Some(w) = &wildcard else { continue };
+                found += 1;
+                let empty = tag(&tags(w), "p").is_none_or(str::is_empty);
+                k.rec(format!("*._domainkey  wildcard: {w}"));
+                if empty {
+                    k.info("*._domainkey wildcard with an empty key: every selector is revoked, so this domain signs no mail");
+                } else {
+                    k.info("*._domainkey wildcard: every selector returns the same key");
+                }
+                continue;
+            }
+            // Selectors that only echo the wildcard add nothing.
+            if cname.is_empty() && keys.first().is_some_and(|k| Some(k) == wildcard.as_ref()) {
+                continue;
+            }
             if keys.is_empty() {
                 if let Some(target) = cname.last() {
                     found += 1;
                     k.rec(format!("{sel}  CNAME ➡ {target}  (no key)"));
-                    k.warn(format!(
-                        "{sel}: CNAME to {target} but no key there; DKIM not enabled at the provider yet?"
-                    ));
+                    keyless.push((sel, target.clone()));
                 }
                 continue;
             }
@@ -483,8 +510,12 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
             let key = &keys[0];
             let target = cname.last();
             let via = target.map(|t| format!(" (via {t})")).unwrap_or_default();
-            // A CNAME out of the domain means a provider publishes (and rotates) the key.
+            // A CNAME out of the domain means a provider publishes the key;
+            // Microsoft 365 tenants rotate theirs themselves.
             let fix = match target.filter(|t| !t.ends_with(&format!(".{d}"))) {
+                Some(t) if t.ends_with(".onmicrosoft.com") => {
+                    "rotate it in Microsoft Defender (Email authentication settings → DKIM → Rotate DKIM keys) to get 2048-bit".to_string()
+                }
                 Some(t) => format!("published by {t}, only that provider can rotate it"),
                 None => "rotate to a 2048-bit key".to_string(),
             };
@@ -522,17 +553,36 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
                 }
             }
         }
+        for (sel, target) in keyless {
+            // Microsoft 365 publishes two selectors and keys only the active
+            // one between rotations.
+            if active > 0 && target.ends_with(".onmicrosoft.com") {
+                k.info(format!(
+                    "{sel}: standby Microsoft 365 selector (no key until the next rotation)"
+                ));
+            } else {
+                k.warn(format!(
+                    "{sel}: CNAME to {target} but no key there; DKIM not enabled at the provider yet?"
+                ));
+            }
+        }
         if revoked > 0 && active == 0 {
             k.warn("no active DKIM key found, only revoked ones; the current selector isn't in the probe list (check a message's s= tag)");
         }
         if failed.len() == sels.len() {
-            return Err(io::Error::other(failed.join(", ")));
+            // Usually one cause (SERVFAIL, timeout): say it once.
+            let (sel, e) = &failed[0];
+            return Err(io::Error::other(format!(
+                "{e} (all {} selectors failed, starting with {sel})",
+                failed.len()
+            )));
         }
         if !failed.is_empty() {
+            let list: Vec<String> = failed.iter().map(|(s, e)| format!("{s} ({e})")).collect();
             k.warn(format!(
                 "{} selector lookup(s) failed, results may be incomplete: {}",
                 failed.len(),
-                failed.join(", ")
+                list.join(", ")
             ));
         }
         if found == 0 {
