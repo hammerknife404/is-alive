@@ -283,9 +283,10 @@ impl App {
                 for (i, e) in self.log.entries.iter().enumerate() {
                     entry_ui(ui, i, &e.header(), &e.text, || e.render());
                 }
-                for (tool, since, text) in &running {
+                // Ids from the top of the range so they never meet log indices.
+                for (j, (tool, since, text)) in running.iter().enumerate() {
                     let header = format!("{tool}  started {since}, running…");
-                    entry_ui(ui, usize::MAX - tool.len(), &header, text, || {
+                    entry_ui(ui, usize::MAX - j, &header, text, || {
                         format!("=== {header} ===\n{}\n", text.trim_end())
                     });
                 }
