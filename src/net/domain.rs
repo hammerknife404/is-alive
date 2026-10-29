@@ -605,7 +605,7 @@ fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
                 .collect();
             hs.into_iter().filter_map(|h| h.join().ok()).collect()
         });
-        let mut found = 0;
+        let (mut found, mut active, mut revoked) = (0, 0, 0);
         for (sel, r) in results {
             let m = r?;
             let cname = m.names(dnsq::CNAME);
@@ -622,18 +622,23 @@ fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
             }
             found += 1;
             let key = &keys[0];
-            let via = cname
-                .last()
-                .map(|t| format!(" (via {t})"))
-                .unwrap_or_default();
+            let target = cname.last();
+            let via = target.map(|t| format!(" (via {t})")).unwrap_or_default();
+            // A CNAME out of the domain means a provider publishes (and rotates) the key.
+            let fix = match target.filter(|t| !t.ends_with(&format!(".{d}"))) {
+                Some(t) => format!("published by {t}, only that provider can rotate it"),
+                None => "rotate to a 2048-bit key".to_string(),
+            };
             let t = tags(key);
             let kt = tag(&t, "k").unwrap_or("rsa").to_ascii_lowercase();
             let p = tag(&t, "p").unwrap_or("");
             if p.is_empty() {
                 k.rec(format!("{sel}{via}  revoked (empty p=)"));
                 k.info(format!("{sel}: key revoked (empty p=)"));
+                revoked += 1;
                 continue;
             }
+            active += 1;
             if kt == "ed25519" {
                 k.rec(format!("{sel}{via}  ed25519"));
                 k.pass(format!("{sel}: ed25519 key"));
@@ -644,19 +649,22 @@ fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
                     k.rec(format!("{sel}{via}  RSA {b}-bit"));
                     if b < 1024 {
                         k.fail(format!(
-                            "{sel}: {b}-bit key; Gmail and others ignore keys under 1024"
+                            "{sel}: {b}-bit key, Gmail and others ignore keys under 1024; {fix}"
                         ));
                     } else if b < 2048 {
-                        k.warn(format!("{sel}: {b}-bit key; rotate to 2048-bit"));
+                        k.warn(format!("{sel}: {b}-bit key; {fix}"));
                     } else {
                         k.pass(format!("{sel}: {b}-bit key"));
                     }
                 }
                 None => {
                     k.rec(format!("{sel}{via}  unparseable key"));
-                    k.fail(format!("{sel}: p= is not a valid RSA public key"));
+                    k.fail(format!("{sel}: p= is not a valid RSA public key; {fix}"));
                 }
             }
+        }
+        if revoked > 0 && active == 0 {
+            k.warn("no active DKIM key found, only revoked ones; the current selector isn't in the probe list (check a message's s= tag)");
         }
         if found == 0 {
             k.warn(format!(
@@ -843,11 +851,21 @@ fn mta_sts(c: &Client, d: &str, mx: &MxInfo) -> Check {
         if tag(&tags(rec), "id").is_none_or(str::is_empty) {
             k.fail("TXT record has no id=");
         }
-        let url = format!("https://mta-sts.{d}/.well-known/mta-sts.txt");
+        let host = format!("mta-sts.{d}");
+        let url = format!("https://{host}/.well-known/mta-sts.txt");
         let policy = match http_get(&url, false) {
             Ok(p) => p,
             Err(e) => {
-                k.fail(format!("policy not reachable at {url}: {e}"));
+                // Only on failure: say plainly when the host simply doesn't exist.
+                let missing = c.ask(&host, dnsq::A).is_ok_and(|m| m.ips().is_empty())
+                    && c.ask(&host, dnsq::AAAA).is_ok_and(|m| m.ips().is_empty());
+                if missing {
+                    k.fail(format!(
+                        "{host} doesn't resolve: the policy can't be fetched, so senders ignore MTA-STS. Publish the host or remove the TXT record"
+                    ));
+                } else {
+                    k.fail(format!("policy not reachable at {url}: {e}"));
+                }
                 return Ok(());
             }
         };
@@ -1112,7 +1130,7 @@ fn mx_ptr(c: &Client, mx: &MxInfo) -> Check {
                 Ok((names, _)) if names.is_empty() => {
                     k.rec(format!("{ip}  ➡ (none)"));
                     k.warn(format!(
-                        "{ip} has no PTR record; receivers often reject or junk mail from it"
+                        "{ip} has no PTR record: harmless if it only receives mail, but if it also sends, receivers will junk or reject it"
                     ));
                 }
                 Ok((names, fc)) => {
@@ -1121,7 +1139,7 @@ fn mx_ptr(c: &Client, mx: &MxInfo) -> Check {
                         ok += 1;
                     } else {
                         k.warn(format!(
-                            "{ip}: PTR {} doesn't resolve back to {ip} (forward and reverse don't match)",
+                            "{ip}: PTR {} doesn't resolve back to {ip}; matters if this host also sends mail",
                             names[0]
                         ));
                     }
@@ -1464,6 +1482,39 @@ mod tests {
                 wire("selector1-example.onmicrosoft.test"),
             ),
             (
+                "old._domainkey.revoked.test",
+                dnsq::TXT,
+                txt("v=DKIM1; k=rsa; p="),
+            ),
+            ("_mta-sts.example.test", dnsq::TXT, txt("v=STSv1; id=1")),
+            ("_mta-sts.sts.test", dnsq::TXT, txt("v=STSv1; id=1")),
+            (
+                "selector1._domainkey.cn.test",
+                dnsq::CNAME,
+                wire("selector1-cn.onmicrosoft.test"),
+            ),
+            ("mta-sts.sts.test", dnsq::A, vec![127, 0, 0, 1]),
+            (
+                "default._domainkey.own.test",
+                dnsq::CNAME,
+                wire("k2024._domainkey.own.test"),
+            ),
+            (
+                "k2024._domainkey.own.test",
+                dnsq::TXT,
+                txt(&format!("v=DKIM1; p={key}")),
+            ),
+            (
+                "k1._domainkey.example.test",
+                dnsq::CNAME,
+                wire("dkim.vendor.test"),
+            ),
+            (
+                "dkim.vendor.test",
+                dnsq::TXT,
+                txt(&format!("k=rsa; p={key}")),
+            ),
+            (
                 "google._domainkey.example.test",
                 dnsq::TXT,
                 txt(&format!("v=DKIM1; k=rsa; p={key}")),
@@ -1494,13 +1545,45 @@ mod tests {
             "{dm:?}"
         );
 
+        let rv = dkim(&c, "revoked.test", &["old".into()]);
+        assert!(has(&rv, Status::Warn, "no active DKIM key"), "{rv:?}");
+
         let dk = dkim(&c, d, &[]);
         assert!(has(&dk, Status::Warn, "selector1: CNAME"), "{dk:?}");
+        // A keyless CNAME (M365 before DKIM is enabled) is not a revoked key.
+        let cn = dkim(&c, "cn.test", &[]);
+        assert!(has(&cn, Status::Warn, "selector1: CNAME"), "{cn:?}");
+        assert!(!has(&cn, Status::Warn, "only revoked"), "{cn:?}");
         assert!(has(&dk, Status::Warn, "google: 1024-bit"), "{dk:?}");
+        assert!(
+            has(
+                &dk,
+                Status::Warn,
+                "k1: 1024-bit key; published by dkim.vendor.test"
+            ),
+            "{dk:?}"
+        );
 
         let ad = autodiscover(&c, d, &info);
         assert_eq!(ad.status(), Status::Info, "{ad:?}");
         assert_eq!(caa(&c, d).status(), Status::Info);
-        assert_eq!(mta_sts(&c, d, &info).status(), Status::Info);
+        let sts = mta_sts(&c, d, &info);
+        assert!(
+            has(&sts, Status::Fail, "mta-sts.example.test doesn't resolve"),
+            "{sts:?}"
+        );
+        // Host resolves (via the chosen resolver) but the fetch fails.
+        let sts = mta_sts(&c, "sts.test", &info);
+        assert!(has(&sts, Status::Fail, "policy not reachable"), "{sts:?}");
+
+        let own = dkim(&c, "own.test", &[]);
+        assert!(
+            has(
+                &own,
+                Status::Warn,
+                "default: 1024-bit key; rotate to a 2048-bit key"
+            ),
+            "{own:?}"
+        );
     }
 }
