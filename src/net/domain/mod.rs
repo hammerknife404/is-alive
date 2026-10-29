@@ -1,11 +1,15 @@
 //! Domain and mail DNS health checks. Each check validates, not just detects:
 //! most real problems are records that exist but are broken.
 
+mod blacklist;
 mod mail;
+mod smtp;
 mod zone;
 
 use super::dnsq::{self, Client};
+use blacklist::blacklists;
 use mail::{autodiscover, bimi, dkim, dmarc, mta_sts, mx, mx_ptr, spf, tls_rpt};
+use smtp::smtp;
 use std::io;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -78,12 +82,14 @@ impl Check {
 }
 
 /// Check names in display order; the first `CORE` are the core email checks.
-pub const NAMES: [&str; 13] = [
+pub const NAMES: [&str; 15] = [
     "MX",
     "SPF",
     "DMARC",
     "DKIM",
     "Nameservers",
+    "SMTP (port 25)",
+    "Blacklists",
     "MTA-STS",
     "TLS-RPT",
     "BIMI",
@@ -93,7 +99,7 @@ pub const NAMES: [&str; 13] = [
     "Autodiscover",
     "Domain expiry",
 ];
-pub const CORE: usize = 5;
+pub const CORE: usize = 7;
 
 /// Common DKIM selectors; DKIM keys can't be listed, only probed.
 pub const SELECTORS: &[&str] = &[
@@ -136,11 +142,13 @@ pub fn run(
         return;
     }
     type CheckFn = fn(&Client, &str, &[String], &MxInfo) -> Check;
-    let jobs: [CheckFn; 12] = [
+    let jobs: [CheckFn; 14] = [
         |c, d, _, _| spf(c, d),
         |c, d, _, _| dmarc(c, d),
         |c, d, sels, _| dkim(c, d, sels),
         |c, d, _, _| nameservers(c, d),
+        |c, _, _, mx| smtp(c, mx),
+        |c, d, _, mx| blacklists(c, d, mx, super::hostinfo::wan()),
         |c, d, _, mx| mta_sts(c, d, mx),
         |c, d, _, _| tls_rpt(c, d),
         |c, d, _, _| bimi(c, d),
@@ -275,7 +283,7 @@ fn tag<'a>(t: &'a [(String, String)], key: &str) -> Option<&'a str> {
 }
 
 /// The zone apex holding `name` (the owner of the SOA that answers for it).
-fn zone_of(c: &Client, name: &str) -> io::Result<String> {
+pub(crate) fn zone_of(c: &Client, name: &str) -> io::Result<String> {
     let m = c.ask(name, dnsq::SOA)?;
     // An alias answers with its target's SOA, but the name itself is
     // published in the zone above it (mail.yahoo.com lives in yahoo.com).
@@ -550,6 +558,11 @@ mod tests {
                 vec![127, 0, 0, 7],
             ),
             ("bogus.test", dnsq::SOA, soa("ns.bogus.test")),
+            // example.test's MX IP (127.0.0.9) is on Spamhaus ZEN.
+            ("9.0.0.127.zen.spamhaus.org", dnsq::A, vec![127, 0, 0, 2]),
+            // A Spamhaus PBL entry for an SPF-authorized address.
+            ("5.2.0.192.zen.spamhaus.org", dnsq::A, vec![127, 0, 0, 11]),
+            ("pbl.test", dnsq::TXT, txt("v=spf1 ip4:192.0.2.5 -all")),
             (
                 "default._bimi.bimi.test",
                 dnsq::TXT,
@@ -717,6 +730,36 @@ mod tests {
             "{am:?}"
         );
         assert_eq!(mx_ptr(&c, &ainfo).status(), Status::Info);
+
+        let bl = blacklists(&c, d, &info, None);
+        assert!(
+            has(
+                &bl,
+                Status::Fail,
+                "127.0.0.9 (MX) is listed on Spamhaus ZEN (code 127.0.0.2)"
+            ),
+            "{bl:?}"
+        );
+        let none = MxInfo::default();
+        let pbl = blacklists(&c, "pbl.test", &none, None);
+        assert!(
+            has(&pbl, Status::Warn, "but SPF authorizes it to send"),
+            "{pbl:?}"
+        );
+        let clean = blacklists(
+            &c,
+            "pbl.test",
+            &none,
+            Some(std::net::Ipv4Addr::new(198, 51, 100, 7)),
+        );
+        assert!(has(&clean, Status::Warn, "Spamhaus PBL"), "{clean:?}");
+        assert!(
+            clean
+                .records
+                .iter()
+                .any(|r| r.starts_with("198.51.100.7 (this network's WAN)  clean")),
+            "{clean:?}"
+        );
 
         let ds = dnssec(&c, "bogus.test");
         assert!(has(&ds, Status::Fail, "bogus"), "{ds:?}");

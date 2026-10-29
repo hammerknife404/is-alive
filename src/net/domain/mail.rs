@@ -418,7 +418,7 @@ fn rsa_bits(p: &str) -> Option<usize> {
     Some(m.len() * 8 - m.first()?.leading_zeros() as usize)
 }
 
-fn base64(s: &str) -> Option<Vec<u8>> {
+pub(super) fn base64(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let (mut acc, mut n) = (0u32, 0);
     for c in s.bytes() {
