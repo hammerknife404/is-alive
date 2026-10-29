@@ -88,14 +88,25 @@ pub(super) fn nameservers(c: &Client, d: &str) -> Check {
         }
 
         // Delegation at the parent (what the registrar published) vs the zone's own NS set.
+        // Advisory: a lookup failing here leaves the delegation unread
+        // (INFO below) rather than failing the checks above.
         let Some(p) = parent(&zone) else {
             return Ok(());
         };
-        let pzone = zone_of(c, p)?;
-        let pns = c.ask(&pzone, dnsq::NS)?.names(dnsq::NS);
+        let Ok(pzone) = zone_of(c, p) else {
+            k.info(format!("couldn't find the zone above {zone}"));
+            return Ok(());
+        };
+        let pns = c
+            .ask(&pzone, dnsq::NS)
+            .map(|m| m.names(dnsq::NS))
+            .unwrap_or_default();
         let mut delegated = None;
         for host in pns.iter().take(3) {
-            let Some(ip) = addrs(c, host)?.0.into_iter().find(IpAddr::is_ipv4) else {
+            let Some(ip) = addrs(c, host)
+                .ok()
+                .and_then(|r| r.0.into_iter().find(IpAddr::is_ipv4))
+            else {
                 continue;
             };
             if let Ok(m) = Client::direct(ip).query(&zone, dnsq::NS, false) {

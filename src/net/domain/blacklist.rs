@@ -135,19 +135,26 @@ fn ask(c: &Client, list: &List, name: &str) -> Result<Answer, String> {
     Ok(classify(list, &m.ips()))
 }
 
-/// Look up one name on a list: via the chosen resolver, then, if the list
-/// refuses it (Spamhaus and URIBL block public resolvers), via `fallback`,
-/// this machine's own DNS server.
+/// Look up one name on a list: via the chosen resolver, then, if that gives
+/// no usable answer, via `fallback`, this machine's own DNS server. Lists
+/// refuse public resolvers in several ways: Spamhaus and URIBL with a refusal
+/// code, others with a REFUSED/SERVFAIL rcode or no answer at all.
 fn lookup(
     c: &Client,
     fallback: Option<&Client>,
     list: &List,
     name: &str,
 ) -> Result<Answer, String> {
-    let a = ask(c, list, name)?;
+    let a = ask(c, list, name);
+    let usable = |r: &Result<Answer, String>| {
+        matches!(r, Ok(Answer::Clean | Answer::Listed(_) | Answer::Policy))
+    };
     match fallback {
-        Some(f) if a == Answer::Refused => ask(f, list, name),
-        _ => Ok(a),
+        Some(f) if !usable(&a) => {
+            let b = ask(f, list, name);
+            if usable(&b) { b } else { a }
+        }
+        _ => a,
     }
 }
 
@@ -317,11 +324,17 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                 unanswered.join(", ")
             ));
         }
-        let checked = LISTS.len() - refused.len() - unanswered.len();
+        // IP lists are only asked when there is an IP to ask about.
+        let asked = dom_lists.len() + if ips.is_empty() { 0 } else { ip_lists.len() };
+        let checked = asked - refused.len() - unanswered.len();
         if clean_ips == ips.len() && dom_hits.is_empty() && checked > 0 {
+            let what = if ips.is_empty() {
+                "the domain is".to_string()
+            } else {
+                format!("{} IP(s) and the domain are", ips.len())
+            };
             k.pass(format!(
-                "{} IP(s) and the domain are not listed on the {checked} blocklist(s) that answered",
-                ips.len()
+                "{what} not listed on the {checked} blocklist(s) that answered"
             ));
         }
         Ok(())
@@ -356,6 +369,49 @@ mod tests {
             Answer::Listed(Ipv4Addr::new(127, 0, 0, 4))
         );
         assert_eq!(reversed(Ipv4Addr::new(192, 0, 2, 5)), "5.2.0.192");
+    }
+
+    /// UDP server answering every query with a fixed rcode and A records.
+    fn server(rcode: u8, answers: &'static [[u8; 4]]) -> Client {
+        let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = sock.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                // Header and question, minus the OPT record (11 bytes).
+                let mut r = buf[..n - 11].to_vec();
+                r[2] |= 0x80;
+                r[3] = rcode;
+                r[6..8].copy_from_slice(&(answers.len() as u16).to_be_bytes());
+                r[10..12].copy_from_slice(&[0, 0]);
+                for a in answers {
+                    r.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+                    r.extend_from_slice(a);
+                }
+                let _ = sock.send_to(&r, from);
+            }
+        });
+        let mut c = Client::new(addr);
+        c.timeout = std::time::Duration::from_millis(300);
+        c
+    }
+
+    #[test]
+    fn falls_back_when_the_resolver_fails() {
+        let zen = &LISTS[0];
+        let name = "2.0.0.127.zen.spamhaus.org";
+        let refused = server(5, &[]); // rcode REFUSED, as some public resolvers do
+        let coded = server(0, &[[127, 255, 255, 254]]);
+        let listed = server(0, &[[127, 0, 0, 2]]);
+        let listing = Ok(Answer::Listed(Ipv4Addr::new(127, 0, 0, 2)));
+        assert_eq!(lookup(&refused, Some(&listed), zen, name), listing);
+        assert_eq!(lookup(&coded, Some(&listed), zen, name), listing);
+        // A fallback that fails too keeps the first answer.
+        assert_eq!(
+            lookup(&coded, Some(&refused), zen, name),
+            Ok(Answer::Refused)
+        );
+        assert!(lookup(&refused, None, zen, name).is_err());
     }
 
     #[test]
