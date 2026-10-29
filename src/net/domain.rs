@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -185,6 +185,25 @@ impl MxInfo {
         self.hosts
             .iter()
             .any(|h| h.ends_with(".mail.protection.outlook.com"))
+    }
+    /// Every MX is a hosted mail/filtering service, whose inbound relays
+    /// don't send the domain's mail, so their reverse DNS doesn't matter here.
+    fn hosted(&self) -> bool {
+        const HOSTED: &[&str] = &[
+            ".mail.protection.outlook.com", // Microsoft 365
+            ".google.com",                  // Google Workspace / Gmail
+            ".googlemail.com",
+            ".cf-emailsecurity.net", // Cloudflare Email Security
+            ".mimecast.com",
+            ".pphosted.com", // Proofpoint
+            ".ppe-hosted.com",
+            ".barracudanetworks.com",
+        ];
+        !self.hosts.is_empty()
+            && self
+                .hosts
+                .iter()
+                .all(|h| HOSTED.iter().any(|s| h.ends_with(s)))
     }
     fn google(&self) -> bool {
         self.hosts
@@ -1053,7 +1072,13 @@ fn bimi(c: &Client, d: &str) -> Check {
         k.rec(format!("default._bimi.{d}  {rec}"));
         let t = tags(rec);
         match tag(&t, "l") {
-            Some(l) if l.starts_with("https://") && l.to_ascii_lowercase().ends_with(".svg") => {
+            // A query string or fragment (cache busting) is fine after .svg.
+            Some(l)
+                if l.starts_with("https://")
+                    && l.split(['?', '#'])
+                        .next()
+                        .is_some_and(|p| p.to_ascii_lowercase().ends_with(".svg")) =>
+            {
                 k.pass("logo is an HTTPS SVG")
             }
             Some("") | None => k.info("no logo (l= empty): declines BIMI"),
@@ -1234,22 +1259,39 @@ fn mx_ptr(c: &Client, mx: &MxInfo) -> Check {
                 .collect();
             hs.into_iter().filter_map(|h| h.join().ok()).collect()
         });
+        // A hosted filter's inbound relays don't send mail, so a missing PTR is
+        // informational there; a self-hosted MX usually sends too.
+        let hosted = mx.hosted();
+        if hosted {
+            k.info("MX is a hosted mail service: its inbound relays don't send your mail");
+        }
         let mut ok = 0;
         for (ip, r) in results {
             match r {
                 Ok((names, _)) if names.is_empty() => {
                     k.rec(format!("{ip}  ➡ (none)"));
-                    k.warn(format!(
-                        "{ip} has no PTR record: harmless if it only receives mail, but if it also sends, receivers will junk or reject it"
-                    ));
+                    if hosted {
+                        k.info(format!(
+                            "{ip} has no PTR record (doesn't matter for a receive-only relay)"
+                        ));
+                    } else {
+                        k.warn(format!(
+                            "{ip} has no PTR record: if this server also sends mail, receivers will junk or reject it"
+                        ));
+                    }
                 }
                 Ok((names, fc)) => {
                     k.rec(format!("{ip}  ➡ {}", names.join(", ")));
                     if fc {
                         ok += 1;
+                    } else if hosted {
+                        k.info(format!(
+                            "{ip}: PTR {} doesn't resolve back to {ip}",
+                            names[0]
+                        ));
                     } else {
                         k.warn(format!(
-                            "{ip}: PTR {} doesn't resolve back to {ip}; matters if this host also sends mail",
+                            "{ip}: PTR {} doesn't resolve back to {ip}; receivers check this for sending servers",
                             names[0]
                         ));
                     }
@@ -1352,7 +1394,14 @@ fn parse_rdap(body: &str) -> Option<Rdap> {
 fn expiry(d: &str) -> Check {
     let mut k = Check::default();
     let tld = d.rsplit('.').next().unwrap_or(d);
-    let base = match http_get("https://data.iana.org/rdap/dns.json", true) {
+    // The IANA bootstrap file changes rarely; fetch it once per session.
+    static BOOTSTRAP: OnceLock<String> = OnceLock::new();
+    let boot = match BOOTSTRAP.get() {
+        Some(b) => Ok(b.clone()),
+        None => http_get("https://data.iana.org/rdap/dns.json", true)
+            .inspect(|b| _ = BOOTSTRAP.set(b.clone())),
+    };
+    let base = match boot {
         Ok(b) => rdap_base(&b, tld),
         Err(e) => {
             k.warn(format!("couldn't reach the IANA RDAP registry: {e}"));
@@ -1636,6 +1685,12 @@ mod tests {
             ("_mta-sts.example.test", dnsq::TXT, txt("v=STSv1; id=1")),
             ("_mta-sts.sts.test", dnsq::TXT, txt("v=STSv1; id=1")),
             (
+                "default._bimi.bimi.test",
+                dnsq::TXT,
+                txt("v=BIMI1; l=https://bimi.test/logo.svg?v=2; a=https://bimi.test/vmc.pem"),
+            ),
+            ("_dmarc.bimi.test", dnsq::TXT, txt("v=DMARC1; p=reject")),
+            (
                 "selector1._domainkey.cn.test",
                 dnsq::CNAME,
                 wire("selector1-cn.onmicrosoft.test"),
@@ -1735,6 +1790,19 @@ mod tests {
             ),
             "{dk:?}"
         );
+
+        let b = bimi(&c, "bimi.test");
+        assert!(has(&b, Status::Pass, "logo is an HTTPS SVG"), "{b:?}");
+        assert_eq!(b.status(), Status::Pass, "{b:?}");
+
+        // No PTR in the zone: a self-hosted MX warns, a hosted filter doesn't.
+        let own = mx_ptr(&c, &info);
+        assert!(has(&own, Status::Warn, "has no PTR record"), "{own:?}");
+        let hosted = MxInfo {
+            hosts: vec!["example-test.mail.protection.outlook.com".into()],
+            ips: info.ips.clone(),
+        };
+        assert_eq!(mx_ptr(&c, &hosted).status(), Status::Info);
 
         let ad = autodiscover(&c, d, &info);
         assert_eq!(ad.status(), Status::Info, "{ad:?}");

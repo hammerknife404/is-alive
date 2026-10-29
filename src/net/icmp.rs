@@ -552,10 +552,9 @@ mod cmd {
     use std::time::Instant;
 
     pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
-        let secs = timeout_ms.div_ceil(1000).max(1).to_string();
         let start = Instant::now();
-        let out = Command::new("ping")
-            .args(["-n", "-c", "1", "-W", &secs, "-t", &ttl.to_string()])
+        let out = Command::new(program(dest))
+            .args(args(dest, ttl, timeout_ms))
             .args(["-s", &size.to_string(), &dest.to_string()])
             .output();
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -571,6 +570,32 @@ mod cmd {
             }
         };
         parse(&out, dest, elapsed)
+    }
+
+    pub(super) fn program(dest: IpAddr) -> &'static str {
+        // BSD/macOS keep a separate ping6; iputils' ping does both.
+        if cfg!(target_os = "linux") || dest.is_ipv4() {
+            "ping"
+        } else {
+            "ping6"
+        }
+    }
+
+    /// TTL and timeout flags differ: iputils uses -t TTL / -W seconds, BSD and
+    /// macOS use -m TTL / -W milliseconds (-t there is a total timeout), and
+    /// BSD ping6 takes the hop limit as -h.
+    pub(super) fn args(dest: IpAddr, ttl: u8, timeout_ms: u32) -> Vec<String> {
+        let ttl = ttl.to_string();
+        let mut a = vec!["-n".to_string(), "-c".into(), "1".into()];
+        if cfg!(target_os = "linux") {
+            let secs = timeout_ms.div_ceil(1000).max(1).to_string();
+            a.extend(["-W".into(), secs, "-t".into(), ttl]);
+        } else if dest.is_ipv4() {
+            a.extend(["-W".into(), timeout_ms.to_string(), "-m".into(), ttl]);
+        } else {
+            a.extend(["-h".into(), ttl]);
+        }
+        a
     }
 
     fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
@@ -618,6 +643,16 @@ mod cmd {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[test]
+    fn iputils_ping_flags() {
+        let ip = "192.0.2.1".parse().unwrap();
+        assert_eq!(super::cmd::program(ip), "ping");
+        assert_eq!(
+            super::cmd::args(ip, 7, 1500),
+            ["-n", "-c", "1", "-W", "2", "-t", "7"]
+        );
+    }
+
     #[test]
     fn ping_socket_loopback() {
         // Skip where ping sockets are disabled (net.ipv4.ping_group_range).
