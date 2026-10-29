@@ -19,6 +19,7 @@ pub const AAAA: u16 = 28;
 pub const SRV: u16 = 33;
 const OPT: u16 = 41;
 pub const DS: u16 = 43;
+pub const RRSIG: u16 = 46;
 pub const DNSKEY: u16 = 48;
 pub const CAA: u16 = 257;
 
@@ -52,6 +53,13 @@ pub enum Data {
     Dnskey {
         flags: u16,
         alg: u8,
+    },
+    /// DNSSEC signature over the answer's records; arrives with the DO bit set.
+    Rrsig {
+        covers: u16,
+        alg: u8,
+        expires: u32,
+        signer: String,
     },
     Srv {
         prio: u16,
@@ -392,6 +400,12 @@ fn parse_data(r: &[u8], start: usize, d: &[u8], rtype: u16) -> io::Result<Data> 
             flags: u16_at(d, 0)?,
             alg: d[3],
         },
+        RRSIG if d.len() >= 18 => Data::Rrsig {
+            covers: u16_at(d, 0)?,
+            alg: d[2],
+            expires: u32::from_be_bytes([d[8], d[9], d[10], d[11]]),
+            signer: read_name(r, start + 18)?.0,
+        },
         SRV => Data::Srv {
             prio: u16_at(d, 0)?,
             weight: u16_at(d, 2)?,
@@ -438,6 +452,17 @@ impl std::fmt::Display for Data {
                 let role = if flags & 1 == 1 { "KSK" } else { "ZSK" };
                 write!(f, "{role}  alg {alg}")
             }
+            Data::Rrsig {
+                covers,
+                alg,
+                expires,
+                signer,
+            } => write!(
+                f,
+                "signs {}  alg {alg}  by {signer}  expires {}",
+                type_name(*covers),
+                ymd(*expires)
+            ),
             Data::Srv {
                 prio,
                 weight,
@@ -466,10 +491,28 @@ pub const TYPES: &[(&str, u16)] = &[
 ];
 
 pub fn type_name(rtype: u16) -> String {
+    if rtype == RRSIG {
+        return "RRSIG".into();
+    }
     TYPES
         .iter()
         .find(|t| t.1 == rtype)
         .map_or_else(|| format!("TYPE{rtype}"), |t| t.0.to_string())
+}
+
+/// UTC date of a Unix timestamp, as YYYY-MM-DD.
+fn ymd(secs: u32) -> String {
+    // Howard Hinnant's days-to-civil.
+    let z = i64::from(secs) / 86_400 + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// The DNS servers this machine is configured to use.
@@ -618,6 +661,25 @@ mod tests {
         );
         assert_eq!(type_name(MX), "MX");
         assert_eq!(type_name(99), "TYPE99");
+        assert_eq!(type_name(RRSIG), "RRSIG");
+        assert_eq!(ymd(0), "1970-01-01");
+        assert_eq!(ymd(1_709_164_800), "2024-02-29");
+    }
+
+    #[test]
+    fn parses_rrsig() {
+        let q = encode_query(7, "example.com", DNSKEY, true, false).unwrap();
+        let mut rd = vec![0, 48, 13, 2, 0, 0, 14, 16];
+        rd.extend_from_slice(&1_709_164_800u32.to_be_bytes()); // expiration
+        rd.extend_from_slice(&[0; 4]); // inception
+        rd.extend_from_slice(&[0x12, 0x34, 0xc0, 12]); // key tag, signer
+        let mut rrs = vec![0xc0, 12, 0, 46, 0, 1, 0, 0, 0, 60, 0, rd.len() as u8];
+        rrs.extend_from_slice(&rd);
+        let m = parse(&answer(&q, &rrs, 1), 7).unwrap();
+        assert_eq!(
+            m.answers[0].data.to_string(),
+            "signs DNSKEY  alg 13  by example.com  expires 2024-02-29"
+        );
     }
 
     #[test]
