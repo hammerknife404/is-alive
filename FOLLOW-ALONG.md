@@ -15,7 +15,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
-4. Check the version: the title bar at the top of the window says `is-alive 0.7.1` (or newer).
+4. Check the version: the title bar at the top of the window says `is-alive 0.7.2` (or newer).
 
 You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced** and **Results**. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address.
 
