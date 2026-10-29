@@ -51,6 +51,8 @@ struct App {
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
+    /// Results tab filter; matches tool name or output, case-insensitive.
+    filter: String,
 }
 
 impl eframe::App for App {
@@ -252,9 +254,30 @@ impl App {
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.running();
+        let needle = self.filter.trim().to_lowercase();
+        let hit = |tool: &str, text: &str| {
+            needle.is_empty()
+                || tool.to_lowercase().contains(&needle)
+                || text.to_lowercase().contains(&needle)
+        };
+        let shown: Vec<(usize, &log::Entry)> = self
+            .log
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| hit(e.tool, &e.text))
+            .collect();
+        let running: Vec<_> = running.iter().filter(|r| hit(r.0, &r.2)).collect();
+        let filtered = !needle.is_empty();
+        let mut clear = false;
         ui.horizontal(|ui| {
             ui.label(format!(
-                "{} logged run(s){}",
+                "{}{} logged run(s){}",
+                if filtered {
+                    format!("{} of ", shown.len())
+                } else {
+                    String::new()
+                },
                 self.log.entries.len(),
                 if running.is_empty() {
                     String::new()
@@ -266,39 +289,72 @@ impl App {
                 ui.weak(format!("({} oldest dropped)", self.log.dropped));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_enabled_ui(!self.log.entries.is_empty(), |ui| {
+                ui.add_enabled_ui(!shown.is_empty(), |ui| {
                     if ui.button("Clear").on_hover_text("Clear the log").clicked() {
-                        self.log.clear();
+                        clear = true;
                     }
-                    widgets::save_button(ui, "log", || self.log.render());
-                    widgets::copy_button(ui, || self.log.render());
+                    let render = || {
+                        if filtered {
+                            shown.iter().map(|(_, e)| e.render() + "\n").collect()
+                        } else {
+                            self.log.render()
+                        }
+                    };
+                    widgets::export_menu(ui, "log", || shown.iter().map(|(_, e)| *e).collect());
+                    widgets::save_button(ui, "log", render);
+                    widgets::copy_button(ui, render);
                 });
             });
+        });
+        ui.horizontal(|ui| {
+            ui.label("Filter");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .desired_width(240.0)
+                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
+            )
+            .on_hover_text("Show only runs whose tool or output contains this. Copy, Save and Export use the filtered set.");
+            if filtered && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+                self.filter.clear();
+            }
         });
         ui.separator();
         if self.log.entries.is_empty() && running.is_empty() {
             ui.weak("No results yet. Finished runs from every tab are logged here with start/end times.");
-            return;
+        } else if shown.is_empty() && running.is_empty() {
+            ui.weak("No runs match the filter.");
+        } else {
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for (i, e) in &shown {
+                        entry_ui(ui, *i, &e.header(), &e.text, Some(e), || e.render());
+                    }
+                    // Ids from the top of the range so they never meet log indices.
+                    for (j, (tool, since, text)) in running.iter().enumerate() {
+                        let header = format!("{tool}  started {since}, running…");
+                        entry_ui(ui, usize::MAX - j, &header, text, None, || {
+                            format!("=== {header} ===\n{}\n", text.trim_end())
+                        });
+                    }
+                });
         }
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for (i, e) in self.log.entries.iter().enumerate() {
-                    entry_ui(ui, i, &e.header(), &e.text, || e.render());
-                }
-                // Ids from the top of the range so they never meet log indices.
-                for (j, (tool, since, text)) in running.iter().enumerate() {
-                    let header = format!("{tool}  started {since}, running…");
-                    entry_ui(ui, usize::MAX - j, &header, text, || {
-                        format!("=== {header} ===\n{}\n", text.trim_end())
-                    });
-                }
-            });
+        if clear {
+            self.log.clear();
+        }
     }
 }
 
-fn entry_ui(ui: &mut egui::Ui, id: usize, header: &str, text: &str, full: impl Fn() -> String) {
+/// `entry` is the logged run, for Export; None while it's still running.
+fn entry_ui(
+    ui: &mut egui::Ui,
+    id: usize,
+    header: &str,
+    text: &str,
+    entry: Option<&log::Entry>,
+    full: impl Fn() -> String,
+) {
     egui::CollapsingHeader::new(egui::RichText::new(header).strong())
         .id_salt(("log", id))
         .default_open(true)
@@ -306,6 +362,9 @@ fn entry_ui(ui: &mut egui::Ui, id: usize, header: &str, text: &str, full: impl F
             ui.horizontal(|ui| {
                 widgets::save_button(ui, "result", &full);
                 widgets::copy_button(ui, &full);
+                if let Some(e) = entry {
+                    widgets::export_menu(ui, "result", || vec![e]);
+                }
             });
             ui.add(
                 egui::Label::new(egui::RichText::new(text.trim_end()).monospace()).selectable(true),
@@ -337,6 +396,7 @@ fn main() -> eframe::Result {
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
+                filter: String::new(),
             };
             app.refresh_info(&cc.egui_ctx);
             Ok(Box::new(app))
