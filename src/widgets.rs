@@ -155,10 +155,42 @@ pub fn save_button(ui: &mut Ui, stem: &str, text: impl FnOnce() -> String) {
 }
 
 pub fn save_text(file_name: String, text: String) {
+    save_file(file_name, "Text", vec!["txt", "log"], text);
+}
+
+/// Export menu: each format opens a save dialog with `entries` rendered in it.
+pub fn export_menu<'a>(
+    ui: &mut Ui,
+    stem: &str,
+    entries: impl FnOnce() -> Vec<&'a crate::log::Entry>,
+) {
+    let mut picked = None;
+    ui.menu_button("Export ▾", |ui| {
+        for f in crate::log::Format::ALL {
+            if ui.button(f.name()).on_hover_text(f.hint()).clicked() {
+                picked = Some(f);
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Save as CSV, JSON, Markdown or HTML");
+    if let Some(f) = picked {
+        let text = f.export(&entries());
+        save_file(
+            format!("is-alive-{stem}.{}", f.ext()),
+            f.name(),
+            vec![f.ext()],
+            text,
+        );
+    }
+}
+
+fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
     std::thread::spawn(move || {
         let Some(path) = rfd::FileDialog::new()
             .set_file_name(&file_name)
-            .add_filter("Text", &["txt", "log"])
+            .add_filter(filter, &exts)
             .save_file()
         else {
             return;
