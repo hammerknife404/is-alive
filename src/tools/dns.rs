@@ -45,8 +45,11 @@ const NXDOMAIN: &str = "does not exist (NXDOMAIN)";
 /// One source's answer: (type, value) rows, or why it failed.
 type Rows = Result<Vec<(String, String)>, String>;
 
-/// "A + AAAA" first (the default), then single record types.
+/// "A + AAAA" first (the default), then "All", then single record types.
 const ADDRS: &str = "A + AAAA";
+/// Every type in turn: ANY queries are deprecated (RFC 8482) and big
+/// resolvers answer them with next to nothing.
+const ALL: &str = "All";
 
 enum Ev {
     /// (source, type, value)
@@ -117,6 +120,7 @@ impl DnsTool {
                 .width(80.0)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.rtype, ADDRS, ADDRS);
+                    ui.selectable_value(&mut self.rtype, ALL, ALL);
                     for (name, _) in dnsq::TYPES {
                         ui.selectable_value(&mut self.rtype, *name, *name);
                     }
@@ -251,6 +255,13 @@ impl DnsTool {
             vec![dnsq::PTR]
         } else if self.rtype == ADDRS {
             vec![dnsq::A, dnsq::AAAA]
+        } else if self.rtype == ALL {
+            // PTR only makes sense for an IP, handled above.
+            dnsq::TYPES
+                .iter()
+                .map(|t| t.1)
+                .filter(|&t| t != dnsq::PTR)
+                .collect()
         } else {
             dnsq::TYPES
                 .iter()
@@ -324,6 +335,9 @@ impl DnsTool {
 /// server answering an alias with just the CNAME (target in another zone)
 /// isn't a difference either.
 fn comparable(r: &Rows, types: &[u16]) -> Option<BTreeSet<String>> {
+    // DS lives in the parent zone: the authoritative server never has it.
+    let types: Vec<u16> = types.iter().copied().filter(|&t| t != dnsq::DS).collect();
+    let types = types.as_slice();
     match r {
         Ok(rows) => {
             let set = answer_set(rows, types);
@@ -427,26 +441,57 @@ fn no_records(q: &str, what: &str) -> String {
     s
 }
 
-/// Raw query of each type; answers include any CNAME chain on the way.
+/// Raw query of each type, in parallel; answers include any CNAME chain
+/// on the way. A type that fails is skipped unless nothing answered.
 fn direct(c: dnsq::Client, q: &str, types: &[u16]) -> Rows {
     let name = match q.parse::<IpAddr>() {
         Ok(ip) => dnsq::reverse_name(ip),
         Err(_) => q.to_string(),
     };
+    let answers: Vec<_> = std::thread::scope(|s| {
+        let hs: Vec<_> = types
+            .iter()
+            .map(|&t| {
+                let (c, name) = (&c, &name);
+                s.spawn(move || c.ask(name, t))
+            })
+            .collect();
+        hs.into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("lookup failed")))
+            })
+            .collect()
+    });
     let mut rows: Vec<(String, String)> = Vec::new();
-    for &t in types {
-        let m = c.ask(&name, t).map_err(|e| e.to_string())?;
+    let mut err = None;
+    for a in answers {
+        let m = match a {
+            Ok(m) => m,
+            Err(e) => {
+                err.get_or_insert(e.to_string());
+                continue;
+            }
+        };
         if m.rcode == dnsq::NXDOMAIN {
             return Err(format!("{name} {NXDOMAIN}"));
         }
         for rr in m.answers {
+            // Signatures on every type of a signed zone are noise in All;
+            // DNSKEY and DS already show the zone is signed.
+            if rr.rtype == dnsq::RRSIG && types.len() > 2 {
+                continue;
+            }
             let row = (dnsq::type_name(rr.rtype), rr.data.to_string());
             if !rows.contains(&row) {
                 rows.push(row);
             }
         }
     }
-    Ok(rows)
+    match err {
+        Some(e) if rows.is_empty() => Err(e),
+        _ => Ok(rows),
+    }
 }
 
 /// A client for the first reachable nameserver of the zone holding `q`.
@@ -486,6 +531,19 @@ mod tests {
         );
         assert!(no_records("_imaps._tcp.gmail.com", "A/AAAA").ends_with("set Type to SRV"));
         assert!(!no_records("_imaps._tcp.gmail.com", "SRV").contains("set Type"));
+    }
+
+    #[test]
+    fn ds_left_out_of_compare() {
+        // Resolvers return the parent's DS; the zone's own server can't.
+        let row = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let types = [dnsq::NS, dnsq::DS];
+        let resolver: Rows = Ok(vec![
+            row("NS", "ns1.x"),
+            row("DS", "tag 1  alg 13  digest 2"),
+        ]);
+        let auth: Rows = Ok(vec![row("NS", "ns1.x")]);
+        assert_eq!(comparable(&resolver, &types), comparable(&auth, &types));
     }
 
     #[test]
