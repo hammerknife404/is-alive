@@ -374,13 +374,20 @@ fn entry_ui(
         });
 }
 
+/// Window and taskbar icon; the same artwork is in the .exe and the AppImage.
+fn icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png"))
+        .expect("valid icon PNG")
+}
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))
             .with_app_id("is-alive")
             .with_inner_size([860.0, 600.0])
-            .with_min_inner_size([620.0, 400.0]),
+            .with_min_inner_size([620.0, 400.0])
+            .with_icon(icon()),
         ..Default::default()
     };
     eframe::run_native(
@@ -404,4 +411,13 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn icon_decodes() {
+        let i = super::icon();
+        assert_eq!((i.width, i.height), (256, 256));
+    }
 }
