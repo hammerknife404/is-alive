@@ -2,6 +2,7 @@ pub mod dnsq;
 pub mod domain;
 pub mod hostinfo;
 pub mod icmp;
+pub mod mac;
 pub mod ports;
 pub mod targets;
 

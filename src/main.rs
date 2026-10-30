@@ -141,7 +141,7 @@ impl eframe::App for App {
             Tab::Ping => self.ping.ui(ui),
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
-            Tab::Sweep => self.sweep.ui(ui),
+            Tab::Sweep => self.sweep.ui(ui, &self.info),
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Unifi => self.unifi.ui(ui),

@@ -17,6 +17,13 @@ pub const PRESETS: &[(&str, &str)] = &[
     ("Well-known 1-1024", "1-1024"),
 ];
 
+/// Checked on each live host by Subnet Sweep's "Check mgmt ports": the
+/// management ports of switches, APs and firewalls, plus a few that mark a
+/// host's role (SMB/RDP for Windows, 9100 printers, 554 cameras).
+pub const INFRA: &[u16] = &[
+    22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443, 9100,
+];
+
 const SERVICES: &[(u16, &str)] = &[
     (20, "ftp-data"),
     (21, "ftp"),
@@ -40,6 +47,8 @@ const SERVICES: &[(u16, &str)] = &[
     (500, "isakmp"),
     (514, "syslog"),
     (515, "lpd"),
+    (541, "fortigate-fgfm"),
+    (554, "rtsp"),
     (587, "submission"),
     (631, "ipp"),
     (636, "ldaps"),
@@ -59,6 +68,7 @@ const SERVICES: &[(u16, &str)] = &[
     (3389, "rdp"),
     (4433, "sslvpn"),
     (4500, "ipsec-nat-t"),
+    (5000, "upnp-dsm"),
     (5060, "sip"),
     (5432, "postgres"),
     (5900, "vnc"),
@@ -68,6 +78,7 @@ const SERVICES: &[(u16, &str)] = &[
     (8000, "http-alt"),
     (8008, "http-alt"),
     (8080, "http-proxy"),
+    (8291, "winbox"),
     (8443, "https-alt"),
     (8888, "http-alt"),
     (9100, "jetdirect"),
@@ -139,6 +150,8 @@ mod tests {
         assert!(SERVICES.windows(2).all(|w| w[0].0 < w[1].0));
         assert_eq!(service_name(3389), "rdp");
         assert_eq!(service_name(12345), "");
+        assert!(INFRA.windows(2).all(|w| w[0] < w[1]));
+        assert!(INFRA.iter().all(|&p| !service_name(p).is_empty()));
     }
 
     #[test]
