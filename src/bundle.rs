@@ -11,6 +11,8 @@ pub const UNIFI: &str = "unifi.unifidump.json";
 pub const SONICWALL: &str = "sonicwall.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
+/// The kickoff prompt, so the bundle carries its own instructions.
+pub const PROMPT: &str = "prompt.txt";
 
 /// One file in the bundle.
 pub struct Part {
@@ -72,6 +74,7 @@ impl Bundle {
                 "gateway": self.scanner.gateway.map(|g| g.to_string()),
                 "wan": self.scanner.wan.map(|w| w.to_string()),
             },
+            "prompt": PROMPT,
             "files": files,
             "mapnetwork_preflight": {
                 "site_name": self.site.trim(),
@@ -121,10 +124,15 @@ Don't ask it again.\n",
         s
     }
 
-    /// The bundle as a zip: manifest first, then each part.
-    pub fn zip(&self) -> std::io::Result<Vec<u8>> {
+    /// The bundle as a zip saved as `file_name`: manifest, kickoff prompt,
+    /// then each part.
+    pub fn zip(&self, file_name: &str) -> std::io::Result<Vec<u8>> {
         let manifest = serde_json::to_string_pretty(&self.manifest()).unwrap_or_default() + "\n";
-        let mut files: Vec<(&str, &[u8])> = vec![("manifest.json", manifest.as_bytes())];
+        let prompt = self.kickoff(file_name);
+        let mut files: Vec<(&str, &[u8])> = vec![
+            ("manifest.json", manifest.as_bytes()),
+            (PROMPT, prompt.as_bytes()),
+        ];
         files.extend(self.parts.iter().map(|p| (p.file, p.data.as_bytes())));
         zip(&files)
     }
@@ -293,10 +301,11 @@ mod tests {
     #[test]
     fn zip_round_trips() {
         let b = bundle(vec![part(UNIFI, "[1]"), part(INVENTORY, "{\"hosts\":[]}")]);
-        let files = unzip(&b.zip().unwrap());
+        let files = unzip(&b.zip("x.bundle.zip").unwrap());
         let names: Vec<_> = files.iter().map(|f| f.0.as_str()).collect();
-        assert_eq!(names, ["manifest.json", UNIFI, INVENTORY]);
-        assert_eq!(files[1].1, b"[1]");
+        assert_eq!(names, ["manifest.json", PROMPT, UNIFI, INVENTORY]);
+        assert_eq!(files[1].1, b.kickoff("x.bundle.zip").as_bytes());
+        assert_eq!(files[2].1, b"[1]");
         let m: Value = serde_json::from_slice(&files[0].1).unwrap();
         assert_eq!(m["site"], "McClendon Baptist");
         assert_eq!(m["mapnetwork_preflight"]["scan"], INVENTORY);
@@ -307,6 +316,7 @@ mod tests {
         );
         assert!(m["clients"].as_str().unwrap().starts_with("anonymized"));
         assert_eq!(m["files"].as_array().unwrap().len(), 2);
+        assert_eq!(m["prompt"], PROMPT);
     }
 
     #[test]

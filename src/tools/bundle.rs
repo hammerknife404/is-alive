@@ -335,7 +335,7 @@ fn build_and_save(
         scanner,
         parts,
     };
-    let zip = b.zip().map_err(|e| e.to_string())?;
+    // Ask first: the prompt inside the zip names the file as saved.
     let Some(path) = rfd::FileDialog::new()
         .set_title("Save site bundle")
         .set_file_name(format!("{}.bundle.zip", bundle::slug(&b.site)))
@@ -344,8 +344,10 @@ fn build_and_save(
     else {
         return Ok(None);
     };
+    let name = export::file_name(&path);
+    let zip = b.zip(&name).map_err(|e| e.to_string())?;
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
-    let kickoff = b.kickoff(&export::file_name(&path));
+    let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
 }
 

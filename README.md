@@ -72,6 +72,7 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 | File | From | For |
 |---|---|---|
 | `manifest.json` | site name, known problems, client handling, this machine's LAN/gateway/WAN, what each file is | both skills; its `mapnetwork_preflight` answers /mapnetwork's pre-build question |
+| `prompt.txt` | the kickoff prompt, also copied to the clipboard on save | you, or paste it into Claude |
 | `unifi.unifidump.json` | the UniFi backup open in Config Export, converted again with the bundle's client setting | /unifidump |
 | `sonicwall.json` | the SonicWall export open in Config Export | /mapnetwork (firewall config) |
 | `inventory.json` | the last finished Subnet Sweep | /mapnetwork (scan) |
