@@ -33,15 +33,52 @@ enum Tab {
     Results,
 }
 
-const TABS: &[(Tab, &str)] = &[
-    (Tab::Ping, "Ping"),
-    (Tab::Ports, "Port Check"),
-    (Tab::Trace, "Traceroute"),
-    (Tab::Sweep, "Subnet Sweep"),
-    (Tab::Dns, "DNS Lookup"),
-    (Tab::Advanced, "Advanced"),
-    (Tab::Export, "Config Export"),
-    (Tab::Results, "Results"),
+/// (tab, label, hover text).
+const TABS: &[(Tab, &str, &str)] = &[
+    (
+        Tab::Ping,
+        "Ping",
+        "ICMP or TCP ping, continuous or a set count, with a live latency graph and loss/min/avg/max.",
+    ),
+    (
+        Tab::Ports,
+        "Port Check",
+        "Check which TCP ports are open on a host: lists, ranges or presets, with service names.",
+    ),
+    (
+        Tab::Trace,
+        "Traceroute",
+        "Show each router hop on the way to a host, 3 probes per hop.",
+    ),
+    (
+        Tab::Sweep,
+        "Subnet Sweep",
+        "Find live hosts on a subnet or range, with name, MAC and vendor. Optional management-port \
+check and an Inventory export for /mapnetwork.",
+    ),
+    (
+        Tab::Dns,
+        "DNS Lookup",
+        "Look up any record type, or all of them, against the system resolver or a public one; \
+Compare all spots split DNS and stale caches.",
+    ),
+    (
+        Tab::Advanced,
+        "Advanced",
+        "Mail and domain health for a domain: MX, SPF, DMARC, DKIM, nameservers, SMTP, blacklists and more.",
+    ),
+    (
+        Tab::Export,
+        "Config Export",
+        "Decode a UniFi backup (.unf / .unifi) or SonicWall settings export (.exp) on this machine \
+into sanitized JSON for /unifidump and /mapnetwork. Secrets are left out.",
+    ),
+    (
+        Tab::Results,
+        "Results",
+        "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
+Markdown or HTML.",
+    ),
 ];
 
 struct App {
@@ -91,14 +128,15 @@ impl eframe::App for App {
                     self.full_scan(ui.ctx());
                 }
                 ui.separator();
-                for (tab, name) in TABS {
+                for (tab, name, tip) in TABS {
                     // Jobs keep running on hidden tabs; mark them so they aren't forgotten.
                     let label = if self.tab_running(*tab) {
                         egui::RichText::new(format!("{name} ⏺")).color(widgets::OK)
                     } else {
                         egui::RichText::new(*name)
                     };
-                    ui.selectable_value(&mut self.tab, *tab, label);
+                    ui.selectable_value(&mut self.tab, *tab, label)
+                        .on_hover_text(*tip);
                 }
             });
             ui.add_space(2.0);
