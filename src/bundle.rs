@@ -12,6 +12,8 @@ pub const SONICWALL: &str = "sonicwall.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
 pub const NOTES: &str = "notes.md";
+/// The /mapnetwork map from an earlier visit, opened in Config Export.
+pub const MAP: &str = "map.dc.html";
 /// The kickoff prompt, so the bundle carries its own instructions.
 pub const PROMPT: &str = "prompt.txt";
 
@@ -98,6 +100,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
                 "scan": self.has(INVENTORY).then_some(INVENTORY),
                 "firewall_config": self.has(SONICWALL).then_some(SONICWALL),
                 "known_problems": self.notes(),
+                "existing_map": self.has(MAP).then_some(MAP),
                 "map_clients": self.map_clients,
                 "note": "Answers /mapnetwork's pre-build question. Treat it as answered; don't ask again.",
             },
@@ -128,8 +131,15 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
         }
         if !inputs.is_empty() {
             let verb = if step == 1 { "Run" } else { "Then" };
+            let which = match self.parts.iter().find(|p| p.file == MAP) {
+                Some(m) => format!(
+                    "update the existing map in {MAP} (it was {}; save the update under that name)",
+                    m.source
+                ),
+                None => "new map".into(),
+            };
             s += &format!(
-                "{step}. {verb} /mapnetwork for {site} (new map), using {}. manifest.json's \
+                "{step}. {verb} /mapnetwork for {site} ({which}), using {}. manifest.json's \
 mapnetwork_preflight answers your pre-build question: {}, no extra inputs coming. \
 Don't ask it again.\n",
                 join(&inputs),
@@ -367,6 +377,25 @@ sonicwall.json and inventory.json"
                 "1. Run /mapnetwork for McClendon Baptist (new map), using sonicwall.json."
             )
         );
+    }
+
+    #[test]
+    fn kickoff_updates_an_existing_map() {
+        let mut map = part(MAP, "<html>");
+        map.source = "Acme_HQ.dc.html".into();
+        let b = bundle(vec![part(INVENTORY, ""), map]);
+        let k = b.kickoff("x.zip");
+        assert!(k.contains(
+            "/mapnetwork for McClendon Baptist (update the existing map in map.dc.html \
+(it was Acme_HQ.dc.html; save the update under that name)), using inventory.json."
+        ));
+        assert_eq!(
+            b.manifest()["mapnetwork_preflight"]["existing_map"],
+            "map.dc.html"
+        );
+        let new = bundle(vec![part(INVENTORY, "")]);
+        assert!(new.kickoff("x.zip").contains("(new map)"));
+        assert!(new.manifest()["mapnetwork_preflight"]["existing_map"].is_null());
     }
 
     #[test]

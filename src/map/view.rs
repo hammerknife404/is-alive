@@ -300,7 +300,7 @@ impl MapView {
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
         }
-        if !empty && src.note {
+        if !empty && src.note && src.export.mapnetwork().is_none() {
             act = accuracy_note(ui);
         }
         if empty {

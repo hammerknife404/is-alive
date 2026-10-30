@@ -62,6 +62,16 @@ impl Export {
         }
     }
 
+    /// Its sub-tab's label.
+    fn tab(&self) -> &'static str {
+        match self {
+            Export::Unifi(_) => "UniFi",
+            Export::SonicWall(r) if r.format.contains(".wri") => "SonicWall report",
+            Export::SonicWall(_) => "SonicWall",
+            Export::Map(_) => "/mapnetwork map",
+        }
+    }
+
     /// Output file suffix, naming the skill it's for.
     fn suffix(&self) -> &'static str {
         match self {
@@ -109,6 +119,9 @@ pub struct ExportTool {
     pending: Option<PathBuf>,
     /// UniFi, SonicWall, /mapnetwork map.
     slots: [Option<Slot>; 3],
+    /// The slot whose sub-tab is showing: the one opened last, until
+    /// another tab is picked.
+    shown: usize,
     err: Option<String>,
 }
 
@@ -117,15 +130,29 @@ fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
         return mapnetwork::parse(&data).map(|d| Export::Map(Box::new(d)));
     }
     // A site bundle (or any zip) holding the map /mapnetwork made from it.
-    if let Some((name, html)) =
-        unifi::zip_find(&data, |n| n.to_lowercase().ends_with(".html")).unwrap_or(None)
-        && mapnetwork::sniff(&html)
-    {
+    let in_zip = |ext: &str| {
+        unifi::zip_find(&data, |n| n.to_lowercase().ends_with(ext))
+            .ok()
+            .flatten()
+            .filter(|(_, html)| mapnetwork::sniff(html))
+    };
+    if let Some((name, html)) = in_zip(".dc.html").or_else(|| in_zip(".html")) {
         return mapnetwork::parse(&html)
             .map(|d| Export::Map(Box::new(d)))
             .map_err(|e| format!("{name}: {e}"));
     }
-    if sonicwall::decode(&data).is_some() {
+    if unifi::zip_find(&data, |n| n == "manifest.json")
+        .ok()
+        .flatten()
+        .is_some_and(|(_, m)| String::from_utf8_lossy(&m).contains("is-alive site bundle"))
+    {
+        return Err(
+            "this site bundle has no /mapnetwork map in it yet: open the .dc.html \
+Claude made from it, or a zip you saved it into"
+                .into(),
+        );
+    }
+    if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
     } else {
         unifi::convert(data, clients)
@@ -230,6 +257,7 @@ impl ExportTool {
             Ev::Done(path, Ok(export)) => {
                 let i = export.slot();
                 self.slots[i] = Some(Slot { path, export });
+                self.shown = i;
             }
             Ev::Done(path, Err(e)) => {
                 let e = format!("{}: {e}", file_name(&path));
@@ -310,8 +338,9 @@ in is-alive's style. Pick several at once, or drop them on the window. Each kind
             }
         });
         ui.weak(
-            "Decodes a UniFi backup or SonicWall settings export on this machine and saves JSON with \
-the topology and config the skills need, or reads a /mapnetwork map back in for the Map tab. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
+            "Decodes a UniFi backup, or a SonicWall settings export or tech support report, on this \
+machine and saves JSON with the topology and config the skills need, or reads a /mapnetwork map \
+back in for the Map tab. Each file gets its own tab below. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
         );
         widgets::error(ui, &self.err);
         ui.separator();
@@ -326,51 +355,67 @@ the topology and config the skills need, or reads a /mapnetwork map back in for 
             }
             return;
         }
-        let mut clear = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                for (i, slot) in self.slots.iter().enumerate() {
-                    let Some(Slot { path, export: r }) = slot else {
-                        continue;
-                    };
-                    egui::CollapsingHeader::new(egui::RichText::new(r.headline()).strong())
-                        .id_salt(("export", i))
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
-                                    let stem = path.file_stem().map_or("config".into(), |s| {
-                                        s.to_string_lossy().into_owned()
-                                    });
-                                    widgets::save_file(
-                                        format!("{stem}.{}.json", r.suffix()),
-                                        "JSON",
-                                        vec!["json"],
-                                        r.json().to_string(),
-                                    );
-                                }
-                                widgets::copy_button(ui, || r.summary());
-                                if ui
-                                    .button("Clear")
-                                    .on_hover_text("Close this result")
-                                    .clicked()
-                                {
-                                    clear = Some(i);
-                                }
-                                ui.add(
-                                    egui::Label::new(egui::RichText::new(file_name(path)).weak())
-                                        .truncate(),
-                                )
-                                .on_hover_text(path.display().to_string());
-                            });
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(r.summary()).monospace())
-                                    .selectable(true),
-                            );
-                        });
+        if self.slots[self.shown].is_none() {
+            self.shown = self.slots.iter().position(Option::is_some).unwrap_or(0);
+        }
+        // One sub-tab per decoded file.
+        ui.horizontal(|ui| {
+            for (i, slot) in self.slots.iter().enumerate() {
+                let Some(Slot { path, export: r }) = slot else {
+                    continue;
+                };
+                let on = self.shown == i;
+                let mut text = egui::RichText::new(r.tab());
+                if on {
+                    text = text.color(crate::theme::accent()).strong();
                 }
+                if ui
+                    .selectable_label(on, text)
+                    .on_hover_text(format!("{}\n{}", r.headline(), file_name(path)))
+                    .clicked()
+                {
+                    self.shown = i;
+                }
+            }
+        });
+        ui.separator();
+        let mut clear = None;
+        if let Some(Slot { path, export: r }) = &self.slots[self.shown] {
+            ui.label(egui::RichText::new(r.headline()).strong());
+            ui.horizontal(|ui| {
+                if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
+                    let stem = path
+                        .file_stem()
+                        .map_or("config".into(), |s| s.to_string_lossy().into_owned());
+                    widgets::save_file(
+                        format!("{stem}.{}.json", r.suffix()),
+                        "JSON",
+                        vec!["json"],
+                        r.json().to_string(),
+                    );
+                }
+                widgets::copy_button(ui, || r.summary());
+                if ui
+                    .button("Clear")
+                    .on_hover_text("Close this result")
+                    .clicked()
+                {
+                    clear = Some(self.shown);
+                }
+                ui.add(egui::Label::new(egui::RichText::new(file_name(path)).weak()).truncate())
+                    .on_hover_text(path.display().to_string());
             });
+            ui.add_space(4.0);
+            egui::ScrollArea::vertical()
+                .id_salt(("export_summary", self.shown))
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(r.summary()).monospace())
+                            .selectable(true),
+                    );
+                });
+        }
         if let Some(i) = clear {
             self.slots[i] = None;
         }

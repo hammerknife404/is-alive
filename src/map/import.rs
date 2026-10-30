@@ -137,8 +137,10 @@ fn role(text: &str) -> Option<Zone> {
     }
 }
 
+/// The first address in `text`; a subnet (`10.0.0.0/24`) isn't one.
 fn first_ip(text: &str) -> Option<Ipv4Addr> {
-    text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+    text.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '/'))
+        .filter(|w| !w.contains('/'))
         .find_map(|w| w.trim_matches('.').parse().ok())
 }
 
@@ -470,6 +472,11 @@ mod tests {
         );
         assert_eq!(fw.chips, ["Head Office", "HA", "VLANs 10/20"]);
         assert_eq!(fw.ip, Some(Ipv4Addr::new(10, 0, 0, 1)));
+        assert_eq!(first_ip("VLAN 10 · 192.168.10.0/24"), None);
+        assert_eq!(
+            first_ip("10.103.10.51 (WiFi)"),
+            Some(Ipv4Addr::new(10, 103, 10, 51))
+        );
         assert!(fw.mac.is_some());
         assert!(
             fw.details

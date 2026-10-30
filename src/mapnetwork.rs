@@ -21,6 +21,9 @@ pub struct Doc {
     pub actions: Vec<Value>,
     /// The site data as JSON, for Save JSON.
     pub json: String,
+    /// The page as opened, so a Site Bundle can hand it back to /mapnetwork
+    /// to update rather than start over.
+    pub html: String,
 }
 
 impl Doc {
@@ -68,23 +71,9 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
     };
     let mut data = Map::new();
     for key in ["META", "SITES", "ZONES", "NODES", "EDGES", "ACTIONS"] {
-        let pat = format!("this.{key}");
-        let Some(at) = block.find(&pat) else {
-            continue;
-        };
-        let rest = block[at + pat.len()..].trim_start();
-        let Some(rest) = rest.strip_prefix('=') else {
-            continue;
-        };
-        let mut p = Parser {
-            s: rest.as_bytes(),
-            i: 0,
-            depth: 0,
-        };
-        let v = p
-            .value()
-            .map_err(|e| format!("this.{key}: {e} (byte {})", p.i))?;
-        data.insert(key.to_lowercase(), v);
+        if let Some(v) = assignment(block, key)? {
+            data.insert(key.to_lowercase(), v);
+        }
     }
     let list = |k: &str| match data.get(k) {
         Some(Value::Array(a)) => a.iter().filter(|v| v.is_object()).cloned().collect(),
@@ -119,7 +108,37 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
         actions: list("actions"),
         nodes,
         json: serde_json::to_string_pretty(&Value::Object(data)).unwrap_or_default(),
+        html: text.to_string(),
     })
+}
+
+/// The literal assigned to `this.<key>`. A mention in a comment, a
+/// comparison or the engine reading it back (`this.NODES = this.NODES…`)
+/// is passed over: only `= {` or `= [` starts the data.
+fn assignment(block: &str, key: &str) -> Result<Option<Value>, String> {
+    let pat = format!("this.{key}");
+    let mut from = 0;
+    while let Some(at) = block[from..].find(&pat).map(|i| from + i) {
+        from = at + pat.len();
+        let rest = block[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=').filter(|r| !r.starts_with('=')) else {
+            continue;
+        };
+        let mut p = Parser {
+            s: rest.as_bytes(),
+            i: 0,
+            depth: 0,
+        };
+        p.skip();
+        if !matches!(p.peek(), Some(b'{' | b'[')) {
+            continue;
+        }
+        return p
+            .value()
+            .map(Some)
+            .map_err(|e| format!("this.{key}: {e} (byte {})", p.i));
+    }
+    Ok(None)
 }
 
 /// JavaScript object/array literals: bare or quoted keys, single, double or
@@ -389,6 +408,15 @@ mod tests {
         assert_eq!(fw["chips"], json!(["TZ470"]));
         assert_eq!(d.nodes[2]["x"], json!(1.5));
         assert!(d.summary().contains("devices"));
+    }
+
+    #[test]
+    fn skips_mentions_that_are_not_the_data() {
+        let page = "// fill this.NODES below\nif (this.NODES == null) {}\n\
+this.NODES = this.NODES || [];\nthis.NODES = [ { id:'a', label:'A' } ];";
+        let d = parse(page.as_bytes()).unwrap();
+        assert_eq!(d.nodes.len(), 1);
+        assert_eq!(d.html, page);
     }
 
     #[test]
