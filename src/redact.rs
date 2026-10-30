@@ -148,6 +148,11 @@ fn random_looking(s: &str) -> bool {
     s.chars().any(|c| c.is_ascii_digit()) && s.chars().any(|c| c.is_ascii_alphabetic())
 }
 
+/// Where earlier redactions left their markers.
+pub fn markers(text: &str) -> Vec<Range<usize>> {
+    MARKER.find_iter(text).map(|m| m.range()).collect()
+}
+
 /// Everything that would be redacted, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();

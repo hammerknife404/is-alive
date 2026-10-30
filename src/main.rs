@@ -102,6 +102,11 @@ Markdown or HTML.",
 
 struct App {
     tab: Tab,
+    /// The tab on screen and when it appeared, for the fade-in.
+    shown_tab: Tab,
+    tab_since: f64,
+    /// Window size last frame, remembered for the next launch.
+    size: Option<egui::Vec2>,
     ping: tools::ping::PingTool,
     ports: tools::ports::PortTool,
     trace: tools::trace::TraceTool,
@@ -130,6 +135,24 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Ctrl+1 … Ctrl+9, Ctrl+0: the tabs in order.
+        use egui::Key::*;
+        for (i, key) in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, Num0]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some((tab, ..)) = TABS.get(i)
+                && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, key))
+            {
+                self.tab = *tab;
+            }
+        }
+        let now = ui.input(|i| i.time);
+        if self.tab != self.shown_tab {
+            self.shown_tab = self.tab;
+            self.tab_since = now;
+        }
+        self.size = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         self.ping.poll();
         self.ports.poll();
         self.trace.poll();
@@ -148,8 +171,12 @@ impl eframe::App for App {
         }
         // Under every panel; Miami's panels are translucent over it.
         if self.look.theme == theme::Theme::Miami {
-            self.backdrop
-                .paint(ui.ctx(), &self.look.backdrop, self.look.animate);
+            self.backdrop.paint(
+                ui.ctx(),
+                &self.look.backdrop,
+                self.look.animate,
+                self.look.glow,
+            );
         }
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
@@ -180,13 +207,15 @@ impl eframe::App for App {
                 ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                 let mut selected = None;
                 let mut dots = Vec::new();
-                for (tab, name, tip) in TABS {
+                for (n, (tab, name, tip)) in TABS.iter().enumerate() {
                     let on = self.tab == *tab;
                     let mut text = egui::RichText::new(*name);
                     if on {
                         text = text.color(theme::accent());
                     }
-                    let r = ui.selectable_label(on, text).on_hover_text(*tip);
+                    let r = ui
+                        .selectable_label(on, text)
+                        .on_hover_text(format!("{tip}\n\nCtrl+{}", (n + 1) % 10));
                     if r.clicked() {
                         self.tab = *tab;
                     }
@@ -275,6 +304,9 @@ OpenDNS)",
                     {
                         self.refresh_info(ui.ctx());
                     }
+                    ui.menu_button("?", shortcuts)
+                        .response
+                        .on_hover_text("Keyboard shortcuts and tips");
                     ui.weak(format!("v{VERSION}"));
                     ui.separator();
                     match theme::menu(
@@ -308,30 +340,16 @@ OpenDNS)",
                 });
             });
         });
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Ping => self.ping.ui(ui),
-            Tab::Ports => self.ports.ui(ui),
-            Tab::Trace => self.trace.ui(ui),
-            Tab::Sweep => self.sweep.ui(ui, &self.info),
-            Tab::Dns => self.dns.ui(ui),
-            Tab::Advanced => self.advanced.ui(ui),
-            Tab::Export => self.export.ui(ui),
-            Tab::Map => {
-                let busy = self.ping.is_running() || self.ports.is_running();
-                let act = self.map.ui(
-                    ui,
-                    map::view::Sources {
-                        sweep: &self.sweep,
-                        export: &self.export,
-                        info: &self.info,
-                        busy,
-                    },
-                );
-                self.map_action(ui.ctx(), act);
-            }
-            Tab::Notes => self.notes.ui(ui, &self.info),
-            Tab::Results => self.results_ui(ui),
+        // A quick fade as a tab comes in.
+        let fade = ((now - self.tab_since) / 0.16).min(1.0) as f32;
+        if fade < 1.0 {
+            ui.ctx().request_repaint();
+        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.multiply_opacity(fade);
+            self.tab_ui(ui)
         });
+        widgets::show_toasts(ui.ctx());
         let App {
             bundle,
             export,
@@ -355,10 +373,45 @@ OpenDNS)",
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.notes.flush();
+        let size = self
+            .size
+            .map(|s| (s.x.round() as u32, s.y.round() as u32))
+            .filter(|&(w, h)| (620..=8000).contains(&w) && (400..=8000).contains(&h));
+        if size.is_some() && size != self.look.size {
+            self.look.size = size;
+            theme::save(&self.look);
+        }
     }
 }
 
 impl App {
+    fn tab_ui(&mut self, ui: &mut egui::Ui) {
+        match self.tab {
+            Tab::Ping => self.ping.ui(ui),
+            Tab::Ports => self.ports.ui(ui),
+            Tab::Trace => self.trace.ui(ui),
+            Tab::Sweep => self.sweep.ui(ui, &self.info),
+            Tab::Dns => self.dns.ui(ui),
+            Tab::Advanced => self.advanced.ui(ui),
+            Tab::Export => self.export.ui(ui),
+            Tab::Map => {
+                let busy = self.ping.is_running() || self.ports.is_running();
+                let act = self.map.ui(
+                    ui,
+                    map::view::Sources {
+                        sweep: &self.sweep,
+                        export: &self.export,
+                        info: &self.info,
+                        busy,
+                    },
+                );
+                self.map_action(ui.ctx(), act);
+            }
+            Tab::Notes => self.notes.ui(ui, &self.info),
+            Tab::Results => self.results_ui(ui),
+        }
+    }
+
     /// Files dropped anywhere on the window go to Config Export; while they
     /// hover, say so.
     fn dropped_files(&mut self, ctx: &egui::Context) {
@@ -635,6 +688,39 @@ impl App {
     }
 }
 
+/// The footer's "?" menu.
+fn shortcuts(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("Keyboard").strong());
+    egui::Grid::new("keys")
+        .num_columns(2)
+        .spacing([16.0, 4.0])
+        .show(ui, |ui| {
+            for (k, what) in [
+                ("Ctrl+1 … Ctrl+0", "Switch tabs, in order"),
+                ("Enter / Esc", "Start / stop the run in a tool's field"),
+                ("Ctrl+B / Ctrl+I", "Bold / italic in Notes"),
+                (
+                    "Enter in a list",
+                    "Next item in Notes (twice ends the list)",
+                ),
+                ("Esc", "Clear the selection on the Map"),
+            ] {
+                ui.label(egui::RichText::new(k).monospace());
+                ui.label(what);
+                ui.end_row();
+            }
+        });
+    ui.separator();
+    ui.label(egui::RichText::new("Mouse").strong());
+    for tip in [
+        "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
+        "Drop a UniFi backup or SonicWall export anywhere to convert it",
+        "Click the is-alive button for a full scan of this network",
+    ] {
+        ui.label(format!("• {tip}"));
+    }
+}
+
 /// Underline under the selected tab, sliding to the new one on a switch.
 fn tab_underline(ui: &egui::Ui, r: egui::Rect) {
     let ctx = ui.ctx();
@@ -710,11 +796,15 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    let look = theme::load();
+    let size = look
+        .size
+        .map_or([980.0, 660.0], |(w, h)| [w as f32, h as f32]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))
             .with_app_id("is-alive")
-            .with_inner_size([980.0, 660.0])
+            .with_inner_size(size)
             .with_min_inner_size([620.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(icon()),
@@ -724,10 +814,13 @@ fn main() -> eframe::Result {
         "is-alive",
         options,
         Box::new(|cc| {
-            let look = theme::load();
             theme::apply(&cc.egui_ctx, look.theme);
+            widgets::init(&cc.egui_ctx);
             let mut app = App {
                 tab: Tab::Ping,
+                shown_tab: Tab::Ping,
+                tab_since: f64::NEG_INFINITY,
+                size: None,
                 ping: Default::default(),
                 ports: Default::default(),
                 trace: Default::default(),

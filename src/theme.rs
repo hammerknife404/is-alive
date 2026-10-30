@@ -258,6 +258,10 @@ pub struct Settings {
     pub theme: Theme,
     /// Miami backdrop and sunset rule move; ignored by the other themes.
     pub animate: bool,
+    /// A soft glow on the bright parts of the Miami backdrop.
+    pub glow: bool,
+    /// Window size (points) at the last exit.
+    pub size: Option<(u32, u32)>,
     pub backdrop: Source,
 }
 
@@ -266,6 +270,8 @@ impl Default for Settings {
         Self {
             theme: Theme::Dark,
             animate: true,
+            glow: true,
+            size: None,
             backdrop: Source::Scene,
         }
     }
@@ -281,6 +287,13 @@ impl Settings {
             match k.trim() {
                 "theme" => s.theme = Theme::from_key(v).unwrap_or_default(),
                 "animate" => s.animate = v.trim() != "0",
+                "glow" => s.glow = v.trim() != "0",
+                "size" => {
+                    s.size = v
+                        .trim()
+                        .split_once('x')
+                        .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                }
                 "backdrop" => {
                     s.backdrop = match v.trim() {
                         "none" => Source::None,
@@ -301,11 +314,16 @@ impl Settings {
             Source::None => "none".to_string(),
             Source::Image(p) => format!("image:{}", p.display()),
         };
-        format!(
-            "theme={}\nanimate={}\nbackdrop={backdrop}\n",
+        let mut s = format!(
+            "theme={}\nanimate={}\nglow={}\nbackdrop={backdrop}\n",
             self.theme.key(),
-            self.animate as u8
-        )
+            self.animate as u8,
+            self.glow as u8
+        );
+        if let Some((w, h)) = self.size {
+            s += &format!("size={w}x{h}\n");
+        }
+        s
     }
 }
 
@@ -373,6 +391,14 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             if ui.checkbox(&mut s.animate, "Animate").on_hover_text(tip).changed() {
                 act = Some(MenuAction::Changed);
             }
+            let tip = if gpu {
+                "A soft glow and haze on the bright parts: the sun, neon and windows, or your picture's highlights"
+            } else {
+                "A soft glow on your picture's highlights (the 16-bit scene glows only on the GPU)"
+            };
+            if ui.checkbox(&mut s.glow, "Glow").on_hover_text(tip).changed() {
+                act = Some(MenuAction::Changed);
+            }
             ui.label(egui::RichText::new(renderer).small().weak())
                 .on_hover_text("What draws the backdrop. Set IS_ALIVE_GPU=off to force the CPU.");
         });
@@ -436,6 +462,8 @@ mod tests {
         let s = Settings {
             theme: Theme::Miami,
             animate: false,
+            glow: false,
+            size: Some((1280, 800)),
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
         };
         assert_eq!(Settings::parse(&s.text()), s);

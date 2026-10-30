@@ -83,10 +83,20 @@ impl BundleTool {
         pump(&mut self.job, |r| match r {
             Ok(Some(saved)) => {
                 ctx.copy_text(saved.kickoff.clone());
+                widgets::toast(
+                    format!(
+                        "Saved {}; kickoff prompt copied",
+                        export::file_name(&saved.path)
+                    ),
+                    true,
+                );
                 self.saved = Some(saved);
             }
             Ok(None) => {}
-            Err(e) => self.err = Some(e),
+            Err(e) => {
+                widgets::toast("Bundle not saved", false);
+                self.err = Some(e);
+            }
         })
     }
 
@@ -252,6 +262,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     .clicked()
                 {
                     ui.ctx().copy_text(s.kickoff.clone());
+                    widgets::toast("Kickoff prompt copied", true);
                 }
                 ui.add(
                     egui::Label::new(

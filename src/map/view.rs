@@ -352,6 +352,7 @@ impl MapView {
         self.animate(&ctx);
         self.paint(ui, rect);
         self.legend(ui, rect);
+        self.zoom_controls(ui, rect);
         act
     }
 
@@ -392,6 +393,7 @@ impl MapView {
                             s += &format!("[{}] {}\n", x.sev.label(), x.text);
                         }
                         ui.ctx().copy_text(s);
+                        widgets::toast("Findings copied", true);
                     }
                 });
             })
@@ -557,6 +559,7 @@ impl MapView {
                         s += &format!("{d}\n");
                     }
                     ui.ctx().copy_text(s);
+                    widgets::toast("Card details copied", true);
                 }
             });
         });
@@ -1025,6 +1028,45 @@ impl MapView {
         }
     }
 
+    /// − 100% + Fit in the canvas corner, for when there's no wheel.
+    fn zoom_controls(&mut self, ui: &mut Ui, rect: Rect) {
+        let h = 22.0;
+        let mut x = rect.max.x - 10.0;
+        let y = rect.max.y - 10.0 - h;
+        let mut button = |ui: &mut Ui, w: f32, text: &str, tip: &str| {
+            x -= w;
+            let r = Rect::from_min_size(pos2(x, y), vec2(w, h));
+            x -= 4.0;
+            ui.put(r, egui::Button::new(text).corner_radius(6))
+                .on_hover_text(tip)
+                .clicked()
+        };
+        let fit = button(ui, 36.0, "Fit", "Show the whole map");
+        let zoom_in = button(ui, 24.0, "+", "Zoom in");
+        let pct = format!("{:.0}%", self.zoom * 100.0);
+        let reset = button(ui, 48.0, &pct, "Back to 100%");
+        let zoom_out = button(ui, 24.0, "−", "Zoom out");
+        let target = if zoom_in {
+            Some(self.zoom * 1.25)
+        } else if zoom_out {
+            Some(self.zoom / 1.25)
+        } else if reset {
+            Some(1.0)
+        } else {
+            None
+        };
+        if fit {
+            self.follow = true;
+            self.fit(rect);
+        } else if let Some(z) = target {
+            // Zoom about the middle of the canvas.
+            let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
+            let mid = self.to_world(rect, rect.center());
+            self.aim = Some((rect.size() / 2.0 - mid.to_vec2() * z, z));
+            self.follow = false;
+        }
+    }
+
     /// Role legend in the canvas corner; click a role to fade it out.
     fn legend(&mut self, ui: &mut Ui, rect: Rect) {
         let dark = ui.visuals().dark_mode;
@@ -1049,7 +1091,8 @@ impl MapView {
                 pos2(x, y - g.size().y - 8.0),
                 vec2(g.size().x + 26.0, g.size().y + 8.0),
             );
-            if r.max.x > rect.max.x - 10.0 {
+            // Room left for the zoom controls.
+            if r.max.x > rect.max.x - 180.0 {
                 break;
             }
             let resp = ui

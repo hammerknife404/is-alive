@@ -338,10 +338,27 @@ impl NotesTool {
                     }
                 }
                 ui.add_enabled_ui(!empty, |ui| {
-                    widgets::save_button(ui, "notes", || self.sanitized().0);
-                    widgets::copy_button(ui, || self.sanitized().0);
+                    if ui
+                        .button("Save .md…")
+                        .on_hover_text("Save the sanitized notes as a Markdown file")
+                        .clicked()
+                    {
+                        widgets::save_file(
+                            "notes.md".into(),
+                            "Markdown",
+                            vec!["md"],
+                            self.sanitized().0,
+                        );
+                    }
+                    if ui
+                        .button("Copy")
+                        .on_hover_text("Copy the sanitized notes")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(self.sanitized().0);
+                        widgets::toast("Notes copied (sanitized)", true);
+                    }
                 });
-                ui.weak("sanitized:");
             });
         });
     }
@@ -527,6 +544,7 @@ fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
     const HEAD: u8 = 1;
     const MARK: u8 = 2;
     const CODE: u8 = 3;
+    const DONE: u8 = 4;
     const HIT: u8 = 8;
     let mut style = vec![PLAIN; text.len()];
     let mut pos = 0;
@@ -567,6 +585,9 @@ fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
         }
         pos += line.len();
     }
+    for m in redact::markers(text) {
+        style[m].fill(DONE);
+    }
     for h in hits {
         for s in &mut style[h.clone()] {
             *s |= HIT;
@@ -588,6 +609,7 @@ fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
                 HEAD => crate::theme::accent(),
                 MARK => crate::theme::accent(),
                 CODE => vis.weak_text_color(),
+                DONE => widgets::warn().gamma_multiply(0.8),
                 _ => vis.text_color(),
             },
         );

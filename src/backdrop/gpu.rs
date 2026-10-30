@@ -1,8 +1,10 @@
 //! The Miami scene on the GPU: drawn at art resolution into an offscreen
 //! framebuffer (a shader for sky, stars, sun and grid; triangles for the
-//! palms), then scaled onto the window with hard edges. The CPU only
-//! uploads the static layers when the size changes and a few thousand palm
-//! vertices a frame, so it runs at 60 fps without costing a core.
+//! palms), then scaled onto the window with hard edges. With glow on, two
+//! blur passes at art resolution make a soft halo that's screened over it.
+//! The CPU only uploads the static layers when the size changes and a few
+//! thousand palm vertices a frame, so it keeps up with any refresh rate
+//! without costing a core.
 
 use eframe::egui::PaintCallbackInfo;
 use eframe::egui_glow::ShaderVersion;
@@ -28,6 +30,8 @@ pub struct Frame {
     /// Palm triangles, x y pairs in art pixels.
     pub palms: Vec<f32>,
     pub upload: Option<std::sync::Arc<Layers>>,
+    /// Soft glow and haze on the bright parts.
+    pub glow: bool,
 }
 
 pub struct Gpu {
@@ -42,6 +46,10 @@ pub struct Gpu {
     mid: glow::Texture,
     fbo: glow::Framebuffer,
     target: glow::Texture,
+    /// Glow: the scene blurred across, then down (filtered when scaled up).
+    blur: glow::Program,
+    across: (glow::Framebuffer, glow::Texture),
+    down: (glow::Framebuffer, glow::Texture),
     size: [usize; 2],
 }
 
@@ -127,16 +135,50 @@ void main() {
 }
 "#;
 
+/// One direction of a 13-tap Gaussian (sigma 2.6 art pixels).
+const BLUR_FS: &str = r#"
+uniform sampler2D u_img;
+uniform vec2 u_dir;
+uniform vec2 u_size;
+out vec4 o_color;
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 last = ivec2(u_size) - 1;
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int i = -6; i <= 6; i++) {
+        float w = exp(-0.5 * float(i * i) / 6.76);
+        sum += w * texelFetch(u_img, clamp(p + ivec2(u_dir) * i, ivec2(0), last), 0).rgb;
+        total += w;
+    }
+    o_color = vec4(sum / total, 1.0);
+}
+"#;
+
+/// The scene with hard edges; with glow, the blurred copy's highlights
+/// screened on top and a little of it laid over everything (the haze).
 const BLIT_FS: &str = r#"
 uniform sampler2D u_img;
+uniform sampler2D u_glow;
+uniform float u_glow_on;
 uniform vec2 u_size;
 uniform vec2 u_view;
 in vec2 v_uv;
 out vec4 o_color;
 void main() {
-    float ax = min(floor(v_uv.x * u_view.x), u_size.x - 1.0);
-    float ay = min(floor((1.0 - v_uv.y) * u_view.y), u_size.y - 1.0);
-    o_color = texelFetch(u_img, ivec2(int(ax), int(u_size.y - 1.0 - ay)), 0);
+    float x = v_uv.x * u_view.x;
+    float y = (1.0 - v_uv.y) * u_view.y;
+    float ax = min(floor(x), u_size.x - 1.0);
+    float ay = min(floor(y), u_size.y - 1.0);
+    vec3 c = texelFetch(u_img, ivec2(int(ax), int(u_size.y - 1.0 - ay)), 0).rgb;
+    if (u_glow_on > 0.5) {
+        vec3 b = texture(u_glow, vec2(x / u_size.x, 1.0 - y / u_size.y)).rgb;
+        float l = dot(b, vec3(0.299, 0.587, 0.114));
+        vec3 g = b * clamp((l - 0.38) / 0.62, 0.0, 1.0);
+        c = 1.0 - (1.0 - c) * (1.0 - g * 0.75);
+        c = mix(c, max(c, b), 0.16);
+    }
+    o_color = vec4(c, 1.0);
 }
 "#;
 
@@ -246,7 +288,12 @@ impl Gpu {
             let scene = program(gl, prefix, FULLSCREEN_VS, SCENE_FS, None)?;
             let palm = program(gl, prefix, PALM_VS, PALM_FS, Some("a_pos"))?;
             let blit = program(gl, prefix, FULLSCREEN_VS, BLIT_FS, None)?;
+            let blur = program(gl, prefix, FULLSCREEN_VS, BLUR_FS, None)?;
             let fbo = gl.create_framebuffer()?;
+            let glow_tex = texture(gl)?;
+            for f in [glow::TEXTURE_MIN_FILTER, glow::TEXTURE_MAG_FILTER] {
+                gl.tex_parameter_i32(glow::TEXTURE_2D, f, glow::LINEAR as i32);
+            }
             Ok(Self {
                 name,
                 scene,
@@ -258,6 +305,9 @@ impl Gpu {
                 mid: texture(gl)?,
                 target: texture(gl)?,
                 fbo,
+                blur,
+                across: (gl.create_framebuffer()?, texture(gl)?),
+                down: (gl.create_framebuffer()?, glow_tex),
                 size: [0, 0],
             })
         }
@@ -271,18 +321,21 @@ impl Gpu {
             }
             let [w, h] = f.art;
             let outer = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
             if self.size != f.art {
-                store(gl, self.target, f.art, None);
-                gl.framebuffer_texture_2d(
-                    glow::FRAMEBUFFER,
-                    glow::COLOR_ATTACHMENT0,
-                    glow::TEXTURE_2D,
-                    Some(self.target),
-                    0,
-                );
+                for (fbo, tex) in [(self.fbo, self.target), self.across, self.down] {
+                    store(gl, tex, f.art, None);
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                    gl.framebuffer_texture_2d(
+                        glow::FRAMEBUFFER,
+                        glow::COLOR_ATTACHMENT0,
+                        glow::TEXTURE_2D,
+                        Some(tex),
+                        0,
+                    );
+                }
                 self.size = f.art;
             }
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
             gl.viewport(0, 0, w as i32, h as i32);
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::BLEND);
@@ -316,6 +369,22 @@ impl Gpu {
                 gl.bind_buffer(glow::ARRAY_BUFFER, None);
             }
 
+            if f.glow {
+                gl.use_program(Some(self.blur));
+                gl.active_texture(glow::TEXTURE0);
+                gl.uniform_1_i32(u(self.blur, "u_img").as_ref(), 0);
+                gl.uniform_2_f32(u(self.blur, "u_size").as_ref(), w as f32, h as f32);
+                for ((fbo, _), src, dir) in [
+                    (self.across, self.target, (1.0, 0.0)),
+                    (self.down, self.across.1, (0.0, 1.0)),
+                ] {
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                    gl.bind_texture(glow::TEXTURE_2D, Some(src));
+                    gl.uniform_2_f32(u(self.blur, "u_dir").as_ref(), dir.0, dir.1);
+                    gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                }
+            }
+
             // Onto the window, cropped to it, hard edges.
             gl.bind_framebuffer(glow::FRAMEBUFFER, outer);
             let vp = info.viewport_in_pixels();
@@ -329,9 +398,14 @@ impl Gpu {
                 clip.height_px,
             );
             gl.use_program(Some(self.blit));
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.down.1));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.target));
             gl.uniform_1_i32(u(self.blit, "u_img").as_ref(), 0);
+            gl.uniform_1_i32(u(self.blit, "u_glow").as_ref(), 1);
+            let on = if f.glow { 1.0 } else { 0.0 };
+            gl.uniform_1_f32(u(self.blit, "u_glow_on").as_ref(), on);
             gl.uniform_2_f32(u(self.blit, "u_size").as_ref(), w as f32, h as f32);
             gl.uniform_2_f32(u(self.blit, "u_view").as_ref(), f.view[0], f.view[1]);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);

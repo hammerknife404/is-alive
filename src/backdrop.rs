@@ -37,12 +37,22 @@ pub enum Source {
     None,
 }
 
+/// The user's picture, with its glow made once when it loads: highlights
+/// blurred and drawn additively, and the whole picture blurred for a haze.
+struct Picture {
+    path: PathBuf,
+    tex: TextureHandle,
+    size: egui::Vec2,
+    glow: TextureHandle,
+    haze: TextureHandle,
+}
+
 #[derive(Default)]
 pub struct Backdrop {
     scene: Option<Scene>,
     scene_tex: Option<TextureHandle>,
     frame: Option<i64>,
-    image: Option<(PathBuf, TextureHandle, egui::Vec2)>,
+    image: Option<Picture>,
     /// Why the chosen image couldn't be shown.
     pub err: Option<String>,
     gpu: Option<Arc<Mutex<gpu::Gpu>>>,
@@ -78,7 +88,7 @@ impl Backdrop {
     }
 
     /// Paint under the panels; call before they are shown.
-    pub fn paint(&mut self, ctx: &egui::Context, source: &Source, animate: bool) {
+    pub fn paint(&mut self, ctx: &egui::Context, source: &Source, animate: bool, glow: bool) {
         let rect = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::background());
         let focused = ctx.input(|i| i.viewport().focused != Some(false));
@@ -119,6 +129,7 @@ impl Backdrop {
                         k: K as f32,
                         palms: gpu::triangles(&scene.palms(ph)),
                         upload: self.upload.take(),
+                        glow,
                     };
                     let g = g.clone();
                     let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| {
@@ -161,22 +172,33 @@ impl Backdrop {
                 }
             }
             Source::Image(path) => {
-                if self.image.as_ref().is_none_or(|i| &i.0 != path) {
+                if self.image.as_ref().is_none_or(|i| &i.path != path) {
                     self.image = None;
                     match load_image(path) {
-                        Ok(img) => {
-                            let size = egui::vec2(img.size[0] as f32, img.size[1] as f32);
-                            let t = ctx.load_texture("backdrop-image", img, TextureOptions::LINEAR);
-                            self.image = Some((path.clone(), t, size));
+                        Ok((img, glow, haze)) => {
+                            let o = TextureOptions::LINEAR;
+                            self.image = Some(Picture {
+                                path: path.clone(),
+                                size: egui::vec2(img.size[0] as f32, img.size[1] as f32),
+                                tex: ctx.load_texture("backdrop-image", img, o),
+                                glow: ctx.load_texture("backdrop-glow", glow, o),
+                                haze: ctx.load_texture("backdrop-haze", haze, o),
+                            });
                             self.err = None;
                         }
                         Err(e) => self.err = Some(e),
                     }
                 }
                 match &self.image {
-                    Some((_, t, size)) => {
+                    Some(p) => {
                         let s = if animate { time } else { 0.0 };
-                        painter.image(t.id(), rect, pan_uv(*size, rect.size(), s), Color32::WHITE);
+                        let uv = pan_uv(p.size, rect.size(), s);
+                        painter.image(p.tex.id(), rect, uv, Color32::WHITE);
+                        if glow {
+                            // Zero alpha in premultiplied colour: added, not blended.
+                            painter.image(p.glow.id(), rect, uv, Color32::WHITE);
+                            painter.image(p.haze.id(), rect, uv, Color32::from_white_alpha(HAZE));
+                        }
                     }
                     None => {
                         painter.rect_filled(rect, 0.0, SOLID);
@@ -195,7 +217,11 @@ impl Backdrop {
     }
 }
 
-fn load_image(path: &Path) -> Result<ColorImage, String> {
+/// How much of the blurred picture is laid over it (of 255).
+const HAZE: u8 = 40;
+
+/// The picture, its additive glow and its haze layer.
+fn load_image(path: &Path) -> Result<(ColorImage, ColorImage, ColorImage), String> {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -207,9 +233,24 @@ fn load_image(path: &Path) -> Result<ColorImage, String> {
     }
     let img = image::open(path).map_err(|e| format!("{name}: {e}"))?;
     // Big photos are scaled down: the window never needs more.
-    let img = img.thumbnail(2560, 1600).to_rgba8();
-    let size = [img.width() as usize, img.height() as usize];
-    Ok(ColorImage::from_rgba_unmultiplied(size, img.as_raw()))
+    let full = img.thumbnail(2560, 1600).to_rgba8();
+    let size = [full.width() as usize, full.height() as usize];
+    let picture = ColorImage::from_rgba_unmultiplied(size, full.as_raw());
+    // Glow and haze from a small blurred copy; filtering smooths it back up.
+    let blurred = image::imageops::blur(&img.thumbnail(480, 300).to_rgba8(), 3.5);
+    let small = [blurred.width() as usize, blurred.height() as usize];
+    let glow = blurred
+        .pixels()
+        .map(|p| {
+            let [r, g, b] = [p[0], p[1], p[2]].map(|c| c as f32 / 255.0);
+            let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            let k = ((luma - 0.45) / 0.55).clamp(0.0, 1.0) * 0.6;
+            let c = |v: f32| (v * k * 255.0) as u8;
+            Color32::from_rgba_premultiplied(c(r), c(g), c(b), 0)
+        })
+        .collect();
+    let haze = ColorImage::from_rgba_unmultiplied(small, blurred.as_raw());
+    Ok((picture, ColorImage::new(small, glow), haze))
 }
 
 /// Cover-fit crop of an image, zoomed in a little and drifting slowly across
