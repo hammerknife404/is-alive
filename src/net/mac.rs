@@ -111,7 +111,7 @@ fn parse_ip_neigh(text: &str) -> Vec<(Ipv4Addr, Mac)> {
 }
 
 /// "aa:bb:cc:dd:ee:ff", "aa-bb-…" or macOS's unpadded "0:1b:…".
-fn parse_mac(s: &str) -> Option<Mac> {
+pub fn parse_mac(s: &str) -> Option<Mac> {
     let parts: Vec<&str> = s.split([':', '-']).collect();
     if parts.len() != 6 {
         return None;

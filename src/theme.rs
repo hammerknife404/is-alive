@@ -1,4 +1,4 @@
-//! Look and feel: three themes (Dark is the default), status colours that
+//! Look and feel: three themes (Dark, egui's stock look, is the default), status colours that
 //! stay readable on each, and the choice remembered between launches.
 
 use crate::backdrop::Source;
@@ -10,7 +10,7 @@ pub enum Theme {
     #[default]
     Dark,
     Light,
-    /// Miami Vice: midnight purple, hot pink and teal, a sunset rule.
+    /// Miami: midnight purple, hot pink and teal, a sunset rule.
     Miami,
 }
 
@@ -21,7 +21,7 @@ impl Theme {
         match self {
             Theme::Dark => "Dark",
             Theme::Light => "Light",
-            Theme::Miami => "Miami Vice",
+            Theme::Miami => "Miami",
         }
     }
 
@@ -48,10 +48,11 @@ pub fn current() -> Theme {
 /// Status colours: (ok, warn, bad) per theme.
 pub fn status() -> (Color32, Color32, Color32) {
     match current() {
+        // The colours from before themes existed.
         Theme::Dark => (
-            Color32::from_rgb(88, 204, 132),
-            Color32::from_rgb(232, 184, 72),
-            Color32::from_rgb(238, 98, 98),
+            Color32::from_rgb(80, 200, 120),
+            Color32::from_rgb(230, 180, 60),
+            Color32::from_rgb(235, 90, 90),
         ),
         Theme::Light => (
             Color32::from_rgb(22, 132, 70),
@@ -73,7 +74,7 @@ pub fn accent() -> Color32 {
 
 fn accent_for(t: Theme) -> Color32 {
     match t {
-        Theme::Dark => Color32::from_rgb(86, 160, 230),
+        Theme::Dark => Visuals::dark().hyperlink_color,
         Theme::Light => Color32::from_rgb(28, 104, 176),
         Theme::Miami => PINK,
     }
@@ -85,7 +86,12 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         Ordering::Relaxed,
     );
     let (slot, visuals) = match theme {
-        Theme::Dark => (egui::Theme::Dark, dark()),
+        // Untouched: egui's own dark style, as the app always looked.
+        Theme::Dark => {
+            ctx.set_theme(egui::Theme::Dark);
+            ctx.set_style_of(egui::Theme::Dark, Style::default());
+            return;
+        }
         Theme::Light => (egui::Theme::Light, light()),
         Theme::Miami => (egui::Theme::Dark, miami()),
     };
@@ -116,33 +122,6 @@ fn rounded(v: &mut Visuals, r: u8) {
     }
     v.window_corner_radius = CornerRadius::same(r + 4);
     v.menu_corner_radius = CornerRadius::same(r + 2);
-}
-
-/// The original look, tidied: cooler greys, softer corners, a calmer accent.
-fn dark() -> Visuals {
-    let mut v = Visuals::dark();
-    v.panel_fill = Color32::from_rgb(25, 27, 31);
-    v.window_fill = Color32::from_rgb(32, 35, 40);
-    v.extreme_bg_color = Color32::from_rgb(14, 16, 19);
-    v.faint_bg_color = Color32::from_rgb(33, 36, 42);
-    v.code_bg_color = Color32::from_rgb(36, 39, 45);
-    v.window_stroke = Stroke::new(1.0, Color32::from_rgb(52, 56, 64));
-    v.window_shadow = Shadow {
-        offset: [0, 6],
-        blur: 18,
-        spread: 0,
-        color: Color32::from_black_alpha(90),
-    };
-    v.selection.bg_fill = Color32::from_rgb(38, 96, 150);
-    v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(170, 210, 245));
-    v.hyperlink_color = accent_for(Theme::Dark);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(44, 48, 55);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(44, 48, 55);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(56, 61, 70);
-    v.widgets.hovered.bg_fill = Color32::from_rgb(56, 61, 70);
-    v.widgets.active.weak_bg_fill = Color32::from_rgb(66, 72, 82);
-    rounded(&mut v, 5);
-    v
 }
 
 fn light() -> Visuals {
@@ -217,7 +196,7 @@ fn miami() -> Visuals {
     v
 }
 
-/// Miami Vice's sunset rule along the bottom of the tab bar: pink, orange
+/// Miami's sunset rule along the bottom of the tab bar: pink, orange
 /// and teal, drifting slowly from side to side and back when animating.
 pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     if current() != Theme::Miami {
@@ -261,7 +240,7 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     ctx.layer_painter(egui::LayerId::background()).add(mesh);
 }
 
-/// Extra glow under the selected tab's underline, Miami Vice only.
+/// Extra glow under the selected tab's underline, Miami only.
 pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
     if current() == Theme::Miami {
         painter.hline(x, y, Stroke::new(6.0, PINK.gamma_multiply(0.25)));
@@ -272,7 +251,7 @@ pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub theme: Theme,
-    /// Miami Vice backdrop and sunset rule move; ignored by the other themes.
+    /// Miami backdrop and sunset rule move; ignored by the other themes.
     pub animate: bool,
     pub backdrop: Source,
 }
@@ -329,21 +308,22 @@ impl Settings {
 pub enum MenuAction {
     /// A setting changed: apply and save.
     Changed,
-    /// Ask for an image file for the Miami Vice backdrop.
+    /// Ask for an image file for the Miami backdrop.
     PickImage,
 }
 
-/// Footer "Theme" menu: the themes (the default marked), and Miami Vice's
+/// Footer "Theme" menu: the themes (the default marked), and Miami's
 /// backdrop and animation.
-pub fn menu(ui: &mut egui::Ui, s: &mut Settings) -> Option<MenuAction> {
+/// `renderer` says what draws the backdrop (GPU, or CPU and why).
+pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> Option<MenuAction> {
     let mut act = None;
     ui.menu_button(format!("Theme: {} ⏷", s.theme.name()), |ui| {
         ui.label(egui::RichText::new("Theme").strong());
         for t in Theme::ALL {
             let (label, tip) = match t {
-                Theme::Dark => ("Dark (default)", "The standard look"),
+                Theme::Dark => ("Dark (default)", "egui's standard dark look"),
                 Theme::Light => ("Light", "For bright rooms and screenshots in tickets"),
-                Theme::Miami => ("Miami Vice", "Midnight purple, hot pink and teal, with a 16-bit sunset"),
+                Theme::Miami => ("Miami", "Midnight purple, hot pink and teal, with a 16-bit sunset"),
             };
             if ui.radio(s.theme == t, label).on_hover_text(tip).clicked() && s.theme != t {
                 s.theme = t;
@@ -352,7 +332,7 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings) -> Option<MenuAction> {
         }
         ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
-            ui.label(egui::RichText::new("Miami Vice backdrop").strong());
+            ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
                 .radio(s.backdrop == Source::Scene, "16-bit sunset scene")
                 .clicked()
@@ -380,13 +360,16 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings) -> Option<MenuAction> {
                 s.backdrop = Source::None;
                 act = Some(MenuAction::Changed);
             }
-            if ui
-                .checkbox(&mut s.animate, "Animate")
-                .on_hover_text("10 frames a second, paused while the window isn't focused")
-                .changed()
-            {
+            let tip = if gpu {
+                "60 frames a second on the GPU, paused while the window isn't focused"
+            } else {
+                "10 frames a second (no usable GPU), paused while the window isn't focused"
+            };
+            if ui.checkbox(&mut s.animate, "Animate").on_hover_text(tip).changed() {
                 act = Some(MenuAction::Changed);
             }
+            ui.label(egui::RichText::new(renderer).small().weak())
+                .on_hover_text("What draws the backdrop. Set IS_ALIVE_GPU=off to force the CPU.");
         });
     });
     act

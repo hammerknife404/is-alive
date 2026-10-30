@@ -4,6 +4,7 @@ mod backdrop;
 mod bundle;
 mod job;
 mod log;
+mod map;
 mod net;
 mod sonicwall;
 mod theme;
@@ -33,6 +34,7 @@ enum Tab {
     Dns,
     Advanced,
     Export,
+    Map,
     Results,
 }
 
@@ -76,6 +78,12 @@ Compare all spots split DNS and stale caches.",
 into sanitized JSON for /unifidump and /mapnetwork. Secrets are left out.",
     ),
     (
+        Tab::Map,
+        "Map",
+        "Network map from the sweep and any UniFi backup or SonicWall export: roles, real uplinks \
+where the data has them, and findings. Drag to pan, scroll to zoom, click a device to trace it.",
+    ),
+    (
         Tab::Results,
         "Results",
         "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
@@ -93,6 +101,7 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
+    map: map::view::MapView,
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
@@ -102,7 +111,7 @@ struct App {
     jump_to_new: bool,
     look: theme::Settings,
     backdrop: backdrop::Backdrop,
-    /// File dialog for the Miami Vice backdrop image.
+    /// File dialog for the Miami backdrop image.
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
 }
 
@@ -124,7 +133,7 @@ impl eframe::App for App {
             self.look.backdrop = backdrop::Source::Image(p);
             theme::save(&self.look);
         }
-        // Under every panel; Miami Vice's panels are translucent over it.
+        // Under every panel; Miami's panels are translucent over it.
         if self.look.theme == theme::Theme::Miami {
             self.backdrop
                 .paint(ui.ctx(), &self.look.backdrop, self.look.animate);
@@ -243,7 +252,12 @@ impl eframe::App for App {
                     }
                     ui.weak(format!("v{VERSION}"));
                     ui.separator();
-                    match theme::menu(ui, &mut self.look) {
+                    match theme::menu(
+                        ui,
+                        &mut self.look,
+                        &self.backdrop.renderer,
+                        self.backdrop.on_gpu(),
+                    ) {
                         Some(theme::MenuAction::Changed) => {
                             theme::apply(ui.ctx(), self.look.theme);
                             theme::save(&self.look);
@@ -252,7 +266,7 @@ impl eframe::App for App {
                             self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
                                 tx.send(
                                     rfd::FileDialog::new()
-                                        .set_title("Miami Vice backdrop")
+                                        .set_title("Miami backdrop")
                                         .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
                                         .pick_file(),
                                 )
@@ -277,6 +291,19 @@ impl eframe::App for App {
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => self.export.ui(ui),
+            Tab::Map => {
+                let busy = self.ping.is_running() || self.ports.is_running();
+                let act = self.map.ui(
+                    ui,
+                    map::view::Sources {
+                        sweep: &self.sweep,
+                        export: &self.export,
+                        info: &self.info,
+                        busy,
+                    },
+                );
+                self.map_action(ui.ctx(), act);
+            }
             Tab::Results => self.results_ui(ui),
         });
         let App {
@@ -339,6 +366,29 @@ impl App {
         }
     }
 
+    fn map_action(&mut self, ctx: &egui::Context, act: Option<map::view::Action>) {
+        use map::view::Action;
+        match act {
+            Some(Action::Sweep) => {
+                if let Some((ip, bits)) = self.info.lan
+                    && !self.sweep.is_running()
+                {
+                    self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
+                }
+            }
+            Some(Action::Export) => self.tab = Tab::Export,
+            Some(Action::Ping(ip)) => {
+                self.ping.run(ctx, &ip, 4);
+                self.tab = Tab::Ping;
+            }
+            Some(Action::Ports(ip)) => {
+                self.ports.run(ctx, &ip);
+                self.tab = Tab::Ports;
+            }
+            None => {}
+        }
+    }
+
     fn refresh_info(&mut self, ctx: &egui::Context) {
         self.info_job = Some(Job::spawn(ctx, |tx| tx.send(HostInfo::fetch())));
     }
@@ -352,6 +402,7 @@ impl App {
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
             Tab::Export => self.export.is_running(),
+            Tab::Map => false,
             Tab::Results => false,
         }
     }
@@ -652,16 +703,24 @@ fn main() -> eframe::Result {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
+                map: map::view::MapView::new(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
                 filter: String::new(),
                 jump_to_new: false,
                 look,
-                backdrop: Default::default(),
+                backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
             };
             app.refresh_info(&cc.egui_ctx);
+            // Files named on the command line ("Open with") go to Config Export.
+            let files: Vec<std::path::PathBuf> =
+                std::env::args_os().skip(1).map(Into::into).collect();
+            if !files.is_empty() {
+                app.tab = Tab::Export;
+                app.export.open(&cc.egui_ctx, files);
+            }
             Ok(Box::new(app))
         }),
     )

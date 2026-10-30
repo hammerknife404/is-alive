@@ -13,9 +13,12 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
 | **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
+| **Map** | Network map built from the sweep and any UniFi / SonicWall export: roles by colour, real uplinks where a backup has them, findings, search, pan and zoom, SVG export (see below) |
 | **Site Bundle…** (top right) | Wraps the UniFi and SonicWall exports, the sweep inventory and optionally the Results log into one zip with a manifest for the unifidump / mapnetwork skills (see below) |
 
-**Themes:** the **Theme** menu in the footer offers Dark (the default), Light and Miami Vice, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami Vice puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs at 10 frames a second and pauses while the window isn't focused; turn it off on battery.
+**Themes:** the **Theme** menu in the footer offers Dark (the default: egui's stock dark look), Light and Miami, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs and pauses while the window isn't focused; turn it off on battery. The scene runs at 60 frames a second on the GPU: it's drawn at art resolution by a shader into an offscreen buffer and scaled up with hard edges, so the CPU does almost nothing. Without a usable GPU (a software OpenGL such as llvmpipe or Microsoft's Basic Render Driver, OpenGL below 3.1 / ES 3.0, or a shader the driver rejects) it falls back to drawing on the CPU at 10 frames a second. The Theme menu says which is in use and why; `IS_ALIVE_GPU=off` forces the CPU.
+
+Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -83,6 +86,18 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 | `results.json` | the Results log, off by default: it holds every run since the app opened, which can include other clients' hosts and domains. The row lists the targets it covers so you can check before ticking it | /mapnetwork |
 
 **UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC; notes and email addresses are dropped. *None* and *full* are the other choices. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
+
+### Map
+
+The **Map** tab draws one picture from what the app has seen, in the spirit of `/mapnetwork`: a tree from the internet down, roles as colours (gateway, switches, access points, servers/NAS, printers/cameras, clients, unidentified), infrastructure first and clients only on request.
+
+- **From a UniFi backup** (loaded in Config Export) it draws the real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless (mesh, bridges). An uplink MAC the backup doesn't describe becomes an *Unidentified upstream device* card; a SonicWall export loaded alongside becomes the gateway, matched by its interface MACs.
+- **From a sweep alone** it can't see switch ports, so devices hang under the gateway on dotted *assumed* links, with roles inferred from vendor and open ports (marked *inferred*). **Scan this network** on the empty map runs a sweep and the map fills in as hosts answer.
+- **Both**: the sweep is merged into a backup only when it found hardware the backup knows by MAC. A backup read at the office isn't mixed up with the office network; the subtitle says so.
+- **Clients** (off by default) puts end devices on the map, up to 10 under each switch or AP and the rest in one *+N more* card, within a 120-card budget; off, each uplink shows a count.
+- **Findings**, worst first, only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, devices UniFi lists as each other's uplink, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and Ubiquiti hardware the backup doesn't know. Click one to show its devices; **Copy** for a ticket.
+
+Drag to pan, scroll or pinch to zoom, double-click the background to fit, drag a card to move it (**Re-layout** puts it back), click a card to trace its path to the internet and see its details, with **Ping**, **Port Check** and **Open web page** for it. Search matches name, IP, MAC and vendor; click a role in the legend to fade it out. **Export SVG** saves the map with its findings as a picture for a ticket or site doc.
 
 ### Config Export: UniFi
 

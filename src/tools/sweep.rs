@@ -51,6 +51,8 @@ pub struct SweepTool {
     /// Whether the last run checked management ports.
     checked_ports: bool,
     err: Option<String>,
+    /// Bumped whenever the host list changes, so the map knows to rebuild.
+    revision: u64,
 }
 
 impl Default for SweepTool {
@@ -72,6 +74,7 @@ impl Default for SweepTool {
             local: HostInfo::default(),
             checked_ports: false,
             err: None,
+            revision: 0,
         }
     }
 }
@@ -94,6 +97,8 @@ impl SweepTool {
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
         let mut got = false;
+        let was = self.job.is_some();
+        let mut changed = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Probed => self.probed += 1,
             Ev::Alive(h) => {
@@ -103,6 +108,7 @@ impl SweepTool {
             Ev::Mac(ip, m) => {
                 if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                     h.mac = Some(m);
+                    changed = true;
                 }
             }
             Ev::PortProbes(n) => self.total += n,
@@ -110,11 +116,15 @@ impl SweepTool {
                 if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                     h.open.push(port);
                     h.open.sort_unstable();
+                    changed = true;
                 }
             }
         });
         if got {
             self.alive.sort_by_key(|h| h.ip);
+        }
+        if got || changed || was != running {
+            self.revision += 1;
         }
         running
     }
@@ -406,8 +416,28 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
         self.checked_ports
     }
 
+    /// Hosts found so far, for the map.
+    pub fn seen(&self) -> Vec<crate::map::Seen> {
+        self.alive
+            .iter()
+            .map(|h| crate::map::Seen {
+                ip: h.ip,
+                mac: h.mac,
+                name: h.name.clone(),
+                rtt: h.rtt,
+                open: h.open.clone(),
+            })
+            .collect()
+    }
+
+    /// Changes whenever `seen` would.
+    pub fn generation(&self) -> u64 {
+        self.revision
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
+        self.revision += 1;
         self.alive.clear();
         self.probed = 0;
         let ips = match targets::parse_range(&self.range) {

@@ -2,7 +2,7 @@
 name = "is-alive"
 version = "0.11.0"
 edition = "2024"
-description = "Native network testing toolkit: ping, port check, traceroute, subnet sweep, DNS, domain/mail health"
+description = "Native network testing toolkit: ping, port check, traceroute, subnet sweep, DNS, domain/mail health, network map"
 license = "MIT"
 
 [dependencies]

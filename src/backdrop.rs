@@ -1,10 +1,14 @@
-//! Miami Vice backdrop: a 16-bit synthwave scene drawn into a small pixel
-//! buffer (one art pixel = 2×2 points or more on big windows) and scaled up with hard edges, or the
-//! user's own image with a slow pan. Animated at 10 frames a second in a
-//! 4-second loop, only while the window has focus.
+//! Miami backdrop: a 16-bit synthwave scene at one art pixel per 2×2
+//! points (chunkier on big windows), scaled up with hard edges, or the
+//! user's own image with a slow pan. A 4-second loop, only while the window
+//! has focus: 60 frames a second drawn by the GPU (`gpu`), or 10 on the CPU
+//! where there's no usable GPU.
+
+mod gpu;
 
 use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Points per art pixel, at least; larger windows get chunkier pixels so the
@@ -13,8 +17,11 @@ const PX: f32 = 2.0;
 const MAX_ART: (f32, f32) = (640.0, 400.0);
 /// Art-pixel scale for sizes first tuned at 4 points per pixel.
 const K: i32 = 2;
+/// CPU frames a second; the GPU draws every display frame up to 60.
 const FPS: f64 = 10.0;
 const LOOP_FRAMES: i64 = 40;
+const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
+const GPU_FRAME: Duration = Duration::from_millis(16);
 /// Behind the panels when the backdrop is off.
 pub const SOLID: Color32 = Color32::from_rgb(22, 14, 44);
 
@@ -34,9 +41,38 @@ pub struct Backdrop {
     image: Option<(PathBuf, TextureHandle, egui::Vec2)>,
     /// Why the chosen image couldn't be shown.
     pub err: Option<String>,
+    gpu: Option<Arc<Mutex<gpu::Gpu>>>,
+    /// Static layers not yet on the GPU (after a resize).
+    upload: Option<Arc<gpu::Layers>>,
+    /// What draws the scene, for the theme menu.
+    pub renderer: String,
 }
 
 impl Backdrop {
+    /// Use the GPU when there's a real one; `IS_ALIVE_GPU=off` forces the
+    /// CPU, `=force` skips the software-renderer check.
+    pub fn new(gl: Option<&Arc<eframe::glow::Context>>) -> Self {
+        let mode = std::env::var("IS_ALIVE_GPU").unwrap_or_default();
+        let gpu = match (gl, mode.as_str()) {
+            (_, "off") => Err("turned off (IS_ALIVE_GPU=off)".to_string()),
+            (None, _) => Err("no OpenGL context".to_string()),
+            (Some(gl), m) => gpu::Gpu::new(gl, m == "force"),
+        };
+        let renderer = match &gpu {
+            Ok(g) => format!("GPU: {}", g.name),
+            Err(e) => format!("CPU, 10 fps: {e}"),
+        };
+        Self {
+            gpu: gpu.ok().map(|g| Arc::new(Mutex::new(g))),
+            renderer,
+            ..Default::default()
+        }
+    }
+
+    pub fn on_gpu(&self) -> bool {
+        self.gpu.is_some()
+    }
+
     /// Paint under the panels; call before they are shown.
     pub fn paint(&mut self, ctx: &egui::Context, source: &Source, animate: bool) {
         let rect = ctx.content_rect();
@@ -57,8 +93,43 @@ impl Backdrop {
                     ((rect.height() / px).ceil() as usize).max(16),
                 );
                 if self.scene.as_ref().is_none_or(|s| (s.w, s.h) != (w, h)) {
-                    self.scene = Some(Scene::new(w, h));
+                    let scene = Scene::new(w, h);
+                    if self.gpu.is_some() {
+                        self.upload = Some(Arc::new(scene.layers()));
+                    }
+                    self.scene = Some(scene);
                     self.frame = None;
+                }
+                if let Some(g) = &self.gpu {
+                    let scene = self.scene.as_ref().expect("built above");
+                    let ph = if animate {
+                        (time / LOOP_SECS).fract() as f32
+                    } else {
+                        0.0
+                    };
+                    let frame = gpu::Frame {
+                        art: [w, h],
+                        view: [rect.width() / px, rect.height() / px],
+                        phase: ph,
+                        sun: scene.sun(),
+                        k: K as f32,
+                        palms: gpu::triangles(&scene.palms(ph)),
+                        upload: self.upload.take(),
+                    };
+                    let g = g.clone();
+                    let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| {
+                        if let Ok(mut g) = g.lock() {
+                            g.paint(painter.gl(), &info, &frame);
+                        }
+                    });
+                    painter.add(egui::PaintCallback {
+                        rect,
+                        callback: Arc::new(cb),
+                    });
+                    if moving {
+                        ctx.request_repaint_after(GPU_FRAME);
+                    }
+                    return;
                 }
                 let frame = if animate { (time * FPS) as i64 } else { 0 };
                 if self.frame != Some(frame) || self.scene_tex.is_none() {
@@ -110,7 +181,12 @@ impl Backdrop {
             }
         }
         if moving && *source != Source::None {
-            ctx.request_repaint_after(Duration::from_millis(100));
+            // A picture pans smoothly when the GPU has frames to spare.
+            let gap = match source {
+                Source::Image(_) if self.gpu.is_some() => GPU_FRAME,
+                _ => Duration::from_millis(100),
+            };
+            ctx.request_repaint_after(gap);
         }
     }
 }
@@ -173,12 +249,17 @@ fn rgb(c: (u8, u8, u8)) -> Color32 {
 struct Scene {
     w: usize,
     h: usize,
-    /// Dithered sky, precomputed.
-    sky: Vec<Color32>,
+    /// Sky (dithered) above the horizon, ground below: never changes.
+    back: Vec<Color32>,
+    /// Skyline, the grid lines running to the horizon and the horizon
+    /// itself, transparent elsewhere: drawn over the moving grid.
+    mid: Vec<Color32>,
     stars: Vec<(i32, i32, f32, i32)>,
-    buildings: Vec<(i32, i32, i32)>,
     buf: Vec<Color32>,
 }
+
+/// A palm's trunk or frond: points in art pixels and the stamp width.
+pub type Stroke = (Vec<(f32, f32)>, i32);
 
 /// Small deterministic generator so the skyline is the same every launch.
 struct Lcg(u64);
@@ -204,7 +285,7 @@ impl Scene {
 
     fn new(w: usize, h: usize) -> Self {
         let hz = Self::horizon(h);
-        let mut sky = vec![Color32::BLACK; w * h];
+        let mut back = vec![Color32::from_rgb(20, 6, 42); w * h];
         for y in 0..hz.max(0) as usize {
             let f = (y as f32 / hz as f32).powf(1.2) * (SKY.len() - 1) as f32;
             let (i, frac) = (f as usize, f.fract());
@@ -215,7 +296,7 @@ impl Scene {
                 } else {
                     i
                 };
-                sky[y * w + x] = rgb(SKY[j]);
+                back[y * w + x] = rgb(SKY[j]);
             }
         }
         let mut r = Lcg(7);
@@ -229,8 +310,24 @@ impl Scene {
                 )
             })
             .collect();
-        let (wi, hf) = (w as i32, h as f32);
-        let mut buildings = Vec::new();
+        let mut s = Self {
+            w,
+            h,
+            back,
+            mid: Vec::new(),
+            stars,
+            buf: vec![Color32::TRANSPARENT; w * h],
+        };
+        s.draw_mid(&mut r);
+        s.mid = std::mem::take(&mut s.buf);
+        s
+    }
+
+    /// Skyline with teal rooftops and lit windows, the grid lines running
+    /// to the vanishing point, and the horizon.
+    fn draw_mid(&mut self, r: &mut Lcg) {
+        let (wi, hf) = (self.w as i32, self.h as f32);
+        let hz = Self::horizon(self.h);
         let mut x = 0;
         while x < wi {
             let bw = r.range(8 * K, 18 * K);
@@ -240,16 +337,83 @@ impl Scene {
             } else {
                 r.range((hf * 0.08) as i32, (hf * 0.30) as i32)
             };
-            buildings.push((x, bw, bh));
+            self.rect(
+                x,
+                hz - bh,
+                x + bw - 1,
+                hz - 1,
+                Color32::from_rgb(48, 26, 100),
+            );
+            self.rect(
+                x,
+                hz - bh,
+                x + bw - 1,
+                hz - bh,
+                Color32::from_rgb(40, 210, 210),
+            );
+            let mut wy = hz - bh + 3 * K;
+            while wy < hz - 2 * K {
+                let mut wx = x + 2 * K;
+                while wx < x + bw - 2 * K {
+                    if (wx / K * 7 + wy / K * 13) % 5 == 0 {
+                        self.rect(
+                            wx,
+                            wy,
+                            wx + K - 1,
+                            wy + K - 1,
+                            Color32::from_rgb(255, 200, 120),
+                        );
+                    }
+                    wx += 3 * K;
+                }
+                wy += 4 * K;
+            }
             x += bw + r.range(1, 3) * K;
         }
-        Self {
-            w,
-            h,
-            sky,
-            stars,
-            buildings,
-            buf: Vec::new(),
+        let cx = (self.w / 2) as f32;
+        for k in -7..=7 {
+            self.line(
+                (cx, hz as f32),
+                (cx + k as f32 * self.w as f32 / 5.0, hf),
+                Color32::from_rgb(30, 170, 180),
+                1,
+            );
+        }
+        self.rect(0, hz, wi - 1, hz, Color32::from_rgb(255, 150, 200));
+    }
+
+    /// Sun centre, radius and the horizon row, in art pixels.
+    fn sun(&self) -> [f32; 4] {
+        let hf = self.h as f32;
+        let hz = Self::horizon(self.h);
+        [
+            (self.w / 2) as f32,
+            (hz - (hf * 0.05) as i32) as f32,
+            ((hf * 0.2) as i32) as f32,
+            hz as f32,
+        ]
+    }
+
+    /// The static layers for the GPU. The back layer's alpha marks stars:
+    /// 255 is none, anything less is that star's blink phase.
+    fn layers(&self) -> gpu::Layers {
+        let mut back: Vec<u8> = self.back.iter().flat_map(|c| c.to_array()).collect();
+        for &(x, y, p, sz) in &self.stars {
+            let a = (p / std::f32::consts::TAU * 254.0)
+                .round()
+                .clamp(0.0, 254.0) as u8;
+            for yy in y..y + sz {
+                for xx in x..x + sz {
+                    if xx >= 0 && yy >= 0 && (xx as usize) < self.w && (yy as usize) < self.h {
+                        back[(yy as usize * self.w + xx as usize) * 4 + 3] = a;
+                    }
+                }
+            }
+        }
+        gpu::Layers {
+            size: [self.w, self.h],
+            back,
+            mid: self.mid.iter().flat_map(|c| c.to_array()).collect(),
         }
     }
 
@@ -298,20 +462,57 @@ impl Scene {
         }
     }
 
-    fn polyline(&mut self, pts: &[(f32, f32)], c: Color32, width: i32) {
-        for p in pts.windows(2) {
-            self.line(p[0], p[1], c, width);
-        }
+    /// Palm silhouettes at loop phase `ph` (0..1), barely swaying.
+    fn palms(&self, ph: f32) -> Vec<Stroke> {
+        use std::f32::consts::TAU;
+        let (wf, hf) = (self.w as f32, self.h as f32);
+        let hz = Self::horizon(self.h) as f32;
+        let mut out = Vec::new();
+        let mut palm = |px: f32, base: f32, height: f32, lean: f32, phase: f32| {
+            let sway = 0.012 * (ph * TAU + phase).sin();
+            let steps = 14 * K;
+            let trunk: Vec<(f32, f32)> = (0..=steps)
+                .map(|i| {
+                    let t = i as f32 / steps as f32;
+                    (
+                        px + (lean + sway) * t.powf(1.6) * height * 0.4,
+                        base - t * height,
+                    )
+                })
+                .collect();
+            let (tx, ty) = *trunk.last().expect("non-empty");
+            out.push((trunk, 3 * K));
+            let len = height * 0.42;
+            for f in 0..8 {
+                let a = -170.0 + 160.0 * f as f32 / 7.0;
+                let ang = (a + 1.5 * (ph * TAU + phase).sin()).to_radians();
+                let fs = 9 * K;
+                let frond: Vec<(f32, f32)> = (0..=fs)
+                    .map(|i| {
+                        let s = i as f32 / fs as f32;
+                        (
+                            tx + ang.cos() * len * s,
+                            ty + ang.sin() * len * s + len * 0.35 * s * s,
+                        )
+                    })
+                    .collect();
+                out.push((frond, 2 * K));
+            }
+        };
+        palm(wf * 0.07, hz + hf * 0.06, hf * 0.55, 1.0, 0.0);
+        palm(wf * 0.16, hz + hf * 0.03, hf * 0.40, 0.6, 1.3);
+        palm(wf * 0.93, hz + hf * 0.06, hf * 0.55, -1.0, 2.1);
+        palm(wf * 0.84, hz + hf * 0.03, hf * 0.42, -0.6, 0.7);
+        out
     }
 
     fn render(&mut self, frame: i64) -> ColorImage {
         use std::f32::consts::TAU;
         let ph = frame as f32 / LOOP_FRAMES as f32;
         let (w, h) = (self.w as i32, self.h as i32);
-        let (wf, hf) = (w as f32, h as f32);
-        let hz = Self::horizon(self.h);
-        // Fresh buffer from the sky; it moves into the frame at the end.
-        self.buf = self.sky.clone();
+        let hf = h as f32;
+        // Fresh buffer from the static back; it moves into the frame at the end.
+        self.buf = self.back.clone();
 
         // Stars blink on and off, each on its own beat.
         for i in 0..self.stars.len() {
@@ -329,7 +530,7 @@ impl Scene {
 
         // Sun: a glow ring that flips between two pinks, banded disc, and
         // stripes stepping down through the lower half.
-        let (cx, cy, r) = (w / 2, hz - (hf * 0.05) as i32, (hf * 0.2) as i32);
+        let [cx, cy, r, hz] = self.sun().map(|v| v as i32);
         let glow = if (ph * TAU).sin() > 0.0 {
             Color32::from_rgb(255, 70, 150)
         } else {
@@ -356,44 +557,7 @@ impl Scene {
             self.rect(cx - half, y, cx + half, y, rgb(band));
         }
 
-        // Skyline with teal rooftops and a scatter of lit windows.
-        for i in 0..self.buildings.len() {
-            let (bx, bw, bh) = self.buildings[i];
-            self.rect(
-                bx,
-                hz - bh,
-                bx + bw - 1,
-                hz - 1,
-                Color32::from_rgb(48, 26, 100),
-            );
-            self.rect(
-                bx,
-                hz - bh,
-                bx + bw - 1,
-                hz - bh,
-                Color32::from_rgb(40, 210, 210),
-            );
-            let mut wy = hz - bh + 3 * K;
-            while wy < hz - 2 * K {
-                let mut wx = bx + 2 * K;
-                while wx < bx + bw - 2 * K {
-                    if (wx / K * 7 + wy / K * 13) % 5 == 0 {
-                        self.rect(
-                            wx,
-                            wy,
-                            wx + K - 1,
-                            wy + K - 1,
-                            Color32::from_rgb(255, 200, 120),
-                        );
-                    }
-                    wx += 3 * K;
-                }
-                wy += 4 * K;
-            }
-        }
-
-        // Ground and a grid drifting toward the viewer.
-        self.rect(0, hz, w - 1, h - 1, Color32::from_rgb(20, 6, 42));
+        // Grid lines drifting toward the viewer, under the static ones.
         let n = 12;
         for k in 0..=n {
             let t = (k as f32 + ph) / n as f32;
@@ -405,54 +569,18 @@ impl Scene {
             };
             self.rect(0, y, w - 1, y, c);
         }
-        for k in -7..=7 {
-            self.line(
-                (cx as f32, hz as f32),
-                (cx as f32 + k as f32 * wf / 5.0, hf),
-                Color32::from_rgb(30, 170, 180),
-                1,
-            );
-        }
-        self.rect(0, hz, w - 1, hz, Color32::from_rgb(255, 150, 200));
-
-        // Palm silhouettes, barely swaying.
-        let palm = |s: &mut Self, px: f32, base: f32, height: f32, lean: f32, phase: f32| {
-            let sway = 0.012 * (ph * TAU + phase).sin();
-            let steps = 14 * K;
-            let trunk: Vec<(f32, f32)> = (0..=steps)
-                .map(|i| {
-                    let t = i as f32 / steps as f32;
-                    (
-                        px + (lean + sway) * t.powf(1.6) * height * 0.4,
-                        base - t * height,
-                    )
-                })
-                .collect();
-            let ink = Color32::from_rgb(12, 4, 28);
-            s.polyline(&trunk, ink, 3 * K);
-            let (tx, ty) = *trunk.last().expect("non-empty");
-            let len = height * 0.42;
-            for f in 0..8 {
-                let a = -170.0 + 160.0 * f as f32 / 7.0;
-                let ang = (a + 1.5 * (ph * TAU + phase).sin()).to_radians();
-                let fs = 9 * K;
-                let frond: Vec<(f32, f32)> = (0..=fs)
-                    .map(|i| {
-                        let s = i as f32 / fs as f32;
-                        (
-                            tx + ang.cos() * len * s,
-                            ty + ang.sin() * len * s + len * 0.35 * s * s,
-                        )
-                    })
-                    .collect();
-                s.polyline(&frond, ink, 2 * K);
+        for (d, m) in self.buf.iter_mut().zip(&self.mid) {
+            if m.a() > 0 {
+                *d = *m;
             }
-        };
-        let hz = hz as f32;
-        palm(self, wf * 0.07, hz + hf * 0.06, hf * 0.55, 1.0, 0.0);
-        palm(self, wf * 0.16, hz + hf * 0.03, hf * 0.40, 0.6, 1.3);
-        palm(self, wf * 0.93, hz + hf * 0.06, hf * 0.55, -1.0, 2.1);
-        palm(self, wf * 0.84, hz + hf * 0.03, hf * 0.42, -0.6, 0.7);
+        }
+
+        let ink = Color32::from_rgb(12, 4, 28);
+        for (pts, width) in self.palms(ph) {
+            for p in pts.windows(2) {
+                self.line(p[0], p[1], ink, width);
+            }
+        }
 
         ColorImage::new([self.w, self.h], std::mem::take(&mut self.buf))
     }
