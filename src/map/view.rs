@@ -88,6 +88,7 @@ impl MapView {
             wan: src.info.wan,
             unifi: src.export.unifi().map(|u| u.1.json.as_str()),
             sonicwall: src.export.sonicwall().map(|s| s.1.json.as_str()),
+            mapnetwork: src.export.mapnetwork().map(|m| m.1),
             clients: self.clients,
         }
     }
@@ -102,6 +103,9 @@ impl MapView {
         }
         if let Some((p, r)) = src.export.sonicwall() {
             (p, r.json.len()).hash(&mut h);
+        }
+        if let Some((p, d)) = src.export.mapnetwork() {
+            (p, d.json.len()).hash(&mut h);
         }
         (src.info.gateway, src.info.lan, src.info.wan).hash(&mut h);
         let key = h.finish();
@@ -1196,7 +1200,7 @@ fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
         ui.add_space(6.0);
         ui.label(
             "The map is built from what this app has seen: a Subnet Sweep, and a UniFi backup or \
-SonicWall export loaded in Config Export. A backup gives the real uplinks; a sweep alone \
+SonicWall export loaded in Config Export, or a /mapnetwork map opened there. A backup gives the real uplinks; a sweep alone \
 can only place devices under the gateway.",
         );
         ui.add_space(10.0);

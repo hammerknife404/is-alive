@@ -1,6 +1,6 @@
 use crate::job::{Job, pump};
 use crate::widgets;
-use crate::{sonicwall, unifi};
+use crate::{mapnetwork, sonicwall, unifi};
 use eframe::egui::{self, Ui};
 use std::path::PathBuf;
 
@@ -8,6 +8,7 @@ use std::path::PathBuf;
 enum Export {
     Unifi(unifi::Report),
     SonicWall(sonicwall::Report),
+    Map(Box<mapnetwork::Doc>),
 }
 
 impl Export {
@@ -31,6 +32,17 @@ impl Export {
                 r.count("access rules"),
                 r.count("NAT rules"),
             ),
+            Export::Map(d) => format!(
+                "/mapnetwork map: {}: {} device(s), {} link(s), {} finding(s)",
+                if d.title.is_empty() {
+                    "untitled"
+                } else {
+                    &d.title
+                },
+                d.nodes.len(),
+                d.edges.len(),
+                d.actions.len(),
+            ),
         }
     }
 
@@ -38,6 +50,7 @@ impl Export {
         match self {
             Export::Unifi(r) => r.summary(),
             Export::SonicWall(r) => r.summary(),
+            Export::Map(d) => d.summary(),
         }
     }
 
@@ -45,6 +58,7 @@ impl Export {
         match self {
             Export::Unifi(r) => &r.json,
             Export::SonicWall(r) => &r.json,
+            Export::Map(d) => &d.json,
         }
     }
 
@@ -53,6 +67,7 @@ impl Export {
         match self {
             Export::Unifi(_) => "unifidump",
             Export::SonicWall(_) => "sonicwall",
+            Export::Map(_) => "mapnetwork",
         }
     }
 
@@ -60,6 +75,7 @@ impl Export {
         match self {
             Export::Unifi(_) => "Save the sanitized export to hand to /unifidump",
             Export::SonicWall(_) => "Save the sanitized config to hand to /mapnetwork",
+            Export::Map(_) => "Save the map's devices, links and findings as JSON",
         }
     }
 
@@ -69,6 +85,7 @@ impl Export {
         match self {
             Export::Unifi(_) => 0,
             Export::SonicWall(_) => 1,
+            Export::Map(_) => 2,
         }
     }
 }
@@ -90,12 +107,24 @@ pub struct ExportTool {
     job: Option<Job<Ev>>,
     /// File being read while the job runs.
     pending: Option<PathBuf>,
-    /// UniFi, SonicWall.
-    slots: [Option<Slot>; 2],
+    /// UniFi, SonicWall, /mapnetwork map.
+    slots: [Option<Slot>; 3],
     err: Option<String>,
 }
 
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
+    if mapnetwork::sniff(&data) {
+        return mapnetwork::parse(&data).map(|d| Export::Map(Box::new(d)));
+    }
+    // A site bundle (or any zip) holding the map /mapnetwork made from it.
+    if let Some((name, html)) =
+        unifi::zip_find(&data, |n| n.to_lowercase().ends_with(".html")).unwrap_or(None)
+        && mapnetwork::sniff(&html)
+    {
+        return mapnetwork::parse(&html)
+            .map(|d| Export::Map(Box::new(d)))
+            .map_err(|e| format!("{name}: {e}"));
+    }
     if sonicwall::decode(&data).is_some() {
         sonicwall::convert(&data).map(Export::SonicWall)
     } else {
@@ -103,7 +132,8 @@ fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
             .map(Export::Unifi)
             .map_err(|e| {
                 if e.starts_with("not a UniFi backup") {
-                    "not a UniFi backup (.unf, .unifi, db.gz) or SonicWall settings export (.exp)"
+                    "not a UniFi backup (.unf, .unifi, db.gz), SonicWall settings export (.exp) or \
+tech support report (.wri), or /mapnetwork map (.dc.html)"
                         .into()
                 } else {
                     e
@@ -172,6 +202,17 @@ impl ExportTool {
         }
     }
 
+    /// The /mapnetwork map currently loaded.
+    pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
+        match &self.slots[2] {
+            Some(Slot {
+                path,
+                export: Export::Map(d),
+            }) => Some((path, &**d)),
+            _ => None,
+        }
+    }
+
     /// The SonicWall export currently loaded, and its conversion.
     pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
         match &self.slots[1] {
@@ -222,8 +263,10 @@ impl ExportTool {
                 rfd::FileDialog::new()
                     .set_title("Open config export")
                     .add_filter(
-                        "UniFi backup or SonicWall settings",
-                        &["unf", "unifi", "exp", "zip", "gz", "txt"],
+                        "UniFi backup, SonicWall settings or /mapnetwork map",
+                        &[
+                            "unf", "unifi", "exp", "wri", "html", "htm", "zip", "gz", "txt",
+                        ],
                     )
                     .pick_files()
             }) else {
@@ -245,8 +288,9 @@ impl ExportTool {
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
                     "UniFi: .unf (site export or autobackup), .unifi (UniFi OS console backup), \
-a .zip holding one, or db.gz. SonicWall: .exp settings export. Pick both at once, or drop them \
-on the window. Each kind keeps its own result; opening another file of the same kind replaces it.",
+a .zip holding one, or db.gz. SonicWall: .exp settings export or .wri tech support report. \
+/mapnetwork: the .dc.html map, or a site bundle .zip it was saved into; it opens in the Map tab \
+in is-alive's style. Pick several at once, or drop them on the window. Each kind keeps its own result; opening another file of the same kind replaces it.",
                 )
                 .clicked()
             {
@@ -267,7 +311,7 @@ on the window. Each kind keeps its own result; opening another file of the same 
         });
         ui.weak(
             "Decodes a UniFi backup or SonicWall settings export on this machine and saves JSON with \
-the topology and config the skills need. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
+the topology and config the skills need, or reads a /mapnetwork map back in for the Map tab. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
         );
         widgets::error(ui, &self.err);
         ui.separator();
@@ -276,7 +320,8 @@ the topology and config the skills need. Passwords, keys and secrets are left ou
             if !running {
                 widgets::empty_hint(
                     ui,
-                    "Open or drop a .unf / .unifi UniFi backup (for /unifidump) or a SonicWall .exp (for /mapnetwork).",
+                    "Open or drop a .unf / .unifi UniFi backup (for /unifidump), a SonicWall .exp or .wri \
+(for /mapnetwork), or a /mapnetwork .dc.html to see it on the Map tab.",
                 );
             }
             return;

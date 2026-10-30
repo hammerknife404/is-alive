@@ -12,7 +12,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames, MAC and vendor, ping-silent devices from the ARP table, optional management-port check, and an **Inventory** JSON for /mapnetwork (see below) |
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
-| **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
+| **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) or tech support report (`.wri`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills; also reads a `/mapnetwork` map (`.dc.html`, or a zip holding one) back in for the Map tab (see below) |
 | **Notes** | Markdown tech notes with a live preview; passwords, keys and patient details are highlighted and replaced before anything is saved, copied or bundled (see below) |
 | **Map** | Network map built from the sweep and any UniFi / SonicWall export: roles by colour, real uplinks where a backup has them, findings, search, pan and zoom, SVG export (see below) |
 | **Speed Test** | Download and upload against Cloudflare, latency, jitter and loss at idle and under load, a bufferbloat grade and a VoIP call-quality score (MOS) (see below) |
@@ -22,7 +22,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 
 Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
 
-**Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut; Speed Test, the last tab, has none), copies and saves confirm with a toast, and the window opens at the size it was closed at.
+**Ctrl+1 … Ctrl+9** switch to the first nine tabs and **Ctrl+0** to Results (the footer's **?** lists every shortcut; Speed Test, just before Results, has none), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab keeps the 12 newest runs open and folds older ones, **Clear** asks for a second click, and it has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -81,7 +81,7 @@ Runs against Cloudflare's speed test service (`speed.cloudflare.com`, anycast, s
 | **VoIP MOS** | Simplified ITU-T G.107 E-model (G.711) from round-trip latency, jitter and loss: 4.34+ excellent, 4.03 good, 3.6 fair, 3.1 poor. Shown at idle and under load |
 | **VoIP targets** | latency < 150 ms, jitter < 30 ms, loss < 1%; anything over in any phase is called out |
 
-Latency is ICMP to the server's address. If 4 pings get no reply (ICMP blocked), it switches to TCP connects to port 443 and says so; loss is less reliable that way. A failed direction says why, and that web filters (SonicWall CFS, DNS filtering) often block speed test sites. The test saturates the line while it runs, and a gigabit line moves over 1 GB each way, so mind metered links. It's not part of the full scan.
+Latency is ICMP to the server's address. If 4 pings get no reply (ICMP blocked), it switches to TCP connects to port 443 and says so; loss is less reliable that way. A failed direction says why, and that web filters (SonicWall CFS, DNS filtering) often block speed test sites. The test saturates the line while it runs, and a gigabit line moves over 1 GB each way, so mind metered links. The full scan (the **is-alive** button) runs it too, with the tab's current Duration, Streams and directions.
 
 ### Subnet Sweep: MAC, vendor and inventory
 
@@ -116,6 +116,7 @@ The **Map** tab draws one picture from what the app has seen, in the spirit of `
 - **From a UniFi backup** (loaded in Config Export) it draws the real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless (mesh, bridges). An uplink MAC the backup doesn't describe becomes an *Unidentified upstream device* card; a SonicWall export loaded alongside becomes the gateway, matched by its interface MACs.
 - **From a sweep alone** it can't see switch ports, so devices hang under the gateway on dotted *assumed* links, with roles inferred from vendor and open ports (marked *inferred*). **Scan this network** on the empty map runs a sweep and the map fills in as hosts answer.
 - **Both**: the sweep is merged into a backup only when it found hardware the backup knows by MAC. A backup read at the office isn't mixed up with the office network; the subtitle says so.
+- **From a /mapnetwork map**: open the `.dc.html` that `/mapnetwork` made (or a zip, such as the site bundle, you saved it into) in Config Export and the Map tab redraws it in this app's style. Only the map's data block is read, as plain values; the page's code never runs. Roles come from each device's kind (firewall, switch, AP, server…), the map's own zone, site and VLANs become details and chips, each device hangs off the first link that reaches it from the internet (any other link is listed in its details, and a device with no link up is drawn as *assumed*), and its findings fill the band. While a map is loaded it *is* the map: a UniFi backup or SonicWall export loaded too is ignored here, and a sweep joins only when it found hardware the map knows by MAC, marking which devices answered.
 - **Clients** (off by default) puts end devices on the map, up to 10 under each switch or AP and the rest in one *+N more* card, within a 120-card budget; off, each uplink shows a count.
 - **Findings**, worst first, only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, devices UniFi lists as each other's uplink, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and Ubiquiti hardware the backup doesn't know. Click one to show its devices; **Copy** for a ticket.
 
@@ -144,7 +145,7 @@ The summary lists the layers peeled, the collections kept and left behind with c
 
 Pick several files at once, or drag them onto the window from any tab. The tab keeps one result per kind, so a UniFi backup and a SonicWall export opened one after the other sit side by side, each with its own **Save JSON…**, **Copy** and **Clear**; opening another file of the same kind replaces only that one.
 
-The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7), or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
+The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7), one already decoded to text, or a tech support report (`.wri`, UTF-8 or UTF-16). From a `.wri` only its `key = value` settings lines are read (the same keys an `.exp` holds); its status tables, logs and other sections are skipped. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 
 The output is built only from those named fields, so admin and user accounts, passwords, VPN pre-shared keys, RADIUS/LDAP secrets, SNMP communities, certificates and PPPoE logins never leave the file; the summary says how many settings were copied and how many left behind. Comments are kept because they say what a rule or port is for; any that mention a password, PSK, secret, community or token are replaced with a placeholder, and the summary counts them. Interface MACs are what `/mapnetwork` matches against `/unifidump`'s unresolved uplink MACs to name the firewall.
 

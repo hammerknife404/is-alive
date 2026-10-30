@@ -284,6 +284,20 @@ fn zip_read(b: &[u8], e: &ZipEntry) -> Result<Vec<u8>, String> {
     }
 }
 
+/// The first file in a zip whose name `pick` accepts, as (name, bytes).
+pub fn zip_find(
+    b: &[u8],
+    pick: impl Fn(&str) -> bool,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    if !b.starts_with(ZIP_LOCAL) {
+        return Ok(None);
+    }
+    match zip_entries(b)?.into_iter().find(|e| pick(&e.name)) {
+        Some(e) => zip_read(b, &e).map(|d| Some((e.name, d))),
+        None => Ok(None),
+    }
+}
+
 fn from_zip(b: &[u8], d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
     let entries = zip_entries(b)?;
     // Version first so it's known even when the dump sits in a nested backup.

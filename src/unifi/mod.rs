@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 /// Sites, devices, networks, switch port profiles, WLANs.
 /// Largest file Config Export will read.
 pub const MAX_INPUT: usize = container::MAX_UNPACKED;
+pub use container::zip_find;
 
 pub const CONFIG: &[&str] = &["site", "device", "networkconf", "portconf", "wlanconf"];
 /// Client (station) table: hostnames, MACs, last IPs.

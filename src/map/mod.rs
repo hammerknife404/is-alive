@@ -5,6 +5,7 @@
 //! the data doesn't show (a sweep can't see switch ports) is drawn as
 //! assumed, never as fact.
 
+pub mod import;
 pub mod layout;
 pub mod svg;
 pub mod view;
@@ -221,12 +222,17 @@ pub struct Input<'a> {
     pub wan: Option<Ipv4Addr>,
     pub unifi: Option<&'a str>,
     pub sonicwall: Option<&'a str>,
+    /// A /mapnetwork map: when loaded, it is the map.
+    pub mapnetwork: Option<&'a crate::mapnetwork::Doc>,
     pub clients: bool,
 }
 
 impl Input<'_> {
     pub fn is_empty(&self) -> bool {
-        self.sweep.is_empty() && self.unifi.is_none() && self.sonicwall.is_none()
+        self.sweep.is_empty()
+            && self.unifi.is_none()
+            && self.sonicwall.is_none()
+            && self.mapnetwork.is_none()
     }
 }
 
@@ -634,6 +640,9 @@ impl B {
 }
 
 pub fn build(input: &Input) -> Map {
+    if let Some(doc) = input.mapnetwork {
+        return import::build(doc, input);
+    }
     let mut b = B::default();
     let unifi = input.unifi.map(parse_unifi);
     let sonic = input.sonicwall.and_then(parse_sonicwall);

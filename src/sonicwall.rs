@@ -1,6 +1,9 @@
-//! SonicWall settings export (.exp) → sanitized JSON for /mapnetwork, offline.
+//! SonicWall settings export (.exp) or tech support report (.wri) →
+//! sanitized JSON for /mapnetwork, offline.
 //!
-//! An .exp is base64 of `key=value&key=value…` with URL-encoded values;
+//! An .exp is base64 of `key=value&key=value…` with URL-encoded values; a
+//! .wri (TSR) is a text report whose settings section lists the same keys
+//! one `key = value` per line, among sections that aren't read at all;
 //! tables are flattened as `<field>_<index>` (`iface_name_3`, `policySrcZone_12`).
 //! Output is built only from the fields named here, so admin and user
 //! accounts, VPN and RADIUS secrets, SNMP communities and certificates are
@@ -10,7 +13,12 @@
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
+const EXP: &str = "SonicWall settings export (.exp)";
+const WRI: &str = "SonicWall tech support report (.wri)";
+
 pub struct Report {
+    /// Which of the two files it was.
+    pub format: &'static str,
     pub keys: usize,
     /// Comments replaced because they look like they hold a credential.
     pub withheld: usize,
@@ -27,7 +35,7 @@ impl Report {
     }
 
     pub fn summary(&self) -> String {
-        let mut s = "Format     SonicWall settings export (.exp)\n".to_string();
+        let mut s = format!("Format     {}\n", self.format);
         for (k, v) in &self.system {
             s += &format!("{k:<11}{v}\n");
         }
@@ -57,8 +65,13 @@ unless they mention a password, key or similar.\n",
     }
 }
 
-/// The export's key=value text, if `data` is one (base64 or already decoded).
+/// The settings as key=value text, if `data` is an .exp or a .wri.
 pub fn decode(data: &[u8]) -> Option<String> {
+    exp(data).or_else(|| tsr(data))
+}
+
+/// An .exp's key=value text (base64 or already decoded).
+fn exp(data: &[u8]) -> Option<String> {
     let trimmed = data.trim_ascii();
     let text = if trimmed
         .iter()
@@ -78,6 +91,38 @@ pub fn decode(data: &[u8]) -> Option<String> {
         })
         .count();
     (pairs >= 10).then_some(text)
+}
+
+/// A tech support report's settings, as .exp-style key=value lines. Only
+/// `key = value` lines are kept (the report's status tables, logs and
+/// prose never are), with `&` and `%` escaped so a value can't split.
+fn tsr(data: &[u8]) -> Option<String> {
+    let text = match data {
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ if data.len() > 64 && data.iter().skip(1).step_by(2).take(32).all(|&b| b == 0) => {
+            utf16(data, u16::from_le_bytes)
+        }
+        _ => String::from_utf8_lossy(data).into_owned(),
+    };
+    let lines: Vec<String> = text
+        .lines()
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let k = k.trim();
+            let ok = k.contains('_')
+                && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && k.as_bytes()[0].is_ascii_alphabetic();
+            ok.then(|| format!("{k}={}", v.trim().replace('%', "%25").replace('&', "%26")))
+        })
+        .collect();
+    let ifaces = lines.iter().any(|l| l.starts_with("iface_name_"));
+    (ifaces && lines.len() >= 10).then(|| lines.join("\n"))
+}
+
+fn utf16(b: &[u8], word: fn([u8; 2]) -> u16) -> String {
+    let w: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| word(c)).collect();
+    String::from_utf16_lossy(&w)
 }
 
 fn is_b64(b: u8) -> bool {
@@ -386,12 +431,17 @@ fn system(c: &Settings) -> Vec<(String, String)> {
 }
 
 pub fn convert(data: &[u8]) -> Result<Report, String> {
-    let text = decode(data).ok_or("not a SonicWall settings export (.exp)")?;
+    let (text, format) = exp(data)
+        .map(|t| (t, EXP))
+        .or_else(|| tsr(data).map(|t| (t, WRI)))
+        .ok_or("not a SonicWall settings export (.exp) or tech support report (.wri)")?;
     let c = Settings::parse(&text);
 
     let ifaces = interfaces(&c);
     if ifaces.is_empty() {
-        return Err("export has no interfaces (iface_name_N): is this a SonicWall .exp?".into());
+        return Err(
+            "export has no interfaces (iface_name_N): is this a SonicWall .exp or .wri?".into(),
+        );
     }
     let zones = table(
         &c,
@@ -471,7 +521,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         ("NAT rules", nat.len()),
     ];
     let v = json!({
-        "source": format!("is-alive {} SonicWall settings export", crate::VERSION),
+        "source": format!("is-alive {} {format}", crate::VERSION),
         "system": system.iter().map(|(k, v)| (k.clone(), json!(v))).collect::<Map<_, _>>(),
         "notes": [
             "Read from the firewall's own config, so this is enforced state, not observation.",
@@ -491,6 +541,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
     });
     let used = c.used.borrow().len();
     Ok(Report {
+        format,
         keys: c.map.len(),
         withheld: c.withheld.get(),
         used,
@@ -601,6 +652,38 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         assert!(credential_like("wifi PSK: abc"));
         assert!(r.used < r.keys);
         assert!(r.summary().contains("left behind"));
+    }
+
+    #[test]
+    fn reads_a_tech_support_report() {
+        let mut tsr = "#System : Status_START\nSerial Number: 2CB8EDDA6E30\nAdmin password = not a setting line\nUp time 3 days\n#System : Status_END\n\n\
+#Prefs_START\n"
+            .to_string();
+        for kv in SAMPLE.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = kv.split_once('=').unwrap();
+            tsr += &format!("{k} = {}\r\n", unescape(v));
+        }
+        tsr += "iface_comment_2 = R&D 100% voice\n#Prefs_END\n";
+        assert!(exp(tsr.as_bytes()).is_none());
+        let r = convert(tsr.as_bytes()).unwrap();
+        assert_eq!(r.format, WRI);
+        assert!(r.summary().contains(".wri"));
+        let v: Value = serde_json::from_str(&r.json).unwrap();
+        assert_eq!(v["interfaces"][0]["ip"], "172.16.0.1");
+        assert_eq!(v["interfaces"][2]["name"], "X0:V40");
+        assert_eq!(v["interfaces"][2]["comment"], "R&D 100% voice");
+        for secret in ["S3cretPass", "TunnelPSK", "AdminPass", "Hunter2"] {
+            assert!(!r.json.contains(secret), "{secret} leaked");
+        }
+        // UTF-16, as some firmware writes it.
+        let mut wide = vec![0xff, 0xfe];
+        wide.extend(tsr.encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(convert(&wide).unwrap().count("interfaces"), 3);
+        assert!(tsr_nothing());
+    }
+
+    fn tsr_nothing() -> bool {
+        decode(b"#System : Status_START\nModel = TZ 470\n#System : Status_END\n").is_none()
     }
 
     #[test]
