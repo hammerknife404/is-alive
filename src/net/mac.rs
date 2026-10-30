@@ -163,7 +163,11 @@ mod imp {
 
     /// /proc/net/arp has no state, so ask iproute2.
     pub fn confirmed() -> Vec<(std::net::Ipv4Addr, super::Mac)> {
-        std::process::Command::new("ip")
+        let Some(ip) = crate::net::system_tool("ip") else {
+            return Vec::new();
+        };
+        std::process::Command::new(ip)
+            .env("LC_ALL", "C")
             .args(["-4", "neigh", "show"])
             .output()
             .map(|o| super::parse_ip_neigh(&String::from_utf8_lossy(&o.stdout)))
@@ -221,7 +225,11 @@ mod imp {
     }
 
     pub fn neighbors() -> Vec<(std::net::Ipv4Addr, super::Mac)> {
-        std::process::Command::new("arp")
+        let Some(arp) = crate::net::system_tool("arp") else {
+            return Vec::new();
+        };
+        std::process::Command::new(arp)
+            .env("LC_ALL", "C")
             .arg("-an")
             .output()
             .map(|o| super::parse_arp_an(&String::from_utf8_lossy(&o.stdout)))

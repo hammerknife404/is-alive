@@ -115,6 +115,9 @@ struct App {
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
+    /// The public address has been asked for. Nothing leaves the machine
+    /// until the user does something: launching the app sends nothing.
+    wan_asked: bool,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
     /// Scroll Results to its newest runs on the next frame (after a full scan).
@@ -248,19 +251,26 @@ impl eframe::App for App {
                     i.gateway.map_or_else(na, |g| g.to_string())
                 ));
                 ui.separator();
-                let wan = match (i.wan, self.info_job.is_some()) {
-                    (Some(w), _) => w.to_string(),
-                    (None, true) => "looking up…".into(),
-                    (None, false) => na(),
+                let wan = match (i.wan, self.info_job.is_some(), self.wan_asked) {
+                    (Some(w), ..) => w.to_string(),
+                    (None, true, _) => "looking up…".into(),
+                    (None, false, true) => na(),
+                    (None, false, false) => "not looked up".into(),
                 };
-                ui.label(format!("WAN {wan}"));
+                ui.label(format!("WAN {wan}")).on_hover_text(
+                    "This network's public address, asked of OpenDNS's resolver (208.67.222.222) \
+only when you press Refresh or run a full scan.",
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
                             self.info_job.is_none(),
                             egui::Button::new("Refresh").small(),
                         )
-                        .on_hover_text("Re-read LAN, gateway and public IP")
+                        .on_hover_text(
+                            "Re-read LAN and gateway, and look up the public IP (a DNS query to \
+OpenDNS)",
+                        )
                         .clicked()
                     {
                         self.refresh_info(ui.ctx());
@@ -413,6 +423,7 @@ impl App {
     }
 
     fn refresh_info(&mut self, ctx: &egui::Context) {
+        self.wan_asked = true;
         self.info_job = Some(Job::spawn(ctx, |tx| tx.send(HostInfo::fetch())));
     }
 
@@ -730,13 +741,13 @@ fn main() -> eframe::Result {
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
+                wan_asked: false,
                 filter: String::new(),
                 jump_to_new: false,
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
             };
-            app.refresh_info(&cc.egui_ctx);
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =
                 std::env::args_os().skip(1).map(Into::into).collect();

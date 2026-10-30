@@ -132,6 +132,23 @@ counts and to spot unadopted gear plugged in as a client.",
     changed
 }
 
+/// Read a file to convert: a regular file no bigger than any backup can
+/// be, so a device, a pipe or a huge file is refused rather than read.
+pub fn read_input(p: &std::path::Path) -> Result<Vec<u8>, String> {
+    let name = file_name(p);
+    let meta = std::fs::metadata(p).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a regular file"));
+    }
+    if meta.len() > crate::unifi::MAX_INPUT as u64 {
+        return Err(format!(
+            "{name}: {} MB is larger than any backup or export this reads",
+            meta.len() >> 20
+        ));
+    }
+    std::fs::read(p).map_err(|e| format!("{name}: {e}"))
+}
+
 pub fn file_name(p: &std::path::Path) -> String {
     p.file_name().map_or_else(
         || p.display().to_string(),
@@ -214,9 +231,7 @@ impl ExportTool {
             };
             for path in paths {
                 tx.send(Ev::Picked(path.clone()));
-                let r = std::fs::read(&path)
-                    .map_err(|e| e.to_string())
-                    .and_then(|data| convert(data, clients));
+                let r = read_input(&path).and_then(|data| convert(data, clients));
                 tx.send(Ev::Done(path, r));
             }
         }));

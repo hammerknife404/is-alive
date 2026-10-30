@@ -49,7 +49,7 @@ unless they mention a password, key or similar.\n",
         );
         if self.withheld > 0 {
             s += &format!(
-                "{} comment(s) withheld: they mention a password, key or similar.\n",
+                "{} comment(s) withheld or redacted: a password, key, email, phone or similar.\n",
                 self.withheld
             );
         }
@@ -163,14 +163,20 @@ impl Settings {
         self.get(&format!("{stem}_{i}"))
     }
 
-    /// A free-text comment, withheld if it looks like it holds a credential.
+    /// A free-text comment, withheld if it looks like it holds a credential,
+    /// and otherwise put through the same redaction as tech notes (emails,
+    /// phone numbers, tokens…).
     fn comment(&self, stem: &str, i: u32) -> Option<Value> {
         let v = self.at(stem, i)?;
         if credential_like(v) {
             self.withheld.set(self.withheld.get() + 1);
             return Some(json!("[withheld: may contain a credential]"));
         }
-        Some(json!(v))
+        let (clean, hits) = crate::redact::sanitize(v);
+        if !hits.is_empty() {
+            self.withheld.set(self.withheld.get() + 1);
+        }
+        Some(json!(clean))
     }
 
     /// Indices present for `stem` (keys `stem_<n>`), ascending.
@@ -602,5 +608,30 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         assert!(convert(b"a=1&b=2").is_err());
         let no_ifaces: String = (0..12).map(|i| format!("k{i}=v&")).collect();
         assert!(convert(no_ifaces.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn hostile_input_never_panics() {
+        let good = b64(SAMPLE.as_bytes()).into_bytes();
+        let mut seed = 0xD1B5_4A32_D192_ED03_u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for n in (0..good.len()).step_by(7) {
+            let _ = convert(&good[..n]);
+            let _ = convert(&SAMPLE.as_bytes()[..n.min(SAMPLE.len())]);
+        }
+        for _ in 0..300 {
+            let mut d = SAMPLE.as_bytes().to_vec();
+            for _ in 0..4 {
+                let i = rnd() as usize % d.len();
+                let palette = b"%=&_0123456789aZ\xff";
+                d[i] = palette[rnd() as usize % palette.len()];
+            }
+            let _ = convert(&d);
+        }
     }
 }

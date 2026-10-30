@@ -358,8 +358,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
 fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, String> {
     let clients = b.clients;
     if let Some(path) = unifi {
-        let data =
-            std::fs::read(&path).map_err(|e| format!("{}: {e}", export::file_name(&path)))?;
+        let data = export::read_input(&path)?;
         let r = unifi::convert(data, clients)?;
         b.parts.insert(
             0,

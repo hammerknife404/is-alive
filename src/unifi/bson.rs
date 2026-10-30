@@ -10,7 +10,12 @@ use serde_json::{Map, Number, Value};
 struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
+    /// Nesting so far; a crafted file can't recurse the stack away.
+    depth: u32,
 }
+
+/// Far deeper than any controller document.
+const MAX_DEPTH: u32 = 64;
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
@@ -52,6 +57,10 @@ impl<'a> Reader<'a> {
 
     /// Walk one embedded document, handing each element to `f`.
     fn elements(&mut self, f: &mut dyn FnMut(String, Value)) -> Result<(), String> {
+        if self.depth >= MAX_DEPTH {
+            return Err(format!("BSON nested too deep at byte {}", self.pos));
+        }
+        self.depth += 1;
         let start = self.pos;
         let end = start + self.len()?;
         if end > self.buf.len() || end < start + 5 {
@@ -64,6 +73,7 @@ impl<'a> Reader<'a> {
             f(k, v);
         }
         self.pos = end;
+        self.depth -= 1;
         Ok(())
     }
 
@@ -154,7 +164,12 @@ pub fn documents(buf: &[u8]) -> impl Iterator<Item = Result<&[u8], String>> {
 }
 
 pub fn decode(doc: &[u8]) -> Result<Map<String, Value>, String> {
-    Reader { buf: doc, pos: 0 }.document()
+    Reader {
+        buf: doc,
+        pos: 0,
+        depth: 0,
+    }
+    .document()
 }
 
 /// Cheap test for a `{"__cmd": …}` collection marker, so skipped

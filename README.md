@@ -13,6 +13,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
 | **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
+| **Notes** | Markdown tech notes with a live preview; passwords, keys and patient details are highlighted and replaced before anything is saved, copied or bundled (see below) |
 | **Map** | Network map built from the sweep and any UniFi / SonicWall export: roles by colour, real uplinks where a backup has them, findings, search, pan and zoom, SVG export (see below) |
 | **Site Bundle…** (top right) | Wraps the UniFi and SonicWall exports, the sweep inventory and optionally the Results log into one zip with a manifest for the unifidump / mapnetwork skills (see below) |
 
@@ -84,8 +85,9 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 | `sonicwall.json` | the SonicWall export open in Config Export | /mapnetwork (firewall config) |
 | `inventory.json` | the last finished Subnet Sweep | /mapnetwork (scan) |
 | `results.json` | the Results log, off by default: it holds every run since the app opened, which can include other clients' hosts and domains. The row lists the targets it covers so you can check before ticking it | /mapnetwork |
+| `notes.md` | the Notes tab, off by default, sanitized (the row says how many values were redacted) | /mapnetwork (context and findings) |
 
-**UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC; notes and email addresses are dropped. *None* and *full* are the other choices. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
+**UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC. *None* and *full* (real device names) are the other choices; client notes, email addresses and phone numbers are dropped in every mode. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
 
 ### Map
 
@@ -110,7 +112,7 @@ Drag to pan, scroll or pinch to zoom, double-click the background to fit, drag a
 
 **Save JSON…** writes `<name>.unifidump.json`: the mongoexport-style array (`{"__cmd":"select","collection":…}` markers) that the unifidump skill's `extract.py` reads directly, so hand that file to `/unifidump` instead of the backup.
 
-- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; Site Bundle defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client.
+- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; Site Bundle defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client. Client notes, email addresses and phone numbers are dropped in every mode.
 - **Left behind:** every other collection: admins and their password hashes, settings, events, alarms, stats, rogue APs, and so on. The console's own config, TLS keys and Postgres database in a `.unifi` are never read.
 - **Removed from what's kept:** any field starting `x_` (UniFi's prefix for stored secrets: WLAN passphrases, device auth keys, WAN/VPN passwords) or named like a password, passphrase, secret, PSK, private key, token, certificate or hash, at any depth.
 
@@ -123,6 +125,22 @@ Pick several files at once, or drag them onto the window from any tab. The tab k
 The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7), or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 
 The output is built only from those named fields, so admin and user accounts, passwords, VPN pre-shared keys, RADIUS/LDAP secrets, SNMP communities, certificates and PPPoE logins never leave the file; the summary says how many settings were copied and how many left behind. Comments are kept because they say what a rule or port is for; any that mention a password, PSK, secret, community or token are replaced with a placeholder, and the summary counts them. Interface MACs are what `/mapnetwork` matches against `/unifidump`'s unresolved uplink MACs to name the firewall.
+
+### Notes
+
+The **Notes** tab is a Markdown scratchpad for the visit: headings, lists that continue when you press Enter, task boxes you tick in the preview, quotes, code and **bold**/*italic*. **Split** shows the editor beside a preview; **Time** and **Host info** insert a timestamp or this machine's LAN, gateway and WAN; Ctrl+B / Ctrl+I format the selection.
+
+Every value that would be redacted is highlighted in the editor, and the count beside the word count flashes when it grows. What's redacted: passwords and other keyword secrets (`password:`, `psk=`, `community:`, `key:` …), logins in URLs, PEM keys and certificates, API keys and long random tokens, SSNs, card numbers (Luhn-checked), patient / MRN / DOB / member ID lines, email addresses and phone numbers. IPs, MACs, VLANs, ports, firmware versions and dates stay. Autosave (every couple of seconds, to the same folder as the settings), **Copy**, **Save** and the Site Bundle's **Tech notes** part all get only the sanitized text, so nothing redactable is ever written to disk: after a restart the notes come back with `[REDACTED: …]` markers. The Site Bundle's **Known problems** field is redacted the same way.
+
+### Privacy and security
+
+Built for sites with regulated data (HIPAA): zero trust and as little as possible.
+
+- **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, and MTA-STS/RDAP over HTTPS with the OS trust store. No telemetry, no update checks, no accounts.
+- **Sanitized on this machine before anything is saved or shared**: UniFi exports (secret fields stripped; client notes, email and phone always dropped; client names only when you choose *full*), SonicWall exports (an allowlist of fields; comments redacted), tech notes and Known problems (the rules above).
+- **At rest** there are only the settings file (theme and backdrop picture path) and `notes.md`, which only ever holds the sanitized text. The Results log lives in memory and is gone when the app closes.
+- **Input files are untrusted.** Only regular files up to 2 GB are read; decompression is capped at 2 GB per layer and document nesting at 64 levels, so a crafted backup is refused rather than exhausting memory or the stack. The parsers are tested against truncated, bit-flipped and random input.
+- **System tools** (`ip` and `arp` for the neighbor table, `ping` as a fallback) run only from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin` with a C locale, never from a PATH lookup. On Windows the app uses the OS APIs instead.
 
 ### Scan speed
 

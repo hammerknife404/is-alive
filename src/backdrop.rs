@@ -200,6 +200,11 @@ fn load_image(path: &Path) -> Result<ColorImage, String> {
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
+    // A picture, not a device or a pipe, and not absurdly big.
+    let meta = std::fs::metadata(path).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() || meta.len() > 64 << 20 {
+        return Err(format!("{name}: not an image file under 64 MB"));
+    }
     let img = image::open(path).map_err(|e| format!("{name}: {e}"))?;
     // Big photos are scaled down: the window never needs more.
     let img = img.thumbnail(2560, 1600).to_rgba8();

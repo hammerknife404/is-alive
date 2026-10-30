@@ -51,7 +51,7 @@ impl Bundle {
                 "Client table: included, anonymized. Device names are client-xxxxxxxx tokens, stable \
 per MAC; MAC, vendor and switch port are real. Use it for client counts and to spot unadopted gear."
             }
-            Clients::Full => "Client table: included, with the controller's real device names.",
+            Clients::Full => "Client table: included, with the controller's real device names (client notes, email and phone dropped).",
         })
     }
 
@@ -84,7 +84,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
                 crate::unifi::Clients::None => "not included",
                 crate::unifi::Clients::Anonymized =>
                     "anonymized: MAC, vendor and switch port kept; device names replaced with client-<hash> tokens; notes and email dropped",
-                crate::unifi::Clients::Full => "included as exported by the controller",
+                crate::unifi::Clients::Full => "included with device names; notes, email and phone dropped",
             },
             "scanner": {
                 "lan": self.scanner.lan.map(|(ip, bits)| format!("{ip}/{bits}")),
