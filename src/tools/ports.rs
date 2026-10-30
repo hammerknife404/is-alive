@@ -315,7 +315,7 @@ impl PortTool {
             };
             tx.send(Ev::Resolved(ip, ports.len()));
             net::par_for(&ports, threads, rate, tx.cancel_flag(), |&p| {
-                let (state, ms) = net::tcp_probe(SocketAddr::new(ip, p), timeout);
+                let (state, ms) = net::tcp_check(SocketAddr::new(ip, p), timeout);
                 tx.send(Ev::Result(p, state, ms));
             });
         }));

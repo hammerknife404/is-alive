@@ -5,7 +5,7 @@
 
 use crate::markdown;
 use crate::net::hostinfo::HostInfo;
-use crate::redact::{self, Hit};
+use crate::redact::{self, Hit, Pick};
 use crate::widgets;
 use eframe::egui::{
     self, Color32, FontId, Key, Modifiers, RichText, Stroke, TextFormat, Ui,
@@ -15,11 +15,6 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
-
-enum Pick {
-    Redact(Range<usize>),
-    Unredact(Hit),
-}
 
 #[derive(PartialEq, Clone, Copy)]
 enum View {
@@ -168,53 +163,21 @@ impl NotesTool {
         }
     }
 
-    /// The editor's selection as a byte range (empty at a bare cursor).
-    fn selection(&self, ctx: &egui::Context) -> Option<Range<usize>> {
-        let state = egui::TextEdit::load_state(ctx, egui::Id::new(EDITOR_ID))?;
-        let r = state.cursor.char_range()?;
-        let byte = |c: usize| {
-            self.text
-                .char_indices()
-                .nth(c)
-                .map_or(self.text.len(), |(i, _)| i)
-        };
-        let (a, b) = (r.primary.index.0, r.secondary.index.0);
-        Some(byte(a.min(b))..byte(a.max(b)))
+    /// The technician's own redact and keep calls, for the Site Bundle.
+    pub fn overrides(&self) -> &redact::Overrides {
+        &self.ov
     }
 
-    /// What the Redact button would do now: unredact the hit the selection
-    /// or cursor is in, or redact the selected text.
+    /// What the Redact button would do now.
     fn pick(&self, ctx: &egui::Context, hits: &[Hit]) -> Option<Pick> {
-        let sel = self.selection(ctx)?;
-        let inside = hits.iter().find(|h| {
-            h.span.start <= sel.start && sel.end <= h.span.end && h.span.start < h.span.end
-        });
-        match inside {
-            Some(h) if sel.is_empty() || h.span.start < sel.end => Some(Pick::Unredact(h.clone())),
-            _ if !self.text[sel.clone()].trim().is_empty() => Some(Pick::Redact(sel)),
-            _ => None,
-        }
+        let sel = widgets::text_selection(ctx, egui::Id::new(EDITOR_ID), &self.text)?;
+        redact::pick(&self.text, sel, hits)
     }
 
     fn apply(&mut self, ctx: &egui::Context, pick: Pick) {
-        match pick {
-            Pick::Redact(r) => {
-                let v = self.text[r].to_string();
-                if !self.ov.add_redact(&v) {
-                    widgets::toast("Select at least two characters to redact", false);
-                    return;
-                }
-                widgets::toast("Redacted by hand, wherever it appears", true);
-            }
-            Pick::Unredact(h) => {
-                let v = self.text[h.span].trim().to_string();
-                if h.kind == redact::Kind::Manual {
-                    self.ov.redact.retain(|r| *r != v);
-                } else {
-                    self.ov.add_allow(&v);
-                }
-                widgets::toast("Kept as written, wherever it appears", true);
-            }
+        match self.ov.apply(&self.text, pick) {
+            Ok(m) => widgets::toast(m, true),
+            Err(m) => return widgets::toast(m, false),
         }
         self.changed(ctx.input(|i| i.time));
     }
@@ -731,7 +694,7 @@ saved, copied or bundled.",
 
 /// Editor colouring: headings, list markers and code, and a highlight on
 /// every value that will be redacted.
-fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
+pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
     const PLAIN: u8 = 0;
     const HEAD: u8 = 1;
     const MARK: u8 = 2;

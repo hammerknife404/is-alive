@@ -447,7 +447,65 @@ impl Overrides {
     }
 }
 
-/// Everything that would be redacted, in order, without overlaps.
+impl Overrides {
+    /// `self` with `local` on top: a field's own redact or keep wins over
+    /// the shared one.
+    pub fn merged(&self, local: &Overrides) -> Overrides {
+        let mut out = self.clone();
+        for v in &local.redact {
+            out.add_redact(v);
+        }
+        for v in &local.allow {
+            out.add_allow(v);
+        }
+        out
+    }
+
+    /// Carry out a pick; the message says what happened.
+    pub fn apply(&mut self, text: &str, pick: Pick) -> Result<&'static str, &'static str> {
+        match pick {
+            Pick::Redact(r) => {
+                if !self.add_redact(&text[r]) {
+                    return Err("Select at least two characters to redact");
+                }
+                Ok("Redacted by hand, wherever it appears")
+            }
+            Pick::Unredact(h) => {
+                let v = text[h.span].trim().to_string();
+                if h.kind == Kind::Manual && self.redact.contains(&v) {
+                    self.redact.retain(|r| *r != v);
+                } else {
+                    self.add_allow(&v);
+                }
+                Ok("Kept as written, wherever it appears")
+            }
+        }
+    }
+}
+
+/// What a Redact button does with a selection.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pick {
+    Redact(Range<usize>),
+    Unredact(Hit),
+}
+
+/// Unredact the hit the selection or cursor sits in; otherwise redact the
+/// selected text. None when there's nothing to do.
+pub fn pick(text: &str, sel: Range<usize>, hits: &[Hit]) -> Option<Pick> {
+    let inside = hits
+        .iter()
+        .find(|h| h.span.start <= sel.start && sel.end <= h.span.end && h.span.start < h.span.end);
+    match inside {
+        Some(h) if sel.is_empty() || h.span.start < sel.end => Some(Pick::Unredact(h.clone())),
+        _ if !text.get(sel.clone())?.trim().is_empty() => Some(Pick::Redact(sel)),
+        _ => None,
+    }
+}
+
+/// Everything that would be redacted, in order, without overlaps. The app
+/// always passes the technician's overrides (`find_with`).
+#[cfg(test)]
 pub fn find(text: &str) -> Vec<Hit> {
     find_with(text, &Overrides::default())
 }
@@ -770,6 +828,30 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
+    }
+
+    #[test]
+    fn local_overrides_win() {
+        let mut notes = Overrides::default();
+        notes.add_redact("4471");
+        notes.add_allow("Office365");
+        let mut field = Overrides::default();
+        field.add_allow("4471");
+        field.add_redact("Office365");
+        let m = notes.merged(&field);
+        assert_eq!(
+            (m.redact, m.allow),
+            (vec!["Office365".to_string()], vec!["4471".to_string()])
+        );
+        // Unredacting a shared pick from a field keeps it there, not by removing the
+        // shared one.
+        let t = "code 4471";
+        let hits = find_with(t, &notes);
+        let mut field = Overrides::default();
+        let p = pick(t, 6..6, &hits).unwrap();
+        field.apply(t, p).unwrap();
+        assert!(find_with(t, &notes.merged(&field)).is_empty());
+        assert!(pick(t, 0..0, &[]).is_none());
     }
 
     #[test]

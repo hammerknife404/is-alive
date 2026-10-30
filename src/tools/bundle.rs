@@ -38,6 +38,9 @@ pub struct BundleTool {
     use_results: bool,
     use_notes: bool,
     use_map: bool,
+    /// Redact and keep calls made in Known problems, on top of the Notes
+    /// tab's. In memory only.
+    ov: crate::redact::Overrides,
     job: Option<Job<Result<Option<Saved>, String>>>,
     saved: Option<Saved>,
     err: Option<String>,
@@ -57,6 +60,7 @@ impl Default for BundleTool {
             use_results: false,
             use_notes: false,
             use_map: true,
+            ov: Default::default(),
             job: None,
             saved: None,
             err: None,
@@ -72,6 +76,8 @@ const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, 
 and open management ports. Observed state.";
 const RESULTS_WHAT: &str =
     "is-alive test runs (ping, port check, traceroute, DNS, mail health) with start and end times.";
+const PROBLEMS_ID: &str = "bundle_known_problems";
+
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
@@ -146,23 +152,61 @@ impl BundleTool {
                 ui.end_row();
                 ui.label("Known problems");
                 ui.vertical(|ui| {
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.notes)
-                            .desired_rows(2)
-                            .desired_width(380.0)
-                            .hint_text("Optional. Goes straight into /mapnetwork's findings."),
-                    );
-                    let hits = crate::redact::find(&self.notes);
-                    if !hits.is_empty() {
-                        ui.label(
-                            RichText::new(format!(
-                                "⚠ {} before bundling",
-                                crate::redact::summary(&hits)
-                            ))
-                            .small()
-                            .color(widgets::warn()),
-                        );
-                    }
+                    let ov = src.notes.overrides().merged(&self.ov);
+                    let id = egui::Id::new(PROBLEMS_ID);
+                    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                        let text = buf.as_str();
+                        let spans: Vec<_> = crate::redact::find_with(text, &ov)
+                            .into_iter()
+                            .map(|h| h.span)
+                            .collect();
+                        let mut job = crate::tools::notes::highlight(ui, text, &spans);
+                        job.wrap.max_width = wrap;
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    };
+                    let edit = egui::TextEdit::multiline(&mut self.notes)
+                        .id(id)
+                        .desired_rows(2)
+                        .desired_width(380.0)
+                        .hint_text("Optional. Goes straight into /mapnetwork's findings.")
+                        .layouter(&mut layouter)
+                        .show(ui);
+                    let hits = crate::redact::find_with(&self.notes, &ov);
+                    let pick = widgets::text_selection(ui.ctx(), id, &self.notes)
+                        .and_then(|sel| crate::redact::pick(&self.notes, sel, &hits));
+                    let shortcut = edit.response.has_focus()
+                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::R));
+                    ui.horizontal(|ui| {
+                        let label = match &pick {
+                            Some(crate::redact::Pick::Unredact(_)) => "Unredact",
+                            _ => "Redact",
+                        };
+                        let clicked = ui
+                            .add_enabled(pick.is_some(), egui::Button::new(label).small())
+                            .on_hover_text(
+                                "Redact the selected text, or keep the highlighted value under \
+the cursor (Ctrl+R). Values redacted or kept in Notes apply here too.",
+                            )
+                            .clicked();
+                        if (clicked || shortcut)
+                            && let Some(p) = pick
+                        {
+                            match self.ov.apply(&self.notes, p) {
+                                Ok(m) => widgets::toast(m, true),
+                                Err(m) => widgets::toast(m, false),
+                            }
+                        }
+                        if !hits.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "⚠ {} before bundling",
+                                    crate::redact::summary(&hits)
+                                ))
+                                .small()
+                                .color(widgets::warn()),
+                            );
+                        }
+                    });
                 });
                 ui.end_row();
             });
@@ -387,7 +431,11 @@ client lists). Applies to clients from the sweep as well as UniFi.",
         let b = Bundle {
             site: self.site.trim().to_string(),
             // Same rules as the notes: nothing redactable goes in the zip.
-            notes: crate::redact::sanitize(&self.notes).0,
+            notes: crate::redact::sanitize_with(
+                &self.notes,
+                &src.notes.overrides().merged(&self.ov),
+            )
+            .0,
             clients: self.clients,
             map_clients: self.map_clients,
             scanner: src.info.clone(),
