@@ -70,20 +70,13 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
             0,
             r"(?s)-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----|\z)",
         ),
-        // Words that are a password whatever follows: "password hunter2".
-        rule(
-            Kind::Password,
-            2,
-            &format!(
-                r"(?im)\b(pass(?:word|wd|phrase|code)?|pwd|pw|psk|pre-?shared[ -]?key|wpa2?[ -]?key|wi-?fi[ -]?(?:key|pass(?:word)?))\b\s*(?:is\b|[:=]|-)?\s*{V}"
-            ),
-        ),
         // Words that are only a secret when given a value: "key: …".
+        // ("password hunter2" and friends are read by `password_values`.)
         rule(
             Kind::Password,
             2,
             &format!(
-                r"(?im)\b(secret|api[ _-]?key|key|token|community|pin|credentials?|p)\s*(?:\bis\b|[:=])\s*{V}"
+                r"(?im)\b(secret|api[ _-]?key|key|token|community|pin|credentials?|p)\s*(?:\bis\b|\bwas\b|[:=])\s*{V}"
             ),
         ),
         // user:password@host in a URL.
@@ -121,6 +114,175 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     ]
 });
 
+/// Words that mean a password follows, however it's phrased.
+static PASSWORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:wi-?fi[ -]?(?:key|pass(?:word)?)|wpa2?[ -]?key|pre-?shared[ -]?key|pass(?:word|wd|phrase|code)?|pwd|pw|psk)\b",
+    )
+    .expect("valid pattern")
+});
+
+/// Between "password" and its value: "her password **was** hunter2".
+const LINKS: &[&str] = &["is", "was", "are", "were", ":", "=", "-", "->"];
+/// Words to step over looking for the value.
+const FILLER: &[&str] = &[
+    "the",
+    "a",
+    "an",
+    "her",
+    "his",
+    "my",
+    "our",
+    "their",
+    "your",
+    "its",
+    "this",
+    "that",
+    "new",
+    "old",
+    "set",
+    "changed",
+    "reset",
+    "updated",
+    "rotated",
+    "to",
+    "for",
+    "of",
+    "on",
+    "at",
+    "as",
+    "now",
+    "still",
+    "temp",
+    "temporary",
+    "default",
+    "current",
+    "same",
+    "also",
+    "just",
+    "be",
+    "been",
+    "will",
+];
+/// Words that say the sentence is about passwords, not giving one.
+const NOT_VALUE: &[&str] = &[
+    "policy",
+    "policies",
+    "manager",
+    "vault",
+    "expired",
+    "expires",
+    "expiry",
+    "expiration",
+    "required",
+    "requires",
+    "requirement",
+    "requirements",
+    "complexity",
+    "length",
+    "rule",
+    "rules",
+    "done",
+    "protected",
+    "prompt",
+    "field",
+    "history",
+    "hint",
+    "recovery",
+    "change",
+    "changes",
+    "works",
+    "worked",
+    "working",
+    "fixed",
+    "needed",
+    "saved",
+    "stored",
+    "missing",
+    "wrong",
+    "incorrect",
+    "invalid",
+    "issue",
+    "issues",
+    "problem",
+    "error",
+    "less",
+    "login",
+    "sync",
+];
+
+/// The value after each password word, read like a sentence: after a link
+/// ("is", "was", ":", "=") the first real word; with no link, the first word
+/// that isn't filler, unless the sentence is about passwords ("password
+/// policy", "password reset done"). Stops at the end of the line or sentence.
+fn password_values(text: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    for m in PASSWORD.find_iter(text) {
+        let line_end = text[m.end()..]
+            .find('\n')
+            .map_or(text.len(), |i| m.end() + i);
+        // Tokens up to the line or sentence end; a quoted value is one token,
+        // and ":x" / "=x" give up their separator.
+        let mut toks: Vec<(Range<usize>, bool)> = Vec::new();
+        let mut i = m.end();
+        while i < line_end && toks.len() < 12 {
+            let rest = &text[i..line_end];
+            let skip = rest.len() - rest.trim_start().len();
+            i += skip;
+            if i >= line_end {
+                break;
+            }
+            let rest = &text[i..line_end];
+            let first = rest.chars().next().expect("non-empty");
+            if matches!(first, ':' | '=') && !rest.starts_with("->") {
+                toks.push((i..i + 1, true));
+                i += 1;
+                continue;
+            }
+            let len = if matches!(first, '"' | '\'') {
+                rest[1..].find(first).map_or(rest.len(), |j| j + 2)
+            } else {
+                rest.find(char::is_whitespace).unwrap_or(rest.len())
+            };
+            let word = rest[..len]
+                .trim_matches(|c: char| ".,;:)(!?".contains(c))
+                .to_lowercase();
+            toks.push((
+                i..i + len,
+                LINKS.contains(&word.as_str()) || LINKS.contains(&&rest[..len]),
+            ));
+            i += len;
+            // A sentence ends at ". " (a password can end in "!", so not there).
+            if rest[..len].ends_with(['.', ';', '?']) {
+                break;
+            }
+        }
+        let word = |r: &Range<usize>| {
+            text[r.clone()]
+                .trim_matches(|c: char| ".,;:)(!?".contains(c))
+                .to_lowercase()
+        };
+        let pick = match toks.iter().position(|t| t.1) {
+            Some(link) => toks[link + 1..]
+                .iter()
+                .find(|t| !t.1 && !FILLER.contains(&word(&t.0).as_str())),
+            None => toks
+                .iter()
+                .find(|t| !FILLER.contains(&word(&t.0).as_str()))
+                .filter(|t| !NOT_VALUE.contains(&word(&t.0).as_str())),
+        };
+        if let Some((r, _)) = pick {
+            // "hunter2." keeps its full stop out of the redaction.
+            let v = &text[r.clone()];
+            let end = r.start + v.trim_end_matches(['.', ',', ';', ')']).len();
+            if end > r.start {
+                out.push(r.start..end);
+            }
+        }
+    }
+    out
+}
+
 /// Luhn check, so serials and part numbers aren't taken for card numbers.
 fn luhn(s: &str) -> bool {
     let digits: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
@@ -156,12 +318,20 @@ pub fn markers(text: &str) -> Vec<Range<usize>> {
 /// Everything that would be redacted, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
-    let mut hits: Vec<Hit> = Vec::new();
+    let fresh = |r: &Range<usize>| !done.iter().any(|d| r.start < d.end && d.start < r.end);
+    let mut hits: Vec<Hit> = password_values(text)
+        .into_iter()
+        .filter(|r| fresh(r))
+        .map(|span| Hit {
+            span,
+            kind: Kind::Password,
+        })
+        .collect();
     for r in RULES.iter() {
         for c in r.re.captures_iter(text) {
             let Some(m) = c.get(r.group) else { continue };
             let s = m.as_str();
-            if done.iter().any(|d| m.start() < d.end && d.start < m.end()) {
+            if !fresh(&m.range()) {
                 continue;
             }
             // The token this match sits in, for the URL check.
@@ -262,6 +432,35 @@ mod tests {
         assert_eq!(
             red("https://bob:s3cret@nas.local/x"),
             "https://bob:[REDACTED: password]@nas.local/x"
+        );
+        // Read like a sentence: the value after "was", not "was".
+        assert_eq!(
+            red("There is no way her password was hunter2."),
+            "There is no way her password was [REDACTED: password]."
+        );
+        let r = red("password for the router is Spring2026!");
+        assert_eq!(r, "password for the router is [REDACTED: password]");
+        assert_eq!(red("pw:x1 then"), "pw:[REDACTED: password] then");
+        assert_eq!(
+            red("the password -> Tr0ub4dor"),
+            "the password -> [REDACTED: password]"
+        );
+        assert_eq!(
+            red("set the new password to Winter25"),
+            "set the new password to [REDACTED: password]"
+        );
+        assert_eq!(red("password reset done"), "password reset done");
+        assert_eq!(
+            red("password policy requires 12 chars"),
+            "password policy requires 12 chars"
+        );
+        assert_eq!(
+            red("Password reset.\nnext line"),
+            "Password reset.\nnext line"
+        );
+        assert_eq!(
+            red("the api key was abc123"),
+            "the api key was [REDACTED: password]"
         );
         // Not credentials.
         assert_eq!(

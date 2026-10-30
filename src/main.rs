@@ -404,6 +404,7 @@ impl App {
                         export: &self.export,
                         info: &self.info,
                         busy,
+                        note: self.look.map_note,
                     },
                 );
                 self.map_action(ui.ctx(), act);
@@ -472,6 +473,10 @@ impl App {
                 self.tab = Tab::Ports;
             }
             Some(Action::Bundle) => self.bundle.open = true,
+            Some(Action::HideNote) => {
+                self.look.map_note = false;
+                theme::save(&self.look);
+            }
             None => {}
         }
     }
@@ -717,6 +722,7 @@ fn shortcuts(ui: &mut egui::Ui) {
         "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
         "Drop a UniFi backup or SonicWall export anywhere to convert it",
         "Click the is-alive button for a full scan of this network",
+        "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {
         ui.label(format!("• {tip}"));
     }

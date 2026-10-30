@@ -25,6 +25,8 @@ pub enum Action {
     Ports(String),
     /// Open the Site Bundle window.
     Bundle,
+    /// The accuracy note was closed: don't show it again.
+    HideNote,
 }
 
 pub struct Sources<'a> {
@@ -33,6 +35,8 @@ pub struct Sources<'a> {
     pub info: &'a HostInfo,
     /// Ping or Port Check is running: their buttons wait.
     pub busy: bool,
+    /// Show the accuracy note (until the user closes it).
+    pub note: bool,
 }
 
 const MIN_ZOOM: f32 = 0.15;
@@ -292,8 +296,8 @@ impl MapView {
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
         }
-        if !empty && accuracy_note(ui) {
-            act = Some(Action::Bundle);
+        if !empty && src.note {
+            act = accuracy_note(ui);
         }
         if empty {
             ui.separator();
@@ -1132,30 +1136,46 @@ impl MapView {
 }
 
 /// The map is a quick picture, not a survey: say so, and point to the
-/// reviewed path. True when Site Bundle was clicked.
-fn accuracy_note(ui: &mut Ui) -> bool {
+/// reviewed path. Site Bundle opens it; × closes the note for good.
+fn accuracy_note(ui: &mut Ui) -> Option<Action> {
     let warn = widgets::warn();
-    let mut open = false;
+    let mut act = None;
     egui::Frame::new()
         .fill(warn.gamma_multiply(0.12))
         .stroke(Stroke::new(1.0, warn.gamma_multiply(0.5)))
         .corner_radius(6)
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("⚠").color(warn));
-                ui.label(
-                    "Built from what this app can see, so it may be incomplete or wrong. \
-For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
-                );
-                open = ui
+            // Buttons take their room on the right; the text wraps in the rest.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new("×").frame(false))
+                    .on_hover_text("Close this note. The footer's ? keeps the Site Bundle tip.")
+                    .clicked()
+                {
+                    act = Some(Action::HideNote);
+                }
+                if ui
                     .small_button("Site Bundle…")
                     .on_hover_text("Wrap the exports, sweep inventory and notes for /mapnetwork")
-                    .clicked();
+                    .clicked()
+                {
+                    act = Some(Action::Bundle);
+                }
+                ui.with_layout(
+                    egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+                    |ui| {
+                        ui.label(RichText::new("⚠").color(warn));
+                        ui.label(
+                            "Built from what this app can see, so it may be incomplete or wrong. \
+For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
+                        );
+                    },
+                );
             });
         });
     ui.add_space(2.0);
-    open
+    act
 }
 
 pub fn zone_colour(z: Zone, dark: bool) -> Color32 {
