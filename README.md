@@ -9,13 +9,19 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Ping** | ICMP (IPv4/IPv6) or TCP-connect ping, continuous or N count, live latency graph, loss/min/avg/max |
 | **Port Check** | Concurrent TCP connect scan — lists, ranges, presets (Common, Windows/AD, Web, Firewall/VPN, Mail, 1-1024) with service names. TCP only: UDP services such as IKE (500/4500) can't be tested |
 | **Traceroute** | 3 probes per hop, optional reverse DNS |
-| **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames, MAC and vendor, optional management-port check, and an **Inventory** JSON for /mapnetwork (see below) |
+| **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames, MAC and vendor, ping-silent devices from the ARP table, optional management-port check, and an **Inventory** JSON for /mapnetwork (see below) |
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
 | **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
+| **Notes** | Markdown tech notes with a live preview; passwords, keys and patient details are highlighted and replaced before anything is saved, copied or bundled (see below) |
+| **Map** | Network map built from the sweep and any UniFi / SonicWall export: roles by colour, real uplinks where a backup has them, findings, search, pan and zoom, SVG export (see below) |
 | **Site Bundle…** (top right) | Wraps the UniFi and SonicWall exports, the sweep inventory and optionally the Results log into one zip with a manifest for the unifidump / mapnetwork skills (see below) |
 
-**Themes:** the **Theme** menu in the footer offers Dark (the default), Light and Miami Vice, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami Vice puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs at 10 frames a second and pauses while the window isn't focused; turn it off on battery.
+**Themes:** the **Theme** menu in the footer offers Dark (the default: egui's stock dark look), Light and Miami, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs and pauses while the window isn't focused; turn it off on battery. **Glow** adds a soft halo and haze to the bright parts (the sun, neon and windows on the GPU; your picture's highlights either way). On the GPU the scene runs at the display's refresh rate (60, 120, 144 Hz…, whatever the OS has the screen set to; vsync paces it): it's drawn at art resolution by a shader into an offscreen buffer and scaled up with hard edges, so the CPU does almost nothing. Without a usable GPU (a software OpenGL such as llvmpipe or Microsoft's Basic Render Driver, OpenGL below 3.1 / ES 3.0, or a shader the driver rejects) it falls back to drawing on the CPU at 10 frames a second. The Theme menu says which is in use and why; `IS_ALIVE_GPU=off` forces the CPU.
+
+Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
+
+**Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -26,7 +32,7 @@ CSV export uses each tool's own columns, one row per result, with the run's star
 | Ping | target, mode, port, seq, from, status, rtt_ms, ttl, bytes |
 | Port Check | host, ip, port, state, service, rtt_ms, error (closed/filtered included) |
 | Traceroute | host, ip, hop, address, name, rtt1_ms, rtt2_ms, rtt3_ms, note |
-| Subnet Sweep | range, ip, rtt_ms, ttl, mac, vendor, name, open_ports (alive hosts) |
+| Subnet Sweep | range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (alive hosts; `arp` rows have no rtt_ms) |
 | DNS Lookup | lookup, source, type, value (Compare notes as type `note`) |
 | Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
 | Host info | field, value |
@@ -63,6 +69,8 @@ MTA-STS and RDAP use HTTPS with the OS certificate store (works behind TLS-inspe
 
 Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetTable2`, Linux `/proc/net/arp`; no admin rights), so only hosts on your own segment have one. **Vendor** is the IEEE registry owner of the MAC prefix (MA-L, MA-M and MA-S, bundled offline; rebuild with `python3 scripts/update-oui.py`). A locally administered MAC shows as *private/virtual*: a phone or laptop's per-network private address, or a VM/container NIC.
 
+**Ping-silent devices.** Pinging an address on your own segment makes the OS send an ARP request first, and almost nothing refuses ARP. Hosts that answer ARP but drop ping (Windows firewall defaults, many IoT devices and cameras) are listed with *no ping* in the Time column and counted as *ARP only* in the header. Only entries the OS has just confirmed count (Linux `ip neigh` REACHABLE, Windows Reachable), so devices that left minutes ago don't show up. The sweep reads the table every 3 s while it runs. Past a router there is no ARP, so only ping counts there. On Linux this needs `ip` (iproute2); without it the sweep is ping-only. The Inventory marks each host `found_by` `ping` or `arp`.
+
 **Check mgmt ports** adds a TCP connect after the sweep to each live host on 22, 23, 80, 443, 445, 541 (FortiGate), 554 (RTSP), 3389, 4433 (SonicWall), 5000, 8080/8443 (UniFi), 8291 (MikroTik) and 9100 (printers), at the same speed limit. Open management ports are the evidence for telling switches, APs and firewalls from clients. It's off by default: it is a port scan.
 
 **Inventory** saves the run as JSON for `/mapnetwork`'s scan input: this machine's LAN, gateway and WAN, the ports checked, and per host `ip`, `mac`, `vendor`, `private_mac`, `name`, `rtt_ms`, `ttl`, `open_ports`, `is_gateway` and `is_this_machine`. Facts only, no role guesses; the MACs are what join it to `/unifidump`'s `discovered_devices` and uplink MACs.
@@ -79,8 +87,21 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 | `sonicwall.json` | the SonicWall export open in Config Export | /mapnetwork (firewall config) |
 | `inventory.json` | the last finished Subnet Sweep | /mapnetwork (scan) |
 | `results.json` | the Results log, off by default: it holds every run since the app opened, which can include other clients' hosts and domains. The row lists the targets it covers so you can check before ticking it | /mapnetwork |
+| `notes.md` | the Notes tab, off by default, sanitized (the row says how many values were redacted) | /mapnetwork (context and findings) |
 
-**UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC; notes and email addresses are dropped. *None* and *full* are the other choices. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
+**UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC. *None* and *full* (real device names) are the other choices; client notes, email addresses and phone numbers are dropped in every mode. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
+
+### Map
+
+The **Map** tab draws one picture from what the app has seen, in the spirit of `/mapnetwork`: a tree from the internet down, roles as colours (gateway, switches, access points, servers/NAS, printers/cameras, clients, unidentified), infrastructure first and clients only on request.
+
+- **From a UniFi backup** (loaded in Config Export) it draws the real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless (mesh, bridges). An uplink MAC the backup doesn't describe becomes an *Unidentified upstream device* card; a SonicWall export loaded alongside becomes the gateway, matched by its interface MACs.
+- **From a sweep alone** it can't see switch ports, so devices hang under the gateway on dotted *assumed* links, with roles inferred from vendor and open ports (marked *inferred*). **Scan this network** on the empty map runs a sweep and the map fills in as hosts answer.
+- **Both**: the sweep is merged into a backup only when it found hardware the backup knows by MAC. A backup read at the office isn't mixed up with the office network; the subtitle says so.
+- **Clients** (off by default) puts end devices on the map, up to 10 under each switch or AP and the rest in one *+N more* card, within a 120-card budget; off, each uplink shows a count.
+- **Findings**, worst first, only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, devices UniFi lists as each other's uplink, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and Ubiquiti hardware the backup doesn't know. Click one to show its devices; **Copy** for a ticket.
+
+Drag to pan, scroll or pinch to zoom, double-click the background to fit, drag a card to move it (**Re-layout** puts it back), click a card to trace its path to the internet and see its details, with **Ping**, **Port Check** and **Open web page** for it. Search matches name, IP, MAC and vendor; click a role in the legend to fade it out. **Export SVG** saves the map with its findings as a picture for a ticket or site doc.
 
 ### Config Export: UniFi
 
@@ -93,7 +114,7 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 
 **Save JSON…** writes `<name>.unifidump.json`: the mongoexport-style array (`{"__cmd":"select","collection":…}` markers) that the unifidump skill's `extract.py` reads directly, so hand that file to `/unifidump` instead of the backup.
 
-- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; Site Bundle defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client.
+- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; Site Bundle defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client. Client notes, email addresses and phone numbers are dropped in every mode.
 - **Left behind:** every other collection: admins and their password hashes, settings, events, alarms, stats, rogue APs, and so on. The console's own config, TLS keys and Postgres database in a `.unifi` are never read.
 - **Removed from what's kept:** any field starting `x_` (UniFi's prefix for stored secrets: WLAN passphrases, device auth keys, WAN/VPN passwords) or named like a password, passphrase, secret, PSK, private key, token, certificate or hash, at any depth.
 
@@ -106,6 +127,23 @@ Pick several files at once, or drag them onto the window from any tab. The tab k
 The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7), or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 
 The output is built only from those named fields, so admin and user accounts, passwords, VPN pre-shared keys, RADIUS/LDAP secrets, SNMP communities, certificates and PPPoE logins never leave the file; the summary says how many settings were copied and how many left behind. Comments are kept because they say what a rule or port is for; any that mention a password, PSK, secret, community or token are replaced with a placeholder, and the summary counts them. Interface MACs are what `/mapnetwork` matches against `/unifidump`'s unresolved uplink MACs to name the firewall.
+
+### Notes
+
+The **Notes** tab is a Markdown scratchpad for the visit: headings, lists that continue when you press Enter, task boxes you tick in the preview, quotes, code and **bold**/*italic*. **Split** shows the editor beside a preview; **Time** and **Host info** insert a timestamp or this machine's LAN, gateway and WAN; Ctrl+B / Ctrl+I format the selection.
+
+Every value that would be redacted is highlighted in the editor, and the count beside the word count flashes when it grows. What's redacted: passwords and other keyword secrets (`password:`, `psk=`, `community:`, `key:` …), logins in URLs, PEM keys and certificates, API keys and long random tokens, SSNs, card numbers (Luhn-checked), patient / MRN / DOB / member ID lines, email addresses and phone numbers. IPs, MACs, VLANs, ports, firmware versions and dates stay. Autosave (every couple of seconds, to the same folder as the settings), **Copy**, **Save** and the Site Bundle's **Tech notes** part all get only the sanitized text, so nothing redactable is ever written to disk: after a restart the notes come back with `[REDACTED: …]` markers. The Site Bundle's **Known problems** field is redacted the same way.
+
+### Privacy and security
+
+Built for sites with regulated data (HIPAA): zero trust and as little as possible.
+
+- **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, and MTA-STS/RDAP over HTTPS with the OS trust store. No telemetry, no update checks, no accounts.
+- **Sanitized on this machine before anything is saved or shared**: UniFi exports (secret fields stripped; client notes, email and phone always dropped; client names only when you choose *full*), SonicWall exports (an allowlist of fields; comments redacted), tech notes and Known problems (the rules above).
+- **Clipboard.** On Windows, everything the app copies is marked to stay out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy (something you copied elsewhere since is left alone).
+- **At rest** there are only the settings file (theme and backdrop picture path) and `notes.md`, which only ever holds the sanitized text. The Results log lives in memory and is gone when the app closes.
+- **Input files are untrusted.** Only regular files up to 2 GB are read; decompression is capped at 2 GB per layer and document nesting at 64 levels, so a crafted backup is refused rather than exhausting memory or the stack. The parsers are tested against truncated, bit-flipped and random input.
+- **System tools** (`ip` and `arp` for the neighbor table, `ping` as a fallback) run only from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin` with a C locale, never from a PATH lookup. On Windows the app uses the OS APIs instead.
 
 ### Scan speed
 
@@ -144,6 +182,8 @@ Downloads `appimagetool` on first run (or set `APPIMAGETOOL=/path/to/appimagetoo
 On Linux, ICMP uses unprivileged ping sockets (`SOCK_DGRAM`/`IPPROTO_ICMP`) — no root, no capabilities. That needs your group inside `net.ipv4.ping_group_range`, the default on Fedora, Ubuntu, Arch and most systemd distros. If it's not, the app falls back to the system `ping` command.
 
 CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts).
+
+Versions: a release with new features bumps the minor number (0.11.0); fixes and polish between feature releases bump the patch (0.11.1, 0.11.2, …).
 
 To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) in a PR and merge it to `main`: CI tags `v<version>`, publishes a GitHub release with both binaries and checksums, and generates release notes from the PRs merged since the last release. Pushing a `v*` tag by hand does the same, as long as it matches `Cargo.toml`.
 

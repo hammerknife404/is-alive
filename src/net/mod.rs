@@ -14,6 +14,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Resolve a host name or IP literal. Prefers IPv4 unless `prefer_v6`.
+/// A system tool by absolute path from the usual system folders, never a
+/// PATH lookup: a folder earlier in PATH can't slip in a look-alike. None if
+/// it isn't installed. Unix only; Windows uses its APIs instead.
+#[cfg(not(windows))]
+pub fn system_tool(name: &str) -> Option<std::path::PathBuf> {
+    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+        .iter()
+        .map(|d| std::path::Path::new(d).join(name))
+        .find(|p| p.is_file())
+}
+
 pub fn resolve(host: &str, prefer_v6: bool) -> io::Result<IpAddr> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
     if let Ok(ip) = host.parse::<IpAddr>() {

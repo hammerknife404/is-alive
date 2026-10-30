@@ -3,6 +3,7 @@ use crate::job::{Job, pump};
 use crate::log::{Format, Log};
 use crate::net::hostinfo::HostInfo;
 use crate::tools::export::{self, ExportTool};
+use crate::tools::notes::NotesTool;
 use crate::tools::sweep::SweepTool;
 use crate::unifi::{self, Clients};
 use crate::widgets;
@@ -16,6 +17,7 @@ pub struct Sources<'a> {
     pub sweep: &'a SweepTool,
     pub log: &'a Log,
     pub info: &'a HostInfo,
+    pub notes: &'a NotesTool,
 }
 
 struct Saved {
@@ -34,6 +36,7 @@ pub struct BundleTool {
     use_sonicwall: bool,
     use_inventory: bool,
     use_results: bool,
+    use_notes: bool,
     job: Option<Job<Result<Option<Saved>, String>>>,
     saved: Option<Saved>,
     err: Option<String>,
@@ -51,6 +54,7 @@ impl Default for BundleTool {
             use_sonicwall: true,
             use_inventory: true,
             use_results: false,
+            use_notes: false,
             job: None,
             saved: None,
             err: None,
@@ -66,6 +70,9 @@ const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, 
 and open management ports. Observed state.";
 const RESULTS_WHAT: &str =
     "is-alive test runs (ping, port check, traceroute, DNS, mail health) with start and end times.";
+const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
+machine: passwords, keys, tokens and patient details are [REDACTED: …] markers. Context and \
+observations; use what bears on the map and its findings.";
 
 impl BundleTool {
     pub fn is_running(&self) -> bool {
@@ -75,11 +82,21 @@ impl BundleTool {
     fn poll(&mut self, ctx: &egui::Context) -> bool {
         pump(&mut self.job, |r| match r {
             Ok(Some(saved)) => {
-                ctx.copy_text(saved.kickoff.clone());
+                widgets::copy(ctx, saved.kickoff.clone());
+                widgets::toast(
+                    format!(
+                        "Saved {}; kickoff prompt copied",
+                        export::file_name(&saved.path)
+                    ),
+                    true,
+                );
                 self.saved = Some(saved);
             }
             Ok(None) => {}
-            Err(e) => self.err = Some(e),
+            Err(e) => {
+                widgets::toast("Bundle not saved", false);
+                self.err = Some(e);
+            }
         })
     }
 
@@ -124,12 +141,25 @@ impl BundleTool {
                 );
                 ui.end_row();
                 ui.label("Known problems");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.notes)
-                        .desired_rows(2)
-                        .desired_width(380.0)
-                        .hint_text("Optional. Goes straight into /mapnetwork's findings."),
-                );
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.notes)
+                            .desired_rows(2)
+                            .desired_width(380.0)
+                            .hint_text("Optional. Goes straight into /mapnetwork's findings."),
+                    );
+                    let hits = crate::redact::find(&self.notes);
+                    if !hits.is_empty() {
+                        ui.label(
+                            RichText::new(format!(
+                                "⚠ {} before bundling",
+                                crate::redact::summary(&hits)
+                            ))
+                            .small()
+                            .color(widgets::warn()),
+                        );
+                    }
+                });
                 ui.end_row();
             });
         ui.horizontal(|ui| {
@@ -194,11 +224,23 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     }),
                     "Nothing in Results yet",
                 );
+                let (_, hits) = src.notes.sanitized();
+                part_row(
+                    ui,
+                    &mut self.use_notes,
+                    "Tech notes",
+                    (!src.notes.is_empty()).then(|| match hits.len() {
+                        0 => "notes.md · nothing to redact".to_string(),
+                        _ => format!("notes.md · {}", crate::redact::summary(&hits)),
+                    }),
+                    "Nothing in Notes yet",
+                );
             });
         let chosen = (self.use_unifi && unifi.is_some())
             || (self.use_sonicwall && sonicwall.is_some())
             || (self.use_inventory && sweep.is_some())
-            || (self.use_results && runs > 0);
+            || (self.use_results && runs > 0)
+            || (self.use_notes && !src.notes.is_empty());
         widgets::error(ui, &self.err);
         ui.separator();
 
@@ -219,7 +261,8 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     .on_hover_text(s.kickoff.as_str())
                     .clicked()
                 {
-                    ui.ctx().copy_text(s.kickoff.clone());
+                    widgets::copy(ui.ctx(), s.kickoff.clone());
+                    widgets::toast("Kickoff prompt copied", true);
                 }
                 ui.add(
                     egui::Label::new(
@@ -295,9 +338,21 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                 data: Format::Json.export(&entries),
             });
         }
+        if self.use_notes && !src.notes.is_empty() {
+            let (clean, hits) = src.notes.sanitized();
+            parts.push(Part {
+                file: bundle::NOTES,
+                source: "Notes tab".into(),
+                skill: "/mapnetwork",
+                what: NOTES_WHAT,
+                summary: json!({ "lines": clean.lines().count(), "redacted": hits.len() }),
+                data: clean,
+            });
+        }
         let b = Bundle {
             site: self.site.trim().to_string(),
-            notes: self.notes.clone(),
+            // Same rules as the notes: nothing redactable goes in the zip.
+            notes: crate::redact::sanitize(&self.notes).0,
             clients: self.clients,
             map_clients: self.map_clients,
             scanner: src.info.clone(),
@@ -314,8 +369,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
 fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, String> {
     let clients = b.clients;
     if let Some(path) = unifi {
-        let data =
-            std::fs::read(&path).map_err(|e| format!("{}: {e}", export::file_name(&path)))?;
+        let data = export::read_input(&path)?;
         let r = unifi::convert(data, clients)?;
         b.parts.insert(
             0,

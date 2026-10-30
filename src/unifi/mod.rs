@@ -13,6 +13,9 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 /// Sites, devices, networks, switch port profiles, WLANs.
+/// Largest file Config Export will read.
+pub const MAX_INPUT: usize = container::MAX_UNPACKED;
+
 pub const CONFIG: &[&str] = &["site", "device", "networkconf", "portconf", "wlanconf"];
 /// Client (station) table: hostnames, MACs, last IPs.
 pub const CLIENTS: &str = "user";
@@ -46,7 +49,10 @@ impl Clients {
 unadopted gear) but replace device names, which are often people's names, with a token \
 like client-1a2b3c4d. Notes and email addresses are dropped."
             }
-            Clients::Full => "Keep the client table as is, names included.",
+            Clients::Full => {
+                "Keep the client table with device names. Notes, email addresses and phone \
+numbers are still dropped: nothing reads them."
+            }
         }
     }
 }
@@ -54,9 +60,21 @@ like client-1a2b3c4d. Notes and email addresses are dropped."
 /// Fields of a client record that name a person or hold their details.
 const PERSONAL_NAMES: &[&str] = &["name", "hostname", "display_name", "local_dns_record"];
 
+/// Drop a client's notes, email and phone fields in every mode: no skill
+/// reads them, and they're where a person's details end up (minimum
+/// necessary). Returns whether anything went.
+fn drop_details(doc: &mut Map<String, Value>) -> bool {
+    let before = doc.len();
+    doc.retain(|k, _| {
+        let k = k.to_ascii_lowercase();
+        k != "note" && !k.contains("email") && !k.contains("phone")
+    });
+    doc.len() != before
+}
+
 /// Replace a client's names with a stable token from its MAC (the MAC is
-/// kept anyway, so the token reveals nothing new) and drop notes, email and
-/// phone fields. Returns whether anything changed.
+/// kept anyway, so the token reveals nothing new). Returns whether
+/// anything changed.
 fn anonymize(doc: &mut Map<String, Value>) -> bool {
     let mac = doc.get("mac").and_then(Value::as_str).unwrap_or_default();
     let token = format!(
@@ -73,12 +91,7 @@ fn anonymize(doc: &mut Map<String, Value>) -> bool {
             changed = true;
         }
     }
-    let before = doc.len();
-    doc.retain(|k, _| {
-        let k = k.to_ascii_lowercase();
-        k != "note" && !k.contains("email") && !k.contains("phone")
-    });
-    changed || doc.len() != before
+    drop_details(doc) || changed
 }
 
 /// Field-name fragments that mark a secret. UniFi prefixes stored secrets
@@ -242,8 +255,11 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
                 if c == "site" {
                     sites.push(site_name(&doc));
                 }
-                if c == CLIENTS && clients == Clients::Anonymized && anonymize(&mut doc) {
-                    anonymized += 1;
+                if c == CLIENTS {
+                    if clients == Clients::Anonymized && anonymize(&mut doc) {
+                        anonymized += 1;
+                    }
+                    drop_details(&mut doc);
                 }
                 let mut v = Value::Object(std::mem::take(&mut doc));
                 redact(&mut v, c, &mut redacted);
@@ -343,6 +359,9 @@ mod tests {
         }
         assert_eq!(docs[0], json!({"__cmd": "select", "collection": "site"}));
         assert!(text.contains("port_overrides") && text.contains("Janes-iPhone"));
+        // Full keeps names, but a client's note and email never go out.
+        assert!(!text.contains("front office") && !text.contains("jane@example.com"));
+        assert!(text.contains("\"noted\":true"));
         assert_eq!(r.sites, ["Main Office"]);
         assert_eq!(r.version.as_deref(), Some("9.0.114"));
         assert_eq!((r.count("device"), r.count("user")), (1, 1));
@@ -393,5 +412,57 @@ mod tests {
             json!({"m": 1}),
         ]);
         assert!(convert(b, Clients::Full).is_err());
+    }
+
+    /// Zero trust for input files: truncated, bit-flipped, random and
+    /// deeply nested data is an error, never a panic or a hang.
+    #[test]
+    fn hostile_input_never_panics() {
+        let good = sample();
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for n in (0..good.len()).step_by(29) {
+            let _ = convert(good[..n].to_vec(), Clients::Full);
+        }
+        for _ in 0..300 {
+            let mut d = good.clone();
+            for _ in 0..3 {
+                let i = rnd() as usize % d.len();
+                d[i] ^= (rnd() as u8) | 1;
+            }
+            let _ = convert(d, Clients::Anonymized);
+        }
+        for len in [0, 1, 16, 17, 512, 4096] {
+            let d: Vec<u8> = (0..len).map(|_| rnd() as u8).collect();
+            assert!(convert(d, Clients::None).is_err());
+        }
+        // A BSON stream mangled after decryption.
+        let stream: Vec<u8> = [
+            json!({"__cmd": "select", "collection": "device"}),
+            json!({"a": {"b": [1, "x"]}}),
+        ]
+        .iter()
+        .flat_map(encode)
+        .collect();
+        for _ in 0..500 {
+            let mut d = stream.clone();
+            let i = rnd() as usize % d.len();
+            d[i] = rnd() as u8;
+            for doc in bson::documents(&d).take(8).flatten() {
+                let _ = bson::decode(doc);
+            }
+        }
+        // Deeper than any controller nests: refused, not recursed into.
+        let mut deep = json!(1);
+        for _ in 0..200 {
+            deep = json!({ "a": deep });
+        }
+        let bytes = encode(&deep);
+        assert!(bson::decode(&bytes).unwrap_err().contains("too deep"));
     }
 }

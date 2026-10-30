@@ -1,6 +1,130 @@
 //! Small shared UI pieces.
 
 use eframe::egui::{self, Color32, RichText, Ui};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+/// Toasts: a short confirmation at the bottom of the window ("Copied",
+/// "Saved notes.md"), or an error. Any thread can raise one.
+static TOASTS: Mutex<Vec<(String, bool, Instant)>> = Mutex::new(Vec::new());
+static CTX: OnceLock<egui::Context> = OnceLock::new();
+const TOAST_FOR: f32 = 2.4;
+
+/// Hash of the last text this app put on the clipboard, so exit clears
+/// only our own copy, never something copied from another app since.
+static LAST_COPY: Mutex<Option<u64>> = Mutex::new(None);
+
+fn hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Put `text` on the clipboard. On Windows it's marked to stay out of
+/// clipboard history (Win+V), cloud clipboard sync and clipboard managers,
+/// as password managers do.
+pub fn copy(ctx: &egui::Context, text: String) {
+    if let Ok(mut l) = LAST_COPY.lock() {
+        *l = Some(hash(&text));
+    }
+    #[cfg(windows)]
+    {
+        use arboard::SetExtWindows;
+        let done = arboard::Clipboard::new()
+            .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
+        if done.is_ok() {
+            return;
+        }
+    }
+    ctx.copy_text(text);
+}
+
+/// On exit: clear the clipboard if it still holds what this app copied.
+pub fn clear_own_clipboard() {
+    let Some(ours) = LAST_COPY.lock().ok().and_then(|l| *l) else {
+        return;
+    };
+    if let Ok(mut c) = arboard::Clipboard::new()
+        && c.get_text().is_ok_and(|t| hash(&t) == ours)
+    {
+        let _ = c.clear();
+    }
+}
+
+/// Let other threads wake the UI for a toast; call once at startup.
+pub fn init(ctx: &egui::Context) {
+    let _ = CTX.set(ctx.clone());
+}
+
+pub fn toast(text: impl Into<String>, ok: bool) {
+    if let Ok(mut t) = TOASTS.lock() {
+        t.push((text.into(), ok, Instant::now()));
+        t.retain(|x| x.2.elapsed().as_secs_f32() < TOAST_FOR);
+        let n = t.len();
+        if n > 3 {
+            t.drain(..n - 3);
+        }
+    }
+    if let Some(c) = CTX.get() {
+        c.request_repaint();
+    }
+}
+
+/// Draw the toasts over everything, newest at the bottom; call once a frame.
+pub fn show_toasts(ctx: &egui::Context) {
+    let Ok(mut list) = TOASTS.lock() else { return };
+    list.retain(|x| x.2.elapsed().as_secs_f32() < TOAST_FOR);
+    if list.is_empty() {
+        return;
+    }
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Tooltip,
+        egui::Id::new("toasts"),
+    ));
+    let vis = ctx.global_style().visuals.clone();
+    let screen = ctx.content_rect();
+    let mut y = screen.bottom() - 40.0;
+    for (text, good, at) in list.iter().rev() {
+        let age = at.elapsed().as_secs_f32();
+        // In over 0.15 s, out over the last 0.4 s, rising a few points.
+        let a = (age / 0.15).min(1.0) * ((TOAST_FOR - age) / 0.4).clamp(0.0, 1.0);
+        let rise = 6.0 * (1.0 - (age / 0.15).min(1.0));
+        let (icon, colour) = if *good { ("✔", ok()) } else { ("⚠", bad()) };
+        let g = painter.layout_no_wrap(
+            format!("{icon}  {text}"),
+            egui::FontId::proportional(13.5),
+            vis.strong_text_color(),
+        );
+        let r = egui::Rect::from_center_size(
+            egui::pos2(screen.center().x, y + rise),
+            g.size() + egui::vec2(28.0, 14.0),
+        );
+        painter.add(
+            egui::Shadow {
+                offset: [0, 4],
+                blur: 16,
+                spread: 0,
+                color: Color32::from_black_alpha((80.0 * a) as u8),
+            }
+            .as_shape(r, 10),
+        );
+        painter.rect(
+            r,
+            10,
+            vis.window_fill.gamma_multiply(a),
+            egui::Stroke::new(1.0, colour.gamma_multiply(0.7 * a)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            r.min + egui::vec2(14.0, 7.0),
+            g,
+            vis.strong_text_color().gamma_multiply(a),
+        );
+        y = r.top() - 22.0;
+    }
+    ctx.request_repaint_after(Duration::from_millis(16));
+}
 
 /// Status colours, tuned per theme so they stay readable.
 pub fn ok() -> Color32 {
@@ -174,7 +298,8 @@ pub fn copy_button(ui: &mut Ui, text: impl FnOnce() -> String) {
         .on_hover_text("Copy results to clipboard")
         .clicked()
     {
-        ui.ctx().copy_text(text());
+        copy(ui.ctx(), text());
+        toast("Copied to the clipboard", true);
     }
 }
 
@@ -230,12 +355,19 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
         else {
             return;
         };
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         if let Err(e) = std::fs::write(&path, text) {
+            toast(format!("Couldn't save {name}"), false);
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)
                 .set_title("Save failed")
                 .set_description(format!("{}: {e}", path.display()))
                 .show();
+        } else {
+            toast(format!("Saved {name}"), true);
         }
     });
 }

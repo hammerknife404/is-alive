@@ -11,6 +11,7 @@ pub const UNIFI: &str = "unifi.unifidump.json";
 pub const SONICWALL: &str = "sonicwall.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
+pub const NOTES: &str = "notes.md";
 /// The kickoff prompt, so the bundle carries its own instructions.
 pub const PROMPT: &str = "prompt.txt";
 
@@ -50,7 +51,7 @@ impl Bundle {
                 "Client table: included, anonymized. Device names are client-xxxxxxxx tokens, stable \
 per MAC; MAC, vendor and switch port are real. Use it for client counts and to spot unadopted gear."
             }
-            Clients::Full => "Client table: included, with the controller's real device names.",
+            Clients::Full => "Client table: included, with the controller's real device names (client notes, email and phone dropped).",
         })
     }
 
@@ -83,7 +84,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
                 crate::unifi::Clients::None => "not included",
                 crate::unifi::Clients::Anonymized =>
                     "anonymized: MAC, vendor and switch port kept; device names replaced with client-<hash> tokens; notes and email dropped",
-                crate::unifi::Clients::Full => "included as exported by the controller",
+                crate::unifi::Clients::Full => "included with device names; notes, email and phone dropped",
             },
             "scanner": {
                 "lan": self.scanner.lan.map(|(ip, bits)| format!("{ip}/{bits}")),
@@ -120,7 +121,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
         if self.has(UNIFI) {
             inputs.push("the unifidump summary".to_string());
         }
-        for f in [SONICWALL, INVENTORY, RESULTS] {
+        for f in [SONICWALL, INVENTORY, RESULTS, NOTES] {
             if self.has(f) {
                 inputs.push(f.to_string());
             }

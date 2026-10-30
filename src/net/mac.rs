@@ -85,8 +85,33 @@ pub fn neighbors() -> HashMap<Ipv4Addr, Mac> {
         .collect()
 }
 
+/// Entries the OS has just confirmed (the device answered an ARP request in
+/// the last few tens of seconds), not leftovers from devices that have
+/// gone: `REACHABLE` in Linux's `ip neigh`, Reachable on Windows. Empty
+/// where the state isn't available (no `ip` command, macOS).
+pub fn confirmed() -> HashMap<Ipv4Addr, Mac> {
+    imp::confirmed()
+        .into_iter()
+        .filter(|(_, m)| usable(m))
+        .collect()
+}
+
+/// `ip -4 neigh show`: "10.0.0.5 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE".
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_ip_neigh(text: &str) -> Vec<(Ipv4Addr, Mac)> {
+    text.lines()
+        .filter(|l| l.split_whitespace().last() == Some("REACHABLE"))
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let ip = f.first()?.parse().ok()?;
+            let at = f.iter().position(|w| *w == "lladdr")?;
+            Some((ip, parse_mac(f.get(at + 1)?)?))
+        })
+        .collect()
+}
+
 /// "aa:bb:cc:dd:ee:ff", "aa-bb-…" or macOS's unpadded "0:1b:…".
-fn parse_mac(s: &str) -> Option<Mac> {
+pub fn parse_mac(s: &str) -> Option<Mac> {
     let parts: Vec<&str> = s.split([':', '-']).collect();
     if parts.len() != 6 {
         return None;
@@ -135,6 +160,19 @@ mod imp {
             .map(|t| super::parse_proc_arp(&t))
             .unwrap_or_default()
     }
+
+    /// /proc/net/arp has no state, so ask iproute2.
+    pub fn confirmed() -> Vec<(std::net::Ipv4Addr, super::Mac)> {
+        let Some(ip) = crate::net::system_tool("ip") else {
+            return Vec::new();
+        };
+        std::process::Command::new(ip)
+            .env("LC_ALL", "C")
+            .args(["-4", "neigh", "show"])
+            .output()
+            .map(|o| super::parse_ip_neigh(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(windows)]
@@ -143,9 +181,19 @@ mod imp {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         FreeMibTable, GetIpNetTable2, MIB_IPNET_TABLE2,
     };
-    use windows_sys::Win32::Networking::WinSock::{AF_INET, NlnsProbe};
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, NlnsProbe, NlnsReachable};
 
     pub fn neighbors() -> Vec<(Ipv4Addr, super::Mac)> {
+        table(NlnsProbe)
+    }
+
+    pub fn confirmed() -> Vec<(Ipv4Addr, super::Mac)> {
+        table(NlnsReachable)
+    }
+
+    /// Entries whose state is at least `min` (Probe and up carry an address;
+    /// Reachable means an ARP reply arrived recently).
+    fn table(min: i32) -> Vec<(Ipv4Addr, super::Mac)> {
         let mut out = Vec::new();
         let mut table: *mut MIB_IPNET_TABLE2 = std::ptr::null_mut();
         unsafe {
@@ -156,7 +204,7 @@ mod imp {
                 std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
             for r in rows {
                 // Unreachable and Incomplete entries carry no address yet.
-                if r.PhysicalAddressLength != 6 || r.State < NlnsProbe {
+                if r.PhysicalAddressLength != 6 || r.State < min {
                     continue;
                 }
                 let ip = Ipv4Addr::from(r.Address.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes());
@@ -172,8 +220,16 @@ mod imp {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 mod imp {
+    pub fn confirmed() -> Vec<(std::net::Ipv4Addr, super::Mac)> {
+        Vec::new()
+    }
+
     pub fn neighbors() -> Vec<(std::net::Ipv4Addr, super::Mac)> {
-        std::process::Command::new("arp")
+        let Some(arp) = crate::net::system_tool("arp") else {
+            return Vec::new();
+        };
+        std::process::Command::new(arp)
+            .env("LC_ALL", "C")
             .arg("-an")
             .output()
             .map(|o| super::parse_arp_an(&String::from_utf8_lossy(&o.stdout)))
@@ -217,6 +273,21 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].0, Ipv4Addr::new(192, 168, 1, 1));
         assert_eq!(fmt(&v[0].1), "24:5a:4c:aa:bb:cc");
+    }
+
+    #[test]
+    fn parses_ip_neigh_reachable_only() {
+        let t = "10.0.0.1 dev wlp2s0 lladdr 9c:c9:eb:e6:c7:ec router REACHABLE\n\
+                 10.0.0.57 dev wlp2s0 lladdr 3c:2a:f4:01:02:03 REACHABLE\n\
+                 10.0.0.60 dev wlp2s0 lladdr 3c:2a:f4:01:02:04 STALE\n\
+                 10.0.0.61 dev wlp2s0 FAILED\n\
+                 10.0.0.62 dev wlp2s0 lladdr 3c:2a:f4:01:02:05 DELAY\n";
+        let v = parse_ip_neigh(t);
+        assert_eq!(
+            v.iter().map(|e| e.0.to_string()).collect::<Vec<_>>(),
+            ["10.0.0.1", "10.0.0.57"]
+        );
+        assert_eq!(fmt(&v[1].1), "3c:2a:f4:01:02:03");
     }
 
     #[test]

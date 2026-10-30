@@ -553,7 +553,17 @@ mod cmd {
 
     pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
         let start = Instant::now();
-        let child = Command::new(program(dest))
+        let Some(prog) = crate::net::system_tool(program(dest)) else {
+            return EchoResult {
+                from: None,
+                rtt_ms: 0.0,
+                ttl: None,
+                status: EchoStatus::Error(format!("{} not found", program(dest))),
+            };
+        };
+        // C locale: the output is parsed, and translations would break that.
+        let child = Command::new(prog)
+            .env("LC_ALL", "C")
             .args(args(dest, ttl, timeout_ms))
             .args(["-s", &size.to_string(), &dest.to_string()])
             .stdin(Stdio::null())

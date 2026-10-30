@@ -131,10 +131,28 @@ fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     Ok(n)
 }
 
-fn gunzip_rest(mut r: impl Read) -> Result<Vec<u8>, String> {
+/// Most any layer may unpack to. A real controller's dump is far smaller;
+/// a crafted file that inflates without end stops here instead of taking
+/// all the memory.
+pub const MAX_UNPACKED: usize = 2 << 30;
+
+/// Read to the end, but no further than MAX_UNPACKED.
+fn read_capped(r: impl Read, what: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    r.read_to_end(&mut out).map_err(|e| format!("db.gz: {e}"))?;
+    r.take(MAX_UNPACKED as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| format!("{what}: {e}"))?;
+    if out.len() > MAX_UNPACKED {
+        return Err(format!(
+            "{what} unpacks to more than {} GB: not a UniFi backup",
+            MAX_UNPACKED >> 30
+        ));
+    }
     Ok(out)
+}
+
+fn gunzip_rest(r: impl Read) -> Result<Vec<u8>, String> {
+    read_capped(r, "db.gz")
 }
 
 /// Single gzip member; trailing padding is ignored.
@@ -261,13 +279,7 @@ fn zip_read(b: &[u8], e: &ZipEntry) -> Result<Vec<u8>, String> {
     let raw = b.get(start..start + e.size).ok_or_else(bad)?;
     match e.method {
         0 => Ok(raw.to_vec()),
-        8 => {
-            let mut out = Vec::new();
-            DeflateDecoder::new(raw)
-                .read_to_end(&mut out)
-                .map_err(|err| format!("zip: {}: {err}", e.name))?;
-            Ok(out)
-        }
+        8 => read_capped(DeflateDecoder::new(raw), &format!("zip: {}", e.name)),
         m => Err(format!("zip: {} uses unsupported compression {m}", e.name)),
     }
 }
@@ -316,10 +328,17 @@ fn from_tar(mut r: impl Read, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String
             break;
         }
         let size = octal(&h[124..136])?;
+        if size > MAX_UNPACKED {
+            return Err(format!("tar: entry of {size} bytes: not a UniFi backup"));
+        }
         let padded = size.div_ceil(512) * 512;
+        // Read what's there rather than allocate what the header claims.
         let read_body = |r: &mut dyn Read| -> Result<Vec<u8>, String> {
-            let mut v = vec![0; padded];
-            r.read_exact(&mut v).map_err(io_err)?;
+            let mut v = Vec::new();
+            r.take(padded as u64).read_to_end(&mut v).map_err(io_err)?;
+            if v.len() < padded {
+                return Err("tar: truncated".into());
+            }
             v.truncate(size);
             Ok(v)
         };

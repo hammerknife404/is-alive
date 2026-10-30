@@ -7,14 +7,15 @@ use crate::net::{self, TcpState, ports, targets};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 struct Host {
     ip: Ipv4Addr,
-    rtt: f64,
+    /// None for a host that never answered ping but did answer ARP.
+    rtt: Option<f64>,
     ttl: Option<u8>,
     name: Option<String>,
     mac: Option<Mac>,
@@ -50,6 +51,8 @@ pub struct SweepTool {
     /// Whether the last run checked management ports.
     checked_ports: bool,
     err: Option<String>,
+    /// Bumped whenever the host list changes, so the map knows to rebuild.
+    revision: u64,
 }
 
 impl Default for SweepTool {
@@ -71,9 +74,18 @@ impl Default for SweepTool {
             local: HostInfo::default(),
             checked_ports: false,
             err: None,
+            revision: 0,
         }
     }
 }
+
+/// How often the ping phase rereads the confirmed ARP entries. Linux keeps
+/// an entry REACHABLE for 15–45 s, so this catches every one the sweep's
+/// own ARP requests produce.
+const ARP_EVERY: Duration = Duration::from_secs(3);
+
+const ARP_TIP: &str = "Answered this machine's ARP request but not ping (a firewall or an \
+endpoint that drops ICMP). Only entries the OS has just confirmed count, not stale ones.";
 
 const PORTS_TIP: &str = "After the sweep, try a TCP connect to each live host's management ports \
 (SSH, telnet, web, UniFi 8080/8443, FortiGate 541, SonicWall 4433, MikroTik 8291) and a few that \
@@ -85,6 +97,8 @@ impl SweepTool {
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
         let mut got = false;
+        let was = self.job.is_some();
+        let mut changed = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Probed => self.probed += 1,
             Ev::Alive(h) => {
@@ -94,6 +108,7 @@ impl SweepTool {
             Ev::Mac(ip, m) => {
                 if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                     h.mac = Some(m);
+                    changed = true;
                 }
             }
             Ev::PortProbes(n) => self.total += n,
@@ -101,11 +116,15 @@ impl SweepTool {
                 if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                     h.open.push(port);
                     h.open.sort_unstable();
+                    changed = true;
                 }
             }
         });
         if got {
             self.alive.sort_by_key(|h| h.ip);
+        }
+        if got || changed || was != running {
+            self.revision += 1;
         }
         running
     }
@@ -153,6 +172,11 @@ impl SweepTool {
                         .color(widgets::ok())
                         .strong(),
                 );
+                let arp = self.arp_only();
+                if arp > 0 {
+                    ui.label(RichText::new(format!("({arp} ARP only)")).weak())
+                        .on_hover_text(ARP_TIP);
+                }
                 ui.label(format!("· {} / {} probed", self.probed, self.total));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -184,7 +208,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
         }
         if self.alive.is_empty() && !running {
             let hint = if self.total > 0 {
-                "No hosts answered. Firewalls often drop ping; try Port Check on a known host."
+                "No hosts answered ping or ARP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host."
             } else {
                 "Enter a CIDR or range and press Enter."
             };
@@ -209,7 +233,12 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                         ui.end_row();
                         for h in &self.alive {
                             ui.monospace(h.ip.to_string());
-                            ui.monospace(widgets::fmt_ms(h.rtt));
+                            match h.rtt {
+                                Some(r) => ui.monospace(widgets::fmt_ms(r)),
+                                None => ui
+                                    .label(RichText::new("no ping").weak())
+                                    .on_hover_text(ARP_TIP),
+                            };
                             ui.monospace(h.ttl.map(|t| t.to_string()).unwrap_or_default());
                             ui.monospace(h.mac.as_ref().map(mac::fmt).unwrap_or_default());
                             ui.label(self.vendor(h));
@@ -221,6 +250,10 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                         }
                     });
             });
+    }
+
+    fn arp_only(&self) -> usize {
+        self.alive.iter().filter(|h| h.rtt.is_none()).count()
     }
 
     /// Vendor, or what the host is to this machine when it has no MAC here.
@@ -254,16 +287,20 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
     }
 
     fn report(&self) -> String {
-        let mut s = format!(
-            "Sweep of {}: {} alive\n",
-            self.range.trim(),
-            self.alive.len()
-        );
+        let mut s = format!("Sweep of {}: {} alive", self.range.trim(), self.alive.len());
+        match self.arp_only() {
+            0 => s += "\n",
+            n => s += &format!(" ({n} found by ARP only, no ping reply)\n"),
+        }
         for h in &self.alive {
+            let rtt = match h.rtt {
+                Some(r) => format!("{r:.1} ms"),
+                None => "ARP only".into(),
+            };
             let mut line = format!(
-                "{:<15}  {:>6.1} ms  {:<17}  {:<24}  {}",
+                "{:<15}  {:>9}  {:<17}  {:<24}  {}",
                 h.ip,
-                h.rtt,
+                rtt,
                 h.mac.as_ref().map(mac::fmt).unwrap_or_default(),
                 self.vendor(h),
                 h.name.as_deref().unwrap_or("")
@@ -286,12 +323,13 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                 vec![
                     self.range.trim().to_string(),
                     h.ip.to_string(),
-                    log::ms(h.rtt),
+                    h.rtt.map(log::ms).unwrap_or_default(),
                     log::cell(h.ttl),
                     h.mac.as_ref().map(mac::fmt).unwrap_or_default(),
                     self.vendor(h),
                     h.name.clone().unwrap_or_default(),
                     port_list(&h.open),
+                    found_by(h).into(),
                 ]
             })
             .collect();
@@ -305,6 +343,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                 "vendor",
                 "name",
                 "open_ports",
+                "found_by",
             ],
             rows,
         })
@@ -322,7 +361,8 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                     "vendor": h.mac.as_ref().and_then(mac::vendor),
                     "private_mac": h.mac.as_ref().map(mac::local_admin),
                     "name": h.name,
-                    "rtt_ms": (h.rtt * 100.0).round() / 100.0,
+                    "found_by": found_by(h),
+                    "rtt_ms": h.rtt.map(|r| (r * 100.0).round() / 100.0),
                     "ttl": h.ttl,
                     "open_ports": self.checked_ports.then(|| h.open.iter().map(|&p| json!({
                         "port": p,
@@ -344,7 +384,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
             },
             "ports_checked": if self.checked_ports { ports::INFRA } else { &[] },
             "notes": [
-                "Hosts that answered ping only; firewalls and many endpoints drop it, so absence is not proof.",
+                "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
                 "mac comes from this machine's ARP table, so only hosts on the scanner's own segment have one; past a router it is null.",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "open_ports is null when ports were not checked.",
@@ -376,8 +416,28 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
         self.checked_ports
     }
 
+    /// Hosts found so far, for the map.
+    pub fn seen(&self) -> Vec<crate::map::Seen> {
+        self.alive
+            .iter()
+            .map(|h| crate::map::Seen {
+                ip: h.ip,
+                mac: h.mac,
+                name: h.name.clone(),
+                rtt: h.rtt,
+                open: h.open.clone(),
+            })
+            .collect()
+    }
+
+    /// Changes whenever `seen` would.
+    pub fn generation(&self) -> u64 {
+        self.revision
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
+        self.revision += 1;
         self.alive.clear();
         self.probed = 0;
         let ips = match targets::parse_range(&self.range) {
@@ -401,8 +461,14 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
 
         self.run_started = Some(log::now());
         self.started_at = Instant::now();
+        let me = self.local.lan.map(|(ip, _)| ip);
         self.job = Some(Job::spawn(ctx, move |tx| {
             let alive = Mutex::new(Vec::new());
+            // Each probe makes the OS ARP for the address, so hosts that drop
+            // ping still land in the neighbor table as confirmed entries.
+            let arp: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
+            let last_look = Mutex::new(Instant::now());
+            let look = || arp.lock().unwrap().extend(mac::confirmed());
             net::par_for(&ips, threads, rate, tx.cancel_flag(), |&ip| {
                 let r = icmp::echo(IpAddr::V4(ip), 128, timeout, 32);
                 if r.is_reply() {
@@ -416,7 +482,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                     alive.lock().unwrap().push((ip, mac.is_some()));
                     tx.send(Ev::Alive(Host {
                         ip,
-                        rtt: r.rtt_ms,
+                        rtt: Some(r.rtt_ms),
                         ttl: r.ttl,
                         name,
                         mac,
@@ -424,7 +490,17 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                     }));
                 }
                 tx.send(Ev::Probed);
+                // One worker at a time; the rest don't wait for it.
+                if let Ok(mut t) = last_look.try_lock()
+                    && t.elapsed() >= ARP_EVERY
+                {
+                    *t = Instant::now();
+                    look();
+                }
             });
+            if !tx.cancelled() {
+                look();
+            }
             let alive = alive.into_inner().unwrap();
 
             // Catch entries that weren't in the table at the first look.
@@ -435,10 +511,37 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
                 }
             }
 
+            if tx.cancelled() {
+                return;
+            }
+            let mut seen: HashSet<Ipv4Addr> = alive.iter().map(|a| a.0).collect();
+            let swept: HashSet<Ipv4Addr> = ips.iter().copied().collect();
+            let silent: Vec<(Ipv4Addr, Mac)> = arp
+                .into_inner()
+                .unwrap()
+                .into_iter()
+                .filter(|(ip, _)| swept.contains(ip) && !seen.contains(ip) && Some(*ip) != me)
+                .collect();
+            net::par_for(&silent, threads, rate, tx.cancel_flag(), |&(ip, m)| {
+                let name = if names {
+                    net::reverse(IpAddr::V4(ip))
+                } else {
+                    None
+                };
+                tx.send(Ev::Alive(Host {
+                    ip,
+                    rtt: None,
+                    ttl: None,
+                    name,
+                    mac: Some(m),
+                    open: Vec::new(),
+                }));
+            });
+            seen.extend(silent.iter().map(|s| s.0));
+
             if !check_ports || tx.cancelled() {
                 return;
             }
-            let seen: HashSet<Ipv4Addr> = alive.iter().map(|a| a.0).collect();
             let mut probes: Vec<(Ipv4Addr, u16)> = Vec::new();
             for ip in seen {
                 probes.extend(ports::INFRA.iter().map(|&p| (ip, p)));
@@ -454,6 +557,10 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
             });
         }));
     }
+}
+
+fn found_by(h: &Host) -> &'static str {
+    if h.rtt.is_some() { "ping" } else { "arp" }
 }
 
 fn port_list(open: &[u16]) -> String {
