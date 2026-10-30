@@ -224,10 +224,87 @@ const NOT_VALUE: &[&str] = &[
     "sync",
 ];
 
+/// Ordinary words: after "password" with no "is" or ":" they're the
+/// sentence going on ("give it a password when prompted"), not a value.
+const PLAIN: &[&str] = &[
+    "when", "while", "if", "then", "and", "or", "but", "so", "because", "until", "before", "after",
+    "once", "unless", "with", "without", "from", "into", "in", "by", "via", "per", "you", "we",
+    "they", "he", "she", "it", "i", "me", "us", "them", "him", "someone", "user", "users",
+    "anyone", "everyone", "nobody", "here", "there", "again", "below", "above", "later", "first",
+    "too", "only", "every", "each", "all", "any", "some", "none", "no", "not", "yes", "which",
+    "who", "what", "where", "why", "how", "should", "would", "could", "can", "must", "may",
+    "might", "do", "does", "did", "has", "have", "had", "get", "gets", "got", "give", "gave",
+    "given", "enter", "entered", "type", "typed", "use", "used", "using", "see", "sent", "send",
+    "ask", "asked", "comes", "came", "pops", "shows", "shown", "box", "screen", "window", "dialog",
+    "page", "box", "form", "please", "like", "unknown",
+];
+
+/// Shaped like a password: lowercase, a digit, and an uppercase letter or a
+/// symbol ("Password11", "JBpass23$"). Serials, model numbers and hostnames
+/// are uppercase or carry dots, colons and slashes, so they don't qualify.
+fn password_shaped(t: &str) -> bool {
+    let sym = |c: char| "!@#$%^&*+=?~".contains(c);
+    t.chars().any(|c| c.is_ascii_lowercase())
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().any(|c| c.is_ascii_uppercase() || sym(c))
+        && !t.contains("://")
+        && !t.starts_with("www.")
+}
+
+/// Passwords with no word to announce them: a line that is one
+/// password-shaped token (a login written as user, then password, on lines
+/// of their own), and anywhere, a token strong enough to be nothing else:
+/// eight or more characters with upper, lower, digit and symbol
+/// ("vpn: jsmith / Spring26$").
+fn bare_passwords(text: &str) -> Vec<Range<usize>> {
+    let sym = |c: char| "!@#$%^&*+=?~".contains(c);
+    let mut out = Vec::new();
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let lead = body.len() - body.trim_start().len();
+        let token = body.trim();
+        let alone = !token.is_empty()
+            && !token.contains(char::is_whitespace)
+            && (6..=64).contains(&token.len())
+            && !token.contains(['.', ':', '/', '\\', '='])
+            // "USW-24-PoE" is a model; a hyphenated password has a symbol too.
+            && (!token.contains('-') || token.chars().any(|c| "!@#$%^&*+?~".contains(c)))
+            && password_shaped(token);
+        if alone {
+            let at = line_start + lead;
+            out.push(at..at + token.len());
+        } else {
+            let mut at = line_start;
+            for word in body.split(char::is_whitespace) {
+                let t = word.trim_matches(|c: char| ",;()[]{}\"'".contains(c));
+                let start = at + word.find(t).unwrap_or(0);
+                let email = t
+                    .split_once('@')
+                    .is_some_and(|(_, d)| d.contains('.') && !d.ends_with('.'));
+                if t.len() >= 8
+                    && t.chars().any(|c| c.is_ascii_uppercase())
+                    && t.chars().any(sym)
+                    && password_shaped(t)
+                    // "key=value" is read by the rules that know the key.
+                    && !t.contains('=')
+                    && !email
+                {
+                    out.push(start..start + t.len());
+                }
+                at += word.len() + 1;
+            }
+        }
+        line_start += line.len();
+    }
+    out
+}
+
 /// The value after each password word, read like a sentence: after a link
 /// ("is", "was", ":", "=") the first real word; with no link, the first word
 /// that isn't filler, unless the sentence is about passwords ("password
-/// policy", "password reset done"). Stops at the end of the line or sentence.
+/// policy", "password reset done") or just goes on ("password when
+/// prompted"). Stops at the end of the line or sentence.
 fn password_values(text: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     for m in PASSWORD.find_iter(text) {
@@ -282,7 +359,10 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
             None => toks
                 .iter()
                 .find(|t| !FILLER.contains(&word(&t.0).as_str()))
-                .filter(|t| !NOT_VALUE.contains(&word(&t.0).as_str())),
+                .filter(|t| {
+                    let w = word(&t.0);
+                    !NOT_VALUE.contains(&w.as_str()) && !PLAIN.contains(&w.as_str())
+                }),
         };
         if let Some((r, _)) = pick {
             // "hunter2." keeps its full stop out of the redaction.
@@ -334,6 +414,7 @@ pub fn find(text: &str) -> Vec<Hit> {
     let fresh = |r: &Range<usize>| !done.iter().any(|d| r.start < d.end && d.start < r.end);
     let mut hits: Vec<Hit> = password_values(text)
         .into_iter()
+        .chain(bare_passwords(text))
         .filter(|r| fresh(r))
         .map(|span| Hit {
             span,
@@ -531,6 +612,55 @@ mod tests {
         );
         assert_eq!(red("(555) 123-4567"), "[REDACTED: phone]");
         assert_eq!(red("+1 555.123.4567"), "[REDACTED: phone]");
+    }
+
+    /// A real-world note's shape (names and values made up).
+    #[test]
+    fn notes_as_techs_write_them() {
+        let t = "jane Doe, NEW USER - also needs vpn Copy Sam Lee\n    \
+jdoe@example.com\n    JDpass23$\n         VPN: jane.doe / JDpass23%\n\n\
+DSmith-LAPTOP - Out - Dan Smith\ndsmith\nPassword11\nNeeds sage credentials\n\
+DSmith\n\nGV Edge Recording Manager - export data from old install: System > Export - \
+give it a password when prompt comes up. Import it the same - Enter password you gave during export.";
+        let r = red(t);
+        for gone in ["JDpass23$", "JDpass23%", "Password11", "jdoe@example.com"] {
+            assert!(!r.contains(gone), "{gone} left in:\n{r}");
+        }
+        for kept in [
+            "a password when prompt",
+            "Enter password you gave",
+            "jane.doe",
+            "DSmith-LAPTOP",
+            "dsmith",
+            "Needs sage credentials",
+        ] {
+            assert!(r.contains(kept), "{kept} redacted:\n{r}");
+        }
+        assert_eq!(summary(&sanitize(t).1), "4 redacted: 3 passwords, 1 email");
+    }
+
+    #[test]
+    fn bare_values_need_the_shape() {
+        // Strong anywhere; weaker only alone on a line.
+        assert_eq!(
+            red("login jsmith / Spring26$ ok"),
+            "login jsmith / [REDACTED: password] ok"
+        );
+        assert_eq!(red("Welcome1\n"), "[REDACTED: password]\n");
+        for t in [
+            "Win11",
+            "Office 365 E3",
+            "SN 2CB8EDA78330",
+            "USW-24-PoE",
+            "fw SonicOS-7.3.3",
+            "C:\\Users\\jsmith1",
+            "https://portal.example.com/a?B=1&c=Zz9!",
+            "Fixed on Win11!",
+            "dlee134",
+            "50% done, R&D",
+        ] {
+            assert_eq!(red(t), t);
+        }
     }
 
     #[test]
