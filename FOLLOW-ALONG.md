@@ -17,7 +17,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
 4. Check the version: the title bar at the top of the window says `is-alive 0.7.2` (or newer).
 
-You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **UniFi Backup** and **Results**. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address.
+You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export** and **Results**. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address.
 
 > **Please watch, don't run, the Port Check and Subnet Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
