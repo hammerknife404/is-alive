@@ -18,6 +18,8 @@ pub enum Kind {
     Patient,
     Email,
     Phone,
+    /// Picked by the technician.
+    Manual,
 }
 
 impl Kind {
@@ -31,6 +33,7 @@ impl Kind {
             Kind::Patient => "patient details",
             Kind::Email => "emails",
             Kind::Phone => "phone numbers",
+            Kind::Manual => "picked by hand",
         }
     }
 
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Patient => "patient detail",
             Kind::Email => "email",
             Kind::Phone => "phone",
+            Kind::Manual => "by hand",
         }
     }
 }
@@ -224,10 +228,87 @@ const NOT_VALUE: &[&str] = &[
     "sync",
 ];
 
+/// Ordinary words: after "password" with no "is" or ":" they're the
+/// sentence going on ("give it a password when prompted"), not a value.
+const PLAIN: &[&str] = &[
+    "when", "while", "if", "then", "and", "or", "but", "so", "because", "until", "before", "after",
+    "once", "unless", "with", "without", "from", "into", "in", "by", "via", "per", "you", "we",
+    "they", "he", "she", "it", "i", "me", "us", "them", "him", "someone", "user", "users",
+    "anyone", "everyone", "nobody", "here", "there", "again", "below", "above", "later", "first",
+    "too", "only", "every", "each", "all", "any", "some", "none", "no", "not", "yes", "which",
+    "who", "what", "where", "why", "how", "should", "would", "could", "can", "must", "may",
+    "might", "do", "does", "did", "has", "have", "had", "get", "gets", "got", "give", "gave",
+    "given", "enter", "entered", "type", "typed", "use", "used", "using", "see", "sent", "send",
+    "ask", "asked", "comes", "came", "pops", "shows", "shown", "box", "screen", "window", "dialog",
+    "page", "box", "form", "please", "like", "unknown",
+];
+
+/// Shaped like a password: lowercase, a digit, and an uppercase letter or a
+/// symbol ("Password11", "JBpass23$"). Serials, model numbers and hostnames
+/// are uppercase or carry dots, colons and slashes, so they don't qualify.
+fn password_shaped(t: &str) -> bool {
+    let sym = |c: char| "!@#$%^&*+=?~".contains(c);
+    t.chars().any(|c| c.is_ascii_lowercase())
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().any(|c| c.is_ascii_uppercase() || sym(c))
+        && !t.contains("://")
+        && !t.starts_with("www.")
+}
+
+/// Passwords with no word to announce them: a line that is one
+/// password-shaped token (a login written as user, then password, on lines
+/// of their own), and anywhere, a token strong enough to be nothing else:
+/// eight or more characters with upper, lower, digit and symbol
+/// ("vpn: jsmith / Spring26$").
+fn bare_passwords(text: &str) -> Vec<Range<usize>> {
+    let sym = |c: char| "!@#$%^&*+=?~".contains(c);
+    let mut out = Vec::new();
+    let mut line_start = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let lead = body.len() - body.trim_start().len();
+        let token = body.trim();
+        let alone = !token.is_empty()
+            && !token.contains(char::is_whitespace)
+            && (6..=64).contains(&token.len())
+            && !token.contains(['.', ':', '/', '\\', '='])
+            // "USW-24-PoE" is a model; a hyphenated password has a symbol too.
+            && (!token.contains('-') || token.chars().any(|c| "!@#$%^&*+?~".contains(c)))
+            && password_shaped(token);
+        if alone {
+            let at = line_start + lead;
+            out.push(at..at + token.len());
+        } else {
+            let mut at = line_start;
+            for word in body.split(char::is_whitespace) {
+                let t = word.trim_matches(|c: char| ",;()[]{}\"'".contains(c));
+                let start = at + word.find(t).unwrap_or(0);
+                let email = t
+                    .split_once('@')
+                    .is_some_and(|(_, d)| d.contains('.') && !d.ends_with('.'));
+                if t.len() >= 8
+                    && t.chars().any(|c| c.is_ascii_uppercase())
+                    && t.chars().any(sym)
+                    && password_shaped(t)
+                    // "key=value" is read by the rules that know the key.
+                    && !t.contains('=')
+                    && !email
+                {
+                    out.push(start..start + t.len());
+                }
+                at += word.len() + 1;
+            }
+        }
+        line_start += line.len();
+    }
+    out
+}
+
 /// The value after each password word, read like a sentence: after a link
 /// ("is", "was", ":", "=") the first real word; with no link, the first word
 /// that isn't filler, unless the sentence is about passwords ("password
-/// policy", "password reset done"). Stops at the end of the line or sentence.
+/// policy", "password reset done") or just goes on ("password when
+/// prompted"). Stops at the end of the line or sentence.
 fn password_values(text: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     for m in PASSWORD.find_iter(text) {
@@ -282,7 +363,10 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
             None => toks
                 .iter()
                 .find(|t| !FILLER.contains(&word(&t.0).as_str()))
-                .filter(|t| !NOT_VALUE.contains(&word(&t.0).as_str())),
+                .filter(|t| {
+                    let w = word(&t.0);
+                    !NOT_VALUE.contains(&w.as_str()) && !PLAIN.contains(&w.as_str())
+                }),
         };
         if let Some((r, _)) = pick {
             // "hunter2." keeps its full stop out of the redaction.
@@ -328,12 +412,77 @@ pub fn markers(text: &str) -> Vec<Range<usize>> {
     MARKER.find_iter(text).map(|m| m.range()).collect()
 }
 
+/// The technician's own calls: values to redact that nothing detects, and
+/// detected values that are fine to keep.
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
+pub struct Overrides {
+    pub redact: Vec<String>,
+    pub allow: Vec<String>,
+}
+
+impl Overrides {
+    /// Redact `value` everywhere it appears (and stop allowing it).
+    pub fn add_redact(&mut self, value: &str) -> bool {
+        let v = value.trim();
+        if v.chars().count() < 2 {
+            return false;
+        }
+        self.allow.retain(|a| a != v);
+        if !self.redact.iter().any(|r| r == v) {
+            self.redact.push(v.to_string());
+        }
+        true
+    }
+
+    /// Keep `value` as written, wherever it appears.
+    pub fn add_allow(&mut self, value: &str) {
+        let v = value.trim();
+        if v.is_empty() {
+            return;
+        }
+        self.redact.retain(|r| r != v);
+        if !self.allow.iter().any(|a| a == v) {
+            self.allow.push(v.to_string());
+        }
+    }
+}
+
 /// Everything that would be redacted, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
+    find_with(text, &Overrides::default())
+}
+
+/// As `find`, with the technician's overrides: their picks are added,
+/// whatever they allowed is left out.
+pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = detect(text)
+        .into_iter()
+        .filter(|h| !ov.allow.iter().any(|a| a == text[h.span.clone()].trim()))
+        .collect();
+    let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
+    for v in ov.redact.iter().filter(|v| !v.is_empty()) {
+        for (i, _) in text.match_indices(v.as_str()) {
+            let span = i..i + v.len();
+            if !done
+                .iter()
+                .any(|d| span.start < d.end && d.start < span.end)
+            {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Manual,
+                });
+            }
+        }
+    }
+    merge(hits)
+}
+
+fn detect(text: &str) -> Vec<Hit> {
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
     let fresh = |r: &Range<usize>| !done.iter().any(|d| r.start < d.end && d.start < r.end);
     let mut hits: Vec<Hit> = password_values(text)
         .into_iter()
+        .chain(bare_passwords(text))
         .filter(|r| fresh(r))
         .map(|span| Hit {
             span,
@@ -367,7 +516,11 @@ pub fn find(text: &str) -> Vec<Hit> {
             }
         }
     }
-    // Earliest first; on overlap the first (wider, by rule order) wins.
+    merge(hits)
+}
+
+/// Earliest first; on overlap the first (wider, by rule order) wins.
+fn merge(mut hits: Vec<Hit>) -> Vec<Hit> {
     hits.sort_by_key(|h| (h.span.start, std::cmp::Reverse(h.span.end)));
     let mut out: Vec<Hit> = Vec::new();
     for h in hits {
@@ -384,7 +537,12 @@ pub fn find(text: &str) -> Vec<Hit> {
 /// The text with every hit replaced by `[REDACTED: kind]`. Line breaks
 /// inside a hit are kept, so line N of the result is line N of the input.
 pub fn sanitize(text: &str) -> (String, Vec<Hit>) {
-    let hits = find(text);
+    sanitize_with(text, &Overrides::default())
+}
+
+/// As `sanitize`, with the technician's overrides.
+pub fn sanitize_with(text: &str, ov: &Overrides) -> (String, Vec<Hit>) {
+    let hits = find_with(text, ov);
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     for h in &hits {
@@ -531,6 +689,87 @@ mod tests {
         );
         assert_eq!(red("(555) 123-4567"), "[REDACTED: phone]");
         assert_eq!(red("+1 555.123.4567"), "[REDACTED: phone]");
+    }
+
+    /// A real-world note's shape (names and values made up).
+    #[test]
+    fn notes_as_techs_write_them() {
+        let t = "jane Doe, NEW USER - also needs vpn Copy Sam Lee\n    \
+jdoe@example.com\n    JDpass23$\n         VPN: jane.doe / JDpass23%\n\n\
+DSmith-LAPTOP - Out - Dan Smith\ndsmith\nPassword11\nNeeds sage credentials\n\
+DSmith\n\nGV Edge Recording Manager - export data from old install: System > Export - \
+give it a password when prompt comes up. Import it the same - Enter password you gave during export.";
+        let r = red(t);
+        for gone in ["JDpass23$", "JDpass23%", "Password11", "jdoe@example.com"] {
+            assert!(!r.contains(gone), "{gone} left in:\n{r}");
+        }
+        for kept in [
+            "a password when prompt",
+            "Enter password you gave",
+            "jane.doe",
+            "DSmith-LAPTOP",
+            "dsmith",
+            "Needs sage credentials",
+        ] {
+            assert!(r.contains(kept), "{kept} redacted:\n{r}");
+        }
+        assert_eq!(summary(&sanitize(t).1), "4 redacted: 3 passwords, 1 email");
+    }
+
+    #[test]
+    fn bare_values_need_the_shape() {
+        // Strong anywhere; weaker only alone on a line.
+        assert_eq!(
+            red("login jsmith / Spring26$ ok"),
+            "login jsmith / [REDACTED: password] ok"
+        );
+        assert_eq!(red("Welcome1\n"), "[REDACTED: password]\n");
+        for t in [
+            "Win11",
+            "Office 365 E3",
+            "SN 2CB8EDA78330",
+            "USW-24-PoE",
+            "fw SonicOS-7.3.3",
+            "C:\\Users\\jsmith1",
+            "https://portal.example.com/a?B=1&c=Zz9!",
+            "Fixed on Win11!",
+            "dlee134",
+            "50% done, R&D",
+        ] {
+            assert_eq!(red(t), t);
+        }
+    }
+
+    #[test]
+    fn overrides_redact_and_allow() {
+        let t = "Lockbox code 4471 at the door. License Office365\nlockbox again: 4471";
+        assert_eq!(
+            red(t),
+            "Lockbox code 4471 at the door. License Office365\nlockbox again: 4471"
+        );
+        let mut ov = Overrides::default();
+        assert!(ov.add_redact(" 4471 "));
+        assert!(!ov.add_redact("x"));
+        let (clean, hits) = sanitize_with(t, &ov);
+        assert_eq!(
+            clean,
+            "Lockbox code [REDACTED: by hand] at the door. License Office365\nlockbox again: [REDACTED: by hand]"
+        );
+        assert_eq!(summary(&hits), "2 redacted: 2 picked by hand");
+
+        let t = "Office365\npassword: hunter2";
+        assert_eq!(find(t).len(), 2);
+        let mut ov = Overrides::default();
+        ov.add_allow("Office365");
+        let (clean, _) = sanitize_with(t, &ov);
+        assert_eq!(clean, "Office365\npassword: [REDACTED: password]");
+        // Redacting it again takes it off the allow list.
+        ov.add_redact("Office365");
+        assert!(ov.allow.is_empty());
+        assert_eq!(sanitize_with(t, &ov).1.len(), 2);
+        // Twice is still a no-op.
+        let once = sanitize_with(t, &ov).0;
+        assert_eq!(sanitize_with(&once, &ov).0, once);
     }
 
     #[test]
