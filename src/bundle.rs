@@ -29,6 +29,8 @@ pub struct Bundle {
     pub site: String,
     pub notes: String,
     pub clients: crate::unifi::Clients,
+    /// Answer to /mapnetwork's "infrastructure only, or include clients?".
+    pub map_clients: bool,
     pub scanner: HostInfo,
     pub parts: Vec<Part>,
 }
@@ -36,6 +38,20 @@ pub struct Bundle {
 impl Bundle {
     fn has(&self, file: &str) -> bool {
         self.parts.iter().any(|p| p.file == file)
+    }
+
+    /// What the bundle's client table is, for the prompt; None without a
+    /// UniFi export, which is the only source of one.
+    fn client_table(&self) -> Option<&'static str> {
+        use crate::unifi::Clients;
+        self.has(UNIFI).then_some(match self.clients {
+            Clients::None => "Client table: not included.",
+            Clients::Anonymized => {
+                "Client table: included, anonymized. Device names are client-xxxxxxxx tokens, stable \
+per MAC; MAC, vendor and switch port are real. Use it for client counts and to spot unadopted gear."
+            }
+            Clients::Full => "Client table: included, with the controller's real device names.",
+        })
     }
 
     fn notes(&self) -> Option<&str> {
@@ -81,7 +97,7 @@ impl Bundle {
                 "scan": self.has(INVENTORY).then_some(INVENTORY),
                 "firewall_config": self.has(SONICWALL).then_some(SONICWALL),
                 "known_problems": self.notes(),
-                "map_clients": false,
+                "map_clients": self.map_clients,
                 "note": "Answers /mapnetwork's pre-build question. Treat it as answered; don't ask again.",
             },
             "privacy": "Built from sanitized exports: passwords, keys, secrets and certificates were removed on the technician's machine before this bundle was made.",
@@ -113,10 +129,18 @@ impl Bundle {
             let verb = if step == 1 { "Run" } else { "Then" };
             s += &format!(
                 "{step}. {verb} /mapnetwork for {site} (new map), using {}. manifest.json's \
-mapnetwork_preflight answers your pre-build question: infrastructure only, no extra inputs coming. \
+mapnetwork_preflight answers your pre-build question: {}, no extra inputs coming. \
 Don't ask it again.\n",
-                join(&inputs)
+                join(&inputs),
+                if self.map_clients {
+                    "put client devices on the map"
+                } else {
+                    "infrastructure only, clients off the map"
+                }
             );
+        }
+        if let Some(t) = self.client_table() {
+            s += &format!("\n{t}\n");
         }
         if let Some(n) = self.notes() {
             s += &format!("\nKnown problems from the technician: {n}\n");
@@ -250,6 +274,7 @@ mod tests {
             site: " McClendon Baptist ".into(),
             notes: "Closet 2 switch flaky".into(),
             clients: Clients::Anonymized,
+            map_clients: false,
             scanner: HostInfo::default(),
             parts,
         }
@@ -341,6 +366,28 @@ sonicwall.json and inventory.json"
                 "1. Run /mapnetwork for McClendon Baptist (new map), using sonicwall.json."
             )
         );
+    }
+
+    #[test]
+    fn kickoff_follows_client_settings() {
+        let mut b = bundle(vec![part(UNIFI, ""), part(INVENTORY, "")]);
+        let k = b.kickoff("x.zip");
+        assert!(k.contains("infrastructure only, clients off the map"));
+        assert!(k.contains("Client table: included, anonymized."));
+
+        b.map_clients = true;
+        b.clients = Clients::Full;
+        let k = b.kickoff("x.zip");
+        assert!(k.contains("put client devices on the map"));
+        assert!(k.contains("with the controller's real device names"));
+        let m = b.manifest();
+        assert_eq!(m["mapnetwork_preflight"]["map_clients"], true);
+
+        b.clients = Clients::None;
+        assert!(b.kickoff("x.zip").contains("Client table: not included."));
+        // No UniFi export, no client table to describe.
+        let fw = bundle(vec![part(SONICWALL, "")]);
+        assert!(!fw.kickoff("x.zip").contains("Client table"));
     }
 
     #[test]

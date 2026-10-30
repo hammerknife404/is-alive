@@ -4,7 +4,7 @@ use crate::net::hostinfo::{self, HostInfo};
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
 use crate::net::{self, TcpState, ports, targets};
-use crate::widgets::{self, Action, OK};
+use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
 use std::collections::HashSet;
@@ -150,7 +150,7 @@ impl SweepTool {
             if self.total > 0 {
                 ui.label(
                     RichText::new(format!("{} alive", self.alive.len()))
-                        .color(OK)
+                        .color(widgets::ok())
                         .strong(),
                 );
                 ui.label(format!("· {} / {} probed", self.probed, self.total));

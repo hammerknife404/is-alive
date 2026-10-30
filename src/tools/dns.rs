@@ -155,7 +155,7 @@ impl DnsTool {
         });
         widgets::error(ui, &self.err);
         for n in &self.notes {
-            ui.label(RichText::new(format!("⚠ {n}")).color(widgets::WARN));
+            ui.label(RichText::new(format!("⚠ {n}")).color(widgets::warn()));
         }
         ui.separator();
 
@@ -175,7 +175,10 @@ impl DnsTool {
             });
         });
         if self.records.is_empty() && !running {
-            widgets::empty_hint(ui, "Enter a name or IP and press Enter.");
+            // After a run the error or the record count above says what happened.
+            if self.took.is_none() && self.err.is_none() {
+                widgets::empty_hint(ui, "Enter a name or IP and press Enter.");
+            }
             return;
         }
         let show_source = self.records.iter().any(|r| r.0 != self.records[0].0);
@@ -437,7 +440,18 @@ fn system_lookup(q: &str) -> Rows {
             .map(|n| vec![("PTR".into(), n)])
             .unwrap_or_default());
     }
-    let ips = net::lookup_all(q).map_err(|e| format!("{} ({e})", no_records(q, "A/AAAA")))?;
+    // The OS resolver can't tell "no such name" from "no DNS server
+    // answered", so don't claim the domain is at fault.
+    let ips = net::lookup_all(q).map_err(|e| {
+        let mut m = format!(
+            "the system resolver couldn't resolve {q} ({e}); pick a public resolver to tell a \
+missing record from a local DNS problem"
+        );
+        if q.starts_with('_') {
+            m += "; names like _service._tcp hold SRV records, set Type to SRV";
+        }
+        m
+    })?;
     let mut rows: Vec<(String, String)> = ips
         .iter()
         .map(|ip| {

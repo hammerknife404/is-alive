@@ -1,10 +1,12 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod backdrop;
 mod bundle;
 mod job;
 mod log;
 mod net;
 mod sonicwall;
+mod theme;
 mod tools;
 mod unifi;
 mod widgets;
@@ -96,6 +98,12 @@ struct App {
     info_job: Option<Job<HostInfo>>,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
+    /// Scroll Results to its newest runs on the next frame (after a full scan).
+    jump_to_new: bool,
+    look: theme::Settings,
+    backdrop: backdrop::Backdrop,
+    /// File dialog for the Miami Vice backdrop image.
+    pick_image: Option<Job<Option<std::path::PathBuf>>>,
 }
 
 impl eframe::App for App {
@@ -110,9 +118,22 @@ impl eframe::App for App {
         self.collect();
         self.dropped_files(ui.ctx());
         pump(&mut self.info_job, |i| self.info = i);
-        egui::Panel::top("tabs").show(ui, |ui| {
+        let mut picked = None;
+        pump(&mut self.pick_image, |p| picked = p);
+        if let Some(p) = picked {
+            self.look.backdrop = backdrop::Source::Image(p);
+            theme::save(&self.look);
+        }
+        // Under every panel; Miami Vice's panels are translucent over it.
+        if self.look.theme == theme::Theme::Miami {
+            self.backdrop
+                .paint(ui.ctx(), &self.look.backdrop, self.look.animate);
+        }
+        let tabs = egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            // Wraps to a second row when the window (or display scaling)
+            // leaves too little width, so every tab stays reachable.
+            ui.horizontal_wrapped(|ui| {
                 let busy = self.any_running();
                 let tip = if busy {
                     "Wait for running tools to finish (or stop them) to run a full scan."
@@ -130,36 +151,65 @@ impl eframe::App for App {
                     self.full_scan(ui.ctx());
                 }
                 ui.separator();
+                // The selected tab is marked by a sliding underline rather
+                // than a filled box; running jobs get a pulsing dot that
+                // doesn't change the tab's width.
+                let fill = ui.visuals().selection.bg_fill;
+                ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                let mut selected = None;
+                let mut dots = Vec::new();
                 for (tab, name, tip) in TABS {
-                    // Jobs keep running on hidden tabs; mark them so they aren't forgotten.
-                    let label = if self.tab_running(*tab) {
-                        egui::RichText::new(format!("{name} ⏺")).color(widgets::OK)
-                    } else {
-                        egui::RichText::new(*name)
-                    };
-                    ui.selectable_value(&mut self.tab, *tab, label)
-                        .on_hover_text(*tip);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if self.bundle.is_running() {
-                        "Site Bundle ⏺"
-                    } else {
-                        "Site Bundle…"
-                    };
-                    if ui
-                        .button(label)
-                        .on_hover_text(
-                            "Wrap the UniFi and SonicWall exports, the sweep inventory and \
-(optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
-                        )
-                        .clicked()
-                    {
-                        self.bundle.open = !self.bundle.open;
+                    let on = self.tab == *tab;
+                    let mut text = egui::RichText::new(*name);
+                    if on {
+                        text = text.color(theme::accent());
                     }
-                });
+                    let r = ui.selectable_label(on, text).on_hover_text(*tip);
+                    if r.clicked() {
+                        self.tab = *tab;
+                    }
+                    if on {
+                        selected = Some(r.rect);
+                    }
+                    if self.tab_running(*tab) {
+                        dots.push(r.rect);
+                    }
+                }
+                ui.visuals_mut().selection.bg_fill = fill;
+                if let Some(r) = selected {
+                    tab_underline(ui, r);
+                }
+                let bundle = |ui: &mut egui::Ui| {
+                    ui.button("Site Bundle…").on_hover_text(
+                        "Wrap the UniFi and SonicWall exports, the sweep inventory and \
+(optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
+                    )
+                };
+                // Right-aligned when the row has room; otherwise it wraps with the tabs.
+                let need = egui::WidgetText::from("Site Bundle…")
+                    .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Button)
+                    .size()
+                    .x
+                    + 2.0 * ui.spacing().button_padding.x
+                    + ui.spacing().item_spacing.x
+                    + 8.0;
+                let button = if ui.available_width() > need {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
+                        .inner
+                } else {
+                    bundle(ui)
+                };
+                if button.clicked() {
+                    self.bundle.open = !self.bundle.open;
+                }
+                if self.bundle.is_running() {
+                    dots.push(button.rect);
+                }
+                running_dots(ui, &dots);
             });
             ui.add_space(2.0);
         });
+        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
@@ -192,6 +242,30 @@ impl eframe::App for App {
                         self.refresh_info(ui.ctx());
                     }
                     ui.weak(format!("v{VERSION}"));
+                    ui.separator();
+                    match theme::menu(ui, &mut self.look) {
+                        Some(theme::MenuAction::Changed) => {
+                            theme::apply(ui.ctx(), self.look.theme);
+                            theme::save(&self.look);
+                        }
+                        Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
+                            self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
+                                tx.send(
+                                    rfd::FileDialog::new()
+                                        .set_title("Miami Vice backdrop")
+                                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                                        .pick_file(),
+                                )
+                            }));
+                        }
+                        _ => {}
+                    }
+                    if self.look.theme == theme::Theme::Miami
+                        && let Some(e) = &self.backdrop.err
+                    {
+                        ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
+                            .on_hover_text(e.as_str());
+                    }
                 });
             });
         });
@@ -243,19 +317,24 @@ impl App {
             self.tab = Tab::Export;
             self.export.open(ctx, dropped);
         }
-        if hovering {
+        let fade = ctx.animate_bool(egui::Id::new("drop_fade"), hovering);
+        if fade > 0.0 {
             let rect = ctx.content_rect();
             let p = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("drop"),
             ));
-            p.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
+            p.rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_black_alpha((180.0 * fade) as u8),
+            );
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Drop a UniFi backup or SonicWall export to convert it",
                 egui::FontId::proportional(18.0),
-                egui::Color32::WHITE,
+                egui::Color32::WHITE.gamma_multiply(fade),
             );
         }
     }
@@ -314,6 +393,10 @@ impl App {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }
         self.tab = Tab::Results;
+        // Show the new runs: a leftover filter could hide them, and the
+        // view may be scrolled up on older ones.
+        self.filter.clear();
+        self.jump_to_new = true;
     }
 
     /// Move finished runs into the log.
@@ -371,6 +454,7 @@ impl App {
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
+        let jump = std::mem::take(&mut self.jump_to_new);
         let running = self.running();
         let needle = self.filter.trim().to_lowercase();
         let hit = |tool: &str, text: &str| {
@@ -456,11 +540,56 @@ impl App {
                             format!("=== {header} ===\n{}\n", text.trim_end())
                         });
                     }
+                    if jump {
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    }
                 });
         }
         if clear {
             self.log.clear();
         }
+    }
+}
+
+/// Underline under the selected tab, sliding to the new one on a switch.
+fn tab_underline(ui: &egui::Ui, r: egui::Rect) {
+    let ctx = ui.ctx();
+    let ease =
+        |k: &str, v: f32| ctx.animate_value_with_time(egui::Id::new(("tab_line", k)), v, 0.16);
+    let (x0, x1, y) = (
+        ease("x0", r.left() + 4.0),
+        ease("x1", r.right() - 4.0),
+        ease("y", r.bottom() + 1.0),
+    );
+    theme::glow(ui.painter(), x0..=x1, y);
+    ui.painter()
+        .hline(x0..=x1, y, egui::Stroke::new(2.0, theme::accent()));
+}
+
+/// Pulsing dot in the top-right corner of each tab whose job is running.
+fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
+    if rects.is_empty() {
+        return;
+    }
+    // Slow pulse at 10 fps, held still while the window isn't focused: a
+    // continuous ping can run for hours, and each frame redraws the window.
+    let focused = ui.input(|i| i.viewport().focused != Some(false));
+    let t = ui.input(|i| i.time) as f32;
+    let a = if focused {
+        0.35 + 0.65 * (0.5 + 0.5 * (t * 3.0).sin())
+    } else {
+        1.0
+    };
+    for r in rects {
+        ui.painter().circle_filled(
+            egui::pos2(r.right() - 2.0, r.top() + 3.0),
+            2.5,
+            widgets::ok().gamma_multiply(a),
+        );
+    }
+    if focused {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 
@@ -501,7 +630,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))
             .with_app_id("is-alive")
-            .with_inner_size([860.0, 600.0])
+            .with_inner_size([980.0, 660.0])
             .with_min_inner_size([620.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(icon()),
@@ -511,6 +640,8 @@ fn main() -> eframe::Result {
         "is-alive",
         options,
         Box::new(|cc| {
+            let look = theme::load();
+            theme::apply(&cc.egui_ctx, look.theme);
             let mut app = App {
                 tab: Tab::Ping,
                 ping: Default::default(),
@@ -525,6 +656,10 @@ fn main() -> eframe::Result {
                 info: HostInfo::local(),
                 info_job: None,
                 filter: String::new(),
+                jump_to_new: false,
+                look,
+                backdrop: Default::default(),
+                pick_image: None,
             };
             app.refresh_info(&cc.egui_ctx);
             Ok(Box::new(app))
