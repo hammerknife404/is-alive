@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = "speed.cloudflare.com";
 pub const BASE: &str = "https://speed.cloudflare.com";
-/// Per request: as large as Cloudflare's own test asks for, so a stream
-/// is rarely between requests. Runs are cut at the deadline, not at the end.
-const DOWN_BYTES: u64 = 100_000_000;
+/// Per request. Cloudflare answers 403 to large ones (100 MB was refused in
+/// the field; others report 50 MB working), so stay well under that; each
+/// stream asks again as soon as one ends. Runs are cut at the deadline.
+const DOWN_BYTES: u64 = 25_000_000;
 const UP_BYTES: u64 = 25_000_000;
 const CHUNK: usize = 64 * 1024;
 
@@ -21,6 +22,59 @@ const CHUNK: usize = 64 * 1024;
 pub const VOIP_LATENCY_MS: f64 = 150.0;
 pub const VOIP_JITTER_MS: f64 = 30.0;
 pub const VOIP_LOSS_PCT: f64 = 1.0;
+
+/// Where a test runs.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Server {
+    /// Cloudflare's speed test: download, upload and where it ran.
+    Cloudflare,
+    /// Any file served over HTTP(S), downloaded again and again. Download
+    /// only: plain file hosts don't take uploads.
+    File(String),
+}
+
+impl Server {
+    /// The host name, for latency probes and the report.
+    pub fn host(&self) -> Result<String, String> {
+        match self {
+            Server::Cloudflare => Ok(HOST.into()),
+            Server::File(url) => file_host(url),
+        }
+    }
+
+    pub fn uploads(&self) -> bool {
+        matches!(self, Server::Cloudflare)
+    }
+
+    /// The URL each stream fetches or posts to.
+    pub fn url(&self, dir: Dir) -> String {
+        match (self, dir) {
+            (Server::Cloudflare, Dir::Down) => format!("{BASE}/__down?bytes={DOWN_BYTES}"),
+            (Server::Cloudflare, Dir::Up) => format!("{BASE}/__up"),
+            (Server::File(url), _) => url.trim().to_string(),
+        }
+    }
+}
+
+/// Host of an http(s) URL, or why it can't be used.
+pub fn file_host(url: &str) -> Result<String, String> {
+    let url = url.trim();
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .ok_or("the URL must start with https:// or http://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() {
+        return Err("the URL has no host".into());
+    }
+    Ok(host.to_string())
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dir {
@@ -100,7 +154,8 @@ pub struct Transfer {
 }
 
 impl Transfer {
-    pub fn start(agent: &ureq::Agent, base: &str, dir: Dir, streams: usize) -> Self {
+    /// `streams` connections moving data to or from `url` (see `Server::url`).
+    pub fn start(agent: &ureq::Agent, url: &str, dir: Dir, streams: usize) -> Self {
         let bytes = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let err = Arc::new(Mutex::new(None));
@@ -108,7 +163,7 @@ impl Transfer {
             .map(|_| {
                 let (agent, bytes, stop, err) =
                     (agent.clone(), bytes.clone(), stop.clone(), err.clone());
-                let base = base.to_string();
+                let url = url.to_string();
                 std::thread::spawn(move || {
                     let s = Stream {
                         agent,
@@ -117,8 +172,8 @@ impl Transfer {
                         err: &err,
                     };
                     match dir {
-                        Dir::Down => s.download(&format!("{base}/__down?bytes={DOWN_BYTES}")),
-                        Dir::Up => s.upload(&format!("{base}/__up")),
+                        Dir::Down => s.download(&url),
+                        Dir::Up => s.upload(&url),
                     }
                 })
             })
@@ -446,7 +501,11 @@ pub(crate) mod tests {
         let base = mock();
         let agent = agent(2);
         for dir in [Dir::Down, Dir::Up] {
-            let t = Transfer::start(&agent, &base, dir, 2);
+            let url = match dir {
+                Dir::Down => format!("{base}/__down?bytes={DOWN_BYTES}"),
+                Dir::Up => format!("{base}/__up"),
+            };
+            let t = Transfer::start(&agent, &url, dir, 2);
             let end = Instant::now() + Duration::from_secs(5);
             while t.bytes() < 4 << 20 && Instant::now() < end {
                 std::thread::sleep(Duration::from_millis(20));
@@ -461,6 +520,19 @@ pub(crate) mod tests {
     fn refused_transfer_reports_why() {
         let base = mock();
         let t = Transfer::start(&agent(1), &format!("{base}/nope"), Dir::Down, 1);
+        // A plain file, fetched again and again.
+        let f = Transfer::start(
+            &agent(1),
+            &format!("{base}/__down?bytes=65536"),
+            Dir::Down,
+            1,
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        while f.bytes() < 4 * 65536 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(f.bytes() >= 4 * 65536, "{} bytes", f.bytes());
+        f.stop(Duration::from_secs(1));
         let end = Instant::now() + Duration::from_secs(5);
         while t.error().is_none() && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(20));
@@ -468,6 +540,25 @@ pub(crate) mod tests {
         assert_eq!(t.bytes(), 0);
         assert!(t.error().is_some_and(|e| e.contains("404")));
         t.stop(Duration::from_secs(1));
+    }
+
+    #[test]
+    fn servers() {
+        let cf = Server::Cloudflare;
+        assert_eq!(cf.host().unwrap(), HOST);
+        assert!(cf.uploads());
+        assert!(cf.url(Dir::Down).ends_with("__down?bytes=25000000"));
+        let f = Server::File(" https://files.example.net:8443/1GB.bin?x=1 ".into());
+        assert_eq!(f.host().unwrap(), "files.example.net");
+        assert!(!f.uploads());
+        assert_eq!(
+            f.url(Dir::Down),
+            "https://files.example.net:8443/1GB.bin?x=1"
+        );
+        assert_eq!(file_host("http://[2001:db8::1]/f").unwrap(), "2001:db8::1");
+        assert_eq!(file_host("http://u:p@10.0.0.5/f").unwrap(), "10.0.0.5");
+        assert!(file_host("ftp://x/y").is_err());
+        assert!(file_host("https:///y").is_err());
     }
 
     #[test]
