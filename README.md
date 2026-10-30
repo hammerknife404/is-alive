@@ -9,20 +9,20 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Ping** | ICMP (IPv4/IPv6) or TCP-connect ping, continuous or N count, live latency graph, loss/min/avg/max |
 | **Port Check** | Concurrent TCP connect scan — lists, ranges, presets (Common, Windows/AD, Web, Firewall/VPN, Mail, 1-1024) with service names. TCP only: UDP services such as IKE (500/4500) can't be tested |
 | **Traceroute** | 3 probes per hop, optional reverse DNS |
-| **Speed Test** | Download and upload against Cloudflare, latency, jitter and loss at idle and under load, a bufferbloat grade and a VoIP call-quality score (MOS) (see below) |
 | **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames, MAC and vendor, ping-silent devices from the ARP table, optional management-port check, and an **Inventory** JSON for /mapnetwork (see below) |
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
 | **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
 | **Notes** | Markdown tech notes with a live preview; passwords, keys and patient details are highlighted and replaced before anything is saved, copied or bundled (see below) |
 | **Map** | Network map built from the sweep and any UniFi / SonicWall export: roles by colour, real uplinks where a backup has them, findings, search, pan and zoom, SVG export (see below) |
+| **Speed Test** | Download and upload against Cloudflare, latency, jitter and loss at idle and under load, a bufferbloat grade and a VoIP call-quality score (MOS) (see below) |
 | **Site Bundle…** (top right) | Wraps the UniFi and SonicWall exports, the sweep inventory and optionally the Results log into one zip with a manifest for the unifidump / mapnetwork skills (see below) |
 
 **Themes:** the **Theme** menu in the footer offers Dark (the default: egui's stock dark look), Light and Miami, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs and pauses while the window isn't focused; turn it off on battery. **Glow** adds a soft halo and haze to the bright parts (the sun, neon and windows on the GPU; your picture's highlights either way). On the GPU the scene runs at the display's refresh rate (60, 120, 144 Hz…, whatever the OS has the screen set to; vsync paces it): it's drawn at art resolution by a shader into an offscreen buffer and scaled up with hard edges, so the CPU does almost nothing. Without a usable GPU (a software OpenGL such as llvmpipe or Microsoft's Basic Render Driver, OpenGL below 3.1 / ES 3.0, or a shader the driver rejects) it falls back to drawing on the CPU at 10 frames a second. The Theme menu says which is in use and why; `IS_ALIVE_GPU=off` forces the CPU.
 
 Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
 
-**Ctrl+1 … Ctrl+9** switch to the first nine tabs and **Ctrl+0** to Results (the footer's **?** lists every shortcut), copies and saves confirm with a toast, and the window opens at the size it was closed at.
+**Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut; Speed Test, the last tab, has none), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab keeps the 12 newest runs open and folds older ones, **Clear** asks for a second click, and it has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
