@@ -642,6 +642,7 @@ pub fn build(input: &Input) -> Map {
     // knows by MAC: the same network, not a look-alike 192.168.1.x.
     let local =
         (unifi.is_none() && sonic.is_none()) || same_site(input, unifi.as_ref(), sonic.as_ref());
+    let had_sweep = !input.sweep.is_empty();
     let away;
     let input = if local {
         input
@@ -1283,8 +1284,10 @@ pub fn build(input: &Input) -> Map {
     }
 
     let mut summary = summary(input, unifi.as_ref(), sonic.as_ref());
-    if !local {
-        summary += " · sweep and gateway not merged: this machine is on another network";
+    if !local && had_sweep {
+        summary += " · sweep not merged: it found no device the data knows (another network?)";
+    } else if !local {
+        summary += " · sweep here to add what this machine sees";
     }
     let mut map = limit(b, input.clients);
     map.summary = summary;
@@ -1714,8 +1717,8 @@ mod tests {
             ..Default::default()
         });
         assert!(
-            m.summary.contains("not merged"),
-            "no sweep: nothing local merged"
+            m.summary.contains("sweep here to add"),
+            "no sweep: nothing local merged, and the subtitle says how to add it"
         );
         let gw = &m.nodes[1];
         assert_eq!(gw.kind, "SONICWALL TZ 470");
@@ -1746,6 +1749,7 @@ mod tests {
             range: Some("192.168.1.0/24".into()),
             ..Default::default()
         });
+        assert!(at_office.summary.contains("sweep not merged"));
         let gw = |m: &Map| m.nodes.iter().find(|n| n.id == "gateway").unwrap().clone();
         assert_eq!(gw(&at_office).label, "Gateway (not in the data)");
         assert!(

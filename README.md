@@ -23,7 +23,7 @@ Files named on the command line (or opened with **Open with → is-alive**) go s
 
 **Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
-Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
+Every result view has a **Copy** button for pasting into tickets. The **Results** tab keeps the 12 newest runs open and folds older ones, **Clear** asks for a second click, and it has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
 CSV export uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel:
 
@@ -100,6 +100,8 @@ The **Map** tab draws one picture from what the app has seen, in the spirit of `
 - **Both**: the sweep is merged into a backup only when it found hardware the backup knows by MAC. A backup read at the office isn't mixed up with the office network; the subtitle says so.
 - **Clients** (off by default) puts end devices on the map, up to 10 under each switch or AP and the rest in one *+N more* card, within a 120-card budget; off, each uplink shows a count.
 - **Findings**, worst first, only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, devices UniFi lists as each other's uplink, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and Ubiquiti hardware the backup doesn't know. Click one to show its devices; **Copy** for a ticket.
+
+A note above the map says it's built only from what the app can see and points to Site Bundle → /mapnetwork in Claude for an accurate one; its **×** closes it for good (the footer's **?** keeps the tip).
 
 Drag to pan, scroll or pinch to zoom, double-click the background to fit, drag a card to move it (**Re-layout** puts it back), click a card to trace its path to the internet and see its details, with **Ping**, **Port Check** and **Open web page** for it. Search matches name, IP, MAC and vendor; click a role in the legend to fade it out. **Export SVG** saves the map with its findings as a picture for a ticket or site doc.
 

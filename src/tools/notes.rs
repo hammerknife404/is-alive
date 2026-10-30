@@ -40,6 +40,8 @@ pub struct NotesTool {
     flash: f64,
     /// (hash of text, hits) so the regexes run once per edit.
     cache: RefCell<(u64, Vec<Hit>)>,
+    /// The same for the sanitized text (preview, status, Site Bundle).
+    clean: RefCell<(u64, (String, Vec<Hit>))>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -51,7 +53,10 @@ impl Default for NotesTool {
         let text = path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        Self {
+        // A file with anything redactable in it (edited by hand, or from an
+        // older build) is rewritten sanitized at once, not on the next edit.
+        let unclean = !redact::find(&text).is_empty();
+        let mut notes = Self {
             text,
             view: View::Split,
             show_hits: true,
@@ -61,7 +66,12 @@ impl Default for NotesTool {
             known_hits: 0,
             flash: f64::NEG_INFINITY,
             cache: RefCell::new((u64::MAX, Vec::new())),
+            clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+        };
+        if unclean {
+            notes.write();
         }
+        notes
     }
 }
 
@@ -87,7 +97,12 @@ impl NotesTool {
 
     /// The notes as they may leave this machine.
     pub fn sanitized(&self) -> (String, Vec<Hit>) {
-        redact::sanitize(&self.text)
+        let h = hash(&self.text);
+        let mut c = self.clean.borrow_mut();
+        if c.0 != h {
+            *c = (h, redact::sanitize(&self.text));
+        }
+        c.1.clone()
     }
 
     /// Write the sanitized notes, replacing the file in one step.
@@ -177,8 +192,9 @@ impl NotesTool {
         self.changed(ctx.input(|i| i.time));
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
-        let ctx = ui.ctx().clone();
+    /// Autosave; called every frame whichever tab is showing, so leaving
+    /// Notes right after typing still saves.
+    pub fn poll(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         if self.dirty.is_some_and(|t| now - t >= SAVE_AFTER) {
             self.write();
@@ -188,6 +204,11 @@ impl NotesTool {
                 (SAVE_AFTER - (now - t)).max(0.05),
             ));
         }
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
+        let ctx = ui.ctx().clone();
+        let now = ctx.input(|i| i.time);
         let hits = hits_for(&self.cache, &self.text);
         if hits.len() > self.known_hits {
             self.flash = now;
