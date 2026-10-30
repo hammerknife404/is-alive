@@ -886,4 +886,84 @@ mod tests {
         let i = super::icon();
         assert_eq!((i.width, i.height), (256, 256));
     }
+
+    /// Code points a TrueType/OpenType font maps (cmap formats 4 and 12).
+    fn cmap(d: &[u8]) -> std::collections::HashSet<u32> {
+        let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]) as usize;
+        let u32_at = |o: usize| u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]) as usize;
+        let table = (0..u16_at(4))
+            .map(|i| 12 + 16 * i)
+            .find(|&t| &d[t..t + 4] == b"cmap")
+            .map(|t| u32_at(t + 8))
+            .expect("font has a cmap");
+        let mut cps = std::collections::HashSet::new();
+        for i in 0..u16_at(table + 2) {
+            let o = table + u32_at(table + 8 + 8 * i);
+            match u16_at(o) {
+                4 => {
+                    let seg = u16_at(o + 6) / 2;
+                    for s in 0..seg {
+                        let end = u16_at(o + 14 + 2 * s);
+                        let start = u16_at(o + 16 + 2 * seg + 2 * s);
+                        cps.extend(start as u32..=end as u32);
+                    }
+                }
+                12 => {
+                    for g in 0..u32_at(o + 12) {
+                        let at = o + 16 + 12 * g;
+                        cps.extend(u32_at(at) as u32..=u32_at(at + 4) as u32);
+                    }
+                }
+                _ => {}
+            }
+        }
+        cps
+    }
+
+    /// Every character the app writes must exist in egui's bundled fonts,
+    /// for both proportional and monospace text, or it shows as a box.
+    #[test]
+    fn every_glyph_in_the_source_renders() {
+        use eframe::egui::{FontDefinitions, FontFamily};
+        let defs = FontDefinitions::default();
+        let covers = |fam: &FontFamily, c: char| {
+            defs.families[fam]
+                .iter()
+                .any(|name| cmap(&defs.font_data[name].font).contains(&(c as u32)))
+        };
+        fn walk(p: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(p).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut files,
+        );
+        let mut missing = Vec::new();
+        for f in files {
+            for (n, line) in std::fs::read_to_string(&f).unwrap().lines().enumerate() {
+                // Comments aren't drawn.
+                let code = line.split("//").next().unwrap_or_default();
+                for c in code.chars().filter(|c| !c.is_ascii()) {
+                    for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+                        if !covers(&fam, c) {
+                            missing.push(format!("{c:?} ({fam:?}) at {}:{}", f.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "renders as a box:\n{}",
+            missing.join("\n")
+        );
+    }
 }
