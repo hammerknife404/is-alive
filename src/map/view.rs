@@ -277,7 +277,7 @@ impl MapView {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui
-                        .button("Export SVG")
+                        .button("Export SVG…")
                         .on_hover_text("Save the map as an SVG picture: opens in any browser, drops into a ticket or doc")
                         .clicked()
                     {
@@ -470,7 +470,7 @@ impl MapView {
                 }
             });
             for f in &n.flags {
-                ui.label(RichText::new(format!("⚠ {f}")).color(widgets::warn()));
+                widgets::warning(ui, f);
             }
             ui.separator();
             if let Some((p, link, port)) = &n.up {
@@ -661,7 +661,7 @@ impl MapView {
                     ui.set_max_width(320.0);
                     ui.strong(&n.label);
                     for f in &n.flags {
-                        ui.colored_label(widgets::warn(), format!("⚠ {f}"));
+                        widgets::warning(ui, f);
                     }
                     for d in n.details.iter().take(8) {
                         ui.label(RichText::new(d).small());
@@ -1146,32 +1146,37 @@ fn accuracy_note(ui: &mut Ui) -> Option<Action> {
         .corner_radius(6)
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
-            // Buttons take their room on the right; the text wraps in the rest.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new("×").frame(false))
-                    .on_hover_text("Close this note. The footer's ? keeps the Site Bundle tip.")
-                    .clicked()
-                {
-                    act = Some(Action::HideNote);
-                }
-                if ui
-                    .small_button("Site Bundle…")
-                    .on_hover_text("Wrap the exports, sweep inventory and notes for /mapnetwork")
-                    .clicked()
-                {
-                    act = Some(Action::Bundle);
-                }
-                ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
-                    |ui| {
-                        ui.label(RichText::new("⚠").color(warn));
-                        ui.label(
+            // One row: the text wraps in the room the buttons leave.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("⚠").color(warn));
+                let room = (ui.available_width() - 150.0).max(160.0);
+                ui.allocate_ui(egui::vec2(room, 0.0), |ui| {
+                    ui.add(
+                        egui::Label::new(
                             "Built from what this app can see, so it may be incomplete or wrong. \
 For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
-                        );
-                    },
-                );
+                        )
+                        .wrap(),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new("×").frame(false))
+                        .on_hover_text("Close this note. The footer's ? keeps the Site Bundle tip.")
+                        .clicked()
+                    {
+                        act = Some(Action::HideNote);
+                    }
+                    if ui
+                        .small_button("Site Bundle…")
+                        .on_hover_text(
+                            "Wrap the exports, sweep inventory and notes for /mapnetwork",
+                        )
+                        .clicked()
+                    {
+                        act = Some(Action::Bundle);
+                    }
+                });
             });
         });
     ui.add_space(2.0);

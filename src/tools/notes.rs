@@ -38,7 +38,6 @@ pub struct NotesTool {
     /// Redactions found so far, to flash the count when it grows.
     known_hits: usize,
     flash: f64,
-    clear_armed: Option<f64>,
     /// (hash of text, hits) so the regexes run once per edit.
     cache: RefCell<(u64, Vec<Hit>)>,
 }
@@ -61,7 +60,6 @@ impl Default for NotesTool {
             err: None,
             known_hits: 0,
             flash: f64::NEG_INFINITY,
-            clear_armed: None,
             cache: RefCell::new((u64::MAX, Vec::new())),
         }
     }
@@ -315,27 +313,10 @@ impl NotesTool {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let empty = self.is_empty();
-                let now = ui.input(|i| i.time);
-                let armed = self.clear_armed.is_some_and(|t| now - t < 3.0);
-                let clear = if armed {
-                    egui::Button::new(RichText::new("Clear: sure?").color(widgets::bad()))
-                } else {
-                    egui::Button::new("Clear")
-                };
-                if ui
-                    .add_enabled(!empty, clear)
-                    .on_hover_text("Empty the notes (click twice)")
-                    .clicked()
-                {
-                    if armed {
-                        self.text.clear();
-                        self.clear_armed = None;
-                        self.changed(now);
-                    } else {
-                        self.clear_armed = Some(now);
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs(3));
-                    }
+                if widgets::confirm_button(ui, "notes_clear", !empty, "Clear", "Empty the notes") {
+                    self.text.clear();
+                    let now = ui.input(|i| i.time);
+                    self.changed(now);
                 }
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui

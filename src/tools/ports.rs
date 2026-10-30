@@ -141,7 +141,7 @@ impl PortTool {
         if let Some(e) = first_err {
             // Errors (no route, bad address, out of sockets) are always shown:
             // hiding them would make a broken scan look like "0 open".
-            ui.label(RichText::new(format!("⚠ some probes failed: {e}")).color(widgets::bad()));
+            widgets::error_text(ui, &format!("Some probes failed: {e}"));
         }
         if running && self.total > 0 {
             widgets::progress(ui, self.results.len(), self.total, self.started_at);

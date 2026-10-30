@@ -635,9 +635,8 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(!shown.is_empty(), |ui| {
-                    if ui.button("Clear").on_hover_text("Clear the log").clicked() {
-                        clear = true;
-                    }
+                    clear =
+                        widgets::confirm_button(ui, "log_clear", true, "Clear", "Clear the log");
                     let render = || {
                         if filtered {
                             shown.iter().map(|(_, e)| e.render() + "\n").collect()
@@ -665,9 +664,12 @@ impl App {
         });
         ui.separator();
         if self.log.entries.is_empty() && running.is_empty() {
-            ui.weak("No results yet. Finished runs from every tab are logged here with start/end times.");
+            widgets::empty_hint(
+                ui,
+                "No results yet. Finished runs from every tab are logged here with start and end times.",
+            );
         } else if shown.is_empty() && running.is_empty() {
-            ui.weak("No runs match the filter.");
+            widgets::empty_hint(ui, "No runs match the filter.");
         } else {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
@@ -784,8 +786,8 @@ fn entry_ui(
         .default_open(true)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::save_button(ui, "result", &full);
                 widgets::copy_button(ui, &full);
+                widgets::save_button(ui, "result", &full);
                 if let Some(e) = entry {
                     widgets::export_menu(ui, "result", || vec![e]);
                 }

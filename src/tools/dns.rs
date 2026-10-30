@@ -155,7 +155,7 @@ impl DnsTool {
         });
         widgets::error(ui, &self.err);
         for n in &self.notes {
-            ui.label(RichText::new(format!("⚠ {n}")).color(widgets::warn()));
+            widgets::warning(ui, n);
         }
         ui.separator();
 
