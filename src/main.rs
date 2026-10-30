@@ -106,6 +106,7 @@ impl eframe::App for App {
         self.advanced.poll();
         self.export.poll();
         self.collect();
+        self.dropped_files(ui.ctx());
         pump(&mut self.info_job, |i| self.info = i);
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
@@ -189,6 +190,40 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Files dropped anywhere on the window go to Config Export; while they
+    /// hover, say so.
+    fn dropped_files(&mut self, ctx: &egui::Context) {
+        let (hovering, dropped) = ctx.input(|i| {
+            (
+                !i.raw.hovered_files.is_empty(),
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .map(|f| f.path().to_path_buf())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        if !dropped.is_empty() && !self.export.is_running() {
+            self.tab = Tab::Export;
+            self.export.open(ctx, dropped);
+        }
+        if hovering {
+            let rect = ctx.content_rect();
+            let p = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("drop"),
+            ));
+            p.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
+            p.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop a UniFi backup or SonicWall export to convert it",
+                egui::FontId::proportional(18.0),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+
     fn refresh_info(&mut self, ctx: &egui::Context) {
         self.info_job = Some(Job::spawn(ctx, |tx| tx.send(HostInfo::fetch())));
     }
@@ -432,6 +467,7 @@ fn main() -> eframe::Result {
             .with_app_id("is-alive")
             .with_inner_size([860.0, 600.0])
             .with_min_inner_size([620.0, 400.0])
+            .with_drag_and_drop(true)
             .with_icon(icon()),
         ..Default::default()
     };

@@ -140,8 +140,9 @@ pub fn documents(buf: &[u8]) -> impl Iterator<Item = Result<&[u8], String>> {
             pos = buf.len();
             return Some(Err(format!("BSON stream truncated at byte {pos}")));
         };
-        let n = i32::from_le_bytes(head.try_into().unwrap()) as usize;
-        if n < 5 || pos + n > buf.len() {
+        // Negative or oversized lengths must not wrap the bounds check.
+        let n = usize::try_from(i32::from_le_bytes(head.try_into().unwrap())).unwrap_or(0);
+        if n < 5 || n > buf.len() - pos {
             let at = pos;
             pos = buf.len();
             return Some(Err(format!("BSON bad document length at byte {at}")));
@@ -253,5 +254,7 @@ pub mod tests {
         assert!(super::has_cmd(docs[0]) && !super::has_cmd(docs[1]));
         assert!(super::documents(&s[..s.len() - 1]).any(|d| d.is_err()));
         assert!(super::decode(&b[..b.len() - 2]).is_err());
+        let negative = [(-8i32).to_le_bytes().to_vec(), vec![0; 8]].concat();
+        assert!(super::documents(&negative).next().unwrap().is_err());
     }
 }

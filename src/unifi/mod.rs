@@ -42,15 +42,26 @@ const SECRET: &[&str] = &[
 
 fn is_secret(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    k.starts_with("x_") || SECRET.iter().any(|s| k.contains(s))
+    k.starts_with("x_")
+        || k.ends_with("key")
+        || k.ends_with("keys")
+        || SECRET.iter().any(|s| k.contains(s))
+}
+
+/// Key or certificate material in a value whatever the field is called,
+/// e.g. an OpenVPN client config pasted into a network's settings.
+fn holds_secret(v: &Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        s.contains("-----BEGIN") || s.contains("<key>") || s.contains("PRIVATE KEY")
+    })
 }
 
 /// Drop secret fields at any depth; count each by `collection.path.field`.
 fn redact(v: &mut Value, path: &str, removed: &mut BTreeMap<String, usize>) {
     match v {
         Value::Object(m) => {
-            m.retain(|k, _| {
-                let keep = !is_secret(k);
+            m.retain(|k, v| {
+                let keep = !is_secret(k) && !holds_secret(v);
                 if !keep {
                     *removed.entry(format!("{path}.{k}")).or_default() += 1;
                 }
@@ -222,6 +233,10 @@ mod tests {
             sel("wlanconf"),
             json!({"name": "Staff", "security": "wpapsk", "x_passphrase": "hunter2",
                    "private_preshared_keys": [{"password": "a"}], "radius_secret": "r"}),
+            sel("networkconf"),
+            json!({"name": "VPN", "purpose": "vpn-client", "vlan": 50,
+                   "openvpn_configuration": "client\n<key>\n-----BEGIN PRIVATE KEY-----\nMIIE\n</key>",
+                   "wireguard_client_peer_public_key": "pub"}),
             sel("user"),
             json!({"mac": "bb", "hostname": "Janes-iPhone", "oui": "Apple"}),
             sel("event"),
@@ -242,6 +257,8 @@ mod tests {
             "radius_secret",
             "\"p\"",
             "root",
+            "PRIVATE KEY",
+            "peer_public_key",
         ] {
             assert!(!text.contains(secret), "{secret} leaked");
         }
@@ -254,7 +271,12 @@ mod tests {
         assert_eq!(r.dropped.get("admin"), Some(&1));
         assert_eq!(r.redacted.get("device.config_network.password"), Some(&1));
         assert_eq!(r.redacted.get("wlanconf.private_preshared_keys"), Some(&1));
-        assert!(r.summary().contains("Secret fields removed: 6"));
+        assert_eq!(
+            r.redacted.get("networkconf.openvpn_configuration"),
+            Some(&1)
+        );
+        assert!(text.contains("\"purpose\":\"vpn-client\""));
+        assert!(r.summary().contains("Secret fields removed: 8"));
     }
 
     #[test]

@@ -100,7 +100,16 @@ fn convert(data: Vec<u8>, clients: bool) -> Result<Export, String> {
     if sonicwall::decode(&data).is_some() {
         sonicwall::convert(&data).map(Export::SonicWall)
     } else {
-        unifi::convert(data, clients).map(Export::Unifi)
+        unifi::convert(data, clients)
+            .map(Export::Unifi)
+            .map_err(|e| {
+                if e.starts_with("not a UniFi backup") {
+                    "not a UniFi backup (.unf, .unifi, db.gz) or SonicWall settings export (.exp)"
+                        .into()
+                } else {
+                    e
+                }
+            })
     }
 }
 
@@ -118,15 +127,18 @@ impl ExportTool {
 
     pub fn poll(&mut self) -> bool {
         let running = pump(&mut self.job, |ev| match ev {
-            Ev::Picked(p) => {
-                self.pending = Some(p);
-                self.err = None;
-            }
+            Ev::Picked(p) => self.pending = Some(p),
             Ev::Done(path, Ok(export)) => {
                 let i = export.slot();
                 self.slots[i] = Some(Slot { path, export });
             }
-            Ev::Done(path, Err(e)) => self.err = Some(format!("{}: {e}", file_name(&path))),
+            Ev::Done(path, Err(e)) => {
+                let e = format!("{}: {e}", file_name(&path));
+                self.err = Some(match self.err.take() {
+                    Some(prev) => format!("{prev}\n{e}"),
+                    None => e,
+                });
+            }
         });
         if !running {
             self.pending = None;
@@ -134,26 +146,38 @@ impl ExportTool {
         running
     }
 
-    /// Convert `path`, or ask for a file first when it's None.
-    fn start(&mut self, ctx: &egui::Context, path: Option<PathBuf>) {
+    /// Convert files dropped on the window or picked elsewhere.
+    pub fn open(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        if !self.is_running() && !paths.is_empty() {
+            self.start(ctx, Some(paths));
+        }
+    }
+
+    /// Convert `paths` one after another, or ask for files first when None.
+    /// Each lands in its kind's slot, so a UniFi backup and a SonicWall
+    /// export picked together both show.
+    fn start(&mut self, ctx: &egui::Context, paths: Option<Vec<PathBuf>>) {
+        self.err = None;
         let clients = self.clients;
         self.job = Some(Job::spawn(ctx, move |tx| {
-            let Some(path) = path.or_else(|| {
+            let Some(paths) = paths.or_else(|| {
                 rfd::FileDialog::new()
                     .set_title("Open config export")
                     .add_filter(
                         "UniFi backup or SonicWall settings",
                         &["unf", "unifi", "exp", "zip", "gz", "txt"],
                     )
-                    .pick_file()
+                    .pick_files()
             }) else {
                 return;
             };
-            tx.send(Ev::Picked(path.clone()));
-            let r = std::fs::read(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|data| convert(data, clients));
-            tx.send(Ev::Done(path, r));
+            for path in paths {
+                tx.send(Ev::Picked(path.clone()));
+                let r = std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|data| convert(data, clients));
+                tx.send(Ev::Done(path, r));
+            }
         }));
     }
 
@@ -165,8 +189,8 @@ impl ExportTool {
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
                     "UniFi: .unf (site export or autobackup), .unifi (UniFi OS console backup), \
-a .zip holding one, or db.gz. SonicWall: .exp settings export. Each kind keeps its own result; \
-opening another file of the same kind replaces it.",
+a .zip holding one, or db.gz. SonicWall: .exp settings export. Pick both at once, or drop them \
+on the window. Each kind keeps its own result; opening another file of the same kind replaces it.",
                 )
                 .clicked()
             {
@@ -179,7 +203,7 @@ unifidump uses it for client counts and to spot unadopted gear plugged in as a c
                 .on_hover_text(tip)
                 .changed();
             if toggled && let Some(s) = &self.slots[0] {
-                self.start(ui.ctx(), Some(s.path.clone()));
+                self.start(ui.ctx(), Some(vec![s.path.clone()]));
             }
             if let Some(p) = &self.pending {
                 ui.spinner();
@@ -197,7 +221,7 @@ the topology and config the skills need. Passwords, keys and secrets are left ou
             if !running {
                 widgets::empty_hint(
                     ui,
-                    "Open a .unf / .unifi UniFi backup (for /unifidump) or a SonicWall .exp (for /mapnetwork).",
+                    "Open or drop a .unf / .unifi UniFi backup (for /unifidump) or a SonicWall .exp (for /mapnetwork).",
                 );
             }
             return;

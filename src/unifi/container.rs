@@ -68,45 +68,56 @@ fn peel(data: Vec<u8>, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
         d.layers.push("db.gz".into());
         return gunzip_rest(rest);
     }
-    if let Some(plain) = decrypt::<aes::Aes128>(UNF_KEY, UNF_IV, &data, ZIP_LOCAL) {
+    if starts_with_after::<aes::Aes128>(UNF_KEY, UNF_IV, &data, ZIP_LOCAL) {
         d.layers.push(".unf (AES-128)".into());
-        return peel(plain, d, depth + 1);
+        return peel(decrypt::<aes::Aes128>(UNF_KEY, UNF_IV, data)?, d, depth + 1);
     }
-    if data.len() > 16 {
-        let (iv, body) = data.split_at(16);
-        if let Some(plain) = decrypt::<aes::Aes256>(&UNIFI_KEY, iv, body, GZIP) {
-            d.layers.push(".unifi (AES-256)".into());
-            return peel(plain, d, depth + 1);
-        }
+    if data.len() > 16
+        && starts_with_after::<aes::Aes256>(&UNIFI_KEY, &data[..16], &data[16..], GZIP)
+    {
+        let iv: [u8; 16] = data[..16].try_into().unwrap();
+        let mut body = data;
+        body.drain(..16);
+        d.layers.push(".unifi (AES-256)".into());
+        return peel(decrypt::<aes::Aes256>(&UNIFI_KEY, &iv, body)?, d, depth + 1);
     }
     Err("not a UniFi backup: expected a .unf, .unifi, a zip holding one, or db.gz".into())
 }
 
-/// AES-CBC without padding, if the plaintext starts with `magic`. The first
-/// block is tried alone so a wrong guess costs one block, not a copy.
-fn decrypt<C>(key: &[u8], iv: &[u8], data: &[u8], magic: &[u8]) -> Option<Vec<u8>>
+/// Whether AES-CBC decryption of `data` would start with `magic`. Only the
+/// first block is decrypted, so a wrong guess costs nothing.
+fn starts_with_after<C>(key: &[u8], iv: &[u8], data: &[u8], magic: &[u8]) -> bool
 where
     C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
     cbc::Decryptor<C>: KeyIvInit,
 {
-    if data.is_empty() || !data.len().is_multiple_of(16) {
-        return None;
+    if data.len() < 16 || !data.len().is_multiple_of(16) {
+        return false;
     }
-    let run = |buf: &mut [u8]| {
-        cbc::Decryptor::<C>::new_from_slices(key, iv)
-            .ok()?
-            .decrypt_padded_mut::<NoPadding>(buf)
-            .ok()
-            .map(|_| ())
-    };
     let mut first = data[..16].to_vec();
-    run(&mut first)?;
-    if !first.starts_with(magic) {
-        return None;
-    }
-    let mut buf = data.to_vec();
-    run(&mut buf)?;
-    Some(buf)
+    decrypt_in_place::<C>(key, iv, &mut first).is_ok() && first.starts_with(magic)
+}
+
+/// AES-CBC, no padding, in place: a large backup isn't held twice.
+fn decrypt<C>(key: &[u8], iv: &[u8], mut data: Vec<u8>) -> Result<Vec<u8>, String>
+where
+    C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
+    cbc::Decryptor<C>: KeyIvInit,
+{
+    decrypt_in_place::<C>(key, iv, &mut data)?;
+    Ok(data)
+}
+
+fn decrypt_in_place<C>(key: &[u8], iv: &[u8], buf: &mut [u8]) -> Result<(), String>
+where
+    C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
+    cbc::Decryptor<C>: KeyIvInit,
+{
+    cbc::Decryptor::<C>::new_from_slices(key, iv)
+        .map_err(|_| "bad key length")?
+        .decrypt_padded_mut::<NoPadding>(buf)
+        .map(|_| ())
+        .map_err(|_| "decryption failed".to_string())
 }
 
 fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {

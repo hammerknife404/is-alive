@@ -4,13 +4,16 @@
 //! tables are flattened as `<field>_<index>` (`iface_name_3`, `policySrcZone_12`).
 //! Output is built only from the fields named here, so admin and user
 //! accounts, VPN and RADIUS secrets, SNMP communities and certificates are
-//! never copied. Comments are kept: they say what a rule or port is for.
+//! never copied. Comments are kept (they say what a rule or port is for) unless
+//! they look like they hold a credential.
 
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 pub struct Report {
     pub keys: usize,
+    /// Comments replaced because they look like they hold a credential.
+    pub withheld: usize,
     pub used: usize,
     /// (table, rows) in output order.
     pub counts: Vec<(&'static str, usize)>,
@@ -38,11 +41,18 @@ impl Report {
         s += &format!(
             "\nSettings in the export: {}; {} copied, {} left behind.\n\
 Only the fields listed above are read: accounts, passwords, VPN and RADIUS secrets,\n\
-SNMP communities and certificates never leave the file. Comments are kept.\n",
+SNMP communities and certificates never leave the file. Comments are kept\n\
+unless they mention a password, key or similar.\n",
             self.keys,
             self.used,
             self.keys - self.used
         );
+        if self.withheld > 0 {
+            s += &format!(
+                "{} comment(s) withheld: they mention a password, key or similar.\n",
+                self.withheld
+            );
+        }
         s
     }
 }
@@ -123,6 +133,8 @@ fn unescape(s: &str) -> String {
 struct Settings {
     map: BTreeMap<String, String>,
     used: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// Comments not copied because they look like they hold a credential.
+    withheld: std::cell::Cell<usize>,
 }
 
 impl Settings {
@@ -136,6 +148,7 @@ impl Settings {
         Self {
             map,
             used: Default::default(),
+            withheld: Default::default(),
         }
     }
 
@@ -150,6 +163,16 @@ impl Settings {
         self.get(&format!("{stem}_{i}"))
     }
 
+    /// A free-text comment, withheld if it looks like it holds a credential.
+    fn comment(&self, stem: &str, i: u32) -> Option<Value> {
+        let v = self.at(stem, i)?;
+        if credential_like(v) {
+            self.withheld.set(self.withheld.get() + 1);
+            return Some(json!("[withheld: may contain a credential]"));
+        }
+        Some(json!(v))
+    }
+
     /// Indices present for `stem` (keys `stem_<n>`), ascending.
     fn indices(&self, stem: &str) -> Vec<u32> {
         let p = format!("{stem}_");
@@ -162,6 +185,26 @@ impl Settings {
         v.sort_unstable();
         v
     }
+}
+
+/// Words that suggest someone typed a credential into a free-text field.
+const CREDENTIAL: &[&str] = &[
+    "pass",
+    "pwd",
+    "psk",
+    "secret",
+    "community",
+    "token",
+    "apikey",
+    "api key",
+];
+
+fn credential_like(v: &str) -> bool {
+    let mut v = v.to_ascii_lowercase();
+    for benign in ["bypass", "passthr", "pass-thr", "pass thr", "passive"] {
+        v = v.replace(benign, "");
+    }
+    CREDENTIAL.iter().any(|w| v.contains(w))
 }
 
 /// An address that means "nothing set".
@@ -250,7 +293,7 @@ fn interfaces(c: &Settings) -> Vec<Value> {
                     "disabled",
                     (c.at("iface_port_disabled", i) == Some("1")).then_some(json!(true)),
                 ),
-                ("comment", s(c.at("iface_comment", i))),
+                ("comment", c.comment("iface_comment", i)),
             ]))
         })
         .collect()
@@ -265,7 +308,10 @@ fn table(c: &Settings, fields: &[(&str, &str)]) -> Vec<Value> {
             c.at(fields[0].1, i)?;
             Some(obj(fields
                 .iter()
-                .map(|(name, stem)| (*name, s(c.at(stem, i))))
+                .map(|(name, stem)| match *name {
+                    "comment" => (*name, c.comment(stem, i)),
+                    _ => (*name, s(c.at(stem, i))),
+                })
                 .collect()))
         })
         .collect()
@@ -321,7 +367,11 @@ fn system(c: &Settings) -> Vec<(String, String)> {
         .iter()
         .filter(|(k, _)| {
             let k = k.to_ascii_lowercase();
-            !k.contains('_') && WANT.iter().any(|w| k.contains(w))
+            !k.contains('_')
+                && WANT.iter().any(|w| k.contains(w))
+                && !credential_like(&k)
+                && !k.contains("key")
+                && !k.contains("user")
         })
         .filter_map(|(k, _)| Some((k.clone(), c.get(k)?.to_string())))
         .collect()
@@ -434,6 +484,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
     let used = c.used.borrow().len();
     Ok(Report {
         keys: c.map.len(),
+        withheld: c.withheld.get(),
         used,
         counts,
         system,
@@ -471,6 +522,8 @@ addrObjId_2=Servers&addrObjType_2=8&addrObjZone_2=LAN&addrObjIp1_2=0.0.0.0&addrO
 addro_atomToGrp_1=Server&addro_grpToGrp_1=Servers&\
 policyAction_0=2&policySrcZone_0=LAN&policyDstZone_0=WAN&policySrcNet_0=&policyDstNet_0=Servers&\
 policyDstSvc_0=HTTPS&policyEnabled_0=1&policyComment_0=web%20out&\
+policyAction_1=2&policySrcZone_1=WAN&policyDstZone_1=LAN&policyComment_1=vpn%20pass%20is%20Hunter2&\
+firmwareUpdatePassword=FwPass&\
 natPolicyOrigSrc_0=&natPolicyTransSrc_0=X1%20IP&natPolicyEnabled_0=1&\
 userObjName_1=jsmith&userObjPass_1=S3cretPass&ipsecSharedSecret_1=TunnelPSK&\
 snmpCommunity=private&adminName=admin&adminPassword=AdminPass&shortProdName=TZ%20470&\
@@ -501,6 +554,8 @@ firmwareVersion=SonicOS%207.0.1&&";
             "isp-account",
             "jsmith",
             "\"private\"",
+            "Hunter2",
+            "FwPass",
         ] {
             assert!(!r.json.contains(secret), "{secret} leaked");
         }
@@ -529,7 +584,12 @@ firmwareVersion=SonicOS%207.0.1&&";
         assert_eq!(rule["dst"], "Servers");
         assert_eq!(v["nat_rules"][0]["trans_src"], "X1 IP");
         assert_eq!(v["system"]["shortProdName"], "TZ 470");
-        assert_eq!((r.count("interfaces"), r.count("access rules")), (3, 1));
+        assert_eq!((r.count("interfaces"), r.count("access rules")), (3, 2));
+        assert_eq!(v["access_rules"][0]["comment"], "web out");
+        assert_eq!(r.withheld, 1);
+        assert!(r.summary().contains("1 comment(s) withheld"));
+        assert!(!credential_like("Passthrough to DMZ, passive FTP"));
+        assert!(credential_like("wifi PSK: abc"));
         assert!(r.used < r.keys);
         assert!(r.summary().contains("left behind"));
     }
