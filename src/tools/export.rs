@@ -246,7 +246,7 @@ on the window. Each kind keeps its own result; opening another file of the same 
                 self.start(ui.ctx(), Some(vec![s.path.clone()]));
             }
             if let Some(p) = &self.pending {
-                ui.spinner();
+                widgets::spinner(ui);
                 ui.add(egui::Label::new(egui::RichText::new(file_name(p)).weak()).truncate());
             }
         });

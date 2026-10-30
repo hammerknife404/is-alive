@@ -211,7 +211,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                 self.save(ui.ctx(), src);
             }
             if running {
-                ui.spinner();
+                widgets::spinner(ui);
             }
             if let Some(s) = &self.saved {
                 if ui

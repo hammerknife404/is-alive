@@ -289,7 +289,7 @@ fn check_ui(ui: &mut Ui, name: &str, check: Option<&Check>, running: bool) {
     let Some(c) = check else {
         ui.horizontal(|ui| {
             if running {
-                ui.spinner();
+                widgets::spinner(ui);
             } else {
                 ui.weak("–");
             }

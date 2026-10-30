@@ -571,8 +571,15 @@ fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
     if rects.is_empty() {
         return;
     }
+    // Slow pulse at 10 fps, held still while the window isn't focused: a
+    // continuous ping can run for hours, and each frame redraws the window.
+    let focused = ui.input(|i| i.viewport().focused != Some(false));
     let t = ui.input(|i| i.time) as f32;
-    let a = 0.35 + 0.65 * (0.5 + 0.5 * (t * 4.0).sin());
+    let a = if focused {
+        0.35 + 0.65 * (0.5 + 0.5 * (t * 3.0).sin())
+    } else {
+        1.0
+    };
     for r in rects {
         ui.painter().circle_filled(
             egui::pos2(r.right() - 2.0, r.top() + 3.0),
@@ -580,8 +587,10 @@ fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
             widgets::ok().gamma_multiply(a),
         );
     }
-    ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(50));
+    if focused {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(100));
+    }
 }
 
 /// `entry` is the logged run, for Export; None while it's still running.

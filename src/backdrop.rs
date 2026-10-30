@@ -1,5 +1,5 @@
 //! Miami Vice backdrop: a 16-bit synthwave scene drawn into a small pixel
-//! buffer (one art pixel = 2×2 points) and scaled up with hard edges, or the
+//! buffer (one art pixel = 2×2 points or more on big windows) and scaled up with hard edges, or the
 //! user's own image with a slow pan. Animated at 10 frames a second in a
 //! 4-second loop, only while the window has focus.
 
@@ -7,8 +7,10 @@ use eframe::egui::{self, Color32, ColorImage, TextureHandle, TextureOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Points per art pixel.
+/// Points per art pixel, at least; larger windows get chunkier pixels so the
+/// frame stays within MAX_ART and its upload small.
 const PX: f32 = 2.0;
+const MAX_ART: (f32, f32) = (640.0, 400.0);
 /// Art-pixel scale for sizes first tuned at 4 points per pixel.
 const K: i32 = 2;
 const FPS: f64 = 10.0;
@@ -47,9 +49,12 @@ impl Backdrop {
                 painter.rect_filled(rect, 0.0, SOLID);
             }
             Source::Scene => {
+                let px = PX
+                    .max((rect.width() / MAX_ART.0).ceil())
+                    .max((rect.height() / MAX_ART.1).ceil());
                 let (w, h) = (
-                    ((rect.width() / PX).ceil() as usize).max(16),
-                    ((rect.height() / PX).ceil() as usize).max(16),
+                    ((rect.width() / px).ceil() as usize).max(16),
+                    ((rect.height() / px).ceil() as usize).max(16),
                 );
                 if self.scene.as_ref().is_none_or(|s| (s.w, s.h) != (w, h)) {
                     self.scene = Some(Scene::new(w, h));
@@ -73,8 +78,8 @@ impl Backdrop {
                     let uv = egui::Rect::from_min_max(
                         egui::pos2(0.0, 0.0),
                         egui::pos2(
-                            rect.width() / (w as f32 * PX),
-                            rect.height() / (h as f32 * PX),
+                            rect.width() / (w as f32 * px),
+                            rect.height() / (h as f32 * px),
                         ),
                     );
                     painter.image(t.id(), rect, uv, Color32::WHITE);
@@ -244,7 +249,7 @@ impl Scene {
             sky,
             stars,
             buildings,
-            buf: vec![Color32::BLACK; w * h],
+            buf: Vec::new(),
         }
     }
 
@@ -305,7 +310,8 @@ impl Scene {
         let (w, h) = (self.w as i32, self.h as i32);
         let (wf, hf) = (w as f32, h as f32);
         let hz = Self::horizon(self.h);
-        self.buf.copy_from_slice(&self.sky);
+        // Fresh buffer from the sky; it moves into the frame at the end.
+        self.buf = self.sky.clone();
 
         // Stars blink on and off, each on its own beat.
         for i in 0..self.stars.len() {
@@ -448,7 +454,7 @@ impl Scene {
         palm(self, wf * 0.93, hz + hf * 0.06, hf * 0.55, -1.0, 2.1);
         palm(self, wf * 0.84, hz + hf * 0.03, hf * 0.42, -0.6, 0.7);
 
-        ColorImage::new([self.w, self.h], self.buf.clone())
+        ColorImage::new([self.w, self.h], std::mem::take(&mut self.buf))
     }
 }
 

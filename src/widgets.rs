@@ -25,7 +25,7 @@ pub enum Action {
 /// Esc stops it.
 pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
     if running {
-        ui.spinner();
+        spinner(ui);
         let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if ui.button("■ Stop").on_hover_text("Stop (Esc)").clicked() || esc {
             return Action::Stop;
@@ -67,6 +67,32 @@ will be flagged as a scan.",
     ),
 ];
 pub const DEFAULT_SPEED: usize = 1;
+
+/// Busy indicator. egui's own spinner asks for a redraw every frame, which
+/// means 60 full window redraws a second (unbounded without vsync) for as
+/// long as a tool runs; this one turns at 20 frames a second.
+pub fn spinner(ui: &mut Ui) {
+    let size = ui.spacing().interact_size.y;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let t = ui.input(|i| i.time) as f32;
+    let start = t * 5.0;
+    let r = rect.height() / 2.0 - 2.0;
+    let pts: Vec<egui::Pos2> = (0..=16)
+        .map(|i| {
+            let a = start + i as f32 / 16.0 * std::f32::consts::PI * 1.4;
+            rect.center() + r * egui::vec2(a.cos(), a.sin())
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(
+        pts,
+        egui::Stroke::new(2.0, ui.visuals().strong_text_color()),
+    ));
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(50));
+}
 
 /// Speed preset picker plus the raw threads / rate values it sets.
 pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
