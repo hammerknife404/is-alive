@@ -63,20 +63,36 @@ impl Export {
             Export::SonicWall(_) => "Save the sanitized config to hand to /mapnetwork",
         }
     }
+
+    /// Which slot it fills: one result per kind, so opening a SonicWall
+    /// export never discards an unsaved UniFi one, and vice versa.
+    fn slot(&self) -> usize {
+        match self {
+            Export::Unifi(_) => 0,
+            Export::SonicWall(_) => 1,
+        }
+    }
+}
+
+struct Slot {
+    path: PathBuf,
+    export: Export,
 }
 
 enum Ev {
     Picked(PathBuf),
-    Done(Result<Export, String>),
+    Done(PathBuf, Result<Export, String>),
 }
 
 #[derive(Default)]
 pub struct ExportTool {
-    path: Option<PathBuf>,
     /// Off by default: client hostnames are often people's names.
     clients: bool,
     job: Option<Job<Ev>>,
-    export: Option<Export>,
+    /// File being read while the job runs.
+    pending: Option<PathBuf>,
+    /// UniFi, SonicWall.
+    slots: [Option<Slot>; 2],
     err: Option<String>,
 }
 
@@ -88,21 +104,34 @@ fn convert(data: Vec<u8>, clients: bool) -> Result<Export, String> {
     }
 }
 
+fn file_name(p: &std::path::Path) -> String {
+    p.file_name().map_or_else(
+        || p.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
 impl ExportTool {
     pub fn is_running(&self) -> bool {
         self.job.is_some()
     }
 
     pub fn poll(&mut self) -> bool {
-        pump(&mut self.job, |ev| match ev {
+        let running = pump(&mut self.job, |ev| match ev {
             Ev::Picked(p) => {
-                self.path = Some(p);
-                self.export = None;
+                self.pending = Some(p);
                 self.err = None;
             }
-            Ev::Done(Ok(r)) => self.export = Some(r),
-            Ev::Done(Err(e)) => self.err = Some(e),
-        })
+            Ev::Done(path, Ok(export)) => {
+                let i = export.slot();
+                self.slots[i] = Some(Slot { path, export });
+            }
+            Ev::Done(path, Err(e)) => self.err = Some(format!("{}: {e}", file_name(&path))),
+        });
+        if !running {
+            self.pending = None;
+        }
+        running
     }
 
     /// Convert `path`, or ask for a file first when it's None.
@@ -122,9 +151,9 @@ impl ExportTool {
             };
             tx.send(Ev::Picked(path.clone()));
             let r = std::fs::read(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))
+                .map_err(|e| e.to_string())
                 .and_then(|data| convert(data, clients));
-            tx.send(Ev::Done(r));
+            tx.send(Ev::Done(path, r));
         }));
     }
 
@@ -136,7 +165,8 @@ impl ExportTool {
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
                     "UniFi: .unf (site export or autobackup), .unifi (UniFi OS console backup), \
-a .zip holding one, or db.gz. SonicWall: .exp settings export.",
+a .zip holding one, or db.gz. SonicWall: .exp settings export. Each kind keeps its own result; \
+opening another file of the same kind replaces it.",
                 )
                 .clicked()
             {
@@ -148,19 +178,12 @@ unifidump uses it for client counts and to spot unadopted gear plugged in as a c
                 .add_enabled(!running, egui::Checkbox::new(&mut self.clients, "Include UniFi clients"))
                 .on_hover_text(tip)
                 .changed();
-            if toggled
-                && matches!(self.export, Some(Export::Unifi(_)))
-                && let Some(p) = self.path.clone()
-            {
-                self.start(ui.ctx(), Some(p));
+            if toggled && let Some(s) = &self.slots[0] {
+                self.start(ui.ctx(), Some(s.path.clone()));
             }
-            if running {
+            if let Some(p) = &self.pending {
                 ui.spinner();
-            }
-            if let Some(p) = &self.path {
-                let name = p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
-                ui.add(egui::Label::new(egui::RichText::new(name).weak()).truncate())
-                    .on_hover_text(p.display().to_string());
+                ui.add(egui::Label::new(egui::RichText::new(file_name(p)).weak()).truncate());
             }
         });
         ui.weak(
@@ -170,7 +193,7 @@ the topology and config the skills need. Passwords, keys and secrets are left ou
         widgets::error(ui, &self.err);
         ui.separator();
 
-        let Some(r) = &self.export else {
+        if self.slots.iter().all(Option::is_none) {
             if !running {
                 widgets::empty_hint(
                     ui,
@@ -178,32 +201,54 @@ the topology and config the skills need. Passwords, keys and secrets are left ou
                 );
             }
             return;
-        };
-        ui.horizontal(|ui| {
-            ui.label(r.headline());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
-                    let stem = self
-                        .path
-                        .as_ref()
-                        .and_then(|p| p.file_stem())
-                        .map_or("config".into(), |s| s.to_string_lossy().into_owned());
-                    widgets::save_file(
-                        format!("{stem}.{}.json", r.suffix()),
-                        "JSON",
-                        vec!["json"],
-                        r.json().to_string(),
-                    );
-                }
-                widgets::copy_button(ui, || r.summary());
-            });
-        });
+        }
+        let mut clear = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(r.summary()).monospace()).selectable(true),
-                );
+                for (i, slot) in self.slots.iter().enumerate() {
+                    let Some(Slot { path, export: r }) = slot else {
+                        continue;
+                    };
+                    egui::CollapsingHeader::new(egui::RichText::new(r.headline()).strong())
+                        .id_salt(("export", i))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
+                                    let stem = path.file_stem().map_or("config".into(), |s| {
+                                        s.to_string_lossy().into_owned()
+                                    });
+                                    widgets::save_file(
+                                        format!("{stem}.{}.json", r.suffix()),
+                                        "JSON",
+                                        vec!["json"],
+                                        r.json().to_string(),
+                                    );
+                                }
+                                widgets::copy_button(ui, || r.summary());
+                                if ui
+                                    .button("Clear")
+                                    .on_hover_text("Close this result")
+                                    .clicked()
+                                {
+                                    clear = Some(i);
+                                }
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(file_name(path)).weak())
+                                        .truncate(),
+                                )
+                                .on_hover_text(path.display().to_string());
+                            });
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(r.summary()).monospace())
+                                    .selectable(true),
+                            );
+                        });
+                }
             });
+        if let Some(i) = clear {
+            self.slots[i] = None;
+        }
     }
 }

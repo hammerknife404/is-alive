@@ -83,6 +83,8 @@ The summary lists the layers peeled, the collections kept and left behind with c
 
 ### Config Export: SonicWall
 
+The tab keeps one result per kind, so a UniFi backup and a SonicWall export opened one after the other sit side by side, each with its own **Save JSON…**, **Copy** and **Clear**; opening another file of the same kind replaces only that one.
+
 The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7), or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 
 The output is built only from those named fields, so admin and user accounts, passwords, VPN pre-shared keys, RADIUS/LDAP secrets, SNMP communities, certificates and PPPoE logins never leave the file; the summary says how many settings were copied and how many left behind. Comments are kept because they say what a rule or port is for, so check them if your team ever wrote credentials into one. Interface MACs are what `/mapnetwork` matches against `/unifidump`'s unresolved uplink MACs to name the firewall.
