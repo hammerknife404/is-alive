@@ -377,6 +377,19 @@ struct Iface {
     mgmt: Vec<String>,
 }
 
+/// A device the firewall heard on one of its ports (LLDP or LLTD).
+struct Heard {
+    iface: String,
+    /// LLTD: a Windows host. LLDP: network gear, which names its port.
+    lltd: bool,
+    mac: Option<Mac>,
+    ip: Option<Ipv4Addr>,
+    name: Option<String>,
+    description: Option<String>,
+    port: Option<String>,
+    caps: String,
+}
+
 #[derive(Default)]
 struct Sonic {
     model: Option<String>,
@@ -384,11 +397,29 @@ struct Sonic {
     serial: Option<String>,
     name: Option<String>,
     ifaces: Vec<Iface>,
+    heard: Vec<Heard>,
 }
 
 fn parse_sonicwall(json: &str) -> Option<Sonic> {
     let v: Value = serde_json::from_str(json).ok()?;
     let mut s = Sonic::default();
+    for n in v
+        .get("neighbors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        s.heard.push(Heard {
+            iface: text(n, "interface").unwrap_or_default(),
+            lltd: text(n, "protocol").as_deref() == Some("LLTD"),
+            mac: text(n, "mac").and_then(|m| mac::parse_mac(&m)),
+            ip: ipv4(n, "ip"),
+            name: text(n, "name"),
+            description: text(n, "description"),
+            port: text(n, "port"),
+            caps: text(n, "capabilities").unwrap_or_default(),
+        });
+    }
     if let Some(sys) = v.get("system").and_then(Value::as_object) {
         for (k, val) in sys {
             let (k, val) = (k.to_ascii_lowercase(), val.as_str().unwrap_or_default());
@@ -544,6 +575,42 @@ fn classify(vendor: Option<&str>, private: bool, open: &[u16]) -> (Zone, String,
         None => "HOST".into(),
     };
     (Zone::Client, kind, true)
+}
+
+/// Role of a device the firewall heard, from its LLDP capabilities and
+/// description; an LLTD talker is a Windows host.
+fn heard_role(h: &Heard) -> (Zone, String) {
+    if h.lltd {
+        return (Zone::Client, "WINDOWS HOST".into());
+    }
+    let can = h.caps.to_ascii_lowercase();
+    let model = h
+        .description
+        .as_deref()
+        .and_then(|d| d.split([',', ';']).next())
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && m.len() <= 24);
+    let vendor = h.mac.as_ref().and_then(mac::vendor);
+    let named = |word: &str| {
+        caps(&match model {
+            Some(m) => format!("{word} {m}"),
+            None => word.to_string(),
+        })
+    };
+    if can.contains("wlan") || can.contains("access point") {
+        (Zone::Wireless, named("AP"))
+    } else if can.contains("bridge") || can.contains("mac-relay") || can.contains("switch") {
+        (Zone::Switch, named("SWITCH"))
+    } else if can.contains("telephone") || can.contains("phone") {
+        (Zone::Client, named("PHONE"))
+    } else if can.contains("router") {
+        (Zone::Gear, named("ROUTER"))
+    } else {
+        let word = vendor.map_or("NETWORK DEVICE".into(), |v| {
+            format!("{} DEVICE", short_vendor(v))
+        });
+        (Zone::Gear, caps(&word))
+    }
 }
 
 fn unifi_role(kind: &str, model: &str) -> (Zone, String) {
@@ -1025,6 +1092,80 @@ pub fn build(input: &Input) -> Map {
         }
     }
 
+    // What the firewall heard on its ports. LLDP never crosses a switch, so
+    // an LLDP neighbour is plugged into that port: a real link, which beats
+    // an assumed one. LLTD does cross switches: a Windows host is somewhere
+    // on that port's network, so its link stays assumed.
+    if let Some(s) = &sonic {
+        for h in &s.heard {
+            let at = match &h.port {
+                Some(p) => format!("{}, its {p}", h.iface),
+                None => h.iface.clone(),
+            };
+            let note = if h.lltd {
+                format!(
+                    "The firewall hears it on {}'s network (LLTD; the switch path isn't known)",
+                    h.iface
+                )
+            } else {
+                format!("Plugged into the firewall's {at} (LLDP)")
+            };
+            let link = if h.lltd { Link::Assumed } else { Link::Wired };
+            match b.find(h.mac, h.ip) {
+                Some(i) if i == gw || i == internet => {}
+                Some(i) => {
+                    let n = &mut b.nodes[i];
+                    n.seen("firewall");
+                    n.details.push(note);
+                    if !h.lltd && n.up.as_ref().is_none_or(|u| u.1 == Link::Assumed) {
+                        n.up = Some((gw, Link::Wired, Some(at)));
+                        // Its uplink is known now.
+                        let id = n.id.clone();
+                        b.findings.retain(|(_, text, ids)| {
+                            !(text.starts_with("No uplink recorded")
+                                && ids.len() == 1
+                                && ids[0] == id)
+                        });
+                    }
+                }
+                None => {
+                    let (zone, kind) = heard_role(h);
+                    let mut n = Node {
+                        id: match (h.mac, h.ip) {
+                            (Some(m), _) => format!("mac:{}", mac::fmt(&m)),
+                            (None, Some(ip)) => format!("ip:{ip}"),
+                            _ => continue,
+                        },
+                        zone,
+                        kind,
+                        label: h
+                            .name
+                            .clone()
+                            .or_else(|| h.ip.map(|ip| ip.to_string()))
+                            .or_else(|| h.mac.map(|m| mac::fmt(&m)))
+                            .unwrap_or_default(),
+                        sub: h.ip.map(|ip| ip.to_string()).unwrap_or_default(),
+                        ip: h.ip,
+                        mac: h.mac,
+                        client: zone == Zone::Client,
+                        rank: (1, h.ip.map_or(u64::MAX, |ip| u32::from(ip) as u64)),
+                        up: Some((gw, link, (!h.lltd).then_some(at))),
+                        ..Default::default()
+                    };
+                    n.seen("firewall");
+                    n.details.push(note);
+                    if let Some(d) = &h.description {
+                        n.details.push(d.clone());
+                    }
+                    if let Some(m) = h.mac {
+                        n.details.push(format!("MAC {}", mac::fmt(&m)));
+                    }
+                    b.add(n);
+                }
+            }
+        }
+    }
+
     // Sweep hosts.
     let unifi_client: HashSet<Mac> = unifi
         .as_ref()
@@ -1335,6 +1476,7 @@ fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> boo
     }
     if let Some(s) = sonic {
         macs.extend(s.ifaces.iter().filter_map(|f| f.mac));
+        macs.extend(s.heard.iter().filter_map(|h| h.mac));
     }
     input
         .sweep
@@ -1695,6 +1837,57 @@ mod tests {
                 .chips
                 .contains(&"300 clients".to_string())
         );
+    }
+
+    #[test]
+    fn what_the_firewall_hears_goes_on_the_map() {
+        let sw = json!({
+            "system": {"model": "TZ 370"},
+            "interfaces": [{"name": "X0", "zone": "LAN", "ip": "10.0.0.1", "mac": "18:b1:69:00:00:01"}],
+            "neighbors": [
+                {"interface": "X0", "protocol": "LLDP", "mac": "f0:9f:c2:00:00:09", "ip": "10.0.0.9",
+                 "name": "Closet Switch", "description": "US-24-250W, 7.1.26", "port": "Port 24",
+                 "capabilities": "2-Port-MAC-Relay"},
+                {"interface": "X0", "protocol": "LLDP", "mac": "00:00:00:00:00:01", "ip": "10.0.0.2",
+                 "name": "Core", "port": "Port 1", "capabilities": "Bridge"},
+                {"interface": "X0", "protocol": "LLTD", "mac": "00:11:22:00:00:05", "ip": "10.0.0.165"}
+            ]
+        })
+        .to_string();
+        // Core is in the UniFi backup with no uplink recorded.
+        let j = unifi(
+            &[dev("Core", "usw", "00:00:00:00:00:01", "10.0.0.2", None)],
+            &[],
+        );
+        let m = build(&Input {
+            unifi: Some(&j),
+            sonicwall: Some(&sw),
+            clients: true,
+            ..Default::default()
+        });
+        let gw = m.nodes[1].label.clone();
+        let closet = by_label(&m, "Closet Switch");
+        assert_eq!(closet.zone, Zone::Switch);
+        assert_eq!(closet.kind, "SWITCH US-24-250W");
+        assert_eq!(parent(&m, "Closet Switch"), gw);
+        assert_eq!(
+            closet.up.as_ref().map(|u| (u.1, u.2.clone())),
+            Some((Link::Wired, Some("X0, its Port 24".into())))
+        );
+        // The backup's switch: its assumed uplink becomes the firewall port.
+        let core = by_label(&m, "Core");
+        assert_eq!(core.link(), Some(Link::Wired));
+        assert!(core.seen_by.contains(&"firewall"));
+        assert!(
+            !m.findings
+                .iter()
+                .any(|f| f.text.starts_with("No uplink recorded"))
+        );
+        let host = by_label(&m, "10.0.0.165");
+        assert!(host.client);
+        assert_eq!(host.kind, "WINDOWS HOST");
+        // LLTD crosses switches: where it plugs in isn't known.
+        assert_eq!(host.link(), Some(Link::Assumed));
     }
 
     #[test]

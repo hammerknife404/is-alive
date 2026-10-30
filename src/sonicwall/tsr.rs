@@ -2,8 +2,8 @@
 //!
 //! A TSR is a readable report in `#Area : Name_START` … `_END` sections.
 //! Only the sections read here are touched: system status (model, serial,
-//! firmware), interfaces, zones, address objects and groups, NAT policies
-//! and access rules. Users, VPN, RADIUS/LDAP, SNMP, certificates, licences,
+//! firmware), interfaces, zones, address objects and groups, NAT policies,
+//! access rules and the LLDP/LLTD neighbours heard on each port. Users, VPN, RADIUS/LDAP, SNMP, certificates, licences,
 //! registration codes, logs and diagnostics are skipped whole, and each
 //! section is read field by field, so nothing else in it is copied.
 
@@ -362,6 +362,55 @@ fn nat_rules(t: &str, withheld: &Cell<usize>) -> Vec<Value> {
         .collect()
 }
 
+/// Devices the firewall heard on its ports: LLDP from switches, APs and
+/// phones, LLTD from Windows hosts. A Windows host's computer name is left
+/// out (it's often a person's name), as the UniFi client table leaves
+/// names out by default.
+fn neighbors(t: &str) -> Vec<Value> {
+    let mut out: Vec<Map<String, Value>> = Vec::new();
+    let mut iface = String::new();
+    for line in section(t, "Advanced Switching : L2_Discovery").lines() {
+        let Some((k, v)) = kv(line) else { continue };
+        match k {
+            "Interface" => iface = v.to_string(),
+            "Protocol" => {
+                let mut m = Map::new();
+                m.insert("interface".into(), json!(iface));
+                m.insert("protocol".into(), json!(v));
+                out.push(m);
+            }
+            _ => {
+                let Some(m) = out.last_mut() else { continue };
+                let host = m["protocol"] == "LLTD";
+                let key = match k {
+                    "MAC Address" => "mac",
+                    "Mgmt Address" => "ip",
+                    "Port ID" => "port",
+                    "System Name" if !host => "name",
+                    "System Description" if !host => "description",
+                    "System Capabilities" => "capabilities",
+                    _ => continue,
+                };
+                let v = match key {
+                    "mac" => mac(v),
+                    "ip" => match ip(v) {
+                        Some(v) => v.to_string(),
+                        None => continue,
+                    },
+                    _ => crate::net::sanitize(v),
+                };
+                if !v.is_empty() {
+                    m.entry(key).or_insert(json!(v));
+                }
+            }
+        }
+    }
+    out.into_iter()
+        .filter(|m| m.contains_key("mac") || m.contains_key("ip"))
+        .map(Value::Object)
+        .collect()
+}
+
 pub fn convert(data: &[u8]) -> Result<Report, String> {
     let t = text(data).ok_or("not a SonicWall tech support report")?;
     let withheld = Cell::new(0);
@@ -373,6 +422,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
     let (addresses, fqdn, groups) = addresses(&t);
     let rules = access_rules(&t, &withheld);
     let nat = nat_rules(&t, &withheld);
+    let heard = neighbors(&t);
     let system = system(&t);
     let counts = vec![
         ("interfaces", ifaces.len()),
@@ -381,6 +431,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         ("address groups", groups.len()),
         ("access rules", rules.len()),
         ("NAT rules", nat.len()),
+        ("LLDP/LLTD neighbours", heard.len()),
     ];
     let v = json!({
         "source": format!("is-alive {} {WRI}", crate::VERSION),
@@ -390,6 +441,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
             "Interface mac is the port's own address: match it against /unifidump's discovered_devices and uplink MACs.",
             "Rule action is as the report words it (allow, deny, discard). Service objects aren't read from a report; rules name their services.",
             "Accounts, passwords, VPN/RADIUS/LDAP settings, SNMP, certificates and registration codes were not copied.",
+            "neighbors: devices the firewall heard on each interface. LLDP ones (switches, APs, phones) give their own port; LLTD ones are Windows hosts, kept without their computer names.",
         ],
         "interfaces": ifaces,
         "zones": zones,
@@ -398,6 +450,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         "address_groups": groups,
         "access_rules": rules,
         "nat_rules": nat,
+        "neighbors": heard,
     });
     Ok(Report {
         format: WRI,
@@ -482,6 +535,15 @@ Rule 2 Guest WLAN -> Guest WLAN Deny Service Any -> SSLVPN (Disabled)\n\
        IP: Guest WLAN Subnets -> All X0 Management IP  Iface: Any (ffffffff) -> Any (ffffffff) \n\
 Comment:                   \n\
 #Firewall : Access Rules_END\n\
+#Advanced Switching : L2_Discovery_START\nL2 Discovery Information\nHandle: 1\n\
+Port Description: TRUE\nSystem Name     : TRUE\n\
+Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:40:10:aa:00:01\n\
+\t\tPort ID: Port 24\n\t\tMAC Address: 00:40:10:AA:00:01\n\t\tMgmt Address: 10.20.0.18\n\
+\t\tSystem Name: Core Switch\n\t\tSystem Description: US-24-250W, 7.1.26\n\
+\t\tSystem Capabilities: 2-Port-MAC-Relay\n\n\t\tProtocol: LLTD\n\t\tChassis ID: \n\t\tPort ID: \n\
+\t\tMAC Address: 00:40:10:BB:00:02\n\t\tMgmt Address: 10.20.0.165\n\t\tSystem Name: JDOE-LAPTOP\n\
+\t\tSystem Description: \n\nInterface: X1\n\tNumber of neighbors: 0\n\
+#Advanced Switching : L2_Discovery_END\n\
 #Debug Information_START:\n#Network : Interfaces_START\nInterface Name : X9\n#Network : Interfaces_END\n";
 
     #[test]
@@ -549,6 +611,17 @@ Comment:                   \n\
         let nat = &v["nat_rules"][0];
         assert_eq!(nat["trans_dst"], "File Server");
         assert_eq!(nat["enabled"], true);
+        let heard = v["neighbors"].as_array().unwrap();
+        assert_eq!(heard.len(), 2);
+        assert_eq!(
+            heard[0],
+            json!({"interface": "X0", "protocol": "LLDP", "port": "Port 24",
+                "mac": "00:40:10:aa:00:01", "ip": "10.20.0.18", "name": "Core Switch",
+                "description": "US-24-250W, 7.1.26", "capabilities": "2-Port-MAC-Relay"})
+        );
+        assert_eq!(heard[1]["protocol"], "LLTD");
+        assert!(heard[1].get("name").is_none());
+        assert!(!r.json.contains("JDOE"));
         assert_eq!(r.withheld, 1);
         assert_eq!(r.count("access rules"), 2);
         assert!(r.summary().contains(".wri"));
