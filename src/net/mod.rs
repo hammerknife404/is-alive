@@ -56,7 +56,7 @@ pub fn reverse(ip: IpAddr) -> Option<String> {
         .filter(|n| !n.is_empty() && n != &ip.to_string())
 }
 
-fn sanitize(s: &str) -> String {
+pub(crate) fn sanitize(s: &str) -> String {
     clean(s, 255)
 }
 
