@@ -19,10 +19,9 @@ impl Export {
                 r.count("device"),
                 r.count("networkconf"),
                 r.count("wlanconf"),
-                if r.clients {
-                    format!(", {} client(s)", r.count(unifi::CLIENTS))
-                } else {
-                    String::new()
+                match r.clients {
+                    unifi::Clients::None => String::new(),
+                    c => format!(", {} client(s), {}", r.count(unifi::CLIENTS), c.label()),
                 }
             ),
             Export::SonicWall(r) => format!(
@@ -86,8 +85,8 @@ enum Ev {
 
 #[derive(Default)]
 pub struct ExportTool {
-    /// Off by default: client hostnames are often people's names.
-    clients: bool,
+    /// None by default here: client hostnames are often people's names.
+    clients: unifi::Clients,
     job: Option<Job<Ev>>,
     /// File being read while the job runs.
     pending: Option<PathBuf>,
@@ -96,7 +95,7 @@ pub struct ExportTool {
     err: Option<String>,
 }
 
-fn convert(data: Vec<u8>, clients: bool) -> Result<Export, String> {
+fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
     if sonicwall::decode(&data).is_some() {
         sonicwall::convert(&data).map(Export::SonicWall)
     } else {
@@ -113,7 +112,27 @@ fn convert(data: Vec<u8>, clients: bool) -> Result<Export, String> {
     }
 }
 
-fn file_name(p: &std::path::Path) -> String {
+/// "UniFi clients: none / anonymized / full" picker; true when changed.
+pub fn clients_choice(ui: &mut Ui, id: &str, clients: &mut unifi::Clients) -> bool {
+    ui.label("UniFi clients").on_hover_text(
+        "The UniFi client table: every device that has connected. unifidump uses it for client \
+counts and to spot unadopted gear plugged in as a client.",
+    );
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(clients.label())
+        .show_ui(ui, |ui| {
+            for c in unifi::Clients::ALL {
+                changed |= ui
+                    .selectable_value(clients, c, c.label())
+                    .on_hover_text(c.hint())
+                    .changed();
+            }
+        });
+    changed
+}
+
+pub fn file_name(p: &std::path::Path) -> String {
     p.file_name().map_or_else(
         || p.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -123,6 +142,28 @@ fn file_name(p: &std::path::Path) -> String {
 impl ExportTool {
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// The UniFi backup currently loaded, and its conversion.
+    pub fn unifi(&self) -> Option<(&PathBuf, &unifi::Report)> {
+        match &self.slots[0] {
+            Some(Slot {
+                path,
+                export: Export::Unifi(r),
+            }) => Some((path, r)),
+            _ => None,
+        }
+    }
+
+    /// The SonicWall export currently loaded, and its conversion.
+    pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
+        match &self.slots[1] {
+            Some(Slot {
+                path,
+                export: Export::SonicWall(r),
+            }) => Some((path, r)),
+            _ => None,
+        }
     }
 
     pub fn poll(&mut self) -> bool {
@@ -196,12 +237,11 @@ on the window. Each kind keeps its own result; opening another file of the same 
             {
                 self.start(ui.ctx(), None);
             }
-            let tip = "UniFi only. Client table: hostnames (often people's names), MACs and last IPs. \
-unifidump uses it for client counts and to spot unadopted gear plugged in as a client.";
             let toggled = ui
-                .add_enabled(!running, egui::Checkbox::new(&mut self.clients, "Include UniFi clients"))
-                .on_hover_text(tip)
-                .changed();
+                .add_enabled_ui(!running, |ui| {
+                    clients_choice(ui, "export_clients", &mut self.clients)
+                })
+                .inner;
             if toggled && let Some(s) = &self.slots[0] {
                 self.start(ui.ctx(), Some(vec![s.path.clone()]));
             }

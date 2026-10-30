@@ -362,6 +362,8 @@ fn system(c: &Settings) -> Vec<(String, String)> {
         "prodname",
         "romversion",
         "firewallname",
+        // Serial is the strongest key for matching documentation (IT Glue).
+        "serial",
     ];
     c.map
         .iter()
@@ -527,7 +529,7 @@ firmwareUpdatePassword=FwPass&\
 natPolicyOrigSrc_0=&natPolicyTransSrc_0=X1%20IP&natPolicyEnabled_0=1&\
 userObjName_1=jsmith&userObjPass_1=S3cretPass&ipsecSharedSecret_1=TunnelPSK&\
 snmpCommunity=private&adminName=admin&adminPassword=AdminPass&shortProdName=TZ%20470&\
-firmwareVersion=SonicOS%207.0.1&&";
+firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
 
     #[test]
     fn decodes_base64_and_plain() {
@@ -584,6 +586,7 @@ firmwareVersion=SonicOS%207.0.1&&";
         assert_eq!(rule["dst"], "Servers");
         assert_eq!(v["nat_rules"][0]["trans_src"], "X1 IP");
         assert_eq!(v["system"]["shortProdName"], "TZ 470");
+        assert_eq!(v["system"]["serialNumber"], "2CB8EDDA6E30");
         assert_eq!((r.count("interfaces"), r.count("access rules")), (3, 2));
         assert_eq!(v["access_rules"][0]["comment"], "web out");
         assert_eq!(r.withheld, 1);

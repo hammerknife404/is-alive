@@ -311,7 +311,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
     }
 
     /// Site inventory for /mapnetwork: facts only, no role guesses.
-    fn inventory(&self, info: &HostInfo) -> String {
+    pub fn inventory(&self, info: &HostInfo) -> String {
         let hosts: Vec<_> = self
             .alive
             .iter()
@@ -363,6 +363,17 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
 
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Range and live-host count of a finished run, if there is one.
+    pub fn finished(&self) -> Option<(String, usize)> {
+        (self.total > 0 && self.job.is_none())
+            .then(|| (self.range.trim().to_string(), self.alive.len()))
+    }
+
+    /// Whether the last run checked management ports.
+    pub fn checked_ports(&self) -> bool {
+        self.checked_ports
     }
 
     fn start(&mut self, ctx: &egui::Context) {
