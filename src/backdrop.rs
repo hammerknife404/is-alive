@@ -1,8 +1,8 @@
 //! Miami backdrop: a 16-bit synthwave scene at one art pixel per 2×2
 //! points (chunkier on big windows), scaled up with hard edges, or the
 //! user's own image with a slow pan. A 4-second loop, only while the window
-//! has focus: 60 frames a second drawn by the GPU (`gpu`), or 10 on the CPU
-//! where there's no usable GPU.
+//! has focus: at the display's refresh rate on the GPU (`gpu`), or 10 frames
+//! a second on the CPU where there's no usable GPU.
 
 mod gpu;
 
@@ -17,11 +17,15 @@ const PX: f32 = 2.0;
 const MAX_ART: (f32, f32) = (640.0, 400.0);
 /// Art-pixel scale for sizes first tuned at 4 points per pixel.
 const K: i32 = 2;
-/// CPU frames a second; the GPU draws every display frame up to 60.
+/// CPU frames a second; the GPU draws every frame the display shows.
 const FPS: f64 = 10.0;
 const LOOP_FRAMES: i64 = 40;
 const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
-const GPU_FRAME: Duration = Duration::from_millis(16);
+/// Smooth animation asks for the next frame at once and lets the display's
+/// refresh (vsync) pace it, so it runs at 60, 120 or 144 Hz as the OS has the
+/// screen set. The short floor only matters where vsync is off: it stops a
+/// runaway loop at 250 frames a second.
+pub const SMOOTH: Duration = Duration::from_millis(4);
 /// Behind the panels when the backdrop is off.
 pub const SOLID: Color32 = Color32::from_rgb(22, 14, 44);
 
@@ -127,7 +131,7 @@ impl Backdrop {
                         callback: Arc::new(cb),
                     });
                     if moving {
-                        ctx.request_repaint_after(GPU_FRAME);
+                        ctx.request_repaint_after(SMOOTH);
                     }
                     return;
                 }
@@ -183,7 +187,7 @@ impl Backdrop {
         if moving && *source != Source::None {
             // A picture pans smoothly when the GPU has frames to spare.
             let gap = match source {
-                Source::Image(_) if self.gpu.is_some() => GPU_FRAME,
+                Source::Image(_) if self.gpu.is_some() => SMOOTH,
                 _ => Duration::from_millis(100),
             };
             ctx.request_repaint_after(gap);

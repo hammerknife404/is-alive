@@ -23,6 +23,8 @@ pub enum Action {
     Export,
     Ping(String),
     Ports(String),
+    /// Open the Site Bundle window.
+    Bundle,
 }
 
 pub struct Sources<'a> {
@@ -289,6 +291,9 @@ impl MapView {
         });
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
+        }
+        if !empty && accuracy_note(ui) {
+            act = Some(Action::Bundle);
         }
         if empty {
             ui.separator();
@@ -853,12 +858,13 @@ impl MapView {
             );
         }
         if focused && (flows || pulse) {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(if flows {
-                    16
-                } else {
-                    50
-                }));
+            // Flowing links at the display's rate; the warning pulse is slow
+            // enough for 20 fps, and it's on screen as long as the tab is.
+            ui.ctx().request_repaint_after(if flows {
+                crate::backdrop::SMOOTH
+            } else {
+                std::time::Duration::from_millis(50)
+            });
         }
     }
 
@@ -1080,6 +1086,33 @@ impl MapView {
             x = r.max.x + 6.0;
         }
     }
+}
+
+/// The map is a quick picture, not a survey: say so, and point to the
+/// reviewed path. True when Site Bundle was clicked.
+fn accuracy_note(ui: &mut Ui) -> bool {
+    let warn = widgets::warn();
+    let mut open = false;
+    egui::Frame::new()
+        .fill(warn.gamma_multiply(0.12))
+        .stroke(Stroke::new(1.0, warn.gamma_multiply(0.5)))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("⚠").color(warn));
+                ui.label(
+                    "Built from what this app can see, so it may be incomplete or wrong. \
+For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
+                );
+                open = ui
+                    .small_button("Site Bundle…")
+                    .on_hover_text("Wrap the exports, sweep inventory and notes for /mapnetwork")
+                    .clicked();
+            });
+        });
+    ui.add_space(2.0);
+    open
 }
 
 pub fn zone_colour(z: Zone, dark: bool) -> Color32 {

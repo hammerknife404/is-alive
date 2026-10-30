@@ -5,7 +5,9 @@ mod bundle;
 mod job;
 mod log;
 mod map;
+mod markdown;
 mod net;
+mod redact;
 mod sonicwall;
 mod theme;
 mod tools;
@@ -35,6 +37,7 @@ enum Tab {
     Advanced,
     Export,
     Map,
+    Notes,
     Results,
 }
 
@@ -84,6 +87,12 @@ into sanitized JSON for /unifidump and /mapnetwork. Secrets are left out.",
 where the data has them, and findings. Drag to pan, scroll to zoom, click a device to trace it.",
     ),
     (
+        Tab::Notes,
+        "Notes",
+        "Tech notes in Markdown, autosaved. Passwords, keys and patient details are highlighted \
+and replaced before anything is saved, copied or bundled.",
+    ),
+    (
         Tab::Results,
         "Results",
         "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
@@ -102,6 +111,7 @@ struct App {
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
     map: map::view::MapView,
+    notes: tools::notes::NotesTool,
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
@@ -218,7 +228,12 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
+        theme::top_rule(
+            ui.ctx(),
+            tabs.response.rect.bottom(),
+            self.look.animate,
+            self.backdrop.on_gpu(),
+        );
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
@@ -304,6 +319,7 @@ impl eframe::App for App {
                 );
                 self.map_action(ui.ctx(), act);
             }
+            Tab::Notes => self.notes.ui(ui, &self.info),
             Tab::Results => self.results_ui(ui),
         });
         let App {
@@ -312,6 +328,7 @@ impl eframe::App for App {
             sweep,
             log,
             info,
+            notes,
             ..
         } = self;
         bundle.window(
@@ -321,8 +338,13 @@ impl eframe::App for App {
                 sweep,
                 log,
                 info,
+                notes,
             },
         );
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.notes.flush();
     }
 }
 
@@ -385,6 +407,7 @@ impl App {
                 self.ports.run(ctx, &ip);
                 self.tab = Tab::Ports;
             }
+            Some(Action::Bundle) => self.bundle.open = true,
             None => {}
         }
     }
@@ -402,8 +425,7 @@ impl App {
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
             Tab::Export => self.export.is_running(),
-            Tab::Map => false,
-            Tab::Results => false,
+            Tab::Map | Tab::Notes | Tab::Results => false,
         }
     }
 
@@ -704,6 +726,7 @@ fn main() -> eframe::Result {
                 export: Default::default(),
                 bundle: Default::default(),
                 map: map::view::MapView::new(),
+                notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,

@@ -11,6 +11,7 @@ pub const UNIFI: &str = "unifi.unifidump.json";
 pub const SONICWALL: &str = "sonicwall.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
+pub const NOTES: &str = "notes.md";
 /// The kickoff prompt, so the bundle carries its own instructions.
 pub const PROMPT: &str = "prompt.txt";
 
@@ -120,7 +121,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
         if self.has(UNIFI) {
             inputs.push("the unifidump summary".to_string());
         }
-        for f in [SONICWALL, INVENTORY, RESULTS] {
+        for f in [SONICWALL, INVENTORY, RESULTS, NOTES] {
             if self.has(f) {
                 inputs.push(f.to_string());
             }

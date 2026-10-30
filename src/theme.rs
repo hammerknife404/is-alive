@@ -198,14 +198,19 @@ fn miami() -> Visuals {
 
 /// Miami's sunset rule along the bottom of the tab bar: pink, orange
 /// and teal, drifting slowly from side to side and back when animating.
-pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
+/// `smooth`: animate at the display's refresh rate (there's a GPU).
+pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool, smooth: bool) {
     if current() != Theme::Miami {
         return;
     }
     let shift = if animate {
         let t = ctx.input(|i| i.time) as f32;
         if ctx.input(|i| i.viewport().focused != Some(false)) {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(if smooth {
+                crate::backdrop::SMOOTH
+            } else {
+                std::time::Duration::from_millis(100)
+            });
         }
         // Over to one side and back every 12 seconds.
         0.5 - 0.5 * (t * std::f32::consts::TAU / 12.0).cos()
@@ -361,7 +366,7 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
-                "60 frames a second on the GPU, paused while the window isn't focused"
+                "At your display's refresh rate on the GPU, paused while the window isn't focused"
             } else {
                 "10 frames a second (no usable GPU), paused while the window isn't focused"
             };
@@ -375,7 +380,8 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
     act
 }
 
-fn settings_path() -> Option<std::path::PathBuf> {
+/// This app's folder in the user's profile (settings, autosaved notes).
+pub fn data_dir() -> Option<std::path::PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(std::path::PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -388,7 +394,11 @@ fn settings_path() -> Option<std::path::PathBuf> {
                 std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
             })
     };
-    Some(base?.join("is-alive").join("settings"))
+    Some(base?.join("is-alive"))
+}
+
+fn settings_path() -> Option<std::path::PathBuf> {
+    Some(data_dir()?.join("settings"))
 }
 
 /// Saved settings, or the defaults. A missing or unreadable file is not an error.
