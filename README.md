@@ -15,7 +15,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Config Export** | Decodes a UniFi backup (`.unf` / `.unifi`) or SonicWall settings export (`.exp`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills (see below) |
 | **Site Bundle…** (top right) | Wraps the UniFi and SonicWall exports, the sweep inventory and optionally the Results log into one zip with a manifest for the unifidump / mapnetwork skills (see below) |
 
-**Themes:** Dark (default), Light and Miami Vice, picked in the footer and remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux).
+**Themes:** the **Theme** menu in the footer offers Dark (the default), Light and Miami Vice, remembered between launches (`%APPDATA%\is-alive\settings` on Windows, `~/.config/is-alive/settings` on Linux). Miami Vice puts the panels over a backdrop: a 16-bit synthwave scene drawn by the app (sunset, skyline, palms, a grid drifting toward you), your own picture with a slow pan (only its path is saved; the image never leaves your machine), or none. **Animate** loops the scene and the sunset line under the tabs at 10 frames a second and pauses while the window isn't focused; turn it off on battery.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 

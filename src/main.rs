@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod backdrop;
 mod bundle;
 mod job;
 mod log;
@@ -99,7 +100,10 @@ struct App {
     filter: String,
     /// Scroll Results to its newest runs on the next frame (after a full scan).
     jump_to_new: bool,
-    theme: theme::Theme,
+    look: theme::Settings,
+    backdrop: backdrop::Backdrop,
+    /// File dialog for the Miami Vice backdrop image.
+    pick_image: Option<Job<Option<std::path::PathBuf>>>,
 }
 
 impl eframe::App for App {
@@ -114,6 +118,17 @@ impl eframe::App for App {
         self.collect();
         self.dropped_files(ui.ctx());
         pump(&mut self.info_job, |i| self.info = i);
+        let mut picked = None;
+        pump(&mut self.pick_image, |p| picked = p);
+        if let Some(p) = picked {
+            self.look.backdrop = backdrop::Source::Image(p);
+            theme::save(&self.look);
+        }
+        // Under every panel; Miami Vice's panels are translucent over it.
+        if self.look.theme == theme::Theme::Miami {
+            self.backdrop
+                .paint(ui.ctx(), &self.look.backdrop, self.look.animate);
+        }
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
             // Wraps to a second row when the window (or display scaling)
@@ -194,7 +209,7 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        theme::top_rule(ui.ctx(), tabs.response.rect.bottom());
+        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
@@ -228,10 +243,28 @@ impl eframe::App for App {
                     }
                     ui.weak(format!("v{VERSION}"));
                     ui.separator();
-                    if let Some(t) = theme::picker(ui, self.theme) {
-                        self.theme = t;
-                        theme::apply(ui.ctx(), t);
-                        theme::save(t);
+                    match theme::menu(ui, &mut self.look) {
+                        Some(theme::MenuAction::Changed) => {
+                            theme::apply(ui.ctx(), self.look.theme);
+                            theme::save(&self.look);
+                        }
+                        Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
+                            self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
+                                tx.send(
+                                    rfd::FileDialog::new()
+                                        .set_title("Miami Vice backdrop")
+                                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                                        .pick_file(),
+                                )
+                            }));
+                        }
+                        _ => {}
+                    }
+                    if self.look.theme == theme::Theme::Miami
+                        && let Some(e) = &self.backdrop.err
+                    {
+                        ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
+                            .on_hover_text(e.as_str());
                     }
                 });
             });
@@ -598,8 +631,8 @@ fn main() -> eframe::Result {
         "is-alive",
         options,
         Box::new(|cc| {
-            let theme = theme::load();
-            theme::apply(&cc.egui_ctx, theme);
+            let look = theme::load();
+            theme::apply(&cc.egui_ctx, look.theme);
             let mut app = App {
                 tab: Tab::Ping,
                 ping: Default::default(),
@@ -615,7 +648,9 @@ fn main() -> eframe::Result {
                 info_job: None,
                 filter: String::new(),
                 jump_to_new: false,
-                theme,
+                look,
+                backdrop: Default::default(),
+                pick_image: None,
             };
             app.refresh_info(&cc.egui_ctx);
             Ok(Box::new(app))

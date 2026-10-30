@@ -1,6 +1,7 @@
 //! Look and feel: three themes (Dark is the default), status colours that
 //! stay readable on each, and the choice remembered between launches.
 
+use crate::backdrop::Source;
 use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke, Style, Visuals};
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -177,11 +178,13 @@ const SUNSET: Color32 = Color32::from_rgb(255, 150, 70);
 fn miami() -> Visuals {
     let mut v = Visuals::dark();
     v.override_text_color = Some(Color32::from_rgb(246, 236, 255));
-    v.panel_fill = Color32::from_rgb(22, 14, 44);
-    v.window_fill = Color32::from_rgb(30, 19, 58);
-    v.extreme_bg_color = Color32::from_rgb(13, 8, 30);
-    v.faint_bg_color = Color32::from_rgb(32, 22, 62);
-    v.code_bg_color = Color32::from_rgb(36, 24, 70);
+    // Translucent so the backdrop shows through; denser where text and
+    // numbers sit (fields, graph, table stripes) to keep them crisp.
+    v.panel_fill = Color32::from_rgba_unmultiplied(22, 14, 44, 184);
+    v.window_fill = Color32::from_rgba_unmultiplied(30, 19, 58, 244);
+    v.extreme_bg_color = Color32::from_rgba_unmultiplied(13, 8, 30, 225);
+    v.faint_bg_color = Color32::from_rgba_unmultiplied(32, 22, 62, 200);
+    v.code_bg_color = Color32::from_rgba_unmultiplied(36, 24, 70, 210);
     v.window_stroke = Stroke::new(1.0, Color32::from_rgb(120, 50, 140));
     v.window_shadow = Shadow {
         offset: [0, 0],
@@ -214,23 +217,40 @@ fn miami() -> Visuals {
     v
 }
 
-/// Miami Vice's sunset rule along the bottom of the tab bar: pink to orange
-/// to teal. Nothing in the other themes.
-pub fn top_rule(ctx: &egui::Context, y: f32) {
+/// Miami Vice's sunset rule along the bottom of the tab bar: pink, orange
+/// and teal, drifting slowly from side to side and back when animating.
+pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     if current() != Theme::Miami {
         return;
     }
+    let shift = if animate {
+        let t = ctx.input(|i| i.time) as f32;
+        if ctx.input(|i| i.viewport().focused != Some(false)) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // Over to one side and back every 12 seconds.
+        0.5 - 0.5 * (t * std::f32::consts::TAU / 12.0).cos()
+    } else {
+        0.0
+    };
     let r = ctx.content_rect();
-    let rect = egui::Rect::from_min_max(
-        egui::pos2(r.left(), y - 1.0),
-        egui::pos2(r.right(), y + 1.0),
-    );
+    let (top, bottom) = (y - 1.0, y + 1.0);
+    // Pink → orange → teal → pink, so the cycle has no seam.
+    let stops = [PINK, SUNSET, TEAL, PINK];
+    let colour = |u: f32| {
+        let u = u.rem_euclid(1.0) * (stops.len() - 1) as f32;
+        let (i, f) = (u as usize, u.fract());
+        let (a, b) = (stops[i], stops[(i + 1).min(stops.len() - 1)]);
+        a.lerp_to_gamma(b, f)
+    };
     let mut mesh = egui::Mesh::default();
-    let stops = [PINK, SUNSET, TEAL];
-    for (i, c) in stops.iter().enumerate() {
-        let x = rect.left() + rect.width() * i as f32 / (stops.len() - 1) as f32;
-        mesh.colored_vertex(egui::pos2(x, rect.top()), *c);
-        mesh.colored_vertex(egui::pos2(x, rect.bottom()), *c);
+    let n = 32;
+    for i in 0..=n {
+        let f = i as f32 / n as f32;
+        let x = r.left() + r.width() * f;
+        let c = colour(f + shift);
+        mesh.colored_vertex(egui::pos2(x, top), c);
+        mesh.colored_vertex(egui::pos2(x, bottom), c);
         if i > 0 {
             let b = (i as u32) * 2;
             mesh.add_triangle(b - 2, b - 1, b);
@@ -248,25 +268,128 @@ pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
     }
 }
 
-/// Footer picker; returns the new theme when it changes.
-pub fn picker(ui: &mut egui::Ui, theme: Theme) -> Option<Theme> {
-    let mut picked = None;
-    for t in Theme::ALL.iter().rev() {
-        let tip = match t {
-            Theme::Dark => "Dark (default)",
-            Theme::Light => "Light, for bright rooms and screenshots in tickets",
-            Theme::Miami => "Midnight purple, hot pink and teal",
-        };
-        if ui
-            .selectable_label(theme == *t, egui::RichText::new(t.name()).small())
-            .on_hover_text(tip)
-            .clicked()
-            && theme != *t
-        {
-            picked = Some(*t);
+/// Everything remembered between launches.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Settings {
+    pub theme: Theme,
+    /// Miami Vice backdrop and sunset rule move; ignored by the other themes.
+    pub animate: bool,
+    pub backdrop: Source,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::Dark,
+            animate: true,
+            backdrop: Source::Scene,
         }
     }
-    picked
+}
+
+impl Settings {
+    fn parse(text: &str) -> Self {
+        let mut s = Self::default();
+        for line in text.lines() {
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            match k.trim() {
+                "theme" => s.theme = Theme::from_key(v).unwrap_or_default(),
+                "animate" => s.animate = v.trim() != "0",
+                "backdrop" => {
+                    s.backdrop = match v.trim() {
+                        "none" => Source::None,
+                        v => v
+                            .strip_prefix("image:")
+                            .map_or(Source::Scene, |p| Source::Image(p.into())),
+                    }
+                }
+                _ => {}
+            }
+        }
+        s
+    }
+
+    fn text(&self) -> String {
+        let backdrop = match &self.backdrop {
+            Source::Scene => "scene".to_string(),
+            Source::None => "none".to_string(),
+            Source::Image(p) => format!("image:{}", p.display()),
+        };
+        format!(
+            "theme={}\nanimate={}\nbackdrop={backdrop}\n",
+            self.theme.key(),
+            self.animate as u8
+        )
+    }
+}
+
+/// What the theme menu asks the app to do.
+pub enum MenuAction {
+    /// A setting changed: apply and save.
+    Changed,
+    /// Ask for an image file for the Miami Vice backdrop.
+    PickImage,
+}
+
+/// Footer "Theme" menu: the themes (the default marked), and Miami Vice's
+/// backdrop and animation.
+pub fn menu(ui: &mut egui::Ui, s: &mut Settings) -> Option<MenuAction> {
+    let mut act = None;
+    ui.menu_button(format!("Theme: {} ⏷", s.theme.name()), |ui| {
+        ui.label(egui::RichText::new("Theme").strong());
+        for t in Theme::ALL {
+            let (label, tip) = match t {
+                Theme::Dark => ("Dark (default)", "The standard look"),
+                Theme::Light => ("Light", "For bright rooms and screenshots in tickets"),
+                Theme::Miami => ("Miami Vice", "Midnight purple, hot pink and teal, with a 16-bit sunset"),
+            };
+            if ui.radio(s.theme == t, label).on_hover_text(tip).clicked() && s.theme != t {
+                s.theme = t;
+                act = Some(MenuAction::Changed);
+            }
+        }
+        ui.separator();
+        ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
+            ui.label(egui::RichText::new("Miami Vice backdrop").strong());
+            if ui
+                .radio(s.backdrop == Source::Scene, "16-bit sunset scene")
+                .clicked()
+                && s.backdrop != Source::Scene
+            {
+                s.backdrop = Source::Scene;
+                act = Some(MenuAction::Changed);
+            }
+            let mine = match &s.backdrop {
+                Source::Image(p) => format!(
+                    "Your image: {}",
+                    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+                ),
+                _ => "Your image…".to_string(),
+            };
+            if ui
+                .radio(matches!(s.backdrop, Source::Image(_)), mine)
+                .on_hover_text("Pick a picture from this computer. It stays here; only its path is remembered.")
+                .clicked()
+            {
+                act = Some(MenuAction::PickImage);
+                ui.close();
+            }
+            if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None {
+                s.backdrop = Source::None;
+                act = Some(MenuAction::Changed);
+            }
+            if ui
+                .checkbox(&mut s.animate, "Animate")
+                .on_hover_text("10 frames a second, paused while the window isn't focused")
+                .changed()
+            {
+                act = Some(MenuAction::Changed);
+            }
+        });
+    });
+    act
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -285,24 +408,21 @@ fn settings_path() -> Option<std::path::PathBuf> {
     Some(base?.join("is-alive").join("settings"))
 }
 
-/// The saved theme, or Dark. A missing or unreadable file is not an error.
-pub fn load() -> Theme {
+/// Saved settings, or the defaults. A missing or unreadable file is not an error.
+pub fn load() -> Settings {
     settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("theme=").and_then(Theme::from_key))
-        })
+        .map(|t| Settings::parse(&t))
         .unwrap_or_default()
 }
 
 /// Best effort: a read-only profile just means the choice isn't remembered.
-pub fn save(theme: Theme) {
+pub fn save(s: &Settings) {
     if let Some(p) = settings_path() {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, format!("theme={}\n", theme.key()));
+        let _ = std::fs::write(p, s.text());
     }
 }
 
@@ -316,6 +436,23 @@ mod tests {
             assert_eq!(Theme::from_key(t.key()), Some(t));
         }
         assert_eq!(Theme::from_key("nope"), None);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let s = Settings {
+            theme: Theme::Miami,
+            animate: false,
+            backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
+        };
+        assert_eq!(Settings::parse(&s.text()), s);
+        assert_eq!(Settings::parse(""), Settings::default());
+        // A file from 0.10.0 had only the theme line.
+        let old = Settings::parse("theme=miami\n");
+        assert_eq!(
+            (old.theme, old.animate, old.backdrop),
+            (Theme::Miami, true, Source::Scene)
+        );
     }
 
     #[test]
