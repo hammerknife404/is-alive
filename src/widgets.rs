@@ -306,7 +306,7 @@ pub fn copy_button(ui: &mut Ui, text: impl FnOnce() -> String) {
 /// Save button: opens a native save dialog off the UI thread and writes `text`.
 pub fn save_button(ui: &mut Ui, stem: &str, text: impl FnOnce() -> String) {
     if ui
-        .button("Save")
+        .button("Save…")
         .on_hover_text("Save results to a text file")
         .clicked()
     {
@@ -374,8 +374,46 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
 
 pub fn error(ui: &mut Ui, err: &Option<String>) {
     if let Some(e) = err {
-        ui.label(RichText::new(format!("⚠ {e}")).color(bad()));
+        error_text(ui, e);
     }
+}
+
+/// "⚠ …" in the error colour.
+pub fn error_text(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(format!("⚠ {text}")).color(bad()));
+}
+
+/// "⚠ …" in the warning colour: worth knowing, not a failure.
+pub fn warning(ui: &mut Ui, text: &str) -> egui::Response {
+    ui.label(RichText::new(format!("⚠ {text}")).color(warn()))
+}
+
+/// A button for something that can't be undone: the first click arms it
+/// ("Clear: sure?") for three seconds, the second does it.
+pub fn confirm_button(ui: &mut Ui, id: &str, enabled: bool, label: &str, tip: &str) -> bool {
+    let id = ui.id().with(("confirm", id));
+    let now = ui.input(|i| i.time);
+    let armed = ui
+        .data(|d| d.get_temp::<f64>(id))
+        .is_some_and(|t| now - t < 3.0);
+    let button = if armed {
+        egui::Button::new(RichText::new(format!("{label}: sure?")).color(bad()))
+    } else {
+        egui::Button::new(label)
+    };
+    let clicked = ui
+        .add_enabled(enabled, button)
+        .on_hover_text(format!("{tip} (click twice)"))
+        .clicked();
+    if clicked && armed {
+        ui.data_mut(|d| d.remove::<f64>(id));
+        return true;
+    }
+    if clicked {
+        ui.data_mut(|d| d.insert_temp(id, now));
+        ui.ctx().request_repaint_after(Duration::from_secs(3));
+    }
+    false
 }
 
 pub fn fmt_ms(ms: f64) -> String {

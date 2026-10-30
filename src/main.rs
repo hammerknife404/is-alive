@@ -125,6 +125,9 @@ struct App {
     wan_asked: bool,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
+    /// ((filter, log stamp), matching entries) for the last frame.
+    #[allow(clippy::type_complexity)]
+    filter_cache: Option<((String, (usize, usize, usize)), Vec<usize>)>,
     /// Scroll Results to its newest runs on the next frame (after a full scan).
     jump_to_new: bool,
     look: theme::Settings,
@@ -160,6 +163,7 @@ impl eframe::App for App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        self.notes.poll(ui.ctx());
         self.collect();
         self.dropped_files(ui.ctx());
         pump(&mut self.info_job, |i| self.info = i);
@@ -404,6 +408,7 @@ impl App {
                         export: &self.export,
                         info: &self.info,
                         busy,
+                        note: self.look.map_note,
                     },
                 );
                 self.map_action(ui.ctx(), act);
@@ -472,6 +477,10 @@ impl App {
                 self.tab = Tab::Ports;
             }
             Some(Action::Bundle) => self.bundle.open = true,
+            Some(Action::HideNote) => {
+                self.look.map_note = false;
+                theme::save(&self.look);
+            }
             None => {}
         }
     }
@@ -600,13 +609,20 @@ impl App {
                 || tool.to_lowercase().contains(&needle)
                 || text.to_lowercase().contains(&needle)
         };
+        // Matching the log is the costly part (it can be megabytes): only
+        // when the filter or the log changes, not every frame.
+        let key = (needle.clone(), self.log.stamp());
+        if self.filter_cache.as_ref().is_none_or(|c| c.0 != key) {
+            let idx = (0..self.log.entries.len())
+                .filter(|&i| hit(self.log.entries[i].tool, &self.log.entries[i].text))
+                .collect();
+            self.filter_cache = Some((key, idx));
+        }
         let shown: Vec<(usize, &log::Entry)> = self
-            .log
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| hit(e.tool, &e.text))
-            .collect();
+            .filter_cache
+            .as_ref()
+            .map(|c| c.1.iter().map(|&i| (i, &self.log.entries[i])).collect())
+            .unwrap_or_default();
         let running: Vec<_> = running.iter().filter(|r| hit(r.0, &r.2)).collect();
         let filtered = !needle.is_empty();
         let mut clear = false;
@@ -630,9 +646,8 @@ impl App {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(!shown.is_empty(), |ui| {
-                    if ui.button("Clear").on_hover_text("Clear the log").clicked() {
-                        clear = true;
-                    }
+                    clear =
+                        widgets::confirm_button(ui, "log_clear", true, "Clear", "Clear the log");
                     let render = || {
                         if filtered {
                             shown.iter().map(|(_, e)| e.render() + "\n").collect()
@@ -660,21 +675,28 @@ impl App {
         });
         ui.separator();
         if self.log.entries.is_empty() && running.is_empty() {
-            ui.weak("No results yet. Finished runs from every tab are logged here with start/end times.");
+            widgets::empty_hint(
+                ui,
+                "No results yet. Finished runs from every tab are logged here with start and end times.",
+            );
         } else if shown.is_empty() && running.is_empty() {
-            ui.weak("No runs match the filter.");
+            widgets::empty_hint(ui, "No runs match the filter.");
         } else {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    for (i, e) in &shown {
-                        entry_ui(ui, *i, &e.header(), &e.text, Some(e), || e.render());
+                    // The newest runs open, older ones folded: a long log
+                    // stays quick to draw.
+                    let open_from = shown.len().saturating_sub(12);
+                    for (k, (i, e)) in shown.iter().enumerate() {
+                        let open = k >= open_from;
+                        entry_ui(ui, *i, &e.header(), &e.text, Some(e), open, || e.render());
                     }
                     // Ids from the top of the range so they never meet log indices.
                     for (j, (tool, since, text)) in running.iter().enumerate() {
                         let header = format!("{tool}  started {since}, running…");
-                        entry_ui(ui, usize::MAX - j, &header, text, None, || {
+                        entry_ui(ui, usize::MAX - j, &header, text, None, true, || {
                             format!("=== {header} ===\n{}\n", text.trim_end())
                         });
                     }
@@ -717,6 +739,7 @@ fn shortcuts(ui: &mut egui::Ui) {
         "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
         "Drop a UniFi backup or SonicWall export anywhere to convert it",
         "Click the is-alive button for a full scan of this network",
+        "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {
         ui.label(format!("• {tip}"));
     }
@@ -771,15 +794,16 @@ fn entry_ui(
     header: &str,
     text: &str,
     entry: Option<&log::Entry>,
+    open: bool,
     full: impl Fn() -> String,
 ) {
     egui::CollapsingHeader::new(egui::RichText::new(header).strong())
         .id_salt(("log", id))
-        .default_open(true)
+        .default_open(open)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::save_button(ui, "result", &full);
                 widgets::copy_button(ui, &full);
+                widgets::save_button(ui, "result", &full);
                 if let Some(e) = entry {
                     widgets::export_menu(ui, "result", || vec![e]);
                 }
@@ -837,6 +861,7 @@ fn main() -> eframe::Result {
                 info_job: None,
                 wan_asked: false,
                 filter: String::new(),
+                filter_cache: None,
                 jump_to_new: false,
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),

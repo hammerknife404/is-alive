@@ -78,6 +78,14 @@ impl<T: Send + 'static> Job<T> {
     }
 }
 
+/// A job nobody holds any more is told to stop, so replacing one never
+/// leaves the old thread probing the network with no one listening.
+impl<T> Drop for Job<T> {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Poll an optional job: feed messages to `on_msg`, drop it once finished.
 /// Returns true while the job is still running.
 pub fn pump<T: Send + 'static>(job: &mut Option<Job<T>>, mut on_msg: impl FnMut(T)) -> bool {

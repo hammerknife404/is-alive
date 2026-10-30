@@ -77,6 +77,11 @@ pub struct Log {
 }
 
 impl Log {
+    /// Changes whenever the entries do (pushes, drops, clears).
+    pub fn stamp(&self) -> (usize, usize, usize) {
+        (self.entries.len(), self.dropped, self.bytes)
+    }
+
     pub fn push(&mut self, e: Entry) {
         self.bytes += e.text.len();
         self.entries.push_back(e);

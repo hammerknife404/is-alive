@@ -38,9 +38,10 @@ pub struct NotesTool {
     /// Redactions found so far, to flash the count when it grows.
     known_hits: usize,
     flash: f64,
-    clear_armed: Option<f64>,
     /// (hash of text, hits) so the regexes run once per edit.
     cache: RefCell<(u64, Vec<Hit>)>,
+    /// The same for the sanitized text (preview, status, Site Bundle).
+    clean: RefCell<(u64, (String, Vec<Hit>))>,
 }
 
 fn path() -> Option<PathBuf> {
@@ -52,7 +53,10 @@ impl Default for NotesTool {
         let text = path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        Self {
+        // A file with anything redactable in it (edited by hand, or from an
+        // older build) is rewritten sanitized at once, not on the next edit.
+        let unclean = !redact::find(&text).is_empty();
+        let mut notes = Self {
             text,
             view: View::Split,
             show_hits: true,
@@ -61,9 +65,13 @@ impl Default for NotesTool {
             err: None,
             known_hits: 0,
             flash: f64::NEG_INFINITY,
-            clear_armed: None,
             cache: RefCell::new((u64::MAX, Vec::new())),
+            clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+        };
+        if unclean {
+            notes.write();
         }
+        notes
     }
 }
 
@@ -89,7 +97,12 @@ impl NotesTool {
 
     /// The notes as they may leave this machine.
     pub fn sanitized(&self) -> (String, Vec<Hit>) {
-        redact::sanitize(&self.text)
+        let h = hash(&self.text);
+        let mut c = self.clean.borrow_mut();
+        if c.0 != h {
+            *c = (h, redact::sanitize(&self.text));
+        }
+        c.1.clone()
     }
 
     /// Write the sanitized notes, replacing the file in one step.
@@ -179,8 +192,9 @@ impl NotesTool {
         self.changed(ctx.input(|i| i.time));
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
-        let ctx = ui.ctx().clone();
+    /// Autosave; called every frame whichever tab is showing, so leaving
+    /// Notes right after typing still saves.
+    pub fn poll(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         if self.dirty.is_some_and(|t| now - t >= SAVE_AFTER) {
             self.write();
@@ -190,6 +204,11 @@ impl NotesTool {
                 (SAVE_AFTER - (now - t)).max(0.05),
             ));
         }
+    }
+
+    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
+        let ctx = ui.ctx().clone();
+        let now = ctx.input(|i| i.time);
         let hits = hits_for(&self.cache, &self.text);
         if hits.len() > self.known_hits {
             self.flash = now;
@@ -315,27 +334,10 @@ impl NotesTool {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let empty = self.is_empty();
-                let now = ui.input(|i| i.time);
-                let armed = self.clear_armed.is_some_and(|t| now - t < 3.0);
-                let clear = if armed {
-                    egui::Button::new(RichText::new("Clear: sure?").color(widgets::bad()))
-                } else {
-                    egui::Button::new("Clear")
-                };
-                if ui
-                    .add_enabled(!empty, clear)
-                    .on_hover_text("Empty the notes (click twice)")
-                    .clicked()
-                {
-                    if armed {
-                        self.text.clear();
-                        self.clear_armed = None;
-                        self.changed(now);
-                    } else {
-                        self.clear_armed = Some(now);
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs(3));
-                    }
+                if widgets::confirm_button(ui, "notes_clear", !empty, "Clear", "Empty the notes") {
+                    self.text.clear();
+                    let now = ui.input(|i| i.time);
+                    self.changed(now);
                 }
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui

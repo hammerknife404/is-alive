@@ -182,7 +182,7 @@ impl SweepTool {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(self.total > 0 && !running, |ui| {
                     if ui
-                        .button("Inventory")
+                        .button("Inventory…")
                         .on_hover_text(
                             "Save live hosts with MAC, vendor, name and open ports as JSON, \
 plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",

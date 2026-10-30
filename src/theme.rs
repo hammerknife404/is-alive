@@ -262,6 +262,8 @@ pub struct Settings {
     pub glow: bool,
     /// Window size (points) at the last exit.
     pub size: Option<(u32, u32)>,
+    /// Show the Map tab's accuracy note (until it's closed).
+    pub map_note: bool,
     pub backdrop: Source,
 }
 
@@ -272,6 +274,7 @@ impl Default for Settings {
             animate: true,
             glow: true,
             size: None,
+            map_note: true,
             backdrop: Source::Scene,
         }
     }
@@ -288,6 +291,7 @@ impl Settings {
                 "theme" => s.theme = Theme::from_key(v).unwrap_or_default(),
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
+                "map_note" => s.map_note = v.trim() != "0",
                 "size" => {
                     s.size = v
                         .trim()
@@ -322,6 +326,9 @@ impl Settings {
         );
         if let Some((w, h)) = self.size {
             s += &format!("size={w}x{h}\n");
+        }
+        if !self.map_note {
+            s += "map_note=0\n";
         }
         s
     }
@@ -464,6 +471,7 @@ mod tests {
             animate: false,
             glow: false,
             size: Some((1280, 800)),
+            map_note: false,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
         };
         assert_eq!(Settings::parse(&s.text()), s);
