@@ -174,7 +174,7 @@ impl Report {
     }
 
     pub fn summary(&self) -> String {
-        let mut s = format!("Format     {}\n", self.layers.join(" → "));
+        let mut s = format!("Format     {}\n", self.layers.join(" ➡ "));
         if let Some(v) = &self.version {
             s += &format!("Network    {v}\n");
         }

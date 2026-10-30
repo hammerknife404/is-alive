@@ -495,7 +495,7 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
             // Microsoft 365 tenants rotate theirs themselves.
             let fix = match target.filter(|t| !t.ends_with(&format!(".{d}"))) {
                 Some(t) if t.ends_with(".onmicrosoft.com") => {
-                    "rotate it in Microsoft Defender (Email authentication settings → DKIM → Rotate DKIM keys) to get 2048-bit".to_string()
+                    "rotate it in Microsoft Defender (Email authentication settings > DKIM > Rotate DKIM keys) to get 2048-bit".to_string()
                 }
                 Some(t) => format!("published by {t}, only that provider can rotate it"),
                 None => "rotate to a 2048-bit key".to_string(),
