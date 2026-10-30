@@ -550,7 +550,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
             let wait = Duration::from_millis(timeout as u64);
             net::par_for(&probes, threads, rate, tx.cancel_flag(), |&(ip, port)| {
                 let addr = SocketAddr::new(IpAddr::V4(ip), port);
-                if net::tcp_probe(addr, wait).0 == TcpState::Open {
+                if net::tcp_check(addr, wait).0 == TcpState::Open {
                     tx.send(Ev::Open(ip, port));
                 }
                 tx.send(Ev::Probed);

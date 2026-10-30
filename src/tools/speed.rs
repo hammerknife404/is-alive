@@ -1,6 +1,6 @@
 use crate::job::{Job, Tx, pump};
 use crate::log::{self, Table};
-use crate::net::speed::{self, Dir, Latency, Meta, Transfer};
+use crate::net::speed::{self, Dir, Latency, Meta, Server, Transfer};
 use crate::net::{self, TcpState, icmp};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, Color32, RichText, Ui};
@@ -18,8 +18,8 @@ const ICMP_TRIES: usize = 4;
 /// it as latency, not loss.
 const IDLE_TIMEOUT_MS: u32 = 1000;
 const LOADED_TIMEOUT_MS: u32 = 2000;
-const BLOCKED_HINT: &str =
-    "Web filters (SonicWall CFS, DNS filtering) often block speed test sites.";
+const BLOCKED_HINT: &str = "Web filters (SonicWall CFS, DNS filtering) often block speed test \
+sites; a 403 or 429 can also be the server's own limit, so try the other server.";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Phase {
@@ -136,6 +136,10 @@ impl Level {
 }
 
 pub struct SpeedTool {
+    /// Cloudflare, or the custom file below.
+    use_file: bool,
+    /// A large file to download instead of Cloudflare.
+    file_url: String,
     secs: u32,
     streams: usize,
     down: bool,
@@ -144,6 +148,8 @@ pub struct SpeedTool {
     run_started: Option<String>,
     /// Duration and streams of the run on screen.
     ran: (u32, usize),
+    /// Host the run on screen tested against.
+    ran_host: String,
     ip: Option<IpAddr>,
     meta: Option<Meta>,
     method: Method,
@@ -159,6 +165,8 @@ pub struct SpeedTool {
 impl Default for SpeedTool {
     fn default() -> Self {
         Self {
+            use_file: false,
+            file_url: String::new(),
             secs: 10,
             streams: 4,
             down: true,
@@ -166,6 +174,7 @@ impl Default for SpeedTool {
             job: None,
             run_started: None,
             ran: (10, 4),
+            ran_host: speed::HOST.into(),
             ip: None,
             meta: None,
             method: Method::Icmp,
@@ -211,11 +220,38 @@ impl SpeedTool {
         let running = self.poll();
 
         ui.horizontal(|ui| {
-            ui.label("Server");
-            ui.label(RichText::new(speed::HOST).strong()).on_hover_text(
-                "Cloudflare's speed test service. It's anycast: the nearest Cloudflare data \
-centre answers, usually inside your ISP's region.",
-            );
+            ui.add_enabled_ui(!running, |ui| {
+                ui.label("Server");
+                egui::ComboBox::from_id_salt("speed_server")
+                    .selected_text(if self.use_file {
+                        "Download a file"
+                    } else {
+                        speed::HOST
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.use_file, false, speed::HOST)
+                            .on_hover_text(
+                                "Cloudflare's speed test service: download and upload. It's \
+anycast: the nearest Cloudflare data centre answers, usually inside your ISP's region.",
+                            );
+                        ui.selectable_value(&mut self.use_file, true, "Download a file")
+                            .on_hover_text(
+                                "Any large file over HTTPS, fetched again and again on each \
+stream: your own server, a client's, or a host's test file. Download only.",
+                            );
+                    });
+                if self.use_file {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.file_url)
+                            .desired_width(240.0)
+                            .hint_text("https://host/100MB.bin"),
+                    )
+                    .on_hover_text(
+                        "A file of 100 MB or more downloads best. Latency is measured to the \
+same host.",
+                    );
+                }
+            });
             ui.separator();
             ui.add_enabled_ui(!running, |ui| {
                 ui.label("Duration");
@@ -232,7 +268,8 @@ centre answers, usually inside your ISP's region.",
 multi-gigabit or long-distance links.",
                     );
                 ui.checkbox(&mut self.down, "Download");
-                ui.checkbox(&mut self.up, "Upload");
+                ui.add_enabled(!self.use_file, egui::Checkbox::new(&mut self.up, "Upload"))
+                    .on_disabled_hover_text("A file download can't measure upload");
             });
             ui.separator();
             match widgets::run_button(ui, running, false) {
@@ -601,7 +638,7 @@ loss is less reliable that way."
     }
 
     fn report(&self) -> String {
-        let mut head = vec![speed::HOST.to_string()];
+        let mut head = vec![self.ran_host.clone()];
         head.extend(self.place());
         let mut s = format!("Speed test: {}\n", head.join(", "));
         let (secs, streams) = self.ran;
@@ -678,7 +715,7 @@ loss is less reliable that way."
                     _ => String::new(),
                 };
                 Some(vec![
-                    speed::HOST.to_string(),
+                    self.ran_host.clone(),
                     log::cell(self.ip),
                     p.name().to_lowercase(),
                     t.map(|t| format!("{:.2}", t.mbps)).unwrap_or_default(),
@@ -738,17 +775,34 @@ loss is less reliable that way."
 
     /// Start a test with the current settings (also the full scan's).
     pub fn run(&mut self, ctx: &egui::Context) {
-        let (secs, streams, down, up) = (self.secs, self.streams, self.down, self.up);
+        let server = if self.use_file {
+            Server::File(self.file_url.trim().to_string())
+        } else {
+            Server::Cloudflare
+        };
+        let (secs, streams, down) = (self.secs, self.streams, self.down);
+        let up = self.up && server.uploads();
+        let (use_file, file_url, keep_up) = (self.use_file, self.file_url.clone(), self.up);
+        let host = server.host();
         *self = Self {
+            use_file,
+            file_url,
             secs,
             streams,
             down,
-            up,
+            up: keep_up,
             ran: (secs, streams),
+            ran_host: host.clone().unwrap_or_default(),
             ..Default::default()
         };
+        if let Err(e) = host {
+            self.err = Some(format!("Server: {e}"));
+            return;
+        }
         self.run_started = Some(log::now());
-        self.job = Some(Job::spawn(ctx, move |tx| run(&tx, secs, streams, down, up)));
+        self.job = Some(Job::spawn(ctx, move |tx| {
+            run(&tx, &server, secs, streams, down, up)
+        }));
     }
 }
 
@@ -780,14 +834,16 @@ impl Prober {
     }
 }
 
-fn run(tx: &Tx<Ev>, secs: u32, streams: usize, down: bool, up: bool) {
-    let ip = match net::resolve(speed::HOST, false) {
+fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {
+    let host = server.host().unwrap_or_default();
+    let ip = match net::resolve(&host, false) {
         Ok(ip) => ip,
-        Err(e) => return tx.send(Ev::Error(format!("could not resolve {}: {e}", speed::HOST))),
+        Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
     };
     tx.send(Ev::Resolved(ip));
     let agent = speed::agent(streams);
-    let mut meta = Some({
+    // Only Cloudflare says where the test ran.
+    let mut meta = (*server == Server::Cloudflare).then(|| {
         let agent = agent.clone();
         std::thread::spawn(move || speed::meta(&agent, speed::BASE))
     });
@@ -814,7 +870,16 @@ fn run(tx: &Tx<Ev>, secs: u32, streams: usize, down: bool, up: bool) {
 
     for (on, phase, dir) in [(down, Phase::Down, Dir::Down), (up, Phase::Up, Dir::Up)] {
         if on && !tx.cancelled() {
-            transfer(tx, &agent, &mut p, phase, dir, secs, streams);
+            transfer(
+                tx,
+                &agent,
+                &server.url(dir),
+                &mut p,
+                phase,
+                dir,
+                secs,
+                streams,
+            );
             send_meta(tx, &mut meta, false);
         }
     }
@@ -831,9 +896,11 @@ fn send_meta(tx: &Tx<Ev>, slot: &mut Option<JoinHandle<Option<Meta>>>, wait: boo
 }
 
 /// One direction for `secs`, probing latency the whole time.
+#[allow(clippy::too_many_arguments)]
 fn transfer(
     tx: &Tx<Ev>,
     agent: &ureq::Agent,
+    url: &str,
     p: &mut Prober,
     phase: Phase,
     dir: Dir,
@@ -841,7 +908,7 @@ fn transfer(
     streams: usize,
 ) {
     tx.send(Ev::Phase(phase));
-    let t = Transfer::start(agent, speed::BASE, dir, streams);
+    let t = Transfer::start(agent, url, dir, streams);
     let secs = secs as f64;
     let warm = speed::warmup(secs);
     let start = Instant::now();
@@ -1005,6 +1072,22 @@ mod tests {
             bytes: 47_800_000,
         });
         t
+    }
+
+    #[test]
+    fn a_bad_file_url_says_so_and_nothing_runs() {
+        let ctx = egui::Context::default();
+        let mut t = SpeedTool {
+            use_file: true,
+            file_url: "ftp://files.example.net/1GB.bin".into(),
+            ..Default::default()
+        };
+        t.run(&ctx);
+        assert!(t.job.is_none() && t.run_started.is_none());
+        assert!(t.err.as_deref().unwrap().contains("https://"));
+        // The settings survive the reset.
+        assert!(t.use_file && t.up);
+        assert_eq!(t.file_url, "ftp://files.example.net/1GB.bin");
     }
 
     #[test]

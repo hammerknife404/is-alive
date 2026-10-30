@@ -192,6 +192,20 @@ will be flagged as a scan.",
 ];
 pub const DEFAULT_SPEED: usize = 1;
 
+/// A TextEdit's selection in `text` as a byte range (empty at a bare
+/// cursor); None before it has one.
+pub fn text_selection(
+    ctx: &egui::Context,
+    id: egui::Id,
+    text: &str,
+) -> Option<std::ops::Range<usize>> {
+    let state = egui::TextEdit::load_state(ctx, id)?;
+    let r = state.cursor.char_range()?;
+    let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
+    let (a, b) = (r.primary.index.0, r.secondary.index.0);
+    Some(byte(a.min(b))..byte(a.max(b)))
+}
+
 /// Busy indicator. egui's own spinner asks for a redraw every frame, which
 /// means 60 full window redraws a second (unbounded without vsync) for as
 /// long as a tool runs; this one turns at 20 frames a second.

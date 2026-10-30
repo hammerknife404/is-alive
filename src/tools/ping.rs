@@ -266,11 +266,11 @@ impl PingTool {
     }
 
     /// Start a run with the given target (used by the full scan).
+    /// `count` ICMP pings to `host` (full scan, Map), leaving the tab's own
+    /// mode and count as the user set them.
     pub fn run(&mut self, ctx: &egui::Context, host: &str, count: u32) {
         self.host = host.into();
-        self.mode = Mode::Icmp;
-        self.count = count;
-        self.start(ctx);
+        self.launch(ctx, Mode::Icmp, count);
     }
 
     pub fn is_running(&self) -> bool {
@@ -278,6 +278,10 @@ impl PingTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
+        self.launch(ctx, self.mode, self.count);
+    }
+
+    fn launch(&mut self, ctx: &egui::Context, mode: Mode, count: u32) {
         self.err = None;
         self.target = None;
         self.lines.clear();
@@ -289,8 +293,7 @@ impl PingTool {
             self.err = Some("enter a host".into());
             return;
         }
-        let (mode, port, count, size, v6) =
-            (self.mode, self.port, self.count, self.size, self.prefer_v6);
+        let (port, size, v6) = (self.port, self.size, self.prefer_v6);
         let interval = Duration::from_millis(self.interval_ms as u64);
         let timeout = self.timeout_ms;
 
@@ -409,6 +412,22 @@ fn push_capped<T>(q: &mut VecDeque<T>, v: T, cap: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_scan_ping_leaves_the_tab_settings() {
+        let ctx = egui::Context::default();
+        let mut t = PingTool {
+            mode: Mode::Tcp,
+            count: 0,
+            ..Default::default()
+        };
+        t.run(&ctx, "127.0.0.1", 1);
+        assert!((t.mode == Mode::Tcp, t.count) == (true, 0));
+        assert_eq!(t.host, "127.0.0.1");
+        if let Some(j) = &t.job {
+            j.stop();
+        }
+    }
 
     #[test]
     fn stats_track_whole_run() {

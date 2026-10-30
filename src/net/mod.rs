@@ -99,6 +99,19 @@ pub fn tcp_probe(addr: SocketAddr, timeout: Duration) -> (TcpState, f64) {
     (state, ms)
 }
 
+/// A port check: `tcp_probe`, but on Windows a filtered answer gets one
+/// more try. Windows sends no SYN retransmit here (see `no_syn_retransmit`),
+/// so one lost packet would otherwise read an open port as filtered. Other
+/// systems already resend within the timeout. Not for TCP ping, whose
+/// timings are single attempts.
+pub fn tcp_check(addr: SocketAddr, timeout: Duration) -> (TcpState, f64) {
+    let first = tcp_probe(addr, timeout);
+    if cfg!(windows) && first.0 == TcpState::Filtered {
+        return tcp_probe(addr, timeout);
+    }
+    first
+}
+
 fn connect(addr: SocketAddr, timeout: Duration) -> io::Result<()> {
     let sock = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
     #[cfg(windows)]
