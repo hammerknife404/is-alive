@@ -28,6 +28,8 @@ pub struct BundleTool {
     site: String,
     notes: String,
     clients: Clients,
+    /// Answer to /mapnetwork's "include clients?"; off means infrastructure only.
+    map_clients: bool,
     use_unifi: bool,
     use_sonicwall: bool,
     use_inventory: bool,
@@ -44,6 +46,7 @@ impl Default for BundleTool {
             site: String::new(),
             notes: String::new(),
             clients: Clients::Anonymized,
+            map_clients: false,
             use_unifi: true,
             use_sonicwall: true,
             use_inventory: true,
@@ -129,7 +132,15 @@ impl BundleTool {
                 );
                 ui.end_row();
             });
-        ui.horizontal(|ui| export::clients_choice(ui, "bundle_clients", &mut self.clients));
+        ui.horizontal(|ui| {
+            export::clients_choice(ui, "bundle_clients", &mut self.clients);
+            ui.separator();
+            ui.checkbox(&mut self.map_clients, "Clients on the map").on_hover_text(
+                "Off: /mapnetwork maps infrastructure only and uses the client table for counts \
+and to spot unadopted gear. On: client devices go on the map too (it caps and collapses large \
+client lists). Applies to clients from the sweep as well as UniFi.",
+            );
+        });
         ui.separator();
 
         let unifi = src.export.unifi();
@@ -284,31 +295,29 @@ impl BundleTool {
                 data: Format::Json.export(&entries),
             });
         }
-        let (site, notes, clients, scanner) = (
-            self.site.trim().to_string(),
-            self.notes.clone(),
-            self.clients,
-            src.info.clone(),
-        );
+        let b = Bundle {
+            site: self.site.trim().to_string(),
+            notes: self.notes.clone(),
+            clients: self.clients,
+            map_clients: self.map_clients,
+            scanner: src.info.clone(),
+            parts,
+        };
         self.job = Some(Job::spawn(ctx, move |tx| {
-            tx.send(build_and_save(unifi, parts, site, notes, clients, scanner));
+            tx.send(build_and_save(unifi, b));
         }));
     }
 }
 
-fn build_and_save(
-    unifi: Option<PathBuf>,
-    mut parts: Vec<Part>,
-    site: String,
-    notes: String,
-    clients: Clients,
-    scanner: HostInfo,
-) -> Result<Option<Saved>, String> {
+/// Add the UniFi part (converted with the bundle's client setting), then
+/// ask where to save and write the zip.
+fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, String> {
+    let clients = b.clients;
     if let Some(path) = unifi {
         let data =
             std::fs::read(&path).map_err(|e| format!("{}: {e}", export::file_name(&path)))?;
         let r = unifi::convert(data, clients)?;
-        parts.insert(
+        b.parts.insert(
             0,
             Part {
                 file: bundle::UNIFI,
@@ -328,13 +337,6 @@ fn build_and_save(
             },
         );
     }
-    let b = Bundle {
-        site,
-        notes,
-        clients,
-        scanner,
-        parts,
-    };
     // Ask first: the prompt inside the zip names the file as saved.
     let Some(path) = rfd::FileDialog::new()
         .set_title("Save site bundle")
