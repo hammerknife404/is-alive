@@ -5,6 +5,7 @@ mod job;
 mod log;
 mod net;
 mod sonicwall;
+mod theme;
 mod tools;
 mod unifi;
 mod widgets;
@@ -98,6 +99,7 @@ struct App {
     filter: String,
     /// Scroll Results to its newest runs on the next frame (after a full scan).
     jump_to_new: bool,
+    theme: theme::Theme,
 }
 
 impl eframe::App for App {
@@ -112,7 +114,7 @@ impl eframe::App for App {
         self.collect();
         self.dropped_files(ui.ctx());
         pump(&mut self.info_job, |i| self.info = i);
-        egui::Panel::top("tabs").show(ui, |ui| {
+        let tabs = egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
             // Wraps to a second row when the window (or display scaling)
             // leaves too little width, so every tab stays reachable.
@@ -134,41 +136,65 @@ impl eframe::App for App {
                     self.full_scan(ui.ctx());
                 }
                 ui.separator();
+                // The selected tab is marked by a sliding underline rather
+                // than a filled box; running jobs get a pulsing dot that
+                // doesn't change the tab's width.
+                let fill = ui.visuals().selection.bg_fill;
+                ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                let mut selected = None;
+                let mut dots = Vec::new();
                 for (tab, name, tip) in TABS {
-                    // Jobs keep running on hidden tabs; mark them so they aren't forgotten.
-                    let label = if self.tab_running(*tab) {
-                        egui::RichText::new(format!("{name} ⏺")).color(widgets::OK)
-                    } else {
-                        egui::RichText::new(*name)
-                    };
-                    ui.selectable_value(&mut self.tab, *tab, label)
-                        .on_hover_text(*tip);
+                    let on = self.tab == *tab;
+                    let mut text = egui::RichText::new(*name);
+                    if on {
+                        text = text.color(theme::accent());
+                    }
+                    let r = ui.selectable_label(on, text).on_hover_text(*tip);
+                    if r.clicked() {
+                        self.tab = *tab;
+                    }
+                    if on {
+                        selected = Some(r.rect);
+                    }
+                    if self.tab_running(*tab) {
+                        dots.push(r.rect);
+                    }
                 }
-                let label = if self.bundle.is_running() {
-                    "Site Bundle ⏺"
-                } else {
-                    "Site Bundle…"
-                };
+                ui.visuals_mut().selection.bg_fill = fill;
+                if let Some(r) = selected {
+                    tab_underline(ui, r);
+                }
                 let bundle = |ui: &mut egui::Ui| {
-                    ui.button(label).on_hover_text(
+                    ui.button("Site Bundle…").on_hover_text(
                         "Wrap the UniFi and SonicWall exports, the sweep inventory and \
 (optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
                     )
                 };
                 // Right-aligned when the row has room; otherwise it wraps with the tabs.
-                let clicked = if ui.available_width() > 120.0 {
+                let need = egui::WidgetText::from("Site Bundle…")
+                    .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Button)
+                    .size()
+                    .x
+                    + 2.0 * ui.spacing().button_padding.x
+                    + ui.spacing().item_spacing.x
+                    + 8.0;
+                let button = if ui.available_width() > need {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
                         .inner
                 } else {
                     bundle(ui)
-                }
-                .clicked();
-                if clicked {
+                };
+                if button.clicked() {
                     self.bundle.open = !self.bundle.open;
                 }
+                if self.bundle.is_running() {
+                    dots.push(button.rect);
+                }
+                running_dots(ui, &dots);
             });
             ui.add_space(2.0);
         });
+        theme::top_rule(ui.ctx(), tabs.response.rect.bottom());
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
@@ -201,6 +227,12 @@ impl eframe::App for App {
                         self.refresh_info(ui.ctx());
                     }
                     ui.weak(format!("v{VERSION}"));
+                    ui.separator();
+                    if let Some(t) = theme::picker(ui, self.theme) {
+                        self.theme = t;
+                        theme::apply(ui.ctx(), t);
+                        theme::save(t);
+                    }
                 });
             });
         });
@@ -252,19 +284,24 @@ impl App {
             self.tab = Tab::Export;
             self.export.open(ctx, dropped);
         }
-        if hovering {
+        let fade = ctx.animate_bool(egui::Id::new("drop_fade"), hovering);
+        if fade > 0.0 {
             let rect = ctx.content_rect();
             let p = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("drop"),
             ));
-            p.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
+            p.rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_black_alpha((180.0 * fade) as u8),
+            );
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Drop a UniFi backup or SonicWall export to convert it",
                 egui::FontId::proportional(18.0),
-                egui::Color32::WHITE,
+                egui::Color32::WHITE.gamma_multiply(fade),
             );
         }
     }
@@ -481,6 +518,39 @@ impl App {
     }
 }
 
+/// Underline under the selected tab, sliding to the new one on a switch.
+fn tab_underline(ui: &egui::Ui, r: egui::Rect) {
+    let ctx = ui.ctx();
+    let ease =
+        |k: &str, v: f32| ctx.animate_value_with_time(egui::Id::new(("tab_line", k)), v, 0.16);
+    let (x0, x1, y) = (
+        ease("x0", r.left() + 4.0),
+        ease("x1", r.right() - 4.0),
+        ease("y", r.bottom() + 1.0),
+    );
+    theme::glow(ui.painter(), x0..=x1, y);
+    ui.painter()
+        .hline(x0..=x1, y, egui::Stroke::new(2.0, theme::accent()));
+}
+
+/// Pulsing dot in the top-right corner of each tab whose job is running.
+fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
+    if rects.is_empty() {
+        return;
+    }
+    let t = ui.input(|i| i.time) as f32;
+    let a = 0.35 + 0.65 * (0.5 + 0.5 * (t * 4.0).sin());
+    for r in rects {
+        ui.painter().circle_filled(
+            egui::pos2(r.right() - 2.0, r.top() + 3.0),
+            2.5,
+            widgets::ok().gamma_multiply(a),
+        );
+    }
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(50));
+}
+
 /// `entry` is the logged run, for Export; None while it's still running.
 fn entry_ui(
     ui: &mut egui::Ui,
@@ -518,7 +588,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))
             .with_app_id("is-alive")
-            .with_inner_size([860.0, 600.0])
+            .with_inner_size([980.0, 660.0])
             .with_min_inner_size([620.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(icon()),
@@ -528,6 +598,8 @@ fn main() -> eframe::Result {
         "is-alive",
         options,
         Box::new(|cc| {
+            let theme = theme::load();
+            theme::apply(&cc.egui_ctx, theme);
             let mut app = App {
                 tab: Tab::Ping,
                 ping: Default::default(),
@@ -543,6 +615,7 @@ fn main() -> eframe::Result {
                 info_job: None,
                 filter: String::new(),
                 jump_to_new: false,
+                theme,
             };
             app.refresh_info(&cc.egui_ctx);
             Ok(Box::new(app))

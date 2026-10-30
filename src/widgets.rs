@@ -2,9 +2,18 @@
 
 use eframe::egui::{self, Color32, RichText, Ui};
 
-pub const OK: Color32 = Color32::from_rgb(80, 200, 120);
-pub const WARN: Color32 = Color32::from_rgb(230, 180, 60);
-pub const BAD: Color32 = Color32::from_rgb(235, 90, 90);
+/// Status colours, tuned per theme so they stay readable.
+pub fn ok() -> Color32 {
+    crate::theme::status().0
+}
+
+pub fn warn() -> Color32 {
+    crate::theme::status().1
+}
+
+pub fn bad() -> Color32 {
+    crate::theme::status().2
+}
 
 pub enum Action {
     None,
@@ -207,7 +216,7 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
 
 pub fn error(ui: &mut Ui, err: &Option<String>) {
     if let Some(e) = err {
-        ui.label(RichText::new(format!("⚠ {e}")).color(BAD));
+        ui.label(RichText::new(format!("⚠ {e}")).color(bad()));
     }
 }
 
@@ -231,7 +240,12 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
     if samples.is_empty() {
         return;
     }
-    let max = samples.iter().flatten().fold(1.0f64, |a, &b| a.max(b)) * 1.15;
+    // Floor of 0.1 ms so LAN pings aren't a flat line; the scale eases
+    // to a new peak instead of jumping.
+    let peak = samples.iter().flatten().fold(0.1f64, |a, &b| a.max(b)) * 1.15;
+    let max =
+        ui.ctx()
+            .animate_value_with_time(ui.id().with("chart_scale"), peak as f32, 0.3) as f64;
     let n = samples.len().max(2) - 1;
     let x = |i: usize| rect.left() + 4.0 + (rect.width() - 8.0) * i as f32 / n as f32;
     let y = |v: f64| rect.bottom() - 4.0 - (rect.height() - 8.0) * (v / max) as f32;
@@ -246,7 +260,7 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
                         egui::pos2(x(i), rect.top() + 2.0),
                         egui::pos2(x(i), rect.bottom() - 2.0),
                     ],
-                    egui::Stroke::new(1.5, BAD.gamma_multiply(0.6)),
+                    egui::Stroke::new(1.5, bad().gamma_multiply(0.6)),
                 );
                 flush(&p, &mut line);
             }
@@ -265,12 +279,12 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
         match line.len() {
             0 => {}
             1 => {
-                p.circle_filled(line[0], 2.0, OK);
+                p.circle_filled(line[0], 2.0, ok());
             }
             _ => {
                 p.add(egui::Shape::line(
                     std::mem::take(line),
-                    egui::Stroke::new(1.5, OK),
+                    egui::Stroke::new(1.5, ok()),
                 ));
             }
         }

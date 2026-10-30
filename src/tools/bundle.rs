@@ -227,7 +227,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                             "Saved {}; prompt copied",
                             export::file_name(&s.path)
                         ))
-                        .color(widgets::OK),
+                        .color(widgets::ok()),
                     )
                     .truncate(),
                 )

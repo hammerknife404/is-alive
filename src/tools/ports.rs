@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::ports::{PRESETS, parse_ports, service_name};
 use crate::net::{self, TcpState};
-use crate::widgets::{self, Action, BAD, OK, WARN};
+use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -124,7 +124,7 @@ impl PortTool {
             }
             if self.total > 0 {
                 let c = if open > 0 {
-                    OK
+                    widgets::ok()
                 } else {
                     ui.visuals().text_color()
                 };
@@ -141,7 +141,7 @@ impl PortTool {
         if let Some(e) = first_err {
             // Errors (no route, bad address, out of sockets) are always shown:
             // hiding them would make a broken scan look like "0 open".
-            ui.label(RichText::new(format!("⚠ some probes failed: {e}")).color(BAD));
+            ui.label(RichText::new(format!("⚠ some probes failed: {e}")).color(widgets::bad()));
         }
         if running && self.total > 0 {
             widgets::progress(ui, self.results.len(), self.total, self.started_at);
@@ -324,9 +324,9 @@ impl PortTool {
 
 fn state_label(s: &TcpState) -> (&'static str, egui::Color32) {
     match s {
-        TcpState::Open => ("open", OK),
-        TcpState::Closed => ("closed", BAD),
-        TcpState::Filtered => ("filtered", WARN),
-        TcpState::Error(_) => ("error", BAD),
+        TcpState::Open => ("open", widgets::ok()),
+        TcpState::Closed => ("closed", widgets::bad()),
+        TcpState::Filtered => ("filtered", widgets::warn()),
+        TcpState::Error(_) => ("error", widgets::bad()),
     }
 }

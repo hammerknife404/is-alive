@@ -45,9 +45,9 @@ impl Default for AdvancedTool {
 fn color(s: Status) -> Color32 {
     match s {
         Status::Info => Color32::GRAY,
-        Status::Pass => widgets::OK,
-        Status::Warn => widgets::WARN,
-        Status::Fail => widgets::BAD,
+        Status::Pass => widgets::ok(),
+        Status::Warn => widgets::warn(),
+        Status::Fail => widgets::bad(),
     }
 }
 

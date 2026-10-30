@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::icmp::{self, EchoStatus};
 use crate::net::{self, TcpState};
-use crate::widgets::{self, Action, BAD, OK, WARN};
+use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
@@ -150,8 +150,11 @@ impl PingTool {
         ui.separator();
 
         self.stats_row(ui);
-        widgets::latency_chart(ui, self.samples.make_contiguous(), 70.0);
-        ui.add_space(4.0);
+        // No empty graph box before the first reply.
+        if !self.samples.is_empty() {
+            widgets::latency_chart(ui, self.samples.make_contiguous(), 70.0);
+            ui.add_space(4.0);
+        }
 
         if self.lines.is_empty() && !running {
             widgets::empty_hint(
@@ -166,7 +169,11 @@ impl PingTool {
             .stick_to_bottom(true)
             .show_rows(ui, row_h, self.lines.len(), |ui, range| {
                 for (ok, line) in self.lines.range(range) {
-                    let c = if *ok { ui.visuals().text_color() } else { BAD };
+                    let c = if *ok {
+                        ui.visuals().text_color()
+                    } else {
+                        widgets::bad()
+                    };
                     // No wrapping: show_rows needs a fixed row height.
                     ui.add(egui::Label::new(RichText::new(line).monospace().color(c)).extend());
                 }
@@ -184,11 +191,11 @@ impl PingTool {
             if sent > 0 {
                 let loss = 100.0 * (sent - recv) as f64 / sent as f64;
                 let c = if loss == 0.0 {
-                    OK
+                    widgets::ok()
                 } else if loss < 100.0 {
-                    WARN
+                    widgets::warn()
                 } else {
-                    BAD
+                    widgets::bad()
                 };
                 ui.label(RichText::new(format!("Loss {loss:.0}%")).color(c));
             }

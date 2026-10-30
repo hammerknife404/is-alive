@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net;
 use crate::net::icmp::{self, EchoStatus};
-use crate::widgets::{self, Action, OK, WARN};
+use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::net::IpAddr;
 
@@ -94,8 +94,12 @@ impl TraceTool {
                 ui.label(RichText::new(format!("Tracing {ip}")).strong());
             }
             match self.reached {
-                Some(true) => _ = ui.label(RichText::new("✔ destination reached").color(OK)),
-                Some(false) => _ = ui.label(RichText::new("destination not reached").color(WARN)),
+                Some(true) => {
+                    _ = ui.label(RichText::new("✔ destination reached").color(widgets::ok()))
+                }
+                Some(false) => {
+                    _ = ui.label(RichText::new("destination not reached").color(widgets::warn()))
+                }
                 None => {}
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
