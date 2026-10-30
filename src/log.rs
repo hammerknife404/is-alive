@@ -45,6 +45,18 @@ pub fn ms(v: f64) -> String {
 }
 
 impl Entry {
+    /// What the run tested (host, range, domain), from its table's first
+    /// column; None for runs without one (Host info, early failures).
+    pub fn target(&self) -> Option<&str> {
+        let t = self.table.as_ref()?;
+        let first = *t.columns.first()?;
+        ["target", "host", "range", "lookup", "domain"]
+            .contains(&first)
+            .then(|| t.rows.first()?.first().map(String::as_str))
+            .flatten()
+            .filter(|v| !v.is_empty())
+    }
+
     pub fn header(&self) -> String {
         format!(
             "{}  started {}, ended {}",
@@ -368,6 +380,17 @@ mod tests {
         assert_eq!(csv_field("-1"), "-1");
         assert_eq!(csv_field("+5.5"), "+5.5");
         assert_eq!(csv_field("v=spf1 -all"), "v=spf1 -all");
+    }
+
+    #[test]
+    fn target_from_first_column() {
+        let mut e = run("Port Check", "t", &[&["10.0.0.1", "open"]]);
+        e.table.as_mut().unwrap().columns = &["host", "state"];
+        assert_eq!(e.target(), Some("10.0.0.1"));
+        e.table.as_mut().unwrap().columns = &["field", "value"];
+        assert_eq!(e.target(), None);
+        e.table = None;
+        assert_eq!(e.target(), None);
     }
 
     #[test]

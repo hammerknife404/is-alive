@@ -17,6 +17,70 @@ pub const CONFIG: &[&str] = &["site", "device", "networkconf", "portconf", "wlan
 /// Client (station) table: hostnames, MACs, last IPs.
 pub const CLIENTS: &str = "user";
 
+/// How the client table goes out.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum Clients {
+    #[default]
+    None,
+    /// MAC, vendor and switch port kept; names replaced with a token.
+    Anonymized,
+    Full,
+}
+
+impl Clients {
+    pub const ALL: [Clients; 3] = [Clients::None, Clients::Anonymized, Clients::Full];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Clients::None => "none",
+            Clients::Anonymized => "anonymized",
+            Clients::Full => "full",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            Clients::None => "Leave the client table out.",
+            Clients::Anonymized => {
+                "Keep each client's MAC, vendor and switch port (what unifidump needs to spot \
+unadopted gear) but replace device names, which are often people's names, with a token \
+like client-1a2b3c4d. Notes and email addresses are dropped."
+            }
+            Clients::Full => "Keep the client table as is, names included.",
+        }
+    }
+}
+
+/// Fields of a client record that name a person or hold their details.
+const PERSONAL_NAMES: &[&str] = &["name", "hostname", "display_name", "local_dns_record"];
+
+/// Replace a client's names with a stable token from its MAC (the MAC is
+/// kept anyway, so the token reveals nothing new) and drop notes, email and
+/// phone fields. Returns whether anything changed.
+fn anonymize(doc: &mut Map<String, Value>) -> bool {
+    let mac = doc.get("mac").and_then(Value::as_str).unwrap_or_default();
+    let token = format!(
+        "client-{:08x}",
+        mac.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32)
+            .wrapping_mul(0x0100_0193))
+    );
+    let mut changed = false;
+    for k in PERSONAL_NAMES {
+        if let Some(v) = doc.get_mut(*k)
+            && v.is_string()
+        {
+            *v = Value::String(token.clone());
+            changed = true;
+        }
+    }
+    let before = doc.len();
+    doc.retain(|k, _| {
+        let k = k.to_ascii_lowercase();
+        k != "note" && !k.contains("email") && !k.contains("phone")
+    });
+    changed || doc.len() != before
+}
+
 /// Field-name fragments that mark a secret. UniFi prefixes stored secrets
 /// with `x_` (x_passphrase, x_authkey, x_wan_password, …); the rest catch
 /// RADIUS secrets, PPSK lists, VPN keys and certificates by name.
@@ -85,7 +149,9 @@ pub struct Report {
     pub dropped: BTreeMap<String, usize>,
     /// `collection.field` → times removed.
     pub redacted: BTreeMap<String, usize>,
-    pub clients: bool,
+    pub clients: Clients,
+    /// Client records whose names were replaced.
+    pub anonymized: usize,
     pub json: String,
 }
 
@@ -108,12 +174,18 @@ impl Report {
             "Output     {:.1} KB, mongoexport JSON for unifidump\n\nKept\n",
             self.json.len() as f64 / 1024.0
         );
-        for c in CONFIG.iter().chain(self.clients.then_some(&CLIENTS)) {
+        for c in CONFIG {
             s += &format!("  {c:<14}{:>7}\n", self.count(c));
         }
-        if !self.clients {
-            s += &format!("  {CLIENTS:<14}{:>7}  (left out)\n", 0);
-        }
+        s += &match self.clients {
+            Clients::None => format!("  {CLIENTS:<14}{:>7}  (left out)\n", 0),
+            Clients::Anonymized => format!(
+                "  {CLIENTS:<14}{:>7}  (anonymized: {} renamed)\n",
+                self.count(CLIENTS),
+                self.anonymized
+            ),
+            Clients::Full => format!("  {CLIENTS:<14}{:>7}\n", self.count(CLIENTS)),
+        };
         s += &format!(
             "\nLeft in the backup: {} collection(s), {} document(s)\n",
             self.dropped.len(),
@@ -135,9 +207,10 @@ impl Report {
 
 /// Decrypt and unpack a backup, keep the config collections (plus clients
 /// if asked) and strip secrets.
-pub fn convert(data: Vec<u8>, clients: bool) -> Result<Report, String> {
+pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
     let dump = container::open(data)?;
-    let keep = |c: &str| CONFIG.contains(&c) || (clients && c == CLIENTS);
+    let keep = |c: &str| CONFIG.contains(&c) || (clients != Clients::None && c == CLIENTS);
+    let mut anonymized = 0;
 
     let mut out: Vec<String> = Vec::new();
     let mut kept: Vec<(String, usize)> = Vec::new();
@@ -169,6 +242,9 @@ pub fn convert(data: Vec<u8>, clients: bool) -> Result<Report, String> {
                 if c == "site" {
                     sites.push(site_name(&doc));
                 }
+                if c == CLIENTS && clients == Clients::Anonymized && anonymize(&mut doc) {
+                    anonymized += 1;
+                }
                 let mut v = Value::Object(std::mem::take(&mut doc));
                 redact(&mut v, c, &mut redacted);
                 out.push(v.to_string());
@@ -192,6 +268,7 @@ pub fn convert(data: Vec<u8>, clients: bool) -> Result<Report, String> {
         dropped,
         redacted,
         clients,
+        anonymized,
         json: format!("[\n{}\n]\n", out.join(",\n")),
     })
 }
@@ -238,7 +315,9 @@ mod tests {
                    "openvpn_configuration": "client\n<key>\n-----BEGIN PRIVATE KEY-----\nMIIE\n</key>",
                    "wireguard_client_peer_public_key": "pub"}),
             sel("user"),
-            json!({"mac": "bb", "hostname": "Janes-iPhone", "oui": "Apple"}),
+            json!({"mac": "bb", "hostname": "Janes-iPhone", "name": "Jane's phone", "oui": "Apple",
+                   "note": "Jane Doe, front office", "email": "jane@example.com",
+                   "last_uplink_name": "SW1", "noted": true}),
             sel("event"),
             json!({"msg": "x"}),
             json!({"msg": "y"}),
@@ -247,7 +326,7 @@ mod tests {
 
     #[test]
     fn keeps_config_and_strips_secrets() {
-        let r = convert(sample(), true).unwrap();
+        let r = convert(sample(), Clients::Full).unwrap();
         let docs: Vec<Value> = serde_json::from_str(&r.json).unwrap();
         let text = r.json.as_str();
         for secret in [
@@ -280,8 +359,28 @@ mod tests {
     }
 
     #[test]
+    fn clients_anonymized() {
+        let r = convert(sample(), Clients::Anonymized).unwrap();
+        assert!(!r.json.contains("Janes-iPhone"));
+        assert!(!r.json.contains("jane@example.com"));
+        let docs: Vec<Value> = serde_json::from_str(&r.json).unwrap();
+        let user = docs.iter().find(|d| d["mac"] == "bb").unwrap();
+        assert!(user["hostname"].as_str().unwrap().starts_with("client-"));
+        assert_eq!(user["hostname"], user["name"]);
+        assert_eq!(
+            (&user["oui"], &user["last_uplink_name"]),
+            (&json!("Apple"), &json!("SW1"))
+        );
+        assert_eq!(r.anonymized, 1);
+        assert!(r.summary().contains("anonymized: 1 renamed"));
+        // Same MAC, same token, so exports can be compared.
+        let again = convert(sample(), Clients::Anonymized).unwrap();
+        assert_eq!(again.json, r.json);
+    }
+
+    #[test]
     fn clients_optional() {
-        let r = convert(sample(), false).unwrap();
+        let r = convert(sample(), Clients::None).unwrap();
         assert!(!r.json.contains("Janes-iPhone"));
         assert_eq!(r.dropped.get("user"), Some(&1));
         assert!(r.summary().contains("(left out)"));
@@ -293,6 +392,6 @@ mod tests {
             json!({"__cmd": "select", "collection": "event"}),
             json!({"m": 1}),
         ]);
-        assert!(convert(b, true).is_err());
+        assert!(convert(b, Clients::Full).is_err());
     }
 }

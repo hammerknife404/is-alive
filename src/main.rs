@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod bundle;
 mod job;
 mod log;
 mod net;
@@ -89,6 +90,7 @@ struct App {
     dns: tools::dns::DnsTool,
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
+    bundle: tools::bundle::BundleTool,
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
@@ -138,6 +140,23 @@ impl eframe::App for App {
                     ui.selectable_value(&mut self.tab, *tab, label)
                         .on_hover_text(*tip);
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if self.bundle.is_running() {
+                        "Site Bundle ⏺"
+                    } else {
+                        "Site Bundle…"
+                    };
+                    if ui
+                        .button(label)
+                        .on_hover_text(
+                            "Wrap the UniFi and SonicWall exports, the sweep inventory and \
+(optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
+                        )
+                        .clicked()
+                    {
+                        self.bundle.open = !self.bundle.open;
+                    }
+                });
             });
             ui.add_space(2.0);
         });
@@ -186,6 +205,23 @@ impl eframe::App for App {
             Tab::Export => self.export.ui(ui),
             Tab::Results => self.results_ui(ui),
         });
+        let App {
+            bundle,
+            export,
+            sweep,
+            log,
+            info,
+            ..
+        } = self;
+        bundle.window(
+            ui.ctx(),
+            tools::bundle::Sources {
+                export,
+                sweep,
+                log,
+                info,
+            },
+        );
     }
 }
 
@@ -484,6 +520,7 @@ fn main() -> eframe::Result {
                 dns: Default::default(),
                 advanced: Default::default(),
                 export: Default::default(),
+                bundle: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
