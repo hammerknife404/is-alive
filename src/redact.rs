@@ -20,6 +20,10 @@ pub enum Kind {
     Phone,
     /// Picked by the technician.
     Manual,
+    /// A secret value from a loaded backup or export.
+    Known,
+    /// Inside a ```secret block.
+    Block,
 }
 
 impl Kind {
@@ -34,6 +38,8 @@ impl Kind {
             Kind::Email => "emails",
             Kind::Phone => "phone numbers",
             Kind::Manual => "picked by hand",
+            Kind::Known => "from the config",
+            Kind::Block => "secret blocks",
         }
     }
 
@@ -48,6 +54,8 @@ impl Kind {
             Kind::Email => "email",
             Kind::Phone => "phone",
             Kind::Manual => "by hand",
+            Kind::Known => "from config",
+            Kind::Block => "secret block",
         }
     }
 }
@@ -73,6 +81,11 @@ fn rule(kind: Kind, group: usize, re: &str) -> Rule {
         group,
     }
 }
+
+/// A fenced block opened with ```secret: everything inside goes.
+static SECRET_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?ms)^[ \t]*```secret[^\n]*\n(.*?)(?:^[ \t]*```|\z)").expect("valid pattern")
+});
 
 /// What `sanitize` leaves behind; never redacted again.
 static MARKER: LazyLock<Regex> =
@@ -412,12 +425,44 @@ pub fn markers(text: &str) -> Vec<Range<usize>> {
     MARKER.find_iter(text).map(|m| m.range()).collect()
 }
 
+/// Worth redacting from notes when a loaded backup or export holds it as a
+/// secret: long enough not to be a flag or a stray number, one line, and not
+/// a stock word ("public", "admin") that would blank out ordinary text.
+pub fn secret_value(v: &str) -> bool {
+    const STOCK: &[&str] = &[
+        "public",
+        "private",
+        "admin",
+        "administrator",
+        "password",
+        "default",
+        "none",
+        "null",
+        "true",
+        "false",
+        "changeme",
+        "guest",
+        "user",
+        "root",
+    ];
+    let v = v.trim();
+    let digits = v.chars().all(|c| c.is_ascii_digit());
+    (4..=128).contains(&v.chars().count())
+        && !v.contains('\n')
+        && !v.starts_with('$')
+        && (!digits || v.len() >= 6)
+        && !STOCK.contains(&v.to_ascii_lowercase().as_str())
+}
+
 /// The technician's own calls: values to redact that nothing detects, and
 /// detected values that are fine to keep.
 #[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct Overrides {
     pub redact: Vec<String>,
     pub allow: Vec<String>,
+    /// Secret values from the loaded backups and exports, matched as whole
+    /// words. Memory only.
+    pub known: Vec<String>,
 }
 
 impl Overrides {
@@ -452,6 +497,11 @@ impl Overrides {
     /// the shared one.
     pub fn merged(&self, local: &Overrides) -> Overrides {
         let mut out = self.clone();
+        for v in &local.known {
+            if !out.known.contains(v) {
+                out.known.push(v.clone());
+            }
+        }
         for v in &local.redact {
             out.add_redact(v);
         }
@@ -513,11 +563,45 @@ pub fn find(text: &str) -> Vec<Hit> {
 /// As `find`, with the technician's overrides: their picks are added,
 /// whatever they allowed is left out.
 pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
+    let allowed = |span: &Range<usize>| ov.allow.iter().any(|a| a == text[span.clone()].trim());
     let mut hits: Vec<Hit> = detect(text)
         .into_iter()
-        .filter(|h| !ov.allow.iter().any(|a| a == text[h.span.clone()].trim()))
+        .filter(|h| !allowed(&h.span))
         .collect();
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
+    let fresh = |span: &Range<usize>| {
+        !done
+            .iter()
+            .any(|d| span.start < d.end && d.start < span.end)
+    };
+    // A known secret counts as a whole word, so "admin1" doesn't blank out
+    // "admin12" or a hostname that happens to contain it.
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    for v in ov.known.iter().filter(|v| !v.is_empty()) {
+        for (i, _) in text.match_indices(v.as_str()) {
+            let span = i..i + v.len();
+            let (before, after) = (
+                text[..i].chars().next_back(),
+                text[span.end..].chars().next(),
+            );
+            if !word(before) && !word(after) && fresh(&span) && !allowed(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Known,
+                });
+            }
+        }
+    }
+    for c in SECRET_BLOCK.captures_iter(text) {
+        if let Some(m) = c.get(1).filter(|m| !m.as_str().trim().is_empty())
+            && fresh(&m.range())
+        {
+            hits.push(Hit {
+                span: m.range(),
+                kind: Kind::Block,
+            });
+        }
+    }
     for v in ov.redact.iter().filter(|v| !v.is_empty()) {
         for (i, _) in text.match_indices(v.as_str()) {
             let span = i..i + v.len();
@@ -828,6 +912,39 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
+    }
+
+    #[test]
+    fn known_secrets_and_secret_blocks() {
+        let mut ov = Overrides {
+            known: vec!["Bobcat2019".into(), "s3cr3t-ppsk".into()],
+            ..Default::default()
+        };
+        let t = "staff wifi is Bobcat2019, guest is Bobcat20190\nppsk s3cr3t-ppsk.";
+        let (clean, hits) = sanitize_with(t, &ov);
+        assert_eq!(
+            clean,
+            "staff wifi is [REDACTED: from config], guest is Bobcat20190\nppsk [REDACTED: from config]."
+        );
+        assert_eq!(summary(&hits), "2 redacted: 2 from the config");
+        // Unredact wins here too.
+        ov.add_allow("Bobcat2019");
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
+
+        let t = "Door codes:\n```secret\nside door 4471\nalarm 9090\n```\nafter";
+        let (clean, hits) = sanitize_with(t, &Overrides::default());
+        assert_eq!(
+            clean,
+            "Door codes:\n```secret\n[REDACTED: secret block]\n\n```\nafter"
+        );
+        assert_eq!(hits[0].kind, Kind::Block);
+        // Unclosed: to the end.
+        let (clean, _) = sanitize_with("```secret\nall of it", &Overrides::default());
+        assert_eq!(clean, "```secret\n[REDACTED: secret block]");
+        // Twice is a no-op.
+        assert_eq!(sanitize_with(&clean, &Overrides::default()).0, clean);
+        assert!(secret_value("Bobcat2019") && !secret_value("public") && !secret_value("1"));
+        assert!(!secret_value("1234") && secret_value("843921") && !secret_value("$6$salt$hash"));
     }
 
     #[test]

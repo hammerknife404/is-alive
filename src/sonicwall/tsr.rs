@@ -460,6 +460,8 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         counts,
         system,
         json: serde_json::to_string_pretty(&v).unwrap_or_default() + "\n",
+        // Reports are downloaded without sensitive keys by default.
+        secrets: Vec::new(),
     })
 }
 

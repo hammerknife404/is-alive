@@ -173,6 +173,7 @@ impl eframe::App for App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ui.ctx());
         self.collect();
         self.dropped_files(ui.ctx());

@@ -54,6 +54,15 @@ impl Export {
         }
     }
 
+    /// Secret values the conversion stripped, held in memory only.
+    fn secrets(&self) -> &[String] {
+        match self {
+            Export::Unifi(r) => &r.secrets,
+            Export::SonicWall(r) => &r.secrets,
+            Export::Map(_) => &[],
+        }
+    }
+
     fn json(&self) -> &str {
         match self {
             Export::Unifi(r) => &r.json,
@@ -107,7 +116,7 @@ struct Slot {
 
 enum Ev {
     Picked(PathBuf),
-    Done(PathBuf, Result<Export, String>),
+    Done(PathBuf, Box<Result<Export, String>>),
 }
 
 #[derive(Default)]
@@ -119,6 +128,8 @@ pub struct ExportTool {
     pending: Option<PathBuf>,
     /// UniFi, SonicWall, /mapnetwork map.
     slots: [Option<Slot>; 3],
+    /// Every loaded file's stripped secret values, for Notes to redact.
+    secrets: Vec<String>,
     /// The slot whose sub-tab is showing: the one opened last, until
     /// another tab is picked.
     shown: usize,
@@ -229,6 +240,23 @@ impl ExportTool {
         }
     }
 
+    /// Secret values from every loaded backup and export (memory only).
+    pub fn secrets(&self) -> &[String] {
+        &self.secrets
+    }
+
+    fn gather_secrets(&mut self) {
+        let mut all: Vec<String> = self
+            .slots
+            .iter()
+            .flatten()
+            .flat_map(|s| s.export.secrets().iter().cloned())
+            .collect();
+        all.sort();
+        all.dedup();
+        self.secrets = all;
+    }
+
     /// The /mapnetwork map currently loaded.
     pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
         match &self.slots[2] {
@@ -252,21 +280,28 @@ impl ExportTool {
     }
 
     pub fn poll(&mut self) -> bool {
+        let mut loaded = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Picked(p) => self.pending = Some(p),
-            Ev::Done(path, Ok(export)) => {
-                let i = export.slot();
-                self.slots[i] = Some(Slot { path, export });
-                self.shown = i;
-            }
-            Ev::Done(path, Err(e)) => {
-                let e = format!("{}: {e}", file_name(&path));
-                self.err = Some(match self.err.take() {
-                    Some(prev) => format!("{prev}\n{e}"),
-                    None => e,
-                });
-            }
+            Ev::Done(path, r) => match *r {
+                Ok(export) => {
+                    let i = export.slot();
+                    self.slots[i] = Some(Slot { path, export });
+                    self.shown = i;
+                    loaded = true;
+                }
+                Err(e) => {
+                    let e = format!("{}: {e}", file_name(&path));
+                    self.err = Some(match self.err.take() {
+                        Some(prev) => format!("{prev}\n{e}"),
+                        None => e,
+                    });
+                }
+            },
         });
+        if loaded {
+            self.gather_secrets();
+        }
         if !running {
             self.pending = None;
         }
@@ -303,7 +338,7 @@ impl ExportTool {
             for path in paths {
                 tx.send(Ev::Picked(path.clone()));
                 let r = read_input(&path).and_then(|data| convert(data, clients));
-                tx.send(Ev::Done(path, r));
+                tx.send(Ev::Done(path, Box::new(r)));
             }
         }));
     }
@@ -405,6 +440,16 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
                 ui.add(egui::Label::new(egui::RichText::new(file_name(path)).weak()).truncate())
                     .on_hover_text(path.display().to_string());
             });
+            let n = r.secrets().len();
+            if n > 0 {
+                ui.weak(format!(
+                    "{n} secret value{} from this file kept in memory (never saved): Notes and \
+the Site Bundle's Known problems redact {} wherever {} appear.",
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "it" } else { "them" },
+                    if n == 1 { "it may" } else { "they" },
+                ));
+            }
             ui.add_space(4.0);
             egui::ScrollArea::vertical()
                 .id_salt(("export_summary", self.shown))
@@ -418,6 +463,7 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
         }
         if let Some(i) = clear {
             self.slots[i] = None;
+            self.gather_secrets();
         }
     }
 }

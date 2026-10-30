@@ -67,6 +67,7 @@ impl Default for NotesTool {
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok())
                 .unwrap_or_default(),
+            known: Vec::new(),
         };
         // A file with anything redactable in it (edited by hand, or from an
         // older build) is rewritten sanitized at once, not on the next edit.
@@ -160,6 +161,17 @@ impl NotesTool {
         };
         if let Err(e) = r {
             self.err = Some(format!("Couldn't save the allowed values: {e}"));
+        }
+    }
+
+    /// Secret values from the loaded backups and exports. When they change,
+    /// the saved notes are rewritten so none of them stays on disk.
+    pub fn set_known(&mut self, known: &[String], now: f64) {
+        if self.ov.known != known {
+            self.ov.known = known.to_vec();
+            if !self.text.is_empty() {
+                self.changed(now);
+            }
         }
     }
 
@@ -390,6 +402,24 @@ Put the cursor on a highlighted value to unredact it instead.",
                 self.apply(&ctx, p);
             }
             self.overrides_menu(ui);
+            if ui
+                .button("Secret")
+                .on_hover_text(
+                    "Wrap the selection (or start) a ```secret block: everything inside is always \
+redacted, whatever it looks like. For door codes, PINs and anything detection would miss.",
+                )
+                .clicked()
+            {
+                self.edit_at_cursor(&ctx, |sel| {
+                    let body = if sel.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}\n", sel.trim_end_matches('\n'))
+                    };
+                    let at = "```secret\n".chars().count() + body.chars().count();
+                    (format!("```secret\n{body}```\n"), at)
+                });
+            }
             ui.separator();
             if ui
                 .button("Time")
@@ -818,6 +848,20 @@ mod tests {
             CCursor::new(CharIndex(at + what.chars().count())),
         )));
         state.store(ctx, id);
+    }
+
+    #[test]
+    fn secrets_from_a_loaded_backup_are_redacted() {
+        let mut n = notes("staff wifi: see board. Bobcat2019 works\n```secret\ngate 4471\n```");
+        assert!(n.sanitized().0.contains("Bobcat2019"));
+        n.set_known(&["Bobcat2019".into()], 1.0);
+        assert!(n.dirty.is_some(), "the saved copy is rewritten");
+        let clean = n.sanitized().0;
+        assert!(
+            !clean.contains("Bobcat2019") && !clean.contains("4471"),
+            "{clean}"
+        );
+        assert!(clean.contains("[REDACTED: from config]"));
     }
 
     #[test]
