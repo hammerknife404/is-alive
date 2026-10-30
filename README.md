@@ -12,6 +12,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames |
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
+| **UniFi Backup** | Decrypts a `.unf` / `.unifi` backup on this machine and saves sanitized JSON for the unifidump skill (see below) |
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab also has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -54,6 +55,23 @@ Enter a domain (`example.com`, `user@example.com` or a URL all work) and press E
 DKIM keys can't be listed, only probed. If none of the common selectors match, take the `s=` value from a received message's `DKIM-Signature` header and add it under **Extra DKIM selectors**.
 
 MTA-STS and RDAP use HTTPS with the OS certificate store (works behind TLS-inspecting firewalls) and honor `HTTPS_PROXY` / the Windows system proxy.
+
+### UniFi Backup
+
+**Open backup…** takes a `.unf` (site export or classic autobackup), a `.unifi` (UniFi OS console backup), a `.zip` holding one, or a bare `db.gz`; the format is detected from the content, not the name. Everything runs locally: nothing is uploaded or sent anywhere.
+
+| File | Decrypt | Inside |
+|---|---|---|
+| `.unf` | AES-128-CBC, UniFi's static key | zip → `db.gz` |
+| `.unifi` | AES-256-CBC, UniFi's static key, IV in the first 16 bytes | gzip → tar → `backup/network/db.gz` |
+
+**Save JSON…** writes `<name>.unifidump.json`: the mongoexport-style array (`{"__cmd":"select","collection":…}` markers) that the unifidump skill's `extract.py` reads directly, so hand that file to `/unifidump` instead of the backup.
+
+- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) unless **Include clients** is off. Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client.
+- **Left behind:** every other collection: admins and their password hashes, settings, events, alarms, stats, rogue APs, and so on. The console's own config, TLS keys and Postgres database in a `.unifi` are never read.
+- **Removed from what's kept:** any field starting `x_` (UniFi's prefix for stored secrets: WLAN passphrases, device auth keys, WAN/VPN passwords) or named like a password, passphrase, secret, PSK, private key, token, certificate or hash, at any depth.
+
+The summary lists the layers peeled, the collections kept and left behind with counts, and every field removed, so you can check what goes out before sharing it. Names, MACs, IPs, VLANs and topology stay: that is what unifidump maps.
 
 ### Scan speed
 

@@ -4,6 +4,7 @@ mod job;
 mod log;
 mod net;
 mod tools;
+mod unifi;
 mod widgets;
 
 use eframe::egui;
@@ -27,6 +28,7 @@ enum Tab {
     Sweep,
     Dns,
     Advanced,
+    Unifi,
     Results,
 }
 
@@ -37,6 +39,7 @@ const TABS: &[(Tab, &str)] = &[
     (Tab::Sweep, "Subnet Sweep"),
     (Tab::Dns, "DNS Lookup"),
     (Tab::Advanced, "Advanced"),
+    (Tab::Unifi, "UniFi Backup"),
     (Tab::Results, "Results"),
 ];
 
@@ -48,6 +51,7 @@ struct App {
     sweep: tools::sweep::SweepTool,
     dns: tools::dns::DnsTool,
     advanced: tools::advanced::AdvancedTool,
+    unifi: tools::unifi::UnifiTool,
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
@@ -63,6 +67,7 @@ impl eframe::App for App {
         self.sweep.poll();
         self.dns.poll();
         self.advanced.poll();
+        self.unifi.poll();
         self.collect();
         pump(&mut self.info_job, |i| self.info = i);
         egui::Panel::top("tabs").show(ui, |ui| {
@@ -139,6 +144,7 @@ impl eframe::App for App {
             Tab::Sweep => self.sweep.ui(ui),
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
+            Tab::Unifi => self.unifi.ui(ui),
             Tab::Results => self.results_ui(ui),
         });
     }
@@ -157,6 +163,7 @@ impl App {
             Tab::Sweep => self.sweep.is_running(),
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
+            Tab::Unifi => self.unifi.is_running(),
             Tab::Results => false,
         }
     }
@@ -402,6 +409,7 @@ fn main() -> eframe::Result {
                 sweep: Default::default(),
                 dns: Default::default(),
                 advanced: Default::default(),
+                unifi: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,

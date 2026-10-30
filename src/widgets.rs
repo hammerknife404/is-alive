@@ -186,7 +186,7 @@ pub fn export_menu<'a>(
     }
 }
 
-fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
+pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
     std::thread::spawn(move || {
         let Some(path) = rfd::FileDialog::new()
             .set_file_name(&file_name)
