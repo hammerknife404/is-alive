@@ -22,7 +22,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 
 Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
 
-**Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut; Speed Test, the last tab, has none), copies and saves confirm with a toast, and the window opens at the size it was closed at.
+**Ctrl+1 … Ctrl+9** switch to the first nine tabs and **Ctrl+0** to Results (the footer's **?** lists every shortcut; Speed Test, just before Results, has none), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab keeps the 12 newest runs open and folds older ones, **Clear** asks for a second click, and it has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -81,7 +81,7 @@ Runs against Cloudflare's speed test service (`speed.cloudflare.com`, anycast, s
 | **VoIP MOS** | Simplified ITU-T G.107 E-model (G.711) from round-trip latency, jitter and loss: 4.34+ excellent, 4.03 good, 3.6 fair, 3.1 poor. Shown at idle and under load |
 | **VoIP targets** | latency < 150 ms, jitter < 30 ms, loss < 1%; anything over in any phase is called out |
 
-Latency is ICMP to the server's address. If 4 pings get no reply (ICMP blocked), it switches to TCP connects to port 443 and says so; loss is less reliable that way. A failed direction says why, and that web filters (SonicWall CFS, DNS filtering) often block speed test sites. The test saturates the line while it runs, and a gigabit line moves over 1 GB each way, so mind metered links. It's not part of the full scan.
+Latency is ICMP to the server's address. If 4 pings get no reply (ICMP blocked), it switches to TCP connects to port 443 and says so; loss is less reliable that way. A failed direction says why, and that web filters (SonicWall CFS, DNS filtering) often block speed test sites. The test saturates the line while it runs, and a gigabit line moves over 1 GB each way, so mind metered links. The full scan (the **is-alive** button) runs it too, with the tab's current Duration, Streams and directions.
 
 ### Subnet Sweep: MAC, vendor and inventory
 

@@ -25,7 +25,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const FULL_SCAN_TIP: &str = "Full scan: pings your gateway, checks its common ports, traces the route to the \
-internet, tests DNS and sweeps your LAN, all at once. Opens Results to watch them run.";
+internet, tests DNS, runs a speed test and sweeps your LAN, all at once. Opens Results to watch them run.";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -38,8 +38,8 @@ enum Tab {
     Export,
     Map,
     Notes,
-    Results,
     Speed,
+    Results,
 }
 
 /// (tab, label, hover text).
@@ -94,16 +94,16 @@ where the data has them, and findings. Drag to pan, scroll to zoom, click a devi
 and replaced before anything is saved, copied or bundled.",
     ),
     (
-        Tab::Results,
-        "Results",
-        "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
-Markdown or HTML.",
-    ),
-    (
         Tab::Speed,
         "Speed Test",
         "Download and upload speed against Cloudflare, with latency, jitter and loss at idle and \
 under load (bufferbloat) and a VoIP call-quality score.",
+    ),
+    (
+        Tab::Results,
+        "Results",
+        "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
+Markdown or HTML.",
     ),
 ];
 
@@ -146,14 +146,12 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Ctrl+1 … Ctrl+9, Ctrl+0: the tabs in order.
+        // Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results.
         use egui::Key::*;
-        for (i, key) in [Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9, Num0]
-            .into_iter()
-            .enumerate()
-        {
-            if let Some((tab, ..)) = TABS.get(i)
-                && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, key))
+        let keys = [Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9];
+        for (n, (tab, ..)) in TABS.iter().enumerate() {
+            if let Some(d) = tab_key(n)
+                && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, keys[d]))
             {
                 self.tab = *tab;
             }
@@ -228,11 +226,9 @@ impl eframe::App for App {
                     }
                     let r = ui
                         .selectable_label(on, text)
-                        // Past the tenth tab there's no digit left.
-                        .on_hover_text(if n < 10 {
-                            format!("{tip}\n\nCtrl+{}", (n + 1) % 10)
-                        } else {
-                            tip.to_string()
+                        .on_hover_text(match tab_key(n) {
+                            Some(d) => format!("{tip}\n\nCtrl+{d}"),
+                            None => tip.to_string(),
                         });
                     if r.clicked() {
                         self.tab = *tab;
@@ -553,6 +549,7 @@ impl App {
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
+        self.speed.run(ctx);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }
@@ -742,7 +739,8 @@ fn shortcuts(ui: &mut egui::Ui) {
         .spacing([16.0, 4.0])
         .show(ui, |ui| {
             for (k, what) in [
-                ("Ctrl+1 … Ctrl+0", "Switch tabs, in order"),
+                ("Ctrl+1 … Ctrl+9", "Switch to the first nine tabs, in order"),
+                ("Ctrl+0", "Results"),
                 ("Enter / Esc", "Start / stop the run in a tool's field"),
                 ("Ctrl+B / Ctrl+I", "Bold / italic in Notes"),
                 (
@@ -765,6 +763,18 @@ fn shortcuts(ui: &mut egui::Ui) {
         "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {
         ui.label(format!("• {tip}"));
+    }
+}
+
+/// Digit of the tab's Ctrl shortcut: 1-9 for the first nine, 0 for Results
+/// (the last); any tab in between has none.
+fn tab_key(n: usize) -> Option<usize> {
+    if n < 9 {
+        Some(n + 1)
+    } else if n == TABS.len() - 1 {
+        Some(0)
+    } else {
+        None
     }
 }
 

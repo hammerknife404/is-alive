@@ -236,7 +236,7 @@ multi-gigabit or long-distance links.",
             });
             ui.separator();
             match widgets::run_button(ui, running, false) {
-                Action::Start => self.start(ui.ctx()),
+                Action::Start => self.run(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
                 Action::None => {}
             }
@@ -736,7 +736,8 @@ loss is less reliable that way."
         self.job.is_some()
     }
 
-    fn start(&mut self, ctx: &egui::Context) {
+    /// Start a test with the current settings (also the full scan's).
+    pub fn run(&mut self, ctx: &egui::Context) {
         let (secs, streams, down, up) = (self.secs, self.streams, self.down, self.up);
         *self = Self {
             secs,
