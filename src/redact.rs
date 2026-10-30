@@ -21,6 +21,19 @@ pub enum Kind {
 }
 
 impl Kind {
+    fn plural(self) -> &'static str {
+        match self {
+            Kind::Key => "keys or certificates",
+            Kind::Password => "passwords",
+            Kind::Token => "tokens",
+            Kind::Ssn => "SSNs",
+            Kind::Card => "card numbers",
+            Kind::Patient => "patient details",
+            Kind::Email => "emails",
+            Kind::Phone => "phone numbers",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Kind::Key => "key or certificate",
@@ -396,7 +409,7 @@ pub fn summary(hits: &[Hit]) -> String {
     counts.sort();
     let parts: Vec<String> = counts
         .iter()
-        .map(|(k, n)| format!("{n} {}", k.label()))
+        .map(|(k, n)| format!("{n} {}", if *n == 1 { k.label() } else { k.plural() }))
         .collect();
     format!("{} redacted: {}", hits.len(), parts.join(", "))
 }
@@ -534,7 +547,7 @@ uplink fe80::1, id 677d5c3b0b20927705d44671, U7LR";
         assert_eq!(red(&once), once);
         assert_eq!(
             summary(&sanitize(t).1),
-            "3 redacted: 2 password, 1 patient detail"
+            "3 redacted: 2 passwords, 1 patient detail"
         );
     }
 }
