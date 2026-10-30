@@ -9,24 +9,14 @@ enum Ev {
     Done(Result<Report, String>),
 }
 
+#[derive(Default)]
 pub struct UnifiTool {
     path: Option<PathBuf>,
+    /// Off by default: client hostnames are often people's names.
     clients: bool,
     job: Option<Job<Ev>>,
     report: Option<Report>,
     err: Option<String>,
-}
-
-impl Default for UnifiTool {
-    fn default() -> Self {
-        Self {
-            path: None,
-            clients: true,
-            job: None,
-            report: None,
-            err: None,
-        }
-    }
 }
 
 impl UnifiTool {

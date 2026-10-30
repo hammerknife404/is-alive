@@ -67,7 +67,7 @@ MTA-STS and RDAP use HTTPS with the OS certificate store (works behind TLS-inspe
 
 **Save JSON…** writes `<name>.unifidump.json`: the mongoexport-style array (`{"__cmd":"select","collection":…}` markers) that the unifidump skill's `extract.py` reads directly, so hand that file to `/unifidump` instead of the backup.
 
-- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) unless **Include clients** is off. Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client.
+- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when you tick **Include clients** (off by default). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client.
 - **Left behind:** every other collection: admins and their password hashes, settings, events, alarms, stats, rogue APs, and so on. The console's own config, TLS keys and Postgres database in a `.unifi` are never read.
 - **Removed from what's kept:** any field starting `x_` (UniFi's prefix for stored secrets: WLAN passphrases, device auth keys, WAN/VPN passwords) or named like a password, passphrase, secret, PSK, private key, token, certificate or hash, at any depth.
 
