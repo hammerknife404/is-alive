@@ -5,6 +5,7 @@ mod bundle;
 mod job;
 mod log;
 mod map;
+mod mapnetwork;
 mod markdown;
 mod net;
 mod redact;
@@ -78,13 +79,15 @@ Compare all spots split DNS and stale caches.",
     (
         Tab::Export,
         "Config Export",
-        "Decode a UniFi backup (.unf / .unifi) or SonicWall settings export (.exp) on this machine \
-into sanitized JSON for /unifidump and /mapnetwork. Secrets are left out.",
+        "Decode a UniFi backup (.unf / .unifi) or SonicWall settings export (.exp) or tech support \
+report (.wri) on this machine into sanitized JSON for /unifidump and /mapnetwork. Secrets are left \
+out. Also reads a /mapnetwork map (.dc.html) back in for the Map tab.",
     ),
     (
         Tab::Map,
         "Map",
-        "Network map from the sweep and any UniFi backup or SonicWall export: roles, real uplinks \
+        "Network map from the sweep and any UniFi backup or SonicWall export, or a /mapnetwork map \
+redrawn in this style: roles, real uplinks \
 where the data has them, and findings. Drag to pan, scroll to zoom, click a device to trace it.",
     ),
     (
