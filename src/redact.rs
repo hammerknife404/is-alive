@@ -18,6 +18,8 @@ pub enum Kind {
     Patient,
     Email,
     Phone,
+    /// Picked by the technician.
+    Manual,
 }
 
 impl Kind {
@@ -31,6 +33,7 @@ impl Kind {
             Kind::Patient => "patient details",
             Kind::Email => "emails",
             Kind::Phone => "phone numbers",
+            Kind::Manual => "picked by hand",
         }
     }
 
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Patient => "patient detail",
             Kind::Email => "email",
             Kind::Phone => "phone",
+            Kind::Manual => "by hand",
         }
     }
 }
@@ -408,8 +412,72 @@ pub fn markers(text: &str) -> Vec<Range<usize>> {
     MARKER.find_iter(text).map(|m| m.range()).collect()
 }
 
+/// The technician's own calls: values to redact that nothing detects, and
+/// detected values that are fine to keep.
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
+pub struct Overrides {
+    pub redact: Vec<String>,
+    pub allow: Vec<String>,
+}
+
+impl Overrides {
+    /// Redact `value` everywhere it appears (and stop allowing it).
+    pub fn add_redact(&mut self, value: &str) -> bool {
+        let v = value.trim();
+        if v.chars().count() < 2 {
+            return false;
+        }
+        self.allow.retain(|a| a != v);
+        if !self.redact.iter().any(|r| r == v) {
+            self.redact.push(v.to_string());
+        }
+        true
+    }
+
+    /// Keep `value` as written, wherever it appears.
+    pub fn add_allow(&mut self, value: &str) {
+        let v = value.trim();
+        if v.is_empty() {
+            return;
+        }
+        self.redact.retain(|r| r != v);
+        if !self.allow.iter().any(|a| a == v) {
+            self.allow.push(v.to_string());
+        }
+    }
+}
+
 /// Everything that would be redacted, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
+    find_with(text, &Overrides::default())
+}
+
+/// As `find`, with the technician's overrides: their picks are added,
+/// whatever they allowed is left out.
+pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = detect(text)
+        .into_iter()
+        .filter(|h| !ov.allow.iter().any(|a| a == text[h.span.clone()].trim()))
+        .collect();
+    let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
+    for v in ov.redact.iter().filter(|v| !v.is_empty()) {
+        for (i, _) in text.match_indices(v.as_str()) {
+            let span = i..i + v.len();
+            if !done
+                .iter()
+                .any(|d| span.start < d.end && d.start < span.end)
+            {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Manual,
+                });
+            }
+        }
+    }
+    merge(hits)
+}
+
+fn detect(text: &str) -> Vec<Hit> {
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
     let fresh = |r: &Range<usize>| !done.iter().any(|d| r.start < d.end && d.start < r.end);
     let mut hits: Vec<Hit> = password_values(text)
@@ -448,7 +516,11 @@ pub fn find(text: &str) -> Vec<Hit> {
             }
         }
     }
-    // Earliest first; on overlap the first (wider, by rule order) wins.
+    merge(hits)
+}
+
+/// Earliest first; on overlap the first (wider, by rule order) wins.
+fn merge(mut hits: Vec<Hit>) -> Vec<Hit> {
     hits.sort_by_key(|h| (h.span.start, std::cmp::Reverse(h.span.end)));
     let mut out: Vec<Hit> = Vec::new();
     for h in hits {
@@ -465,7 +537,12 @@ pub fn find(text: &str) -> Vec<Hit> {
 /// The text with every hit replaced by `[REDACTED: kind]`. Line breaks
 /// inside a hit are kept, so line N of the result is line N of the input.
 pub fn sanitize(text: &str) -> (String, Vec<Hit>) {
-    let hits = find(text);
+    sanitize_with(text, &Overrides::default())
+}
+
+/// As `sanitize`, with the technician's overrides.
+pub fn sanitize_with(text: &str, ov: &Overrides) -> (String, Vec<Hit>) {
+    let hits = find_with(text, ov);
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     for h in &hits {
@@ -661,6 +738,38 @@ give it a password when prompt comes up. Import it the same - Enter password you
         ] {
             assert_eq!(red(t), t);
         }
+    }
+
+    #[test]
+    fn overrides_redact_and_allow() {
+        let t = "Lockbox code 4471 at the door. License Office365\nlockbox again: 4471";
+        assert_eq!(
+            red(t),
+            "Lockbox code 4471 at the door. License Office365\nlockbox again: 4471"
+        );
+        let mut ov = Overrides::default();
+        assert!(ov.add_redact(" 4471 "));
+        assert!(!ov.add_redact("x"));
+        let (clean, hits) = sanitize_with(t, &ov);
+        assert_eq!(
+            clean,
+            "Lockbox code [REDACTED: by hand] at the door. License Office365\nlockbox again: [REDACTED: by hand]"
+        );
+        assert_eq!(summary(&hits), "2 redacted: 2 picked by hand");
+
+        let t = "Office365\npassword: hunter2";
+        assert_eq!(find(t).len(), 2);
+        let mut ov = Overrides::default();
+        ov.add_allow("Office365");
+        let (clean, _) = sanitize_with(t, &ov);
+        assert_eq!(clean, "Office365\npassword: [REDACTED: password]");
+        // Redacting it again takes it off the allow list.
+        ov.add_redact("Office365");
+        assert!(ov.allow.is_empty());
+        assert_eq!(sanitize_with(t, &ov).1.len(), 2);
+        // Twice is still a no-op.
+        let once = sanitize_with(t, &ov).0;
+        assert_eq!(sanitize_with(&once, &ov).0, once);
     }
 
     #[test]

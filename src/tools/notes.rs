@@ -16,6 +16,11 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
 
+enum Pick {
+    Redact(Range<usize>),
+    Unredact(Hit),
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum View {
     Edit,
@@ -38,7 +43,10 @@ pub struct NotesTool {
     /// Redactions found so far, to flash the count when it grows.
     known_hits: usize,
     flash: f64,
-    /// (hash of text, hits) so the regexes run once per edit.
+    /// The technician's own calls. Picks to redact live only in memory;
+    /// allowed values are saved beside the notes, which hold them anyway.
+    ov: redact::Overrides,
+    /// (hash of text and overrides, hits) so the regexes run once per edit.
     cache: RefCell<(u64, Vec<Hit>)>,
     /// The same for the sanitized text (preview, status, Site Bundle).
     clean: RefCell<(u64, (String, Vec<Hit>))>,
@@ -48,16 +56,29 @@ fn path() -> Option<PathBuf> {
     Some(crate::theme::data_dir()?.join("notes.md"))
 }
 
+/// Values the technician said to keep, as a JSON list of strings.
+fn allow_path() -> Option<PathBuf> {
+    Some(crate::theme::data_dir()?.join("notes-allow.json"))
+}
+
 impl Default for NotesTool {
     fn default() -> Self {
         let text = path()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
+        let ov = redact::Overrides {
+            redact: Vec::new(),
+            allow: allow_path()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok())
+                .unwrap_or_default(),
+        };
         // A file with anything redactable in it (edited by hand, or from an
         // older build) is rewritten sanitized at once, not on the next edit.
-        let unclean = !redact::find(&text).is_empty();
+        let unclean = !redact::find_with(&text, &ov).is_empty();
         let mut notes = Self {
             text,
+            ov,
             view: View::Split,
             show_hits: true,
             dirty: None,
@@ -75,17 +96,17 @@ impl Default for NotesTool {
     }
 }
 
-fn hash(s: &str) -> u64 {
+fn hash_with(text: &str, ov: &redact::Overrides) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut h);
+    (text, ov).hash(&mut h);
     h.finish()
 }
 
-fn hits_for(cache: &RefCell<(u64, Vec<Hit>)>, text: &str) -> Vec<Hit> {
-    let h = hash(text);
+fn hits_for(cache: &RefCell<(u64, Vec<Hit>)>, text: &str, ov: &redact::Overrides) -> Vec<Hit> {
+    let h = hash_with(text, ov);
     let mut c = cache.borrow_mut();
     if c.0 != h {
-        *c = (h, redact::find(text));
+        *c = (h, redact::find_with(text, ov));
     }
     c.1.clone()
 }
@@ -97,10 +118,10 @@ impl NotesTool {
 
     /// The notes as they may leave this machine.
     pub fn sanitized(&self) -> (String, Vec<Hit>) {
-        let h = hash(&self.text);
+        let h = hash_with(&self.text, &self.ov);
         let mut c = self.clean.borrow_mut();
         if c.0 != h {
-            *c = (h, redact::sanitize(&self.text));
+            *c = (h, redact::sanitize_with(&self.text, &self.ov));
         }
         c.1.clone()
     }
@@ -120,9 +141,82 @@ impl NotesTool {
             Ok(()) => {
                 self.saved = Some(chrono::Local::now().format("%H:%M").to_string());
                 self.err = None;
+                self.write_allow();
             }
             Err(e) => self.err = Some(format!("Couldn't autosave notes: {e}")),
         }
+    }
+
+    /// The allow list, trimmed to values still in the notes.
+    fn write_allow(&mut self) {
+        let text = &self.text;
+        self.ov.allow.retain(|a| text.contains(a.as_str()));
+        let Some(p) = allow_path() else { return };
+        let r = if self.ov.allow.is_empty() {
+            match std::fs::remove_file(&p) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        } else {
+            std::fs::write(
+                &p,
+                serde_json::to_string(&self.ov.allow).unwrap_or_default(),
+            )
+        };
+        if let Err(e) = r {
+            self.err = Some(format!("Couldn't save the allowed values: {e}"));
+        }
+    }
+
+    /// The editor's selection as a byte range (empty at a bare cursor).
+    fn selection(&self, ctx: &egui::Context) -> Option<Range<usize>> {
+        let state = egui::TextEdit::load_state(ctx, egui::Id::new(EDITOR_ID))?;
+        let r = state.cursor.char_range()?;
+        let byte = |c: usize| {
+            self.text
+                .char_indices()
+                .nth(c)
+                .map_or(self.text.len(), |(i, _)| i)
+        };
+        let (a, b) = (r.primary.index.0, r.secondary.index.0);
+        Some(byte(a.min(b))..byte(a.max(b)))
+    }
+
+    /// What the Redact button would do now: unredact the hit the selection
+    /// or cursor is in, or redact the selected text.
+    fn pick(&self, ctx: &egui::Context, hits: &[Hit]) -> Option<Pick> {
+        let sel = self.selection(ctx)?;
+        let inside = hits.iter().find(|h| {
+            h.span.start <= sel.start && sel.end <= h.span.end && h.span.start < h.span.end
+        });
+        match inside {
+            Some(h) if sel.is_empty() || h.span.start < sel.end => Some(Pick::Unredact(h.clone())),
+            _ if !self.text[sel.clone()].trim().is_empty() => Some(Pick::Redact(sel)),
+            _ => None,
+        }
+    }
+
+    fn apply(&mut self, ctx: &egui::Context, pick: Pick) {
+        match pick {
+            Pick::Redact(r) => {
+                let v = self.text[r].to_string();
+                if !self.ov.add_redact(&v) {
+                    widgets::toast("Select at least two characters to redact", false);
+                    return;
+                }
+                widgets::toast("Redacted by hand, wherever it appears", true);
+            }
+            Pick::Unredact(h) => {
+                let v = self.text[h.span].trim().to_string();
+                if h.kind == redact::Kind::Manual {
+                    self.ov.redact.retain(|r| *r != v);
+                } else {
+                    self.ov.add_allow(&v);
+                }
+                widgets::toast("Kept as written, wherever it appears", true);
+            }
+        }
+        self.changed(ctx.input(|i| i.time));
     }
 
     /// Save now if there are unsaved changes (on exit).
@@ -209,13 +303,13 @@ impl NotesTool {
     pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
-        let hits = hits_for(&self.cache, &self.text);
+        let hits = hits_for(&self.cache, &self.text, &self.ov);
         if hits.len() > self.known_hits {
             self.flash = now;
         }
         self.known_hits = hits.len();
 
-        self.toolbar(ui, info);
+        self.toolbar(ui, info, &hits);
         self.status(ui, &hits, now);
         widgets::error(ui, &self.err);
         ui.separator();
@@ -238,7 +332,7 @@ impl NotesTool {
         }
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, info: &HostInfo) {
+    fn toolbar(&mut self, ui: &mut Ui, info: &HostInfo, hits: &[Hit]) {
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             for (v, name, tip) in [
@@ -308,6 +402,32 @@ impl NotesTool {
                 self.line_prefix(&ctx, "- [ ] ");
             }
             ui.separator();
+            let pick = self.pick(&ctx, hits);
+            let (label, tip) = match &pick {
+                Some(Pick::Unredact(_)) => (
+                    "Unredact",
+                    "Keep this value as written, here and wherever else it appears (Ctrl+R). \
+It's then saved, copied and bundled in plain text.",
+                ),
+                _ => (
+                    "Redact",
+                    "Redact the selected text, here and wherever else it appears (Ctrl+R). \
+Put the cursor on a highlighted value to unredact it instead.",
+                ),
+            };
+            if ui
+                .add_enabled(pick.is_some(), egui::Button::new(label))
+                .on_hover_text(tip)
+                .on_disabled_hover_text(
+                    "Select text to redact it, or put the cursor on a highlighted value to keep it",
+                )
+                .clicked()
+                && let Some(p) = pick
+            {
+                self.apply(&ctx, p);
+            }
+            self.overrides_menu(ui);
+            ui.separator();
             if ui
                 .button("Time")
                 .on_hover_text("Insert the date and time")
@@ -363,6 +483,67 @@ impl NotesTool {
                 });
             });
         });
+    }
+
+    /// What was redacted or kept by hand, each with a way back.
+    fn overrides_menu(&mut self, ui: &mut Ui) {
+        let n = self.ov.redact.len() + self.ov.allow.len();
+        if n == 0 {
+            return;
+        }
+        let mut changed = false;
+        ui.menu_button(format!("By hand ({n})"), |ui| {
+            if !self.ov.redact.is_empty() {
+                ui.label(RichText::new("Redacted").strong());
+                ui.weak("Only in memory: after a restart the notes hold the [REDACTED] marker.");
+                let mut drop = None;
+                for (i, v) in self.ov.redact.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Stop redacting it")
+                            .clicked()
+                        {
+                            drop = Some(i);
+                        }
+                        let shown: String = v.chars().take(2).collect();
+                        ui.monospace(format!("{shown}… ({} chars)", v.chars().count()));
+                    });
+                }
+                if let Some(i) = drop {
+                    self.ov.redact.remove(i);
+                    changed = true;
+                }
+            }
+            if !self.ov.allow.is_empty() {
+                ui.label(RichText::new("Kept as written").strong());
+                ui.weak("Saved, copied and bundled in plain text.");
+                let mut drop = None;
+                for (i, v) in self.ov.allow.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Redact it again")
+                            .clicked()
+                        {
+                            drop = Some(i);
+                        }
+                        let shown: String = v.chars().take(40).collect();
+                        ui.monospace(shown);
+                    });
+                }
+                if let Some(i) = drop {
+                    self.ov.allow.remove(i);
+                    changed = true;
+                }
+            }
+        })
+        .response
+        .on_hover_text("Values redacted or kept by hand");
+        if changed {
+            let now = ui.input(|i| i.time);
+            self.changed(now);
+        }
     }
 
     /// Word count, what will be redacted (flashing when it grows), and the
@@ -433,6 +614,12 @@ written to disk. After a restart the notes come back sanitized.",
         let id = egui::Id::new(EDITOR_ID);
         let focused = ui.memory(|m| m.has_focus(id));
         let ctx = ui.ctx().clone();
+        if focused && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::R)) {
+            let hits = hits_for(&self.cache, &self.text, &self.ov);
+            if let Some(p) = self.pick(&ctx, &hits) {
+                self.apply(&ctx, p);
+            }
+        }
         if focused {
             for (key, mark) in [(Key::B, "**"), (Key::I, "*")] {
                 if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) {
@@ -449,10 +636,13 @@ written to disk. After a restart the notes come back sanitized.",
         }
         let show = self.show_hits;
         let cache = &self.cache;
+        let ov = &self.ov;
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
             let text = buf.as_str();
-            let hits: Vec<Range<usize>> =
-                hits_for(cache, text).into_iter().map(|h| h.span).collect();
+            let hits: Vec<Range<usize>> = hits_for(cache, text, ov)
+                .into_iter()
+                .map(|h| h.span)
+                .collect();
             let mut job = highlight(ui, text, if show { &hits } else { &[] });
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
@@ -639,6 +829,71 @@ fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notes(text: &str) -> NotesTool {
+        NotesTool {
+            text: text.into(),
+            view: View::Split,
+            show_hits: true,
+            dirty: None,
+            saved: None,
+            err: None,
+            known_hits: 0,
+            flash: 0.0,
+            ov: Default::default(),
+            cache: RefCell::new((u64::MAX, Vec::new())),
+            clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+        }
+    }
+
+    fn select(ctx: &egui::Context, n: &NotesTool, what: &str) {
+        let at = n.text[..n.text.find(what).unwrap()].chars().count();
+        let id = egui::Id::new(EDITOR_ID);
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(CharIndex(at)),
+            CCursor::new(CharIndex(at + what.chars().count())),
+        )));
+        state.store(ctx, id);
+    }
+
+    #[test]
+    fn redact_and_unredact_by_hand() {
+        let ctx = egui::Context::default();
+        let mut n = notes("Lockbox 4471, again 4471\nOffice365\npassword: hunter2");
+        let hits = |n: &NotesTool| hits_for(&n.cache, &n.text, &n.ov);
+        assert_eq!(hits(&n).len(), 2);
+
+        // Select a value nothing detects: Redact, everywhere.
+        select(&ctx, &n, "4471");
+        let p = n.pick(&ctx, &hits(&n)).unwrap();
+        assert!(matches!(p, Pick::Redact(_)));
+        n.apply(&ctx, p);
+        assert_eq!(hits(&n).len(), 4);
+        assert!(
+            n.sanitized()
+                .0
+                .starts_with("Lockbox [REDACTED: by hand], again [REDACTED: by hand]")
+        );
+
+        // Cursor on a false positive: Unredact keeps it.
+        select(&ctx, &n, "fice");
+        let p = n.pick(&ctx, &hits(&n)).unwrap();
+        assert!(matches!(p, Pick::Unredact(_)));
+        n.apply(&ctx, p);
+        assert!(n.sanitized().0.contains("\nOffice365\n"));
+        assert_eq!(n.ov.allow, ["Office365"]);
+
+        // A hand pick is undone the same way.
+        select(&ctx, &n, "4471");
+        let p = n.pick(&ctx, &hits(&n)).unwrap();
+        n.apply(&ctx, p);
+        assert!(n.ov.redact.is_empty());
+        assert!(n.sanitized().0.ends_with("password: [REDACTED: password]"));
+        // Nothing selected and no hit under the cursor: nothing to do.
+        select(&ctx, &n, "");
+        assert!(n.pick(&ctx, &hits(&n)).is_none());
+    }
 
     #[test]
     fn highlight_covers_the_text_on_char_boundaries() {
