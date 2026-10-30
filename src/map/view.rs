@@ -392,7 +392,7 @@ impl MapView {
                         for x in f {
                             s += &format!("[{}] {}\n", x.sev.label(), x.text);
                         }
-                        ui.ctx().copy_text(s);
+                        widgets::copy(ui.ctx(), s);
                         widgets::toast("Findings copied", true);
                     }
                 });
@@ -558,7 +558,7 @@ impl MapView {
                     for d in n.flags.iter().map(|f| format!("Flag: {f}")).chain(n.details.iter().cloned()) {
                         s += &format!("{d}\n");
                     }
-                    ui.ctx().copy_text(s);
+                    widgets::copy(ui.ctx(), s);
                     widgets::toast("Card details copied", true);
                 }
             });

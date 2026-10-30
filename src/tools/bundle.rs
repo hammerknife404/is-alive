@@ -82,7 +82,7 @@ impl BundleTool {
     fn poll(&mut self, ctx: &egui::Context) -> bool {
         pump(&mut self.job, |r| match r {
             Ok(Some(saved)) => {
-                ctx.copy_text(saved.kickoff.clone());
+                widgets::copy(ctx, saved.kickoff.clone());
                 widgets::toast(
                     format!(
                         "Saved {}; kickoff prompt copied",
@@ -261,7 +261,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     .on_hover_text(s.kickoff.as_str())
                     .clicked()
                 {
-                    ui.ctx().copy_text(s.kickoff.clone());
+                    widgets::copy(ui.ctx(), s.kickoff.clone());
                     widgets::toast("Kickoff prompt copied", true);
                 }
                 ui.add(

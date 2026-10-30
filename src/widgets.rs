@@ -10,6 +10,48 @@ static TOASTS: Mutex<Vec<(String, bool, Instant)>> = Mutex::new(Vec::new());
 static CTX: OnceLock<egui::Context> = OnceLock::new();
 const TOAST_FOR: f32 = 2.4;
 
+/// Hash of the last text this app put on the clipboard, so exit clears
+/// only our own copy, never something copied from another app since.
+static LAST_COPY: Mutex<Option<u64>> = Mutex::new(None);
+
+fn hash(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Put `text` on the clipboard. On Windows it's marked to stay out of
+/// clipboard history (Win+V), cloud clipboard sync and clipboard managers,
+/// as password managers do.
+pub fn copy(ctx: &egui::Context, text: String) {
+    if let Ok(mut l) = LAST_COPY.lock() {
+        *l = Some(hash(&text));
+    }
+    #[cfg(windows)]
+    {
+        use arboard::SetExtWindows;
+        let done = arboard::Clipboard::new()
+            .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
+        if done.is_ok() {
+            return;
+        }
+    }
+    ctx.copy_text(text);
+}
+
+/// On exit: clear the clipboard if it still holds what this app copied.
+pub fn clear_own_clipboard() {
+    let Some(ours) = LAST_COPY.lock().ok().and_then(|l| *l) else {
+        return;
+    };
+    if let Ok(mut c) = arboard::Clipboard::new()
+        && c.get_text().is_ok_and(|t| hash(&t) == ours)
+    {
+        let _ = c.clear();
+    }
+}
+
 /// Let other threads wake the UI for a toast; call once at startup.
 pub fn init(ctx: &egui::Context) {
     let _ = CTX.set(ctx.clone());
@@ -256,7 +298,7 @@ pub fn copy_button(ui: &mut Ui, text: impl FnOnce() -> String) {
         .on_hover_text("Copy results to clipboard")
         .clicked()
     {
-        ui.ctx().copy_text(text());
+        copy(ui.ctx(), text());
         toast("Copied to the clipboard", true);
     }
 }

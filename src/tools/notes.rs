@@ -355,7 +355,7 @@ impl NotesTool {
                         .on_hover_text("Copy the sanitized notes")
                         .clicked()
                     {
-                        ui.ctx().copy_text(self.sanitized().0);
+                        widgets::copy(ui.ctx(), self.sanitized().0);
                         widgets::toast("Notes copied (sanitized)", true);
                     }
                 });

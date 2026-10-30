@@ -373,6 +373,7 @@ OpenDNS)",
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.notes.flush();
+        widgets::clear_own_clipboard();
         let size = self
             .size
             .map(|s| (s.x.round() as u32, s.y.round() as u32))
