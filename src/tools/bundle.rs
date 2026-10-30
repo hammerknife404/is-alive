@@ -136,6 +136,7 @@ impl BundleTool {
         let sonicwall = src.export.sonicwall();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
+        let targets = log_targets(src.log);
         ui.label(RichText::new("Includes").strong());
         egui::Grid::new("bundle_parts")
             .num_columns(2)
@@ -176,8 +177,10 @@ impl BundleTool {
                     ui,
                     &mut self.use_results,
                     "Results log",
-                    (runs > 0)
-                        .then(|| format!("{runs} run(s): ping, DNS, mail health, port checks…")),
+                    (runs > 0).then(|| match targets.is_empty() {
+                        true => format!("{runs} run(s)"),
+                        false => format!("{runs} run(s): {}", targets.join(", ")),
+                    }),
                     "Nothing in Results yet",
                 );
             });
@@ -346,13 +349,26 @@ fn build_and_save(
     Ok(Some(Saved { path, kickoff }))
 }
 
+/// Distinct targets in the Results log, in run order, so it's plain whether
+/// every run is this site's before the log goes in.
+fn log_targets(log: &Log) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in log.entries.iter().filter_map(|e| e.target()) {
+        if !out.iter().any(|o| o == t) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
 /// Checkbox, name and what's loaded; greyed out with a hint when there's
 /// nothing to include.
 fn part_row(ui: &mut Ui, on: &mut bool, name: &str, loaded: Option<String>, missing: &str) {
     match loaded {
         Some(detail) => {
             ui.checkbox(on, name);
-            ui.add(egui::Label::new(RichText::new(detail).weak()).truncate());
+            ui.add(egui::Label::new(RichText::new(&detail).weak()).truncate())
+                .on_hover_text(detail);
         }
         None => {
             ui.add_enabled(false, egui::Checkbox::new(&mut false, name));

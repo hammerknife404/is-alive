@@ -75,7 +75,7 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 | `unifi.unifidump.json` | the UniFi backup open in Config Export, converted again with the bundle's client setting | /unifidump |
 | `sonicwall.json` | the SonicWall export open in Config Export | /mapnetwork (firewall config) |
 | `inventory.json` | the last finished Subnet Sweep | /mapnetwork (scan) |
-| `results.json` | the Results log, off by default | /mapnetwork |
+| `results.json` | the Results log, off by default: it holds every run since the app opened, which can include other clients' hosts and domains. The row lists the targets it covers so you can check before ticking it | /mapnetwork |
 
 **UniFi clients** defaults to *anonymized* here: each client keeps its MAC, vendor and switch port (what unifidump needs to spot unadopted gear plugged in as a client) but device names, often people's names, become a token like `client-1a2b3c4d`, stable per MAC; notes and email addresses are dropped. *None* and *full* are the other choices. Saving also copies a kickoff prompt to the clipboard ("Run /unifidump on …, then /mapnetwork …"), so it's one attach and one paste. Everything in the bundle comes from the sanitized exports; raw backups and secrets never go in.
 
