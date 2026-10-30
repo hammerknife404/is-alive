@@ -310,11 +310,20 @@ fn check_ui(ui: &mut Ui, name: &str, check: Option<&Check>, running: bool) {
     header.append(&format!("{} {} ", icon(st), st.tag()), 0.0, fmt(color(st)));
     header.append(name, 6.0, fmt(ui.visuals().strong_text_color()));
     header.append(headline, 12.0, fmt(ui.visuals().weak_text_color()));
+    // A lone finding is already the headline: one row, nothing to expand.
+    if c.findings.len() <= 1 && c.records.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(ui.spacing().icon_width + ui.spacing().icon_spacing);
+            ui.label(header);
+        });
+        return;
+    }
+    let lone = c.findings.len() == 1;
     egui::CollapsingHeader::new(header)
         .id_salt(("adv", name))
         .default_open(st >= Status::Warn)
         .show(ui, |ui| {
-            for (s, f) in &c.findings {
+            for (s, f) in c.findings.iter().filter(|_| !lone) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(icon(*s)).color(color(*s)));
                     ui.label(f);

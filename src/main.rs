@@ -96,6 +96,8 @@ struct App {
     info_job: Option<Job<HostInfo>>,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
+    /// Scroll Results to its newest runs on the next frame (after a full scan).
+    jump_to_new: bool,
 }
 
 impl eframe::App for App {
@@ -112,7 +114,9 @@ impl eframe::App for App {
         pump(&mut self.info_job, |i| self.info = i);
         egui::Panel::top("tabs").show(ui, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            // Wraps to a second row when the window (or display scaling)
+            // leaves too little width, so every tab stays reachable.
+            ui.horizontal_wrapped(|ui| {
                 let busy = self.any_running();
                 let tip = if busy {
                     "Wait for running tools to finish (or stop them) to run a full scan."
@@ -140,23 +144,28 @@ impl eframe::App for App {
                     ui.selectable_value(&mut self.tab, *tab, label)
                         .on_hover_text(*tip);
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = if self.bundle.is_running() {
-                        "Site Bundle ⏺"
-                    } else {
-                        "Site Bundle…"
-                    };
-                    if ui
-                        .button(label)
-                        .on_hover_text(
-                            "Wrap the UniFi and SonicWall exports, the sweep inventory and \
+                let label = if self.bundle.is_running() {
+                    "Site Bundle ⏺"
+                } else {
+                    "Site Bundle…"
+                };
+                let bundle = |ui: &mut egui::Ui| {
+                    ui.button(label).on_hover_text(
+                        "Wrap the UniFi and SonicWall exports, the sweep inventory and \
 (optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
-                        )
-                        .clicked()
-                    {
-                        self.bundle.open = !self.bundle.open;
-                    }
-                });
+                    )
+                };
+                // Right-aligned when the row has room; otherwise it wraps with the tabs.
+                let clicked = if ui.available_width() > 120.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
+                        .inner
+                } else {
+                    bundle(ui)
+                }
+                .clicked();
+                if clicked {
+                    self.bundle.open = !self.bundle.open;
+                }
             });
             ui.add_space(2.0);
         });
@@ -314,6 +323,10 @@ impl App {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }
         self.tab = Tab::Results;
+        // Show the new runs: a leftover filter could hide them, and the
+        // view may be scrolled up on older ones.
+        self.filter.clear();
+        self.jump_to_new = true;
     }
 
     /// Move finished runs into the log.
@@ -371,6 +384,7 @@ impl App {
     }
 
     fn results_ui(&mut self, ui: &mut egui::Ui) {
+        let jump = std::mem::take(&mut self.jump_to_new);
         let running = self.running();
         let needle = self.filter.trim().to_lowercase();
         let hit = |tool: &str, text: &str| {
@@ -456,6 +470,9 @@ impl App {
                             format!("=== {header} ===\n{}\n", text.trim_end())
                         });
                     }
+                    if jump {
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    }
                 });
         }
         if clear {
@@ -525,6 +542,7 @@ fn main() -> eframe::Result {
                 info: HostInfo::local(),
                 info_job: None,
                 filter: String::new(),
+                jump_to_new: false,
             };
             app.refresh_info(&cc.egui_ctx);
             Ok(Box::new(app))

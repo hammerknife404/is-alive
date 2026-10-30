@@ -164,7 +164,7 @@ impl TraceTool {
             let rtts: Vec<String> = h
                 .rtts
                 .iter()
-                .map(|r| r.map_or("*".into(), |v| format!("{v:.0} ms")))
+                .map(|r| r.map_or("*".into(), widgets::fmt_ms))
                 .collect();
             let addr = h.addr.map_or("request timed out".into(), |a| a.to_string());
             let name = h.name.as_deref().unwrap_or(&h.note);

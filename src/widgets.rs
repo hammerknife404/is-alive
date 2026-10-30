@@ -165,7 +165,7 @@ pub fn export_menu<'a>(
     entries: impl FnOnce() -> Vec<&'a crate::log::Entry>,
 ) {
     let mut picked = None;
-    ui.menu_button("Export ▾", |ui| {
+    ui.menu_button("Export ⏷", |ui| {
         for f in crate::log::Format::ALL {
             if ui.button(f.name()).on_hover_text(f.hint()).clicked() {
                 picked = Some(f);

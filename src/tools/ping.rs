@@ -239,7 +239,12 @@ impl PingTool {
         }
         s += &format!("\nSent {sent}, Received {recv}");
         if let Some((min, avg, max)) = mm {
-            s += &format!(", Min {min:.1} ms, Avg {avg:.1} ms, Max {max:.1} ms");
+            s += &format!(
+                ", Min {}, Avg {}, Max {}",
+                widgets::fmt_ms(min),
+                widgets::fmt_ms(avg),
+                widgets::fmt_ms(max)
+            );
         }
         s
     }
