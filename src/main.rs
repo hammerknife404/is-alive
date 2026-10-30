@@ -464,7 +464,7 @@ impl App {
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop a UniFi backup or SonicWall export to convert it",
+                "Drop a UniFi backup, SonicWall export or report, or /mapnetwork map",
                 egui::FontId::proportional(18.0),
                 egui::Color32::WHITE.gamma_multiply(fade),
             );
@@ -761,7 +761,7 @@ fn shortcuts(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("Mouse").strong());
     for tip in [
         "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
-        "Drop a UniFi backup or SonicWall export anywhere to convert it",
+        "Drop a UniFi backup, SonicWall .exp / .wri or /mapnetwork map anywhere to open it",
         "Click the is-alive button for a full scan of this network",
         "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {

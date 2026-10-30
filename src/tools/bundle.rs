@@ -37,6 +37,7 @@ pub struct BundleTool {
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
+    use_map: bool,
     job: Option<Job<Result<Option<Saved>, String>>>,
     saved: Option<Saved>,
     err: Option<String>,
@@ -55,6 +56,7 @@ impl Default for BundleTool {
             use_inventory: true,
             use_results: false,
             use_notes: false,
+            use_map: true,
             job: None,
             saved: None,
             err: None,
@@ -70,6 +72,8 @@ const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, 
 and open management ports. Observed state.";
 const RESULTS_WHAT: &str =
     "is-alive test runs (ping, port check, traceroute, DNS, mail health) with start and end times.";
+const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
+Update it rather than starting over: keep what still holds, change what the other files show.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
 machine: passwords, keys, tokens and patient details are [REDACTED: …] markers. Context and \
 observations; use what bears on the map and its findings.";
@@ -175,6 +179,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
 
         let unifi = src.export.unifi();
         let sonicwall = src.export.sonicwall();
+        let map = src.export.mapnetwork();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
         let targets = log_targets(src.log);
@@ -203,7 +208,20 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                             export::file_name(p)
                         )
                     }),
-                    "Open a SonicWall .exp in Config Export",
+                    "Open a SonicWall .exp or .wri in Config Export",
+                );
+                part_row(
+                    ui,
+                    &mut self.use_map,
+                    "Current map",
+                    map.map(|(p, d)| {
+                        format!(
+                            "{} device(s) · {} · updated, not rebuilt",
+                            d.nodes.len(),
+                            export::file_name(p)
+                        )
+                    }),
+                    "Open the site's /mapnetwork .dc.html in Config Export to have it updated",
                 );
                 part_row(
                     ui,
@@ -307,6 +325,23 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     "nat_rules": r.count("NAT rules"),
                 }),
                 data: r.json.clone(),
+            });
+        }
+        if self.use_map
+            && let Some((p, d)) = src.export.mapnetwork()
+        {
+            parts.push(Part {
+                file: bundle::MAP,
+                source: export::file_name(p),
+                skill: "/mapnetwork",
+                what: MAP_WHAT,
+                summary: json!({
+                    "title": d.title,
+                    "devices": d.nodes.len(),
+                    "links": d.edges.len(),
+                    "findings": d.actions.len(),
+                }),
+                data: d.html.clone(),
             });
         }
         if self.use_inventory

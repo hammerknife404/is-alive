@@ -1,16 +1,17 @@
-//! SonicWall settings export (.exp) or tech support report (.wri) →
-//! sanitized JSON for /mapnetwork, offline.
+//! SonicWall settings export (.exp) or tech support report (.wri, see
+//! `tsr`) → sanitized JSON for /mapnetwork, offline.
 //!
-//! An .exp is base64 of `key=value&key=value…` with URL-encoded values; a
-//! .wri (TSR) is a text report whose settings section lists the same keys
-//! one `key = value` per line, among sections that aren't read at all;
+//! An .exp is base64 of `key=value&key=value…` with URL-encoded values;
 //! tables are flattened as `<field>_<index>` (`iface_name_3`, `policySrcZone_12`).
 //! Output is built only from the fields named here, so admin and user
 //! accounts, VPN and RADIUS secrets, SNMP communities and certificates are
 //! never copied. Comments are kept (they say what a rule or port is for) unless
 //! they look like they hold a credential.
 
+mod tsr;
+
 use serde_json::{Map, Value, json};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 const EXP: &str = "SonicWall settings export (.exp)";
@@ -37,7 +38,15 @@ impl Report {
     pub fn summary(&self) -> String {
         let mut s = format!("Format     {}\n", self.format);
         for (k, v) in &self.system {
-            s += &format!("{k:<11}{v}\n");
+            let k = match k.to_ascii_lowercase() {
+                l if l.contains("serial") => "Serial",
+                l if l.contains("firmware") => "Firmware",
+                l if l.contains("romversion") => "ROM",
+                l if l.contains("model") || l.contains("prodname") => "Model",
+                l if l.contains("firewallname") => "Name",
+                _ => k.as_str(),
+            };
+            s += &format!("{k:<10} {v}\n");
         }
         s += &format!(
             "Output     {:.1} KB, JSON for /mapnetwork\n\nKept\n",
@@ -46,15 +55,23 @@ impl Report {
         for (t, n) in &self.counts {
             s += &format!("  {t:<18}{n:>6}\n");
         }
-        s += &format!(
-            "\nSettings in the export: {}; {} copied, {} left behind.\n\
+        if self.format == WRI {
+            s += "\nRead from the report: system status (model, serial, firmware), interfaces,\n\
+zones, address objects and groups, NAT policies and access rules, field by field.\n\
+Users, VPN, RADIUS/LDAP, SNMP, certificates, licences, registration codes, logs\n\
+and diagnostics are skipped. Comments are kept unless they mention a password,\n\
+key or similar.\n";
+        } else {
+            s += &format!(
+                "\nSettings in the export: {}; {} copied, {} left behind.\n\
 Only the fields listed above are read: accounts, passwords, VPN and RADIUS secrets,\n\
 SNMP communities and certificates never leave the file. Comments are kept\n\
 unless they mention a password, key or similar.\n",
-            self.keys,
-            self.used,
-            self.keys - self.used
-        );
+                self.keys,
+                self.used,
+                self.keys - self.used
+            );
+        }
         if self.withheld > 0 {
             s += &format!(
                 "{} comment(s) withheld or redacted: a password, key, email, phone or similar.\n",
@@ -65,13 +82,13 @@ unless they mention a password, key or similar.\n",
     }
 }
 
-/// The settings as key=value text, if `data` is an .exp or a .wri.
-pub fn decode(data: &[u8]) -> Option<String> {
-    exp(data).or_else(|| tsr(data))
+/// True when `data` is an .exp or a tech support report.
+pub fn sniff(data: &[u8]) -> bool {
+    decode(data).is_some() || tsr::sniff(data)
 }
 
 /// An .exp's key=value text (base64 or already decoded).
-fn exp(data: &[u8]) -> Option<String> {
+fn decode(data: &[u8]) -> Option<String> {
     let trimmed = data.trim_ascii();
     let text = if trimmed
         .iter()
@@ -91,38 +108,6 @@ fn exp(data: &[u8]) -> Option<String> {
         })
         .count();
     (pairs >= 10).then_some(text)
-}
-
-/// A tech support report's settings, as .exp-style key=value lines. Only
-/// `key = value` lines are kept (the report's status tables, logs and
-/// prose never are), with `&` and `%` escaped so a value can't split.
-fn tsr(data: &[u8]) -> Option<String> {
-    let text = match data {
-        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
-        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
-        _ if data.len() > 64 && data.iter().skip(1).step_by(2).take(32).all(|&b| b == 0) => {
-            utf16(data, u16::from_le_bytes)
-        }
-        _ => String::from_utf8_lossy(data).into_owned(),
-    };
-    let lines: Vec<String> = text
-        .lines()
-        .filter_map(|l| {
-            let (k, v) = l.split_once('=')?;
-            let k = k.trim();
-            let ok = k.contains('_')
-                && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                && k.as_bytes()[0].is_ascii_alphabetic();
-            ok.then(|| format!("{k}={}", v.trim().replace('%', "%25").replace('&', "%26")))
-        })
-        .collect();
-    let ifaces = lines.iter().any(|l| l.starts_with("iface_name_"));
-    (ifaces && lines.len() >= 10).then(|| lines.join("\n"))
-}
-
-fn utf16(b: &[u8], word: fn([u8; 2]) -> u16) -> String {
-    let w: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| word(c)).collect();
-    String::from_utf16_lossy(&w)
 }
 
 fn is_b64(b: u8) -> bool {
@@ -212,16 +197,7 @@ impl Settings {
     /// and otherwise put through the same redaction as tech notes (emails,
     /// phone numbers, tokens…).
     fn comment(&self, stem: &str, i: u32) -> Option<Value> {
-        let v = self.at(stem, i)?;
-        if credential_like(v) {
-            self.withheld.set(self.withheld.get() + 1);
-            return Some(json!("[withheld: may contain a credential]"));
-        }
-        let (clean, hits) = crate::redact::sanitize(v);
-        if !hits.is_empty() {
-            self.withheld.set(self.withheld.get() + 1);
-        }
-        Some(json!(clean))
+        Some(clean_comment(self.at(stem, i)?, &self.withheld))
     }
 
     /// Indices present for `stem` (keys `stem_<n>`), ascending.
@@ -249,6 +225,21 @@ const CREDENTIAL: &[&str] = &[
     "apikey",
     "api key",
 ];
+
+/// A free-text comment, withheld if it looks like it holds a credential,
+/// and otherwise put through the same redaction as tech notes; `withheld`
+/// counts either.
+fn clean_comment(v: &str, withheld: &Cell<usize>) -> Value {
+    if credential_like(v) {
+        withheld.set(withheld.get() + 1);
+        return json!("[withheld: may contain a credential]");
+    }
+    let (clean, hits) = crate::redact::sanitize(v);
+    if !hits.is_empty() {
+        withheld.set(withheld.get() + 1);
+    }
+    json!(clean)
+}
 
 fn credential_like(v: &str) -> bool {
     let mut v = v.to_ascii_lowercase();
@@ -431,17 +422,19 @@ fn system(c: &Settings) -> Vec<(String, String)> {
 }
 
 pub fn convert(data: &[u8]) -> Result<Report, String> {
-    let (text, format) = exp(data)
-        .map(|t| (t, EXP))
-        .or_else(|| tsr(data).map(|t| (t, WRI)))
-        .ok_or("not a SonicWall settings export (.exp) or tech support report (.wri)")?;
+    let Some(text) = decode(data) else {
+        return if tsr::sniff(data) {
+            tsr::convert(data)
+        } else {
+            Err("not a SonicWall settings export (.exp) or tech support report (.wri)".into())
+        };
+    };
+    let format = EXP;
     let c = Settings::parse(&text);
 
     let ifaces = interfaces(&c);
     if ifaces.is_empty() {
-        return Err(
-            "export has no interfaces (iface_name_N): is this a SonicWall .exp or .wri?".into(),
-        );
+        return Err("export has no interfaces (iface_name_N): is this a SonicWall .exp?".into());
     }
     let zones = table(
         &c,
@@ -652,38 +645,6 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         assert!(credential_like("wifi PSK: abc"));
         assert!(r.used < r.keys);
         assert!(r.summary().contains("left behind"));
-    }
-
-    #[test]
-    fn reads_a_tech_support_report() {
-        let mut tsr = "#System : Status_START\nSerial Number: 2CB8EDDA6E30\nAdmin password = not a setting line\nUp time 3 days\n#System : Status_END\n\n\
-#Prefs_START\n"
-            .to_string();
-        for kv in SAMPLE.split('&').filter(|p| !p.is_empty()) {
-            let (k, v) = kv.split_once('=').unwrap();
-            tsr += &format!("{k} = {}\r\n", unescape(v));
-        }
-        tsr += "iface_comment_2 = R&D 100% voice\n#Prefs_END\n";
-        assert!(exp(tsr.as_bytes()).is_none());
-        let r = convert(tsr.as_bytes()).unwrap();
-        assert_eq!(r.format, WRI);
-        assert!(r.summary().contains(".wri"));
-        let v: Value = serde_json::from_str(&r.json).unwrap();
-        assert_eq!(v["interfaces"][0]["ip"], "172.16.0.1");
-        assert_eq!(v["interfaces"][2]["name"], "X0:V40");
-        assert_eq!(v["interfaces"][2]["comment"], "R&D 100% voice");
-        for secret in ["S3cretPass", "TunnelPSK", "AdminPass", "Hunter2"] {
-            assert!(!r.json.contains(secret), "{secret} leaked");
-        }
-        // UTF-16, as some firmware writes it.
-        let mut wide = vec![0xff, 0xfe];
-        wide.extend(tsr.encode_utf16().flat_map(u16::to_le_bytes));
-        assert_eq!(convert(&wide).unwrap().count("interfaces"), 3);
-        assert!(tsr_nothing());
-    }
-
-    fn tsr_nothing() -> bool {
-        decode(b"#System : Status_START\nModel = TZ 470\n#System : Status_END\n").is_none()
     }
 
     #[test]
