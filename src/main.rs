@@ -39,6 +39,7 @@ enum Tab {
     Map,
     Notes,
     Results,
+    Speed,
 }
 
 /// (tab, label, hover text).
@@ -98,6 +99,12 @@ and replaced before anything is saved, copied or bundled.",
         "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
 Markdown or HTML.",
     ),
+    (
+        Tab::Speed,
+        "Speed Test",
+        "Download and upload speed against Cloudflare, with latency, jitter and loss at idle and \
+under load (bufferbloat) and a VoIP call-quality score.",
+    ),
 ];
 
 struct App {
@@ -110,6 +117,7 @@ struct App {
     ping: tools::ping::PingTool,
     ports: tools::ports::PortTool,
     trace: tools::trace::TraceTool,
+    speed: tools::speed::SpeedTool,
     sweep: tools::sweep::SweepTool,
     dns: tools::dns::DnsTool,
     advanced: tools::advanced::AdvancedTool,
@@ -159,6 +167,7 @@ impl eframe::App for App {
         self.ping.poll();
         self.ports.poll();
         self.trace.poll();
+        self.speed.poll();
         self.sweep.poll();
         self.dns.poll();
         self.advanced.poll();
@@ -219,7 +228,12 @@ impl eframe::App for App {
                     }
                     let r = ui
                         .selectable_label(on, text)
-                        .on_hover_text(format!("{tip}\n\nCtrl+{}", (n + 1) % 10));
+                        // Past the tenth tab there's no digit left.
+                        .on_hover_text(if n < 10 {
+                            format!("{tip}\n\nCtrl+{}", (n + 1) % 10)
+                        } else {
+                            tip.to_string()
+                        });
                     if r.clicked() {
                         self.tab = *tab;
                     }
@@ -395,6 +409,7 @@ impl App {
             Tab::Ping => self.ping.ui(ui),
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
+            Tab::Speed => self.speed.ui(ui),
             Tab::Sweep => self.sweep.ui(ui, &self.info),
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
@@ -495,6 +510,7 @@ impl App {
             Tab::Ping => self.ping.is_running(),
             Tab::Ports => self.ports.is_running(),
             Tab::Trace => self.trace.is_running(),
+            Tab::Speed => self.speed.is_running(),
             Tab::Sweep => self.sweep.is_running(),
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
@@ -507,6 +523,7 @@ impl App {
         self.ping.is_running()
             || self.ports.is_running()
             || self.trace.is_running()
+            || self.speed.is_running()
             || self.sweep.is_running()
             || self.dns.is_running()
             || self.advanced.is_running()
@@ -552,6 +569,7 @@ impl App {
             ("Ping", self.ping.take_finished()),
             ("Port Check", self.ports.take_finished()),
             ("Traceroute", self.trace.take_finished()),
+            ("Speed Test", self.speed.take_finished()),
             ("Subnet Sweep", self.sweep.take_finished()),
             ("DNS Lookup", self.dns.take_finished()),
             ("Advanced", self.advanced.take_finished()),
@@ -582,6 +600,11 @@ impl App {
                 "Traceroute",
                 self.trace.running_since(),
                 self.trace.output(),
+            ),
+            (
+                "Speed Test",
+                self.speed.running_since(),
+                self.speed.output(),
             ),
             (
                 "Subnet Sweep",
@@ -849,6 +872,7 @@ fn main() -> eframe::Result {
                 ping: Default::default(),
                 ports: Default::default(),
                 trace: Default::default(),
+                speed: Default::default(),
                 sweep: Default::default(),
                 dns: Default::default(),
                 advanced: Default::default(),
