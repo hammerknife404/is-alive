@@ -53,8 +53,7 @@ const TABS: &[(Tab, &str, &str)] = &[
     (
         Tab::Sweep,
         "Subnet Sweep",
-        "Find live hosts on a subnet or range, with name, MAC and vendor. Optional management-port \
-check and an Inventory export for /mapnetwork.",
+        "Find live hosts on a subnet or range, with name, MAC and vendor.",
     ),
     (
         Tab::Dns,
