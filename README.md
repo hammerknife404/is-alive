@@ -9,6 +9,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 | **Ping** | ICMP (IPv4/IPv6) or TCP-connect ping, continuous or N count, live latency graph, loss/min/avg/max |
 | **Port Check** | Concurrent TCP connect scan — lists, ranges, presets (Common, Windows/AD, Web, Firewall/VPN, Mail, 1-1024) with service names. TCP only: UDP services such as IKE (500/4500) can't be tested |
 | **Traceroute** | 3 probes per hop, optional reverse DNS |
+| **Speed Test** | Download and upload against Cloudflare, latency, jitter and loss at idle and under load, a bufferbloat grade and a VoIP call-quality score (MOS) (see below) |
 | **Subnet Sweep** | Ping sweep of a CIDR or range (`10.0.0.0/24`, `10.0.0.1-254`, `10.0.0.10-10.0.1.20`) with hostnames, MAC and vendor, ping-silent devices from the ARP table, optional management-port check, and an **Inventory** JSON for /mapnetwork (see below) |
 | **DNS Lookup** | Any record type, or **All** at once (A/AAAA, MX, TXT, CNAME, NS, SOA, SRV, CAA, PTR, DS, DNSKEY) via the system resolver, Cloudflare, Google, Quad9 or the domain's authoritative server, or **Compare all** side by side to spot split DNS and stale caches |
 | **Advanced** | Mail and domain DNS health for a domain — validates, not just detects (see below) |
@@ -21,7 +22,7 @@ Native network tester written in Rust. Single portable `.exe` on Windows, single
 
 Files named on the command line (or opened with **Open with → is-alive**) go straight to Config Export, as if dropped on the window.
 
-**Ctrl+1 … Ctrl+0** switch tabs (the footer's **?** lists every shortcut), copies and saves confirm with a toast, and the window opens at the size it was closed at.
+**Ctrl+1 … Ctrl+9** switch to the first nine tabs and **Ctrl+0** to Results (the footer's **?** lists every shortcut), copies and saves confirm with a toast, and the window opens at the size it was closed at.
 
 Every result view has a **Copy** button for pasting into tickets. The **Results** tab keeps the 12 newest runs open and folds older ones, **Clear** asks for a second click, and it has a **Filter** box (tool name or output text) and **Export** to CSV, JSON, Markdown or HTML, for the whole log or a single run; Copy, Save and Export all use the filtered set.
 
@@ -32,6 +33,7 @@ CSV export uses each tool's own columns, one row per result, with the run's star
 | Ping | target, mode, port, seq, from, status, rtt_ms, ttl, bytes |
 | Port Check | host, ip, port, state, service, rtt_ms, error (closed/filtered included) |
 | Traceroute | host, ip, hop, address, name, rtt1_ms, rtt2_ms, rtt3_ms, note |
+| Speed Test | server, ip, phase (idle/download/upload), mbps, mb, seconds, streams, probe, probes, lost, latency_avg_ms, latency_min_ms, latency_max_ms, jitter_ms, loss_pct, added_ms, mos |
 | Subnet Sweep | range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (alive hosts; `arp` rows have no rtt_ms) |
 | DNS Lookup | lookup, source, type, value (Compare notes as type `note`) |
 | Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
@@ -64,6 +66,22 @@ Enter a domain (`example.com`, `user@example.com` or a URL all work) and press E
 DKIM keys can't be listed, only probed. If none of the common selectors match, take the `s=` value from a received message's `DKIM-Signature` header and add it under **Extra DKIM selectors**.
 
 MTA-STS and RDAP use HTTPS with the OS certificate store (works behind TLS-inspecting firewalls) and honor `HTTPS_PROXY` / the Windows system proxy.
+
+### Speed Test (VoIP readiness)
+
+Runs against Cloudflare's speed test service (`speed.cloudflare.com`, anycast, so the nearest Cloudflare data centre answers; the header names it and your ISP). Three phases:
+
+1. **Idle**: 40 latency probes, 10 a second.
+2. **Download**, then **Upload**: parallel HTTPS streams (4 by default, up to 16) for the set duration (10 s by default), probing latency the whole time. The first 20% (1 to 3 s) is left out of the result: TCP slow start and buffers filling, not the line's rate.
+3. Results: Mbps each way, and for each phase average/min/max latency, **jitter** (mean difference between consecutive replies, as VoIP tools and RFC 3550 measure it), **loss**, the latency **added** under load and an estimated **MOS**.
+
+| Figure | Meaning |
+|---|---|
+| **Bufferbloat** | Latency added under load, graded A+ (<5 ms), A (<30), B (<60), C (<200), D (<400), F. B or worse gets a finding: calls break up whenever someone fills the line; the fix is smart queue management (SQM: fq_codel / CAKE) or bandwidth management on the firewall shaped just below the line rate |
+| **VoIP MOS** | Simplified ITU-T G.107 E-model (G.711) from round-trip latency, jitter and loss: 4.34+ excellent, 4.03 good, 3.6 fair, 3.1 poor. Shown at idle and under load |
+| **VoIP targets** | latency < 150 ms, jitter < 30 ms, loss < 1%; anything over in any phase is called out |
+
+Latency is ICMP to the server's address. If 4 pings get no reply (ICMP blocked), it switches to TCP connects to port 443 and says so; loss is less reliable that way. A failed direction says why, and that web filters (SonicWall CFS, DNS filtering) often block speed test sites. The test saturates the line while it runs, and a gigabit line moves over 1 GB each way, so mind metered links. It's not part of the full scan.
 
 ### Subnet Sweep: MAC, vendor and inventory
 
@@ -140,7 +158,7 @@ Every value that would be redacted is highlighted in the editor, and the count b
 
 Built for sites with regulated data (HIPAA): zero trust and as little as possible.
 
-- **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, and MTA-STS/RDAP over HTTPS with the OS trust store. No telemetry, no update checks, no accounts.
+- **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, MTA-STS/RDAP over HTTPS with the OS trust store, and the Speed Test's transfers to Cloudflare. No telemetry, no update checks, no accounts.
 - **Sanitized on this machine before anything is saved or shared**: UniFi exports (secret fields stripped; client notes, email and phone always dropped; client names only when you choose *full*), SonicWall exports (an allowlist of fields; comments redacted), tech notes and Known problems (the rules above).
 - **Clipboard.** On Windows, everything the app copies is marked to stay out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy (something you copied elsewhere since is left alone).
 - **At rest** there are only the settings file (theme and backdrop picture path) and `notes.md`, which only ever holds the sanitized text. The Results log lives in memory and is gone when the app closes.
