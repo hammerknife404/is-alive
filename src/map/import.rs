@@ -248,6 +248,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         }
         n.rank = (u8::from(n.flags.is_empty()), rank as u64);
         let site = sites.get(s(v, "site")).copied();
+        n.site = site.map(str::to_string);
         if multi_site && let Some(site) = site {
             n.chip(site);
         }

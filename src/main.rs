@@ -126,6 +126,8 @@ struct App {
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
+    /// The map's files are being read again (Reload): say how it went.
+    reloading: bool,
 }
 
 impl eframe::App for App {
@@ -155,6 +157,22 @@ impl eframe::App for App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        if self.reloading && !self.export.is_running() {
+            self.reloading = false;
+            let failed = self.export.failed();
+            if failed.is_empty() {
+                widgets::toast("Map reloaded", true);
+            } else {
+                widgets::toast(
+                    format!(
+                        "Couldn't read {} again: the map still shows what was loaded before \
+                         (Config Export says why)",
+                        failed.join(", ")
+                    ),
+                    false,
+                );
+            }
+        }
         self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ui.ctx());
         self.collect();
@@ -475,6 +493,26 @@ impl App {
             Some(Action::HideNote) => {
                 self.look.map_note = false;
                 theme::save(&self.look);
+            }
+            Some(Action::Layout(m)) => {
+                self.look.map_layout = Some(m);
+                theme::save(&self.look);
+            }
+            Some(Action::Reload) => {
+                let files = self.export.map_sources();
+                self.map.reload();
+                if files.is_empty() {
+                    widgets::toast("Map rebuilt", true);
+                } else if self.export.is_running() {
+                    widgets::toast(
+                        "Config Export is still loading a file: rebuilt from what's loaded. \
+                         Reload again when it's done to re-read the map's files.",
+                        false,
+                    );
+                } else {
+                    self.export.open(ctx, files);
+                    self.reloading = true;
+                }
             }
             None => {}
         }
@@ -902,7 +940,7 @@ fn main() -> eframe::Result {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
-                map: map::view::MapView::new(),
+                map: map::view::MapView::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
@@ -914,6 +952,7 @@ fn main() -> eframe::Result {
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
+                reloading: false,
             };
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =

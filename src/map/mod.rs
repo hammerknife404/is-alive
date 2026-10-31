@@ -188,6 +188,11 @@ pub struct Node {
     pub up: Option<(usize, Link, Option<String>)>,
     /// Ranks clients for the per-uplink cap: lower shows first.
     rank: (u8, u64),
+    /// The site it's at, when the source has sites (/mapnetwork maps).
+    pub site: Option<String>,
+    /// Pinned, then missing from the latest data: kept on the map, marked,
+    /// for the user to review.
+    pub gone: bool,
 }
 
 impl Node {
@@ -228,6 +233,9 @@ pub struct Map {
     pub summary: String,
     /// Clients known but not drawn.
     pub hidden: usize,
+    /// Ids of the cards left out to keep the map readable (clients off, or
+    /// past the per-uplink cap): still in the data, just not drawn.
+    pub folded: HashSet<String>,
 }
 
 impl Map {
@@ -239,6 +247,17 @@ impl Map {
             }
         }
         c
+    }
+
+    /// Every site named on a card, in the order first seen.
+    pub fn sites(&self) -> Vec<String> {
+        let mut v: Vec<String> = Vec::new();
+        for s in self.nodes.iter().filter_map(|n| n.site.as_ref()) {
+            if !v.contains(s) {
+                v.push(s.clone());
+            }
+        }
+        v
     }
 
     /// Path from the internet down to `i`.
@@ -1600,6 +1619,7 @@ fn limit(b: B, clients: bool) -> Map {
         };
     }
     let mut keep = vec![true; n];
+    let mut folded = HashSet::new();
     let mut extra = Vec::new();
     let mut hidden = 0;
     for (&p, kids) in &by_parent {
@@ -1610,6 +1630,7 @@ fn limit(b: B, clients: bool) -> Map {
         hidden += rest.len();
         for &i in rest {
             keep[i] = false;
+            folded.insert(nodes[i].id.clone());
         }
         if clients && cost(cap) <= BUDGET {
             let mut more = Node {
@@ -1688,6 +1709,7 @@ fn limit(b: B, clients: bool) -> Map {
         findings,
         summary: String::new(),
         hidden,
+        folded,
     }
 }
 

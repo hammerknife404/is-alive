@@ -677,6 +677,8 @@ pub struct Settings {
     /// Share of the width the Notes editor takes in Split view.
     pub notes_split: f32,
     pub emoji: EmojiStyle,
+    /// Map layout picked (Cluster, Tree, Zones, Sites); None until one is.
+    pub map_layout: Option<crate::map::layout::Mode>,
 }
 
 /// Font sizes the Notes tab offers.
@@ -695,6 +697,7 @@ impl Default for Settings {
             notes_split: 0.5,
             emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
+            map_layout: None,
         }
     }
 }
@@ -711,6 +714,7 @@ impl Settings {
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
                     s.notes_font = match v.trim() {
@@ -784,6 +788,9 @@ impl Settings {
         }
         if self.emoji != EmojiStyle::Theme {
             s += &format!("emoji={}\n", self.emoji.key());
+        }
+        if let Some(m) = self.map_layout {
+            s += &format!("map_layout={}\n", m.key());
         }
         s
     }
@@ -1004,6 +1011,7 @@ mod tests {
             notes_size: 16,
             notes_split: 0.625,
             emoji: EmojiStyle::Color,
+            map_layout: Some(crate::map::layout::Mode::Zones),
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(
