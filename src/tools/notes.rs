@@ -312,13 +312,70 @@ impl NotesTool {
         match view {
             View::Edit => self.editor(ui, &font),
             View::Preview => self.preview(ui, &font),
-            View::Split => {
-                ui.columns(2, |c| {
-                    self.editor(&mut c[0], &font);
-                    self.preview(&mut c[1], &font);
-                });
-            }
+            View::Split => self.split(ui, &font, look),
         }
+    }
+
+    /// Editor and preview side by side, with a divider that drags between
+    /// 20% and 80% of the width (double-click: back to half).
+    fn split(&mut self, ui: &mut Ui, font: &FontId, look: &mut crate::theme::Settings) {
+        const GAP: f32 = 10.0;
+        const MIN: f32 = 160.0;
+        let full = ui.available_rect_before_wrap();
+        let w = full.width();
+        let left_w = (w * look.notes_split).clamp(MIN.min(w / 2.0), (w - GAP - MIN).max(w / 2.0));
+        let left =
+            egui::Rect::from_min_size(full.min, egui::vec2(left_w - GAP / 2.0, full.height()));
+        let handle = egui::Rect::from_min_size(
+            egui::pos2(left.right(), full.top()),
+            egui::vec2(GAP, full.height()),
+        );
+        let right = egui::Rect::from_min_max(egui::pos2(handle.right(), full.top()), full.max);
+
+        let r = ui.interact(
+            handle,
+            ui.id().with("notes_split"),
+            egui::Sense::click_and_drag(),
+        );
+        let active = r.hovered() || r.dragged();
+        if active {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if r.dragged()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            look.notes_split = ((p.x - full.left()) / w).clamp(0.2, 0.8);
+        }
+        if r.double_clicked() {
+            look.notes_split = 0.5;
+        }
+        if r.drag_stopped() || r.double_clicked() {
+            crate::theme::save(look);
+        }
+        let colour = if active {
+            crate::theme::accent()
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke.color
+        };
+        let x = handle.center().x;
+        ui.painter().vline(
+            x,
+            handle.y_range(),
+            Stroke::new(if active { 2.0 } else { 1.0 }, colour),
+        );
+        // A grip in the middle, so it reads as something to drag.
+        for dy in [-6.0, 0.0, 6.0] {
+            ui.painter()
+                .circle_filled(egui::pos2(x, handle.center().y + dy), 1.5, colour);
+        }
+
+        ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
+            self.editor(ui, font)
+        });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+            self.preview(ui, font)
+        });
+        ui.allocate_rect(full, egui::Sense::hover());
     }
 
     fn toolbar(

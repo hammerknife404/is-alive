@@ -268,6 +268,8 @@ pub struct Settings {
     /// Notes in a monospace font (else sans), and its size in points.
     pub notes_mono: bool,
     pub notes_size: u8,
+    /// Share of the width the Notes editor takes in Split view.
+    pub notes_split: f32,
 }
 
 /// Font sizes the Notes tab offers.
@@ -283,6 +285,7 @@ impl Default for Settings {
             map_note: true,
             notes_mono: true,
             notes_size: 13,
+            notes_split: 0.5,
             backdrop: Source::Scene,
         }
     }
@@ -301,6 +304,11 @@ impl Settings {
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
                 "notes_font" => s.notes_mono = v.trim() != "sans",
+                "notes_split" => {
+                    if let Ok(f) = v.trim().parse::<f32>() {
+                        s.notes_split = f.clamp(0.2, 0.8);
+                    }
+                }
                 "notes_size" => {
                     if let Ok(n) = v.trim().parse::<u8>() {
                         s.notes_size = n.clamp(8, 32);
@@ -346,6 +354,9 @@ impl Settings {
         }
         if !self.notes_mono {
             s += "notes_font=sans\n";
+        }
+        if self.notes_split != 0.5 {
+            s += &format!("notes_split={:.3}\n", self.notes_split);
         }
         if self.notes_size != 13 {
             s += &format!("notes_size={}\n", self.notes_size);
@@ -495,6 +506,7 @@ mod tests {
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_mono: false,
             notes_size: 16,
+            notes_split: 0.625,
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(Settings::parse(""), Settings::default());
