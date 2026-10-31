@@ -1567,8 +1567,8 @@ impl MapView {
                 // Beside it (same row): under both boxes and up into its
                 // bottom, rather than along the cards' edges.
                 let own = group(*up).and_then(|g| self.lay.boxes.get(g));
-                let floor = own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom())
-                    + layout::BOX_PAD;
+                let floor =
+                    own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom()) + layout::BOX_PAD;
                 let x = b.rect.center().x;
                 vec![
                     from,
