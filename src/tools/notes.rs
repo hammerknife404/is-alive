@@ -3,6 +3,7 @@
 //! the editor highlights every value that will be redacted. The raw text
 //! lives only in memory: after a restart the notes come back sanitized.
 
+use crate::job::Job;
 use crate::markdown;
 use crate::net::hostinfo::HostInfo;
 use crate::redact::{self, Hit, Pick};
@@ -51,6 +52,59 @@ pub struct NotesTool {
     cache: RefCell<(u64, Vec<Hit>)>,
     /// The same for the sanitized text (preview, status, Site Bundle).
     clean: RefCell<(u64, (String, Vec<Hit>))>,
+    /// A text file opened to read, and whether its tab is showing.
+    file: Option<Viewed>,
+    on_file: bool,
+    opening: Option<Job<Result<Viewed, String>>>,
+}
+
+/// A text or config file open in the viewer: read-only, never saved or
+/// bundled with the notes.
+struct Viewed {
+    path: PathBuf,
+    text: String,
+    lines: usize,
+    bytes: u64,
+}
+
+/// Larger files are refused: this is for reading configs, not big logs.
+const VIEW_MAX: u64 = 5 * 1024 * 1024;
+
+/// Read `path` as text: UTF-8 (BOM or not), UTF-16 with a BOM, else
+/// whatever decodes. A file with NUL bytes and no UTF-16 BOM is binary.
+fn read_text(path: &std::path::Path) -> Result<Viewed, String> {
+    let name = crate::tools::export::file_name(path);
+    let meta = std::fs::metadata(path).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a file"));
+    }
+    if meta.len() > VIEW_MAX {
+        return Err(format!(
+            "{name}: {:.1} MB; the viewer opens files up to 5 MB",
+            meta.len() as f64 / 1048576.0
+        ));
+    }
+    let data = std::fs::read(path).map_err(|e| format!("{name}: {e}"))?;
+    let utf16 = |b: &[u8], word: fn([u8; 2]) -> u16| {
+        let w: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| word(c)).collect();
+        String::from_utf16_lossy(&w)
+    };
+    let text = match data.as_slice() {
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        d if d[..d.len().min(8192)].contains(&0) => {
+            return Err(format!("{name}: not a text file"));
+        }
+        d => String::from_utf8_lossy(d).into_owned(),
+    };
+    let text = text.replace("\r\n", "\n");
+    Ok(Viewed {
+        path: path.to_path_buf(),
+        lines: text.lines().count(),
+        bytes: meta.len(),
+        text,
+    })
 }
 
 fn path() -> Option<PathBuf> {
@@ -90,6 +144,9 @@ impl Default for NotesTool {
             flash: f64::NEG_INFINITY,
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            file: None,
+            on_file: false,
+            opening: None,
         };
         if unclean {
             notes.write();
@@ -284,11 +341,7 @@ impl NotesTool {
     pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo, look: &mut crate::theme::Settings) {
         let font = FontId::new(
             look.notes_size as f32,
-            if look.notes_mono {
-                egui::FontFamily::Monospace
-            } else {
-                egui::FontFamily::Proportional
-            },
+            crate::fonts::family(ui.ctx(), &look.notes_font),
         );
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
@@ -298,14 +351,47 @@ impl NotesTool {
         }
         self.known_hits = hits.len();
 
-        self.toolbar(ui, info, &hits, &font, look);
+        let mut opened = None;
+        crate::job::pump(&mut self.opening, |r| opened = Some(r));
+        match opened {
+            Some(Ok(v)) => {
+                self.file = Some(v);
+                self.on_file = true;
+            }
+            Some(Err(e)) => self.err = Some(e),
+            None => {}
+        }
+        if self.file.is_some() {
+            self.tabs(ui);
+        }
+        if self.on_file && self.file.is_some() {
+            ui.horizontal(|ui| {
+                ui.weak("Read-only");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    font_menus(ui, look)
+                });
+            });
+        } else {
+            self.on_file = false;
+            self.toolbar(ui, info, &hits, &font, look);
+        }
         widgets::error(ui, &self.err);
         egui::Panel::bottom("notes_footer")
             .show_separator_line(true)
             .show(ui, |ui| {
                 ui.add_space(2.0);
-                self.footer(ui, &hits, now);
+                if self.on_file {
+                    self.file_footer(ui);
+                } else {
+                    self.footer(ui, &hits, now);
+                }
             });
+        if self.on_file {
+            if let Some(v) = &self.file {
+                viewer(ui, v, &font);
+            }
+            return;
+        }
 
         let narrow = ui.available_width() < 720.0;
         let view = if narrow && self.view == View::Split {
@@ -480,12 +566,10 @@ impl NotesTool {
             ui.separator();
             if ui
                 .button("Time")
-                .on_hover_text("Insert the date and time")
+                .on_hover_text("Insert the date, time, time zone and clock source")
                 .clicked()
             {
-                let stamp = chrono::Local::now()
-                    .format("**%Y-%m-%d %H:%M** ")
-                    .to_string();
+                let stamp = crate::net::clock::stamp();
                 let n = stamp.chars().count();
                 self.edit_at_cursor(&ctx, |_| (stamp, n));
             }
@@ -494,8 +578,7 @@ impl NotesTool {
                 .on_hover_text("Insert this computer's name, LAN, MAC, gateway and WAN")
                 .clicked()
             {
-                let when = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-                let mut block = info.markdown(&when);
+                let mut block = info.markdown();
                 // On a line of its own.
                 let at = widgets::text_selection(&ctx, egui::Id::new(EDITOR_ID), &self.text)
                     .map_or(self.text.len(), |r| r.start);
@@ -531,31 +614,97 @@ impl NotesTool {
                 ui.end_row();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let before = (look.notes_mono, look.notes_size);
-                egui::ComboBox::from_id_salt("notes_size")
-                    .width(44.0)
-                    .selected_text(look.notes_size.to_string())
-                    .show_ui(ui, |ui| {
-                        for &n in crate::theme::NOTES_SIZES {
-                            ui.selectable_value(&mut look.notes_size, n, n.to_string());
-                        }
-                    })
-                    .response
-                    .on_hover_text("Text size");
-                egui::ComboBox::from_id_salt("notes_font")
-                    .width(64.0)
-                    .selected_text(if look.notes_mono { "Mono" } else { "Sans" })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut look.notes_mono, false, "Sans");
-                        ui.selectable_value(&mut look.notes_mono, true, "Mono");
-                    })
-                    .response
-                    .on_hover_text("Font");
-                if (look.notes_mono, look.notes_size) != before {
-                    crate::theme::save(look);
-                }
+                font_menus(ui, look)
             });
         });
+    }
+
+    /// Notes and the open file, when there is one.
+    fn tabs(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.on_file, "Notes").clicked() {
+                self.on_file = false;
+            }
+            let Some(v) = &self.file else { return };
+            let name = crate::tools::export::file_name(&v.path);
+            if ui
+                .selectable_label(self.on_file, &name)
+                .on_hover_text(v.path.display().to_string())
+                .clicked()
+            {
+                self.on_file = true;
+            }
+            if ui
+                .small_button("✕")
+                .on_hover_text("Close the file")
+                .clicked()
+            {
+                self.file = None;
+                self.on_file = false;
+            }
+        });
+        ui.separator();
+    }
+
+    /// Ask for a text file to read, off the UI thread.
+    fn open(&mut self, ctx: &egui::Context) {
+        if self.opening.is_some() {
+            return;
+        }
+        self.err = None;
+        self.opening = Some(Job::spawn(ctx, |tx| {
+            let picked = rfd::FileDialog::new()
+                .set_title("Open a text file")
+                .add_filter(
+                    "Text and config files",
+                    &[
+                        "txt", "log", "cfg", "conf", "config", "ini", "md", "json", "xml", "csv",
+                        "yaml", "yml", "toml", "ps1", "bat", "cmd", "sh", "reg", "inf",
+                    ],
+                )
+                .add_filter("All files", &["*"])
+                .pick_file();
+            if let Some(p) = picked {
+                tx.send(read_text(&p));
+            }
+        }));
+    }
+
+    /// Under an open file: what it is, and Open / Copy / Close.
+    fn file_footer(&mut self, ui: &mut Ui) {
+        let Some(v) = &self.file else { return };
+        let (mut close, mut open) = (false, false);
+        ui.horizontal(|ui| {
+            ui.weak(format!(
+                "{} · {} line{} · {:.1} KB",
+                v.path.display(),
+                v.lines,
+                if v.lines == 1 { "" } else { "s" },
+                v.bytes as f64 / 1024.0
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.button("Close").clicked();
+                if ui
+                    .button("Copy")
+                    .on_hover_text("Copy the whole file")
+                    .clicked()
+                {
+                    widgets::copy(ui.ctx(), v.text.clone());
+                    widgets::toast("File copied", true);
+                }
+                open = ui
+                    .button("Open…")
+                    .on_hover_text("Open another text file")
+                    .clicked();
+            });
+        });
+        if open {
+            self.open(ui.ctx());
+        }
+        if close {
+            self.file = None;
+            self.on_file = false;
+        }
     }
 
     /// Under the notes: counts, what's redacted, autosave, and the ways out.
@@ -603,7 +752,7 @@ impl NotesTool {
             ui.weak(saved).on_hover_text(
                 path().map_or("No profile folder".into(), |p| p.display().to_string()),
             );
-            if ui.available_size_before_wrap().x <= 280.0 {
+            if ui.available_size_before_wrap().x <= 340.0 {
                 ui.end_row();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -640,6 +789,13 @@ impl NotesTool {
                         widgets::toast("Notes copied", true);
                     }
                 });
+                if ui
+                    .button("Open…")
+                    .on_hover_text("Open a text or config file to read")
+                    .clicked()
+                {
+                    self.open(ui.ctx());
+                }
             });
         });
     }
@@ -820,6 +976,73 @@ impl NotesTool {
     }
 }
 
+/// Font and size menus, laid out right to left; saved when changed.
+fn font_menus(ui: &mut Ui, look: &mut crate::theme::Settings) {
+    let before = (look.notes_font.clone(), look.notes_size);
+    egui::ComboBox::from_id_salt("notes_size")
+        .width(44.0)
+        .selected_text(look.notes_size.to_string())
+        .show_ui(ui, |ui| {
+            for &n in crate::theme::NOTES_SIZES {
+                ui.selectable_value(&mut look.notes_size, n, n.to_string());
+            }
+        })
+        .response
+        .on_hover_text("Text size");
+    egui::ComboBox::from_id_salt("notes_font")
+        .width(130.0)
+        .selected_text(look.notes_font.as_str())
+        .show_ui(ui, |ui| {
+            for name in crate::fonts::names() {
+                ui.selectable_value(&mut look.notes_font, name.to_string(), name);
+            }
+        })
+        .response
+        .on_hover_text("Font (the monospace ones this computer has are listed too)");
+    if (look.notes_font.clone(), look.notes_size) != before {
+        crate::theme::save(look);
+    }
+}
+
+/// An open file, read-only: line numbers, no wrapping, select and copy.
+fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
+    let numbers: String = (1..=v.lines.max(1)).map(|n| format!("{n}\n")).collect();
+    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
+        let mut job = LayoutJob::simple(
+            buf.as_str().to_string(),
+            font.clone(),
+            ui.visuals().text_color(),
+            f32::INFINITY,
+        );
+        job.wrap.max_width = f32::INFINITY;
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    egui::ScrollArea::both()
+        .id_salt("notes_viewer")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(numbers.trim_end())
+                            .font(font.clone())
+                            .color(ui.visuals().weak_text_color()),
+                    )
+                    .selectable(false),
+                );
+                ui.separator();
+                let mut text = v.text.as_str();
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .font(font.clone())
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY)
+                        .layouter(&mut layouter),
+                );
+            });
+        });
+}
+
 /// Editor colouring: headings, list markers and code, and a highlight on
 /// every value that will be redacted.
 pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontId) -> LayoutJob {
@@ -934,6 +1157,9 @@ mod tests {
             ov: Default::default(),
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            file: None,
+            on_file: false,
+            opening: None,
         }
     }
 
@@ -946,6 +1172,48 @@ mod tests {
             CCursor::new(CharIndex(at + what.chars().count())),
         )));
         state.store(ctx, id);
+    }
+
+    #[test]
+    fn opens_text_files_and_refuses_binary_ones() {
+        let dir = std::env::temp_dir().join(format!("is-alive-view-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |n: &str, d: &[u8]| {
+            let p = dir.join(n);
+            std::fs::write(&p, d).unwrap();
+            p
+        };
+        let v = read_text(&write(
+            "a.cfg",
+            b"\xef\xbb\xbfhostname fw1\r\ninterface X0\r\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            (v.text.as_str(), v.lines),
+            ("hostname fw1\ninterface X0\n", 2)
+        );
+        let mut wide = vec![0xff, 0xfe];
+        wide.extend(
+            "[global]\nname=x\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        assert_eq!(
+            read_text(&write("b.ini", &wide)).unwrap().text,
+            "[global]\nname=x\n"
+        );
+        let e = read_text(&write("c.bin", b"MZ\x90\x00\x03")).err().unwrap();
+        assert!(e.contains("not a text file"), "{e}");
+        let big = write("d.log", &vec![b'a'; (VIEW_MAX + 1) as usize]);
+        assert!(read_text(&big).err().unwrap().contains("up to 5 MB"));
+        // Drawn without trouble, line numbers and all.
+        let v = read_text(&write("e.txt", b"one\ntwo\nthree")).unwrap();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            viewer(ui, &v, &FontId::monospace(13.0));
+        });
+        out.textures_delta.clear();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

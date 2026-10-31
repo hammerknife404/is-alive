@@ -39,9 +39,9 @@ impl HostInfo {
             .collect()
     }
 
-    /// A Markdown block for the Notes tab, stamped with `when`.
-    pub fn markdown(&self, when: &str) -> String {
-        let mut s = format!("**This machine** · {when}\n");
+    /// A Markdown block for the Notes tab.
+    pub fn markdown(&self) -> String {
+        let mut s = "**This machine**\n".to_string();
         for (k, v) in self.fields() {
             s += &format!("- {k}: {v}\n");
         }

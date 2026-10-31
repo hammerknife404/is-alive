@@ -319,15 +319,15 @@ pub struct Settings {
     /// Show the Map tab's accuracy note (until it's closed).
     pub map_note: bool,
     pub backdrop: Source,
-    /// Notes in a monospace font (else sans), and its size in points.
-    pub notes_mono: bool,
+    /// Notes and text-viewer font (see `fonts`) and size in points.
+    pub notes_font: String,
     pub notes_size: u8,
     /// Share of the width the Notes editor takes in Split view.
     pub notes_split: f32,
 }
 
 /// Font sizes the Notes tab offers.
-pub const NOTES_SIZES: &[u8] = &[10, 11, 12, 13, 14, 16, 18, 20, 24];
+pub const NOTES_SIZES: &[u8] = &[8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -337,7 +337,7 @@ impl Default for Settings {
             glow: true,
             size: None,
             map_note: true,
-            notes_mono: true,
+            notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
             notes_split: 0.5,
             backdrop: Source::Scene,
@@ -357,7 +357,14 @@ impl Settings {
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
-                "notes_font" => s.notes_mono = v.trim() != "sans",
+                // 0.18 builds wrote sans / mono.
+                "notes_font" => {
+                    s.notes_font = match v.trim() {
+                        "sans" => crate::fonts::SANS.into(),
+                        "mono" => crate::fonts::MONO.into(),
+                        name => name.into(),
+                    }
+                }
                 "notes_split" => {
                     if let Ok(f) = v.trim().parse::<f32>() {
                         s.notes_split = f.clamp(0.2, 0.8);
@@ -406,8 +413,8 @@ impl Settings {
         if !self.map_note {
             s += "map_note=0\n";
         }
-        if !self.notes_mono {
-            s += "notes_font=sans\n";
+        if self.notes_font != crate::fonts::MONO {
+            s += &format!("notes_font={}\n", self.notes_font);
         }
         if self.notes_split != 0.5 {
             s += &format!("notes_split={:.3}\n", self.notes_split);
@@ -587,11 +594,15 @@ mod tests {
             size: Some((1280, 800)),
             map_note: false,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
-            notes_mono: false,
+            notes_font: "DejaVu Sans Mono".into(),
             notes_size: 16,
             notes_split: 0.625,
         };
         assert_eq!(Settings::parse(&s.text()), s);
+        assert_eq!(
+            Settings::parse("notes_font=sans\n").notes_font,
+            crate::fonts::SANS
+        );
         assert_eq!(Settings::parse(""), Settings::default());
         // A file from 0.10.0 had only the theme line.
         let old = Settings::parse("theme=miami\n");

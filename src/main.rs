@@ -2,6 +2,7 @@
 
 mod backdrop;
 mod bundle;
+mod fonts;
 mod job;
 mod log;
 mod map;
@@ -851,6 +852,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
+            net::clock::warm();
             let mut app = App {
                 tab: Tab::Ping,
                 shown_tab: Tab::Ping,
