@@ -81,7 +81,7 @@ const PROBLEMS_ID: &str = "bundle_known_problems";
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
-machine: passwords, keys, tokens and patient details are [REDACTED: …] markers. Context and \
+machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
 observations; use what bears on the map and its findings.";
 
 impl BundleTool {
@@ -160,7 +160,12 @@ impl BundleTool {
                             .into_iter()
                             .map(|h| h.span)
                             .collect();
-                        let mut job = crate::tools::notes::highlight(ui, text, &spans);
+                        let mut job = crate::tools::notes::highlight(
+                            ui,
+                            text,
+                            &spans,
+                            &eframe::egui::FontId::monospace(13.0),
+                        );
                         job.wrap.max_width = wrap;
                         ui.fonts_mut(|f| f.layout_job(job))
                     };

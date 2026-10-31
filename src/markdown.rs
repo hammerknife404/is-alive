@@ -3,17 +3,17 @@
 //! and [links](…) inline. Links are shown, not followed. Redaction markers
 //! are picked out so it's plain what was removed.
 
-use eframe::egui::{self, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
+use eframe::egui::{self, FontFamily, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
 
 /// Inline spans of one line, styled.
-fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
+fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> LayoutJob {
     let vis = ui.visuals();
     let body = if strong {
         vis.strong_text_color()
     } else {
         vis.text_color()
     };
-    let base = TextFormat::simple(FontId::proportional(size), body);
+    let base = TextFormat::simple(FontId::new(size, family.clone()), body);
     let mut job = LayoutJob::default();
     let mut rest = text;
     let mut bold = false;
@@ -50,11 +50,11 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
             f.background = vis.code_bg_color;
             job.append(&r[..end], 0.0, f);
             rest = &r[end + 1..];
-        } else if rest.starts_with("[REDACTED: ")
+        } else if (rest.starts_with("[🔑 REDACTED: ") || rest.starts_with("[REDACTED: "))
             && let Some(end) = rest.find(']')
         {
             let warn = crate::widgets::warn();
-            let mut f = TextFormat::simple(FontId::proportional(size * 0.9), warn);
+            let mut f = TextFormat::simple(FontId::new(size * 0.9, family.clone()), warn);
             f.background = warn.gamma_multiply(0.15);
             job.append(&rest[..=end], 0.0, f);
             rest = &rest[end + 1..];
@@ -108,10 +108,11 @@ fn item(line: &str) -> Option<(usize, Item<'_>)> {
     None
 }
 
-/// Draw `text`. Returns the line of a task box that was clicked.
-pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
+/// Draw `text` in `font` (headings scale from its size). Returns the line
+/// of a task box that was clicked.
+pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
     let mut toggled = None;
-    let body = egui::TextStyle::Body.resolve(ui.style()).size;
+    let body = font.size;
     let mut lines = text.lines().enumerate().peekable();
     while let Some((n, line)) = lines.next() {
         let t = line.trim_start();
@@ -129,7 +130,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                 .inner_margin(6)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(code.join("\n")).monospace());
+                    ui.label(RichText::new(code.join("\n")).monospace().size(body * 0.95));
                 });
             continue;
         }
@@ -145,7 +146,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
         if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
             let size = body * [1.6, 1.35, 1.15, 1.05, 1.0, 1.0][hashes - 1];
             ui.add_space(body * 0.3);
-            ui.label(inline(ui, t[hashes..].trim(), size, true));
+            ui.label(inline(ui, t[hashes..].trim(), size, true, &font.family));
             if hashes <= 2 {
                 let r = ui.min_rect();
                 let y = ui.cursor().top();
@@ -164,7 +165,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                     ui.allocate_exact_size(egui::vec2(3.0, body * 1.3), egui::Sense::hover());
                 ui.painter()
                     .rect_filled(r, 1, crate::theme::accent().gamma_multiply(0.6));
-                ui.label(inline(ui, q.trim(), body, false));
+                ui.label(inline(ui, q.trim(), body, false, &font.family));
             });
             continue;
         }
@@ -173,19 +174,19 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                 ui.add_space(8.0 + indent as f32 * 6.0);
                 match it {
                     Item::Bullet(r) => {
-                        ui.label(RichText::new("•").color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false));
+                        ui.label(RichText::new("•").size(body).color(crate::theme::accent()));
+                        ui.label(inline(ui, r, body, false, &font.family));
                     }
                     Item::Number(num, r) => {
-                        ui.label(RichText::new(num).color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false));
+                        ui.label(RichText::new(num).size(body).color(crate::theme::accent()));
+                        ui.label(inline(ui, r, body, false, &font.family));
                     }
                     Item::Task(done, r) => {
                         let mut d = done;
                         if ui.checkbox(&mut d, "").clicked() {
                             toggled = Some(n);
                         }
-                        let mut job = inline(ui, r, body, false);
+                        let mut job = inline(ui, r, body, false, &font.family);
                         if done {
                             for s in &mut job.sections {
                                 s.format.strikethrough =
@@ -199,7 +200,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
             });
             continue;
         }
-        ui.label(inline(ui, line, body, false));
+        ui.label(inline(ui, line, body, false, &font.family));
     }
     toggled
 }

@@ -265,7 +265,13 @@ pub struct Settings {
     /// Show the Map tab's accuracy note (until it's closed).
     pub map_note: bool,
     pub backdrop: Source,
+    /// Notes in a monospace font (else sans), and its size in points.
+    pub notes_mono: bool,
+    pub notes_size: u8,
 }
+
+/// Font sizes the Notes tab offers.
+pub const NOTES_SIZES: &[u8] = &[10, 11, 12, 13, 14, 16, 18, 20, 24];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -275,6 +281,8 @@ impl Default for Settings {
             glow: true,
             size: None,
             map_note: true,
+            notes_mono: true,
+            notes_size: 13,
             backdrop: Source::Scene,
         }
     }
@@ -292,6 +300,12 @@ impl Settings {
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                "notes_font" => s.notes_mono = v.trim() != "sans",
+                "notes_size" => {
+                    if let Ok(n) = v.trim().parse::<u8>() {
+                        s.notes_size = n.clamp(8, 32);
+                    }
+                }
                 "size" => {
                     s.size = v
                         .trim()
@@ -329,6 +343,12 @@ impl Settings {
         }
         if !self.map_note {
             s += "map_note=0\n";
+        }
+        if !self.notes_mono {
+            s += "notes_font=sans\n";
+        }
+        if self.notes_size != 13 {
+            s += &format!("notes_size={}\n", self.notes_size);
         }
         s
     }
@@ -473,6 +493,8 @@ mod tests {
             size: Some((1280, 800)),
             map_note: false,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
+            notes_mono: false,
+            notes_size: 16,
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(Settings::parse(""), Settings::default());

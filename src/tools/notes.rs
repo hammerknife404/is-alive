@@ -281,7 +281,15 @@ impl NotesTool {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
+    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo, look: &mut crate::theme::Settings) {
+        let font = FontId::new(
+            look.notes_size as f32,
+            if look.notes_mono {
+                egui::FontFamily::Monospace
+            } else {
+                egui::FontFamily::Proportional
+            },
+        );
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         let hits = hits_for(&self.cache, &self.text, &self.ov);
@@ -290,7 +298,7 @@ impl NotesTool {
         }
         self.known_hits = hits.len();
 
-        self.toolbar(ui, info, &hits);
+        self.toolbar(ui, info, &hits, &font, look);
         self.status(ui, &hits, now);
         widgets::error(ui, &self.err);
         ui.separator();
@@ -302,20 +310,28 @@ impl NotesTool {
             self.view
         };
         match view {
-            View::Edit => self.editor(ui),
-            View::Preview => self.preview(ui),
+            View::Edit => self.editor(ui, &font),
+            View::Preview => self.preview(ui, &font),
             View::Split => {
                 ui.columns(2, |c| {
-                    self.editor(&mut c[0]);
-                    self.preview(&mut c[1]);
+                    self.editor(&mut c[0], &font);
+                    self.preview(&mut c[1], &font);
                 });
             }
         }
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, info: &HostInfo, hits: &[Hit]) {
+    fn toolbar(
+        &mut self,
+        ui: &mut Ui,
+        info: &HostInfo,
+        hits: &[Hit],
+        font: &FontId,
+        look: &mut crate::theme::Settings,
+    ) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
+        // Wraps onto a second row when the window is narrow.
+        ui.horizontal_wrapped(|ui| {
             for (v, name, tip) in [
                 (View::Edit, "Edit", "Just the editor"),
                 (View::Split, "Split", "Editor and preview side by side"),
@@ -408,31 +424,37 @@ Put the cursor on a highlighted value to unredact it instead.",
                 self.apply(&ctx, p);
             }
             self.overrides_menu(ui);
-            if ui
-                .button("Secret")
-                .on_hover_text(
-                    "Wrap the selection (or start) a ```secret block: everything inside is always \
-redacted, whatever it looks like. For door codes, PINs and anything detection would miss.",
-                )
-                .clicked()
-            {
-                self.edit_at_cursor(&ctx, |sel| {
-                    let body = if sel.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{}\n", sel.trim_end_matches('\n'))
-                    };
-                    let at = "```secret\n".chars().count() + body.chars().count();
-                    (format!("```secret\n{body}```\n"), at)
-                });
-            }
             let mut emoji = None;
+            ui.separator();
+            let before = (look.notes_mono, look.notes_size);
+            egui::ComboBox::from_id_salt("notes_font")
+                .width(64.0)
+                .selected_text(if look.notes_mono { "Mono" } else { "Sans" })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut look.notes_mono, false, "Sans");
+                    ui.selectable_value(&mut look.notes_mono, true, "Mono");
+                })
+                .response
+                .on_hover_text("Font for the editor and preview; code stays monospace");
+            egui::ComboBox::from_id_salt("notes_size")
+                .width(44.0)
+                .selected_text(look.notes_size.to_string())
+                .show_ui(ui, |ui| {
+                    for &n in crate::theme::NOTES_SIZES {
+                        ui.selectable_value(&mut look.notes_size, n, n.to_string());
+                    }
+                })
+                .response
+                .on_hover_text("Font size; emoji scale with it");
+            if (look.notes_mono, look.notes_size) != before {
+                crate::theme::save(look);
+            }
             ui.menu_button("😀", |ui| {
                 egui::Grid::new("notes_emoji")
                     .spacing([2.0, 2.0])
                     .show(ui, |ui| {
                         for (i, e) in EMOJI.iter().enumerate() {
-                            if ui.button(RichText::new(*e).size(16.0)).clicked() {
+                            if ui.button(RichText::new(*e).size(font.size + 3.0)).clicked() {
                                 emoji = Some(*e);
                                 ui.close();
                             }
@@ -473,7 +495,7 @@ redacted, whatever it looks like. For door codes, PINs and anything detection wo
                 let n = line.chars().count();
                 self.edit_at_cursor(&ctx, |_| (line, n));
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut right = |ui: &mut Ui| {
                 let empty = self.is_empty();
                 if widgets::confirm_button(ui, "notes_clear", !empty, "Clear", "Empty the notes") {
                     self.text.clear();
@@ -483,7 +505,7 @@ redacted, whatever it looks like. For door codes, PINs and anything detection wo
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui
                         .button("Save .md…")
-                        .on_hover_text("Save the sanitized notes as a Markdown file")
+                        .on_hover_text("Save the notes as a Markdown file, redactions applied")
                         .clicked()
                     {
                         widgets::save_file(
@@ -495,11 +517,11 @@ redacted, whatever it looks like. For door codes, PINs and anything detection wo
                     }
                     if ui
                         .button("Copy")
-                        .on_hover_text("Copy the sanitized notes")
+                        .on_hover_text("Copy the notes, redactions applied")
                         .clicked()
                     {
                         widgets::copy(ui.ctx(), self.sanitized().0);
-                        widgets::toast("Notes copied (sanitized)", true);
+                        widgets::toast("Notes copied (redacted)", true);
                     }
                     if widgets::confirm_button(
                         ui,
@@ -513,7 +535,14 @@ pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
                         widgets::toast("Notes copied UNREDACTED: secrets included", false);
                     }
                 });
-            });
+            };
+            // Right-aligned when the row has room for it; otherwise it
+            // wraps with the rest instead of drawing over it.
+            if ui.available_size_before_wrap().x > 280.0 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+            } else {
+                right(ui);
+            }
         });
     }
 
@@ -527,7 +556,7 @@ pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
         ui.menu_button(format!("By hand ({n})"), |ui| {
             if !self.ov.redact.is_empty() {
                 ui.label(RichText::new("Redacted").strong());
-                ui.weak("Only in memory: after a restart the notes hold the [REDACTED] marker.");
+                ui.weak("Only in memory: after a restart the notes hold the [🔑 REDACTED] marker.");
                 let mut drop = None;
                 for (i, v) in self.ov.redact.iter().enumerate() {
                     ui.horizontal(|ui| {
@@ -597,8 +626,8 @@ pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
             if hits.is_empty() {
                 ui.label(RichText::new("nothing marked to redact").weak().small())
                     .on_hover_text(
-                        "Notes aren't scanned: only what you redact by hand, secret blocks and the \
-secrets of a loaded backup or export are replaced.",
+                        "Notes aren't scanned: only what you redact by hand and the secrets of a \
+loaded backup or export are replaced.",
                     );
             } else {
                 let age = (now - self.flash) as f32;
@@ -616,9 +645,10 @@ secrets of a loaded backup or export are replaced.",
                     .inner_margin(egui::Margin::symmetric(6, 1))
                     .show(ui, |ui| ui.label(text))
                     .response;
-                let mut tip = "Replaced with [REDACTED: …] in everything that leaves the editor: \
+                let mut tip =
+                    "Replaced with [🔑 REDACTED: …] in everything that leaves the editor: \
 autosave, Copy, Save and Site Bundle."
-                    .to_string();
+                        .to_string();
                 for h in hits.iter().take(12) {
                     let s: String = self.text[h.span.clone()].chars().take(3).collect();
                     tip += &format!("\n• {}: {s}…", h.kind.label());
@@ -634,15 +664,15 @@ autosave, Copy, Save and Site Bundle."
                     (None, None) => "Autosaved as you type".to_string(),
                 };
                 ui.weak(label).on_hover_text(format!(
-                    "Saved to {} with your redactions, secret blocks and loaded-config secrets \
-replaced; everything else is saved as written.",
+                    "Saved to {} with your redactions and loaded-config secrets replaced; \
+everything else is saved as written.",
                     path().map_or("(no profile folder)".into(), |p| p.display().to_string())
                 ));
             });
         });
     }
 
-    fn editor(&mut self, ui: &mut Ui) {
+    fn editor(&mut self, ui: &mut Ui, font: &FontId) {
         let id = egui::Id::new(EDITOR_ID);
         let focused = ui.memory(|m| m.has_focus(id));
         let ctx = ui.ctx().clone();
@@ -675,7 +705,7 @@ replaced; everything else is saved as written.",
                 .into_iter()
                 .map(|h| h.span)
                 .collect();
-            let mut job = highlight(ui, text, if show { &hits } else { &[] });
+            let mut job = highlight(ui, text, if show { &hits } else { &[] }, font);
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
@@ -691,8 +721,7 @@ replaced; everything else is saved as written.",
                     .lock_focus(true)
                     .hint_text(
                         "Site notes in Markdown: # headings, - lists, - [ ] tasks, **bold**, `code`.\n\
-Select text and Redact (Ctrl+R) to keep it out of saves, copies and bundles, or put it in a \
-Secret block.",
+Select text and Redact (Ctrl+R) to keep it out of saves, copies and bundles.",
                     )
                     .layouter(&mut layouter)
                     .show(ui)
@@ -741,7 +770,7 @@ Secret block.",
         state.store(ctx, id);
     }
 
-    fn preview(&mut self, ui: &mut Ui) {
+    fn preview(&mut self, ui: &mut Ui, font: &FontId) {
         let (clean, _) = self.sanitized();
         egui::ScrollArea::vertical()
             .id_salt("notes_preview_scroll")
@@ -752,7 +781,7 @@ Secret block.",
                     return;
                 }
                 // Line numbers match the raw text, so a ticked box maps back.
-                if let Some(line) = markdown::render(ui, &clean) {
+                if let Some(line) = markdown::render(ui, &clean, font) {
                     markdown::toggle_task(&mut self.text, line);
                     let now = ui.input(|i| i.time);
                     self.changed(now);
@@ -763,7 +792,7 @@ Secret block.",
 
 /// Editor colouring: headings, list markers and code, and a highlight on
 /// every value that will be redacted.
-pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
+pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontId) -> LayoutJob {
     const PLAIN: u8 = 0;
     const HEAD: u8 = 1;
     const MARK: u8 = 2;
@@ -818,7 +847,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob
         }
     }
     let vis = ui.visuals();
-    let font = FontId::monospace(13.0);
+    let font = font.clone();
     let warn = widgets::warn();
     let mut job = LayoutJob::default();
     let mut start = 0;
@@ -838,7 +867,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob
             },
         );
         if s & !HIT == HEAD {
-            f.font_id = FontId::monospace(14.0);
+            f.font_id = FontId::new(font.size + 1.0, font.family.clone());
         }
         if s & !HIT == CODE {
             f.background = vis.code_bg_color;
@@ -891,7 +920,7 @@ mod tests {
 
     #[test]
     fn secrets_from_a_loaded_backup_are_redacted() {
-        let mut n = notes("staff wifi: see board. Bobcat2019 works\n```secret\ngate 4471\n```");
+        let mut n = notes("staff wifi: see board. Bobcat2019 works");
         assert!(n.sanitized().0.contains("Bobcat2019"));
         n.set_known(&["Bobcat2019".into()], 1.0);
         assert!(n.dirty.is_some(), "the saved copy is rewritten");
@@ -900,7 +929,7 @@ mod tests {
             !clean.contains("Bobcat2019") && !clean.contains("4471"),
             "{clean}"
         );
-        assert!(clean.contains("[REDACTED: from config]"));
+        assert!(clean.contains("[🔑 REDACTED: from config]"));
     }
 
     #[test]
@@ -922,7 +951,7 @@ mod tests {
         assert!(
             n.sanitized()
                 .0
-                .starts_with("Lockbox [REDACTED: by hand], again [REDACTED: by hand]")
+                .starts_with("Lockbox [🔑 REDACTED: by hand], again [🔑 REDACTED: by hand]")
         );
 
         // Cursor on a config value that's fine to show: Unredact keeps it.
@@ -951,7 +980,7 @@ mod tests {
             let t = "# Héading\n- pass: ünïcode\n`x` done";
             let hits: Vec<_> = redact::find(t).into_iter().map(|h| h.span).collect();
             assert_eq!(hits.len(), 1);
-            let job = highlight(ui, t, &hits);
+            let job = highlight(ui, t, &hits, &FontId::monospace(13.0));
             assert_eq!(job.text, t);
         });
         out.textures_delta.clear();

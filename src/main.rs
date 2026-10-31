@@ -93,7 +93,7 @@ where the data has them, and findings. Drag to pan, scroll to zoom, click a devi
     (
         Tab::Notes,
         "Notes",
-        "Tech notes in Markdown, autosaved. Redact by hand or with a secret block; a loaded \
+        "Tech notes in Markdown, autosaved. Redact by hand; a loaded \
 backup's or export's secrets are redacted wherever they appear.",
     ),
     (
@@ -428,7 +428,7 @@ impl App {
                 );
                 self.map_action(ui.ctx(), act);
             }
-            Tab::Notes => self.notes.ui(ui, &self.info),
+            Tab::Notes => self.notes.ui(ui, &self.info, &mut self.look),
             Tab::Results => self.results_ui(ui),
         }
     }

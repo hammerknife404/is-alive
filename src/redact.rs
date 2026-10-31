@@ -1,7 +1,7 @@
 //! Redaction for free text.
 //!
 //! The technician's own text (tech notes, known problems) is redacted only
-//! where they say so: values picked by hand, secret blocks, and the secret
+//! where they say so: values picked by hand and the secret
 //! values of the backups and exports loaded in Config Export
 //! (`find_with` / `sanitize_with`). Nothing is guessed from patterns there.
 //!
@@ -30,8 +30,6 @@ pub enum Kind {
     Manual,
     /// A secret value from a loaded backup or export.
     Known,
-    /// Inside a ```secret block.
-    Block,
 }
 
 impl Kind {
@@ -49,7 +47,6 @@ impl Kind {
             Kind::Account => "account numbers",
             Kind::Manual => "picked by hand",
             Kind::Known => "from the config",
-            Kind::Block => "secret blocks",
         }
     }
 
@@ -67,7 +64,6 @@ impl Kind {
             Kind::Account => "account number",
             Kind::Manual => "by hand",
             Kind::Known => "from config",
-            Kind::Block => "secret block",
         }
     }
 }
@@ -104,17 +100,10 @@ static ICD10: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b[A-TV-Z][0-9][0-9AB](?:\.[0-9A-TV-Z]{1,4})?\b").expect("valid pattern")
 });
 
-/// A fenced block opened with ```secret: everything inside goes, and so
-/// does text written on the fence lines themselves (```secret alarm 9090,
-/// or a closing ```door 4471), since that's where people type it.
-static SECRET_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ms)^[ \t]*```secret([^\n]*)\n?(.*?)(?:^[ \t]*```([^\n]*)$|\z)")
-        .expect("valid pattern")
-});
-
-/// What `sanitize` leaves behind; never redacted again.
+/// What `sanitize` leaves behind; never redacted again. Notes saved before
+/// the key was added hold the plain `[REDACTED: …]` form.
 static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[REDACTED: [^\]\n]*\]").expect("valid pattern"));
+    LazyLock::new(|| Regex::new(r"\[(?:🔑 )?REDACTED: [^\]\n]*\]").expect("valid pattern"));
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     // A value: quoted, or a run of non-space characters.
@@ -656,7 +645,7 @@ pub fn find(text: &str) -> Vec<Hit> {
     detect(text)
 }
 
-/// What the technician asked for: hand picks, secret blocks and the loaded
+/// What the technician asked for: hand picks and the loaded
 /// configs' secrets, minus whatever they chose to keep. No pattern rules.
 pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
     let allowed = |span: &Range<usize>| ov.allow.iter().any(|a| a == text[span.clone()].trim());
@@ -681,19 +670,6 @@ pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
                 hits.push(Hit {
                     span,
                     kind: Kind::Known,
-                });
-            }
-        }
-    }
-    for c in SECRET_BLOCK.captures_iter(text) {
-        for m in [c.get(1), c.get(2), c.get(3)].into_iter().flatten() {
-            let v = m.as_str();
-            let lead = v.len() - v.trim_start().len();
-            let span = m.start() + lead..m.start() + v.trim_end().len();
-            if !span.is_empty() && fresh(&span) {
-                hits.push(Hit {
-                    span,
-                    kind: Kind::Block,
                 });
             }
         }
@@ -787,7 +763,7 @@ fn merge(mut hits: Vec<Hit>) -> Vec<Hit> {
     out
 }
 
-/// The text with every hit replaced by `[REDACTED: kind]`. Line breaks
+/// The text with every hit replaced by `[🔑 REDACTED: kind]`. Line breaks
 /// inside a hit are kept, so line N of the result is line N of the input.
 pub fn sanitize(text: &str) -> (String, Vec<Hit>) {
     replace(text, find(text))
@@ -803,7 +779,7 @@ fn replace(text: &str, hits: Vec<Hit>) -> (String, Vec<Hit>) {
     let mut at = 0;
     for h in &hits {
         out += &text[at..h.span.start];
-        out += &format!("[REDACTED: {}]", h.kind.label());
+        out += &format!("[🔑 REDACTED: {}]", h.kind.label());
         out.extend(text[h.span.clone()].chars().filter(|&c| c == '\n'));
         at = h.span.end;
     }
@@ -840,41 +816,41 @@ mod tests {
     fn credentials() {
         assert_eq!(
             red("admin password: hunter2!"),
-            "admin password: [REDACTED: password]"
+            "admin password: [🔑 REDACTED: password]"
         );
-        assert_eq!(red("Password hunter2"), "Password [REDACTED: password]");
+        assert_eq!(red("Password hunter2"), "Password [🔑 REDACTED: password]");
         assert_eq!(
             red("wifi password is \"Spring 2026!\""),
-            "wifi password is [REDACTED: password]"
+            "wifi password is [🔑 REDACTED: password]"
         );
-        assert_eq!(red("PSK=abc123xyz"), "PSK=[REDACTED: password]");
+        assert_eq!(red("PSK=abc123xyz"), "PSK=[🔑 REDACTED: password]");
         assert_eq!(
             red("snmp community: public"),
-            "snmp community: [REDACTED: password]"
+            "snmp community: [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("u: admin p: Tr0ub4dor"),
-            "u: admin p: [REDACTED: password]"
+            "u: admin p: [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("https://bob:s3cret@nas.local/x"),
-            "https://bob:[REDACTED: password]@nas.local/x"
+            "https://bob:[🔑 REDACTED: password]@nas.local/x"
         );
         // Read like a sentence: the value after "was", not "was".
         assert_eq!(
             red("There is no way her password was hunter2."),
-            "There is no way her password was [REDACTED: password]."
+            "There is no way her password was [🔑 REDACTED: password]."
         );
         let r = red("password for the router is Spring2026!");
-        assert_eq!(r, "password for the router is [REDACTED: password]");
-        assert_eq!(red("pw:x1 then"), "pw:[REDACTED: password] then");
+        assert_eq!(r, "password for the router is [🔑 REDACTED: password]");
+        assert_eq!(red("pw:x1 then"), "pw:[🔑 REDACTED: password] then");
         assert_eq!(
             red("the password -> Tr0ub4dor"),
-            "the password -> [REDACTED: password]"
+            "the password -> [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("set the new password to Winter25"),
-            "set the new password to [REDACTED: password]"
+            "set the new password to [🔑 REDACTED: password]"
         );
         assert_eq!(red("password reset done"), "password reset done");
         assert_eq!(
@@ -887,7 +863,7 @@ mod tests {
         );
         assert_eq!(
             red("the api key was abc123"),
-            "the api key was [REDACTED: password]"
+            "the api key was [🔑 REDACTED: password]"
         );
         // Not credentials.
         assert_eq!(
@@ -902,10 +878,10 @@ mod tests {
         let pem =
             "before\n-----BEGIN PRIVATE KEY-----\nMIIEv\nabc\n-----END PRIVATE KEY-----\nafter";
         let (s, h) = sanitize(pem);
-        assert_eq!(s, "before\n[REDACTED: key or certificate]\n\n\n\nafter");
+        assert_eq!(s, "before\n[🔑 REDACTED: key or certificate]\n\n\n\nafter");
         assert_eq!(s.lines().count(), pem.lines().count(), "line numbers kept");
         assert_eq!(h.len(), 1);
-        assert!(red("api AKIAIOSFODNN7EXAMPLE here").contains("[REDACTED: token]"));
+        assert!(red("api AKIAIOSFODNN7EXAMPLE here").contains("[🔑 REDACTED: token]"));
         assert!(red("ghp_abcdefghijklmnopqrstuvwxyz0123456789").contains("REDACTED"));
         assert!(red("k 3f9a1c0e7b2d4a6f8e0c1b3d5f7a9c2e4b6d8f0a").contains("REDACTED"));
         // Long but not random: a path or a word run stays.
@@ -921,11 +897,11 @@ mod tests {
 
     #[test]
     fn personal_identifiers() {
-        assert_eq!(red("SSN 123-45-6789"), "SSN [REDACTED: SSN]");
-        assert_eq!(red("call 123-45-6789"), "call [REDACTED: SSN]");
+        assert_eq!(red("SSN 123-45-6789"), "SSN [🔑 REDACTED: SSN]");
+        assert_eq!(red("call 123-45-6789"), "call [🔑 REDACTED: SSN]");
         assert_eq!(
             red("card 4111 1111 1111 1111 ok"),
-            "card [REDACTED: card number] ok"
+            "card [🔑 REDACTED: card number] ok"
         );
         assert_eq!(
             red("serial 1234 5678 9012 3456"),
@@ -934,17 +910,17 @@ mod tests {
         );
         assert_eq!(
             red("Patient: Jane Q. Doe\nnext"),
-            "Patient: [REDACTED: patient detail]\nnext"
+            "Patient: [🔑 REDACTED: patient detail]\nnext"
         );
-        assert_eq!(red("DOB 01/02/1980"), "DOB [REDACTED: patient detail]");
-        assert_eq!(red("MRN# 00123456"), "MRN# [REDACTED: patient detail]");
+        assert_eq!(red("DOB 01/02/1980"), "DOB [🔑 REDACTED: patient detail]");
+        assert_eq!(red("MRN# 00123456"), "MRN# [🔑 REDACTED: patient detail]");
         assert_eq!(red("patient portal is down"), "patient portal is down");
         assert_eq!(
             red("mail jane.doe@clinic.org now"),
-            "mail [REDACTED: email] now"
+            "mail [🔑 REDACTED: email] now"
         );
-        assert_eq!(red("(555) 123-4567"), "[REDACTED: phone]");
-        assert_eq!(red("+1 555.123.4567"), "[REDACTED: phone]");
+        assert_eq!(red("(555) 123-4567"), "[🔑 REDACTED: phone]");
+        assert_eq!(red("+1 555.123.4567"), "[🔑 REDACTED: phone]");
     }
 
     /// A real-world note's shape (names and values made up).
@@ -977,9 +953,9 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Strong anywhere; weaker only alone on a line.
         assert_eq!(
             red("login jsmith / Spring26$ ok"),
-            "login jsmith / [REDACTED: password] ok"
+            "login jsmith / [🔑 REDACTED: password] ok"
         );
-        assert_eq!(red("Welcome1\n"), "[REDACTED: password]\n");
+        assert_eq!(red("Welcome1\n"), "[🔑 REDACTED: password]\n");
         for t in [
             "Win11",
             "Office 365 E3",
@@ -1009,7 +985,7 @@ give it a password when prompt comes up. Import it the same - Enter password you
         let (clean, hits) = sanitize_with(t, &ov);
         assert_eq!(
             clean,
-            "Lockbox code [REDACTED: by hand] at the door. License Office365\nlockbox again: [REDACTED: by hand]"
+            "Lockbox code [🔑 REDACTED: by hand] at the door. License Office365\nlockbox again: [🔑 REDACTED: by hand]"
         );
         assert_eq!(summary(&hits), "2 redacted: 2 picked by hand");
 
@@ -1036,19 +1012,19 @@ give it a password when prompt comes up. Import it the same - Enter password you
     fn payment_address_and_diagnosis() {
         assert_eq!(
             red("Card 4111 1111 1111 1111 exp 09/29 cvv 123"),
-            "Card [REDACTED: card number] exp [REDACTED: card number] cvv [REDACTED: card number]"
+            "Card [🔑 REDACTED: card number] exp [🔑 REDACTED: card number] cvv [🔑 REDACTED: card number]"
         );
         assert_eq!(
             red("Routing 021000021  Acct 000123456789"),
-            "Routing [REDACTED: account number]  Acct [REDACTED: account number]"
+            "Routing [🔑 REDACTED: account number]  Acct [🔑 REDACTED: account number]"
         );
         assert_eq!(
             red("Lives at 418 Cypress Ln, West Monroe LA 71291"),
-            "Lives at [REDACTED: address]"
+            "Lives at [🔑 REDACTED: address]"
         );
         assert_eq!(
             red("Dx: K02.9, E11.9. Prior anesthesia reaction 2019."),
-            "Dx: [REDACTED: patient detail], [REDACTED: patient detail]. Prior anesthesia reaction 2019."
+            "Dx: [🔑 REDACTED: patient detail], [🔑 REDACTED: patient detail]. Prior anesthesia reaction 2019."
         );
         for kept in [
             "X0 to switch port 24, VLAN 30",
@@ -1065,14 +1041,6 @@ give it a password when prompt comes up. Import it the same - Enter password you
     /// From a technician's redaction test file.
     #[test]
     fn field_test_regressions() {
-        // Text on the closing fence's line is part of the secret.
-        let notes = |t: &str| sanitize_with(t, &Overrides::default()).0;
-        let t = "staff\n```secret\n```Bruh this is the secret!!!\n\nnext section";
-        let r = notes(t);
-        assert!(!r.contains("Bruh"), "{r}");
-        assert!(r.contains("next section"), "{r}");
-        // Text on the opening line too.
-        assert!(!notes("```secret alarm 9090\n```").contains("9090"));
         for kept in [
             "git commit 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
             "Version 1.21.1, build 20261030      (not a date of birth or card)",
@@ -1087,12 +1055,12 @@ give it a password when prompt comes up. Import it the same - Enter password you
         assert!(red("date of birth: 1961-04-12").contains("REDACTED"));
         assert_eq!(
             red("password is hunter2"),
-            "password is [REDACTED: password]"
+            "password is [🔑 REDACTED: password]"
         );
     }
 
     #[test]
-    fn known_secrets_and_secret_blocks() {
+    fn known_secrets() {
         let mut ov = Overrides {
             known: vec!["Bobcat2019".into(), "s3cr3t-ppsk".into()],
             ..Default::default()
@@ -1101,27 +1069,26 @@ give it a password when prompt comes up. Import it the same - Enter password you
         let (clean, hits) = sanitize_with(t, &ov);
         assert_eq!(
             clean,
-            "staff wifi is [REDACTED: from config], guest is Bobcat20190\nppsk [REDACTED: from config]."
+            "staff wifi is [🔑 REDACTED: from config], guest is Bobcat20190\nppsk [🔑 REDACTED: from config]."
         );
         assert_eq!(summary(&hits), "2 redacted: 2 from the config");
         // Unredact wins here too.
         ov.add_allow("Bobcat2019");
         assert_eq!(sanitize_with(t, &ov).1.len(), 1);
 
-        let t = "Door codes:\n```secret\nside door 4471\nalarm 9090\n```\nafter";
-        let (clean, hits) = sanitize_with(t, &Overrides::default());
-        assert_eq!(
-            clean,
-            "Door codes:\n```secret\n[REDACTED: secret block]\n\n```\nafter"
-        );
-        assert_eq!(hits[0].kind, Kind::Block);
-        // Unclosed: to the end.
-        let (clean, _) = sanitize_with("```secret\nall of it", &Overrides::default());
-        assert_eq!(clean, "```secret\n[REDACTED: secret block]");
         // Twice is a no-op.
-        assert_eq!(sanitize_with(&clean, &Overrides::default()).0, clean);
+        let (clean, _) = sanitize_with(t, &ov);
+        assert_eq!(sanitize_with(&clean, &ov).0, clean);
         assert!(secret_value("Bobcat2019") && !secret_value("public") && !secret_value("1"));
         assert!(!secret_value("1234") && secret_value("843921") && !secret_value("$6$salt$hash"));
+    }
+
+    #[test]
+    fn markers_old_and_new_are_left_alone() {
+        let t = "pw: [REDACTED: password] and [🔑 REDACTED: by hand]";
+        assert_eq!(markers(t).len(), 2);
+        assert_eq!(red(t), t);
+        assert_eq!(red("password: x1"), "password: [🔑 REDACTED: password]");
     }
 
     #[test]
