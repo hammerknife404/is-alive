@@ -231,10 +231,8 @@ impl MapView {
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.clients, "Clients").on_hover_text(
-                "Put workstations, phones, printers and other end devices on the map: up to \
-10 under each switch or AP, the rest in one card. Off, each shows as a count on its uplink.",
-            );
+            ui.checkbox(&mut self.clients, "Clients")
+                .on_hover_text("Show end devices (up to 10 per switch or AP)");
             ui.separator();
             let subnet = src
                 .info
@@ -264,14 +262,14 @@ impl MapView {
             ui.add_enabled_ui(!empty, |ui| {
                 if ui
                     .button("Fit")
-                    .on_hover_text("Show the whole map (or double-click the background)")
+                    .on_hover_text("Fit the map (or double-click the background)")
                     .clicked()
                 {
                     fit = true;
                 }
                 if ui
                     .add_enabled(!self.pinned.is_empty(), egui::Button::new("Re-layout"))
-                    .on_hover_text("Put cards you dragged back where the layout wants them")
+                    .on_hover_text("Undo card moves")
                     .clicked()
                 {
                     self.pinned.clear();
@@ -282,7 +280,7 @@ impl MapView {
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui
                         .button("Export SVG…")
-                        .on_hover_text("Save the map as an SVG picture: opens in any browser, drops into a ticket or doc")
+                        .on_hover_text("Save the map as SVG")
                         .clicked()
                     {
                         let pos: Vec<Option<Pos2>> =
@@ -291,7 +289,12 @@ impl MapView {
                             "is-alive-map.svg".into(),
                             "SVG",
                             vec!["svg"],
-                            super::svg::render(&self.map, &pos, &self.lay.stacked, ui.visuals().dark_mode),
+                            super::svg::render(
+                                &self.map,
+                                &pos,
+                                &self.lay.stacked,
+                                ui.visuals().dark_mode,
+                            ),
                         );
                     }
                 });
@@ -460,117 +463,138 @@ impl MapView {
         let n = &self.map.nodes[i];
         let dark = ui.visuals().dark_mode;
         let accent = zone_colour(n.zone, dark);
-        egui::ScrollArea::vertical().id_salt("map_detail_scroll").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.label(RichText::new(&n.kind).monospace().small().weak());
-            ui.label(RichText::new(&n.label).heading());
-            if !n.sub.is_empty() {
-                ui.label(RichText::new(&n.sub).monospace().color(accent));
-            }
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(n.zone.name()).small().color(accent));
-                for c in &n.chips {
-                    ui.label(RichText::new(c).small().weak());
-                }
-            });
-            for f in &n.flags {
-                widgets::warning(ui, f);
-            }
-            ui.separator();
-            if let Some((p, link, port)) = &n.up {
-                ui.horizontal_wrapped(|ui| {
-                    ui.weak("Uplink");
-                    if ui.link(&self.map.nodes[*p].label).clicked() {
-                        *pick = Some(*p);
-                    }
-                    let how = match link {
-                        Link::Backbone => "WAN".to_string(),
-                        Link::Wired => port.clone().unwrap_or_else(|| "wired".into()),
-                        Link::Wireless => "wireless".into(),
-                        Link::Assumed => "assumed".into(),
-                    };
-                    ui.weak(format!("· {how}"));
-                })
-                .response
-                .on_hover_text(match link {
-                    Link::Assumed => "Not in the data: placed here because it answered on this network. A sweep can't see switch ports; a UniFi backup can.",
-                    _ => "From the data",
-                });
-            }
-            let kids: Vec<usize> = (0..self.map.nodes.len())
-                .filter(|&k| self.map.nodes[k].parent() == Some(i))
-                .collect();
-            if !kids.is_empty() {
-                ui.weak(format!("Below it ({})", kids.len()));
-                for &k in kids.iter().take(14) {
-                    if ui.link(&self.map.nodes[k].label).clicked() {
-                        *pick = Some(k);
-                    }
-                }
-                if kids.len() > 14 {
-                    ui.weak(format!("…{} more", kids.len() - 14));
-                }
-            }
-            if !n.details.is_empty() {
-                ui.separator();
-                for d in &n.details {
-                    ui.add(egui::Label::new(RichText::new(d).small()).wrap().selectable(true));
-                }
-            }
-            if !n.seen_by.is_empty() {
+        egui::ScrollArea::vertical()
+            .id_salt("map_detail_scroll")
+            .show(ui, |ui| {
                 ui.add_space(4.0);
-                ui.weak(format!("Seen by: {}", n.seen_by.join(", ")));
-            }
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                if let Some(ip) = n.ip {
-                    let tip = if busy { "Wait for Ping and Port Check to finish" } else { "" };
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Ping"))
-                        .on_hover_text("Ping it 4 times (opens Ping)")
-                        .on_disabled_hover_text(tip)
-                        .clicked()
-                    {
-                        act = Some(Action::Ping(ip.to_string()));
+                ui.label(RichText::new(&n.kind).monospace().small().weak());
+                ui.label(RichText::new(&n.label).heading());
+                if !n.sub.is_empty() {
+                    ui.label(RichText::new(&n.sub).monospace().color(accent));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(n.zone.name()).small().color(accent));
+                    for c in &n.chips {
+                        ui.label(RichText::new(c).small().weak());
                     }
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Port Check"))
-                        .on_hover_text("Check its common ports (opens Port Check)")
-                        .on_disabled_hover_text(tip)
-                        .clicked()
-                    {
-                        act = Some(Action::Ports(ip.to_string()));
+                });
+                for f in &n.flags {
+                    widgets::warning(ui, f);
+                }
+                ui.separator();
+                if let Some((p, link, port)) = &n.up {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.weak("Uplink");
+                        if ui.link(&self.map.nodes[*p].label).clicked() {
+                            *pick = Some(*p);
+                        }
+                        let how = match link {
+                            Link::Backbone => "WAN".to_string(),
+                            Link::Wired => port.clone().unwrap_or_else(|| "wired".into()),
+                            Link::Wireless => "wireless".into(),
+                            Link::Assumed => "assumed".into(),
+                        };
+                        ui.weak(format!("· {how}"));
+                    })
+                    .response
+                    .on_hover_text(match link {
+                        Link::Assumed => {
+                            "Assumed: it answered here, but its switch port isn't known"
+                        }
+                        _ => "From the data",
+                    });
+                }
+                let kids: Vec<usize> = (0..self.map.nodes.len())
+                    .filter(|&k| self.map.nodes[k].parent() == Some(i))
+                    .collect();
+                if !kids.is_empty() {
+                    ui.weak(format!("Below it ({})", kids.len()));
+                    for &k in kids.iter().take(14) {
+                        if ui.link(&self.map.nodes[k].label).clicked() {
+                            *pick = Some(k);
+                        }
                     }
-                    let web = [(443, "https", ""), (8443, "https", ":8443"), (80, "http", "")]
+                    if kids.len() > 14 {
+                        ui.weak(format!("…{} more", kids.len() - 14));
+                    }
+                }
+                if !n.details.is_empty() {
+                    ui.separator();
+                    for d in &n.details {
+                        ui.add(
+                            egui::Label::new(RichText::new(d).small())
+                                .wrap()
+                                .selectable(true),
+                        );
+                    }
+                }
+                if !n.seen_by.is_empty() {
+                    ui.add_space(4.0);
+                    ui.weak(format!("Seen by: {}", n.seen_by.join(", ")));
+                }
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(ip) = n.ip {
+                        let tip = if busy {
+                            "Wait for Ping and Port Check to finish"
+                        } else {
+                            ""
+                        };
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("Ping"))
+                            .on_hover_text("Ping it 4 times (opens Ping)")
+                            .on_disabled_hover_text(tip)
+                            .clicked()
+                        {
+                            act = Some(Action::Ping(ip.to_string()));
+                        }
+                        if ui
+                            .add_enabled(!busy, egui::Button::new("Port Check"))
+                            .on_hover_text("Check its common ports (opens Port Check)")
+                            .on_disabled_hover_text(tip)
+                            .clicked()
+                        {
+                            act = Some(Action::Ports(ip.to_string()));
+                        }
+                        let web = [
+                            (443, "https", ""),
+                            (8443, "https", ":8443"),
+                            (80, "http", ""),
+                        ]
                         .into_iter()
                         .find(|(p, ..)| n.open.contains(p));
-                    if let Some((_, scheme, port)) = web
-                        && ui
-                            .button("Open web page")
-                            .on_hover_text(format!("{scheme}://{ip}{port} in your browser"))
-                            .clicked()
+                        if let Some((_, scheme, port)) = web
+                            && ui
+                                .button("Open web page")
+                                .on_hover_text(format!("{scheme}://{ip}{port} in your browser"))
+                                .clicked()
+                        {
+                            ui.ctx()
+                                .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
+                        }
+                    }
+                    if ui
+                        .button("Copy")
+                        .on_hover_text("Copy this card's details as text")
+                        .clicked()
                     {
-                        ui.ctx()
-                            .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
+                        let mut s = format!("{} ({})\n", n.label, n.kind);
+                        if !n.sub.is_empty() {
+                            s += &format!("{}\n", n.sub);
+                        }
+                        for d in n
+                            .flags
+                            .iter()
+                            .map(|f| format!("Flag: {f}"))
+                            .chain(n.details.iter().cloned())
+                        {
+                            s += &format!("{d}\n");
+                        }
+                        widgets::copy(ui.ctx(), s);
+                        widgets::toast("Card details copied", true);
                     }
-                }
-                if ui
-                    .button("Copy")
-                    .on_hover_text("Copy this card's details as text")
-                    .clicked()
-                {
-                    let mut s = format!("{} ({})\n", n.label, n.kind);
-                    if !n.sub.is_empty() {
-                        s += &format!("{}\n", n.sub);
-                    }
-                    for d in n.flags.iter().map(|f| format!("Flag: {f}")).chain(n.details.iter().cloned()) {
-                        s += &format!("{d}\n");
-                    }
-                    widgets::copy(ui.ctx(), s);
-                    widgets::toast("Card details copied", true);
-                }
+                });
             });
-        });
         act
     }
 
@@ -1166,16 +1190,14 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(egui::Button::new("×").frame(false))
-                        .on_hover_text("Close this note. The footer's ? keeps the Site Bundle tip.")
+                        .on_hover_text("Close this note")
                         .clicked()
                     {
                         act = Some(Action::HideNote);
                     }
                     if ui
                         .small_button("Site Bundle…")
-                        .on_hover_text(
-                            "Wrap the exports, sweep inventory and notes for /mapnetwork",
-                        )
+                        .on_hover_text("Zip it all for /mapnetwork")
                         .clicked()
                     {
                         act = Some(Action::Bundle);
@@ -1222,7 +1244,7 @@ can only place devices under the gateway.",
             }
             if ui
                 .button("Load a UniFi or SonicWall export…")
-                .on_hover_text("Opens Config Export; you can also drop the file on the window")
+                .on_hover_text("Opens Config Export (or drop the file on the window)")
                 .clicked()
             {
                 act = Some(Action::Export);

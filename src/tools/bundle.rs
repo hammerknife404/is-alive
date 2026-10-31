@@ -134,10 +134,7 @@ impl BundleTool {
     }
 
     fn body(&mut self, ui: &mut Ui, src: &Sources, running: bool) {
-        ui.weak(
-            "One zip of everything converted so far, with a manifest that tells /unifidump and \
-/mapnetwork what each file is. Built only from the sanitized exports.",
-        );
+        ui.weak("One zip of everything so far, for /unifidump and /mapnetwork.");
         ui.add_space(4.0);
         egui::Grid::new("bundle_form")
             .num_columns(2)
@@ -189,8 +186,7 @@ impl BundleTool {
                         let clicked = ui
                             .add_enabled(pick.is_some(), egui::Button::new(label).small())
                             .on_hover_text(
-                                "Redact the selected text, or keep the highlighted value under \
-the cursor (Ctrl+R). Values redacted or kept in Notes apply here too.",
+                                "Hide the selected text (Ctrl+R). Notes' redactions apply here too",
                             )
                             .clicked();
                         if (clicked || shortcut)
@@ -218,11 +214,8 @@ the cursor (Ctrl+R). Values redacted or kept in Notes apply here too.",
         ui.horizontal(|ui| {
             export::clients_choice(ui, "bundle_clients", &mut self.clients);
             ui.separator();
-            ui.checkbox(&mut self.map_clients, "Clients on the map").on_hover_text(
-                "Off: /mapnetwork maps infrastructure only and uses the client table for counts \
-and to spot unadopted gear. On: client devices go on the map too (it caps and collapses large \
-client lists). Applies to clients from the sweep as well as UniFi.",
-            );
+            ui.checkbox(&mut self.map_clients, "Clients on the map")
+                .on_hover_text("Put client devices on the map (off: infrastructure only)");
         });
         ui.separator();
 
@@ -314,7 +307,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
         ui.horizontal(|ui| {
             let save = ui
                 .add_enabled(chosen && !running, egui::Button::new("Save bundle…"))
-                .on_hover_text("Save the zip, then copy the kickoff prompt to the clipboard")
+                .on_hover_text("Save the zip and copy the prompt")
                 .on_disabled_hover_text("Nothing to bundle yet");
             if save.clicked() {
                 self.save(ui.ctx(), src);

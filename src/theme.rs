@@ -438,7 +438,10 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             let (label, tip) = match t {
                 Theme::Dark => ("Dark (default)", "egui's standard dark look"),
                 Theme::Light => ("Light", "For bright rooms and screenshots in tickets"),
-                Theme::Miami => ("Miami", "Midnight purple, hot pink and teal, with a 16-bit sunset"),
+                Theme::Miami => (
+                    "Miami",
+                    "Midnight purple, hot pink and teal, with a 16-bit sunset",
+                ),
             };
             if ui.radio(s.theme == t, label).on_hover_text(tip).clicked() && s.theme != t {
                 s.theme = t;
@@ -459,19 +462,23 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             let mine = match &s.backdrop {
                 Source::Image(p) => format!(
                     "Your image: {}",
-                    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+                    p.file_name().map_or_else(
+                        || p.display().to_string(),
+                        |n| n.to_string_lossy().into_owned()
+                    )
                 ),
                 _ => "Your image…".to_string(),
             };
             if ui
                 .radio(matches!(s.backdrop, Source::Image(_)), mine)
-                .on_hover_text("Pick a picture from this computer. It stays here; only its path is remembered.")
+                .on_hover_text("Pick a picture (only its path is saved)")
                 .clicked()
             {
                 act = Some(MenuAction::PickImage);
                 ui.close();
             }
-            if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None {
+            if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
+            {
                 s.backdrop = Source::None;
                 act = Some(MenuAction::Changed);
             }
@@ -480,15 +487,23 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             } else {
                 "10 frames a second (no usable GPU), paused while the window isn't focused"
             };
-            if ui.checkbox(&mut s.animate, "Animate").on_hover_text(tip).changed() {
+            if ui
+                .checkbox(&mut s.animate, "Animate")
+                .on_hover_text(tip)
+                .changed()
+            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
-                "A soft glow and haze on the bright parts: the sun, neon and windows, or your picture's highlights"
+                "Soft glow on bright parts"
             } else {
                 "A soft glow on your picture's highlights (the 16-bit scene glows only on the GPU)"
             };
-            if ui.checkbox(&mut s.glow, "Glow").on_hover_text(tip).changed() {
+            if ui
+                .checkbox(&mut s.glow, "Glow")
+                .on_hover_text(tip)
+                .changed()
+            {
                 act = Some(MenuAction::Changed);
             }
             ui.label(egui::RichText::new(renderer).small().weak())

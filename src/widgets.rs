@@ -169,26 +169,10 @@ pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
 /// Threads only cap how many probes are in flight; against targets that answer
 /// fast (RST, live hosts) the rate limit is what keeps a scan from bursting.
 pub const SPEEDS: &[(&str, usize, u32, &str)] = &[
-    (
-        "Gentle",
-        4,
-        10,
-        "10 probes/s, 4 in flight. Slowest; least load and least scan-like to IDS/EDR.",
-    ),
-    ("Normal", 16, 50, "50 probes/s, 16 in flight."),
-    (
-        "Fast",
-        64,
-        500,
-        "500 probes/s, 64 in flight. Expect IDS/EDR scan alerts.",
-    ),
-    (
-        "Unthrottled",
-        256,
-        0,
-        "No rate limit, 256 in flight. Tens of thousands of probes/s on a LAN; \
-will be flagged as a scan.",
-    ),
+    ("Gentle", 4, 10, "10 probes/s. Least likely to trip IDS/EDR"),
+    ("Normal", 16, 50, "50 probes/s"),
+    ("Fast", 64, 500, "500 probes/s. Expect IDS/EDR alerts"),
+    ("Unthrottled", 256, 0, "No limit. Will be flagged as a scan"),
 ];
 pub const DEFAULT_SPEED: usize = 1;
 
@@ -252,7 +236,7 @@ pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
             }
         });
     ui.add(egui::DragValue::new(rate).range(0..=100_000).suffix(" /s"))
-        .on_hover_text("Max probes started per second across all threads (0 = unlimited)");
+        .on_hover_text("Probes per second (0 = no limit)");
     ui.add(egui::DragValue::new(threads).range(1..=1024).suffix(" thr"))
         .on_hover_text("Max probes in flight at once");
 }

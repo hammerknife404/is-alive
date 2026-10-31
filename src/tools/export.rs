@@ -182,10 +182,8 @@ tech support report (.wri), or /mapnetwork map (.dc.html)"
 
 /// "UniFi clients: none / anonymized / full" picker; true when changed.
 pub fn clients_choice(ui: &mut Ui, id: &str, clients: &mut unifi::Clients) -> bool {
-    ui.label("UniFi clients").on_hover_text(
-        "The UniFi client table: every device that has connected. unifidump uses it for client \
-counts and to spot unadopted gear plugged in as a client.",
-    );
+    ui.label("UniFi clients")
+        .on_hover_text("Include the UniFi client table (every device that has connected)");
     let mut changed = false;
     egui::ComboBox::from_id_salt(id)
         .selected_text(clients.label())
@@ -350,10 +348,7 @@ impl ExportTool {
             if ui
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
-                    "UniFi: .unf (site export or autobackup), .unifi (UniFi OS console backup), \
-a .zip holding one, or db.gz. SonicWall: .exp settings export or .wri tech support report. \
-/mapnetwork: the .dc.html map, or a site bundle .zip it was saved into; it opens in the Map tab \
-in is-alive's style. Pick several at once, or drop them on the window. Each kind keeps its own result; opening another file of the same kind replaces it.",
+                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, or a /mapnetwork .dc.html (or a zip of one). Several at once, or drop them on the window",
                 )
                 .clicked()
             {
@@ -373,9 +368,7 @@ in is-alive's style. Pick several at once, or drop them on the window. Each kind
             }
         });
         ui.weak(
-            "Decodes a UniFi backup, or a SonicWall settings export or tech support report, on this \
-machine and saves JSON with the topology and config the skills need, or reads a /mapnetwork map \
-back in for the Map tab. Each file gets its own tab below. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
+            "Converts configs on this machine into JSON for the skills. Secrets are stripped; nothing is sent.",
         );
         widgets::error(ui, &self.err);
         ui.separator();
@@ -384,8 +377,7 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
             if !running {
                 widgets::empty_hint(
                     ui,
-                    "Open or drop a .unf / .unifi UniFi backup (for /unifidump), a SonicWall .exp or .wri \
-(for /mapnetwork), or a /mapnetwork .dc.html to see it on the Map tab.",
+                    "Open or drop a UniFi backup, SonicWall .exp / .wri, or /mapnetwork map.",
                 );
             }
             return;
@@ -443,11 +435,8 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
             let n = r.secrets().len();
             if n > 0 {
                 ui.weak(format!(
-                    "{n} secret value{} from this file kept in memory (never saved): Notes and \
-the Site Bundle's Known problems redact {} wherever {} appear.",
+                    "🔑 {n} secret{} from this file hidden in Notes (kept in memory only)",
                     if n == 1 { "" } else { "s" },
-                    if n == 1 { "it" } else { "them" },
-                    if n == 1 { "it may" } else { "they" },
                 ));
             }
             ui.add_space(4.0);

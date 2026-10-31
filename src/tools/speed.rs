@@ -230,16 +230,10 @@ impl SpeedTool {
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.use_file, false, speed::HOST)
-                            .on_hover_text(
-                                "Cloudflare's speed test service: download and upload. It's \
-anycast: the nearest Cloudflare data centre answers, usually inside your ISP's region.",
-                            );
+                            .on_hover_text("Cloudflare: download and upload, nearest data centre");
                         ui.selectable_value(&mut self.use_file, true, "Download a file")
                             .on_hover_text(
-                                "Any large file over HTTP(S), fetched again and again on each \
-stream: ThinkBroadband's public 5 GB test file to start with, or your own server's, a client's \
-or a host's. Download only; latency is measured to 1.1.1.1 so it reads your line, not the \
-path to the file.",
+                                "Download any large file. Download only; latency goes to 1.1.1.1",
                             );
                     });
                 if self.use_file {
@@ -248,10 +242,7 @@ path to the file.",
                             .desired_width(240.0)
                             .hint_text("https://host/100MB.bin"),
                     )
-                    .on_hover_text(
-                        "The file's direct link, not the page it's offered on. 1 GB or more \
-downloads best.",
-                    );
+                    .on_hover_text("The file's direct link. 1 GB or more works best");
                 }
             });
             ui.separator();
@@ -262,13 +253,10 @@ downloads best.",
                         .range(5..=60)
                         .suffix(" s"),
                 )
-                .on_hover_text("Per direction. Latency at idle is measured first, about 4 s.");
+                .on_hover_text("Per direction");
                 ui.label("Streams");
                 ui.add(egui::DragValue::new(&mut self.streams).range(1..=16))
-                    .on_hover_text(
-                        "Parallel connections per direction. 4 fills most lines; raise it for \
-multi-gigabit or long-distance links.",
-                    );
+                    .on_hover_text("Parallel connections. 4 suits most lines");
                 ui.checkbox(&mut self.down, "Download");
                 ui.add_enabled(!self.use_file, egui::Checkbox::new(&mut self.up, "Upload"))
                     .on_disabled_hover_text("A file download can't measure upload");
@@ -299,9 +287,7 @@ multi-gigabit or long-distance links.",
         if !self.has_results() && !running {
             widgets::empty_hint(
                 ui,
-                "Press Start: latency and jitter at idle, then download and upload with latency \
-probed under load (bufferbloat), and a VoIP call-quality estimate.\nIt saturates the line while it \
-runs, and a gigabit line moves over 1 GB each way.",
+                "Press Start. Measures latency, then download and upload under load. It fills the line while it runs.",
             );
             return;
         }
