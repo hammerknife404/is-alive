@@ -939,6 +939,10 @@ fn transfer(
     t.stop(Duration::from_secs(2));
     if total == 0 {
         let why = match err {
+            // The error already says why: no guessing at web filters.
+            Some(e) if e.contains("bot check") || e.contains("web page") => {
+                format!("{} failed: {e}.", phase.name())
+            }
             Some(e) => format!("{} failed: {e}. {BLOCKED_HINT}", phase.name()),
             None => format!("{} stopped before any data arrived.", phase.name()),
         };
