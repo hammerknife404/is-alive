@@ -473,6 +473,17 @@ redacted, whatever it looks like. For door codes, PINs and anything detection wo
                         widgets::copy(ui.ctx(), self.sanitized().0);
                         widgets::toast("Notes copied (sanitized)", true);
                     }
+                    if widgets::confirm_button(
+                        ui,
+                        "notes_raw_copy",
+                        true,
+                        "Raw copy",
+                        "Copy the notes as written, nothing redacted: passwords and all. For \
+pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
+                    ) {
+                        widgets::copy(ui.ctx(), self.text.clone());
+                        widgets::toast("Notes copied UNREDACTED: secrets included", false);
+                    }
                 });
             });
         });

@@ -18,6 +18,9 @@ pub enum Kind {
     Patient,
     Email,
     Phone,
+    Address,
+    /// Bank routing and account numbers.
+    Account,
     /// Picked by the technician.
     Manual,
     /// A secret value from a loaded backup or export.
@@ -37,6 +40,8 @@ impl Kind {
             Kind::Patient => "patient details",
             Kind::Email => "emails",
             Kind::Phone => "phone numbers",
+            Kind::Address => "addresses",
+            Kind::Account => "account numbers",
             Kind::Manual => "picked by hand",
             Kind::Known => "from the config",
             Kind::Block => "secret blocks",
@@ -53,6 +58,8 @@ impl Kind {
             Kind::Patient => "patient detail",
             Kind::Email => "email",
             Kind::Phone => "phone",
+            Kind::Address => "address",
+            Kind::Account => "account number",
             Kind::Manual => "by hand",
             Kind::Known => "from config",
             Kind::Block => "secret block",
@@ -81,6 +88,16 @@ fn rule(kind: Kind, group: usize, re: &str) -> Rule {
         group,
     }
 }
+
+/// From a diagnosis label to the end of its line.
+static DX_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)\b(?:dx|diagnos[a-z]*|icd(?:-?10)?(?:\s+codes?)?)\b[^\n]*")
+        .expect("valid pattern")
+});
+/// An ICD-10-CM code: letter, two characters, optional decimal part.
+static ICD10: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[A-TV-Z][0-9][0-9AB](?:\.[0-9A-TV-Z]{1,4})?\b").expect("valid pattern")
+});
 
 /// A fenced block opened with ```secret: everything inside goes, and so
 /// does text written on the fence lines themselves (```secret alarm 9090,
@@ -123,6 +140,35 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         rule(Kind::Token, 0, r"\b[A-Za-z0-9+/_-]{32,}={0,2}"),
         rule(Kind::Ssn, 0, r"\b\d{3}-\d{2}-\d{4}\b"),
         rule(Kind::Card, 0, r"\b(?:\d[ -]?){12,18}\d\b"),
+        // The rest of a card: its security code and an expiry written mm/yy.
+        rule(
+            Kind::Card,
+            1,
+            r"(?i)\b(?:cvv2?|cvc2?|csc|security\s+code)\s*[:#=]?\s*(\d{3,4})\b",
+        ),
+        rule(
+            Kind::Card,
+            1,
+            r"(?i)\b(?:exp(?:iry|iration|ires)?\.?(?:\s+date)?)\s*[:#=]?\s*((?:0?[1-9]|1[0-2])\s*/\s*(?:\d{2}|\d{4}))\b",
+        ),
+        // Bank details: a 9-digit routing number, an account number.
+        rule(
+            Kind::Account,
+            1,
+            r"(?i)\b(?:routing|aba|rtn)(?:\s*(?:no\.?|number|#))?\s*[:#=]?\s*(\d{9})\b",
+        ),
+        rule(
+            Kind::Account,
+            1,
+            r"(?i)\b(?:acct|account)(?:\s*(?:no\.?|number|#))?\s*[:#=]?\s*(\d{6,17})\b",
+        ),
+        // A street address: number, name, street type, then city, state
+        // and ZIP when they follow.
+        rule(
+            Kind::Address,
+            0,
+            r"\b\d{1,6}\s+(?:[NSEW]\.?\s+)?(?:[A-Z][a-z]+\s+){1,3}(?:St|Street|Ave|Avenue|Rd|Road|Ln|Lane|Dr|Drive|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Hwy|Highway|Pkwy|Parkway|Cir|Circle|Ter|Terrace|Trl|Trail)\b\.?(?:,?\s+(?:Apt|Suite|Ste|Unit|#)\.?\s*[\w-]+)?(?:,\s*(?:[A-Z][a-z]+\s*){1,3})?(?:,?\s*[A-Z]{2})?(?:\s+\d{5}(?:-\d{4})?)?",
+        ),
         // HIPAA identifiers: the rest of the line after the label.
         rule(
             Kind::Patient,
@@ -639,6 +685,18 @@ pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
             }
         }
     }
+    // ICD-10 codes on a line that says it's a diagnosis.
+    for line in DX_LINE.find_iter(text) {
+        for m in ICD10.find_iter(line.as_str()) {
+            let span = line.start() + m.start()..line.start() + m.end();
+            if fresh(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Patient,
+                });
+            }
+        }
+    }
     for c in SECRET_BLOCK.captures_iter(text) {
         for m in [c.get(1), c.get(2), c.get(3)].into_iter().flatten() {
             let v = m.as_str();
@@ -693,7 +751,8 @@ fn detect(text: &str) -> Vec<Hit> {
                 .rfind(char::is_whitespace)
                 .map_or(0, |i| i + 1);
             let keep = match r.kind {
-                Kind::Card => luhn(s),
+                // The number itself must pass Luhn; its CVV and expiry can't.
+                Kind::Card => s.chars().filter(char::is_ascii_digit).count() < 12 || luhn(s),
                 Kind::Token if s.len() >= 32 && !s.starts_with("AKIA") => {
                     random_looking(s) && !named_hash(text, m.start(), s)
                 }
@@ -964,6 +1023,36 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
+    }
+
+    #[test]
+    fn payment_address_and_diagnosis() {
+        assert_eq!(
+            red("Card 4111 1111 1111 1111 exp 09/29 cvv 123"),
+            "Card [REDACTED: card number] exp [REDACTED: card number] cvv [REDACTED: card number]"
+        );
+        assert_eq!(
+            red("Routing 021000021  Acct 000123456789"),
+            "Routing [REDACTED: account number]  Acct [REDACTED: account number]"
+        );
+        assert_eq!(
+            red("Lives at 418 Cypress Ln, West Monroe LA 71291"),
+            "Lives at [REDACTED: address]"
+        );
+        assert_eq!(
+            red("Dx: K02.9, E11.9. Prior anesthesia reaction 2019."),
+            "Dx: [REDACTED: patient detail], [REDACTED: patient detail]. Prior anesthesia reaction 2019."
+        );
+        for kept in [
+            "X0 to switch port 24, VLAN 30",
+            "E11 error on the printer",
+            "3 way switch in room 4",
+            "fw expires 2027, renew account soon",
+            "exp. 3 years in the field",
+            "Ticket 2026-10-30-0418, P2, Block 4",
+        ] {
+            assert_eq!(red(kept), kept);
+        }
     }
 
     /// From a technician's redaction test file.
