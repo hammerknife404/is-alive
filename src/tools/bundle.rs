@@ -34,6 +34,7 @@ pub struct BundleTool {
     map_clients: bool,
     use_unifi: bool,
     use_sonicwall: bool,
+    use_meraki: bool,
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
@@ -56,6 +57,7 @@ impl Default for BundleTool {
             map_clients: false,
             use_unifi: true,
             use_sonicwall: true,
+            use_meraki: true,
             use_inventory: true,
             use_results: false,
             use_notes: false,
@@ -72,6 +74,9 @@ const UNIFI_WHAT: &str = "UniFi controller export: sites, devices, networks, swi
 WLANs (plus clients as the manifest says), secrets removed. mongoexport-style array for /unifidump's extract.py.";
 const SONICWALL_WHAT: &str = "SonicWall config: interfaces (zone, VLAN, IP, MAC, management), zones, \
 address and service objects, access and NAT rules. Enforced config, not observation.";
+const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs, \
+appliance ports, firewall, port forwarding and NAT rules, static routes, VPN and uplinks. Enforced config, \
+not observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name, TTL \
 and open management ports. Observed state.";
 const RESULTS_WHAT: &str =
@@ -81,7 +86,7 @@ const PROBLEMS_ID: &str = "bundle_known_problems";
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
-machine: passwords, keys, tokens and patient details are [REDACTED: …] markers. Context and \
+machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
 observations; use what bears on the map and its findings.";
 
 impl BundleTool {
@@ -134,10 +139,7 @@ impl BundleTool {
     }
 
     fn body(&mut self, ui: &mut Ui, src: &Sources, running: bool) {
-        ui.weak(
-            "One zip of everything converted so far, with a manifest that tells /unifidump and \
-/mapnetwork what each file is. Built only from the sanitized exports.",
-        );
+        ui.weak("One zip of everything so far, for /unifidump and /mapnetwork.");
         ui.add_space(4.0);
         egui::Grid::new("bundle_form")
             .num_columns(2)
@@ -146,6 +148,7 @@ impl BundleTool {
                 ui.label("Site name");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.site)
+                        .char_limit(widgets::FIELD_MAX)
                         .desired_width(380.0)
                         .hint_text("Client or site name"),
                 );
@@ -160,12 +163,18 @@ impl BundleTool {
                             .into_iter()
                             .map(|h| h.span)
                             .collect();
-                        let mut job = crate::tools::notes::highlight(ui, text, &spans);
+                        let mut job = crate::tools::notes::highlight(
+                            ui,
+                            text,
+                            &spans,
+                            &eframe::egui::FontId::monospace(13.0),
+                        );
                         job.wrap.max_width = wrap;
                         ui.fonts_mut(|f| f.layout_job(job))
                     };
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
+                        .char_limit(widgets::PROBLEMS_MAX)
                         .desired_rows(2)
                         .desired_width(380.0)
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")
@@ -184,8 +193,7 @@ impl BundleTool {
                         let clicked = ui
                             .add_enabled(pick.is_some(), egui::Button::new(label).small())
                             .on_hover_text(
-                                "Redact the selected text, or keep the highlighted value under \
-the cursor (Ctrl+R). Values redacted or kept in Notes apply here too.",
+                                "Hide the selected text (Ctrl+R). Notes' redactions apply here too",
                             )
                             .clicked();
                         if (clicked || shortcut)
@@ -213,16 +221,14 @@ the cursor (Ctrl+R). Values redacted or kept in Notes apply here too.",
         ui.horizontal(|ui| {
             export::clients_choice(ui, "bundle_clients", &mut self.clients);
             ui.separator();
-            ui.checkbox(&mut self.map_clients, "Clients on the map").on_hover_text(
-                "Off: /mapnetwork maps infrastructure only and uses the client table for counts \
-and to spot unadopted gear. On: client devices go on the map too (it caps and collapses large \
-client lists). Applies to clients from the sweep as well as UniFi.",
-            );
+            ui.checkbox(&mut self.map_clients, "Clients on the map")
+                .on_hover_text("Put client devices on the map (off: infrastructure only)");
         });
         ui.separator();
 
         let unifi = src.export.unifi();
         let sonicwall = src.export.sonicwall();
+        let meraki = src.export.meraki();
         let map = src.export.mapnetwork();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
@@ -253,6 +259,20 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                         )
                     }),
                     "Open a SonicWall .exp or .wri in Config Export",
+                );
+                part_row(
+                    ui,
+                    &mut self.use_meraki,
+                    "Meraki export",
+                    meraki.map(|(p, r)| {
+                        format!(
+                            "{} network(s) · {} VLAN(s) · {}",
+                            r.count("networks"),
+                            r.count("VLANs"),
+                            export::file_name(p)
+                        )
+                    }),
+                    "Open a Meraki API export (.json) in Config Export",
                 );
                 part_row(
                     ui,
@@ -292,7 +312,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     &mut self.use_notes,
                     "Tech notes",
                     (!src.notes.is_empty()).then(|| match hits.len() {
-                        0 => "notes.md · nothing to redact".to_string(),
+                        0 => "notes.md · nothing redacted".to_string(),
                         _ => format!("notes.md · {}", crate::redact::summary(&hits)),
                     }),
                     "Nothing in Notes yet",
@@ -300,6 +320,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
             });
         let chosen = (self.use_unifi && unifi.is_some())
             || (self.use_sonicwall && sonicwall.is_some())
+            || (self.use_meraki && meraki.is_some())
             || (self.use_inventory && sweep.is_some())
             || (self.use_results && runs > 0)
             || (self.use_notes && !src.notes.is_empty());
@@ -309,7 +330,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
         ui.horizontal(|ui| {
             let save = ui
                 .add_enabled(chosen && !running, egui::Button::new("Save bundle…"))
-                .on_hover_text("Save the zip, then copy the kickoff prompt to the clipboard")
+                .on_hover_text("Save the zip and copy the prompt")
                 .on_disabled_hover_text("Nothing to bundle yet");
             if save.clicked() {
                 self.save(ui.ctx(), src);
@@ -367,6 +388,25 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     "address_objects": r.count("address objects"),
                     "access_rules": r.count("access rules"),
                     "nat_rules": r.count("NAT rules"),
+                }),
+                data: r.json.clone(),
+            });
+        }
+        if self.use_meraki
+            && let Some((p, r)) = src.export.meraki()
+        {
+            parts.push(Part {
+                file: bundle::MERAKI,
+                source: export::file_name(p),
+                skill: "/mapnetwork",
+                what: MERAKI_WHAT,
+                summary: json!({
+                    "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
+                        .collect::<serde_json::Map<_, _>>(),
+                    "networks": r.count("networks"),
+                    "vlans": r.count("VLANs"),
+                    "firewall_rules": r.count("firewall rules"),
+                    "port_forwards": r.count("port forwards"),
                 }),
                 data: r.json.clone(),
             });
@@ -483,6 +523,7 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
     else {
         return Ok(None);
     };
+    let path = widgets::safe_path(path, &["zip"]);
     let name = export::file_name(&path);
     let zip = b.zip(&name).map_err(|e| e.to_string())?;
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;

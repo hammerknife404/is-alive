@@ -67,6 +67,158 @@ pub fn status() -> (Color32, Color32, Color32) {
     }
 }
 
+/// Emoji and pictographs: drawn a size up and coloured by `emoji_colour`
+/// so egui's monochrome glyphs read clearly. Arrows and plain symbols that
+/// sit in running text aren't included.
+pub fn is_emoji(c: char) -> bool {
+    matches!(c as u32,
+        0x2300..=0x23FF   // ⏰ ⌛
+        | 0x2600..=0x27BF // ☀ ⚠ ✅ ✔ ❌ ❗ ❓
+        | 0x2B50..=0x2B55 // ⭐
+        | 0x1F000..=0x1FAFF)
+}
+
+/// How much bigger an emoji is than the text around it.
+pub const EMOJI_SCALE: f32 = 1.3;
+
+/// How emoji are coloured. egui draws every glyph in one colour, so
+/// "colour" means each emoji in its own natural colour, not full-colour art.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EmojiStyle {
+    /// Monochrome, or Miami's neons in Miami.
+    #[default]
+    Theme,
+    Mono,
+    Color,
+    Neon,
+}
+
+impl EmojiStyle {
+    pub const ALL: [EmojiStyle; 4] = [Self::Theme, Self::Mono, Self::Color, Self::Neon];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Theme => "Match theme",
+            Self::Mono => "Monochrome",
+            Self::Color => "Colour",
+            Self::Neon => "Miami neon",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::Mono => "mono",
+            Self::Color => "color",
+            Self::Neon => "neon",
+        }
+    }
+}
+
+static EMOJI: AtomicU8 = AtomicU8::new(0);
+
+/// The emoji style every text drawn from now on uses.
+pub fn set_emoji_style(s: EmojiStyle) {
+    let i = EmojiStyle::ALL.iter().position(|x| *x == s).unwrap_or(0);
+    EMOJI.store(i as u8, Ordering::Relaxed);
+}
+
+fn emoji_style() -> EmojiStyle {
+    EmojiStyle::ALL[EMOJI.load(Ordering::Relaxed) as usize % EmojiStyle::ALL.len()]
+}
+
+/// An emoji's colour in the current style: the text's own (monochrome),
+/// one of Miami's neons (the same one every time), or its natural colour.
+pub fn emoji_colour(c: char, text: Color32) -> Color32 {
+    let style = match emoji_style() {
+        EmojiStyle::Theme if current() == Theme::Miami => EmojiStyle::Neon,
+        EmojiStyle::Theme => EmojiStyle::Mono,
+        s => s,
+    };
+    match style {
+        EmojiStyle::Neon => {
+            const NEON: [Color32; 4] = [PINK, TEAL, SUNSET, Color32::from_rgb(178, 120, 255)];
+            NEON[c as usize % NEON.len()]
+        }
+        EmojiStyle::Color => match natural(c) {
+            // A shade darker on a light background, so yellow still reads.
+            Some(n) if current() == Theme::Light => n.lerp_to_gamma(Color32::BLACK, 0.3),
+            Some(n) => n,
+            None => text,
+        },
+        _ => text,
+    }
+}
+
+/// What colour the emoji is, drawn in colour: faces and hands yellow, stop
+/// signs red, a tick green, and so on. None for those with no one colour.
+fn natural(c: char) -> Option<Color32> {
+    let rgb = |r, g, b| Some(Color32::from_rgb(r, g, b));
+    const YELLOW: (u8, u8, u8) = (250, 200, 50);
+    match c {
+        '✅' | '✔' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
+        '❌' | '✖' | '❗' | '⛔' | '🚫' | '🔴' | '📌' | '📍' | '❤' | '💔' | '📅' | '📆' | '⏰'
+        | '🚨' | '💯' | '🍎' => rgb(230, 70, 70),
+        '❓' | '❔' | '❕' | '➖' => rgb(230, 90, 90),
+        '⚠' | '⭐' | '🌟' | '✨' | '💡' | '⚡' | '🔑' | '🔒' | '🔓' | '🏆' | '🔔' | '☀' | '🌞' => {
+            rgb(YELLOW.0, YELLOW.1, YELLOW.2)
+        }
+        '🔥' | '🚧' | '🎃' => rgb(250, 130, 40),
+        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' => rgb(70, 150, 240),
+        '💜' | '🔮' => rgb(170, 110, 240),
+        '📦' | '🗄' => rgb(190, 130, 70),
+        '📝' | '📄' | '📃' | '📋' | '☁' | '⚪' => rgb(225, 225, 225),
+        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' => rgb(150, 165, 185),
+        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' => {
+            rgb(120, 175, 230)
+        }
+        '⏳' | '⌛' => rgb(210, 170, 100),
+        _ => match c as u32 {
+            // Faces and hands.
+            0x1F600..=0x1F64F
+            | 0x1F910..=0x1F92F
+            | 0x1F970..=0x1F97F
+            | 0x1F44A..=0x1F450
+            | 0x1F590..=0x1F596
+            | 0x270A..=0x270D
+            | 0x261D
+            | 0x263A
+            | 0x263B => rgb(YELLOW.0, YELLOW.1, YELLOW.2),
+            // Green plants.
+            0x1F331..=0x1F343 => rgb(80, 180, 90),
+            _ => None,
+        },
+    }
+}
+
+/// Append `text` to `job` in `format`, with every emoji a size up and
+/// coloured to match the theme.
+pub fn append_with_emoji(job: &mut egui::text::LayoutJob, text: &str, format: &egui::TextFormat) {
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        if !is_emoji(c) {
+            continue;
+        }
+        if start < i {
+            job.append(&text[start..i], 0.0, format.clone());
+        }
+        let end = i + c.len_utf8();
+        // A variation selector belongs to the emoji before it.
+        let end = text[end..]
+            .strip_prefix('\u{FE0F}')
+            .map_or(end, |_| end + '\u{FE0F}'.len_utf8());
+        let mut f = format.clone();
+        f.font_id.size *= EMOJI_SCALE;
+        f.color = emoji_colour(c, format.color);
+        f.valign = egui::Align::Center;
+        job.append(&text[i..end], 0.0, f);
+        start = end;
+    }
+    if start < text.len() {
+        job.append(&text[start..], 0.0, format.clone());
+    }
+}
+
 /// Accent for the selected tab and other highlights.
 pub fn accent() -> Color32 {
     accent_for(current())
@@ -89,7 +241,9 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         // Untouched: egui's own dark style, as the app always looked.
         Theme::Dark => {
             ctx.set_theme(egui::Theme::Dark);
-            ctx.set_style_of(egui::Theme::Dark, Style::default());
+            let mut style = Style::default();
+            text_sizes(&mut style);
+            ctx.set_style_of(egui::Theme::Dark, style);
             return;
         }
         Theme::Light => (egui::Theme::Light, light()),
@@ -104,8 +258,23 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     s.button_padding = egui::vec2(6.0, 2.0);
     s.window_margin = egui::Margin::same(12);
     s.menu_margin = egui::Margin::same(6);
+    text_sizes(&mut style);
     ctx.set_theme(slot);
     ctx.set_style_of(slot, style);
+}
+
+/// A size up from egui's defaults (12.5 body) for every theme: easier to
+/// read at arm's length on a laptop in a server closet.
+fn text_sizes(style: &mut Style) {
+    use egui::{FontFamily::*, FontId, TextStyle};
+    style.text_styles = [
+        (TextStyle::Small, FontId::new(11.0, Proportional)),
+        (TextStyle::Body, FontId::new(14.0, Proportional)),
+        (TextStyle::Button, FontId::new(14.0, Proportional)),
+        (TextStyle::Monospace, FontId::new(13.5, Monospace)),
+        (TextStyle::Heading, FontId::new(20.0, Proportional)),
+    ]
+    .into();
 }
 
 fn rounded(v: &mut Visuals, r: u8) {
@@ -265,7 +434,16 @@ pub struct Settings {
     /// Show the Map tab's accuracy note (until it's closed).
     pub map_note: bool,
     pub backdrop: Source,
+    /// Notes and text-viewer font (see `fonts`) and size in points.
+    pub notes_font: String,
+    pub notes_size: u8,
+    /// Share of the width the Notes editor takes in Split view.
+    pub notes_split: f32,
+    pub emoji: EmojiStyle,
 }
+
+/// Font sizes the Notes tab offers.
+pub const NOTES_SIZES: &[u8] = &[8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -275,6 +453,10 @@ impl Default for Settings {
             glow: true,
             size: None,
             map_note: true,
+            notes_font: crate::fonts::MONO.into(),
+            notes_size: 13,
+            notes_split: 0.5,
+            emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
         }
     }
@@ -292,6 +474,30 @@ impl Settings {
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                // 0.18 builds wrote sans / mono.
+                "notes_font" => {
+                    s.notes_font = match v.trim() {
+                        "sans" => crate::fonts::SANS.into(),
+                        "mono" => crate::fonts::MONO.into(),
+                        name => name.into(),
+                    }
+                }
+                "notes_split" => {
+                    if let Ok(f) = v.trim().parse::<f32>() {
+                        s.notes_split = f.clamp(0.2, 0.8);
+                    }
+                }
+                "emoji" => {
+                    s.emoji = EmojiStyle::ALL
+                        .into_iter()
+                        .find(|e| e.key() == v.trim())
+                        .unwrap_or_default()
+                }
+                "notes_size" => {
+                    if let Ok(n) = v.trim().parse::<u8>() {
+                        s.notes_size = n.clamp(8, 32);
+                    }
+                }
                 "size" => {
                     s.size = v
                         .trim()
@@ -330,6 +536,18 @@ impl Settings {
         if !self.map_note {
             s += "map_note=0\n";
         }
+        if self.notes_font != crate::fonts::MONO {
+            s += &format!("notes_font={}\n", self.notes_font);
+        }
+        if self.notes_split != 0.5 {
+            s += &format!("notes_split={:.3}\n", self.notes_split);
+        }
+        if self.notes_size != 13 {
+            s += &format!("notes_size={}\n", self.notes_size);
+        }
+        if self.emoji != EmojiStyle::Theme {
+            s += &format!("emoji={}\n", self.emoji.key());
+        }
         s
     }
 }
@@ -353,7 +571,10 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             let (label, tip) = match t {
                 Theme::Dark => ("Dark (default)", "egui's standard dark look"),
                 Theme::Light => ("Light", "For bright rooms and screenshots in tickets"),
-                Theme::Miami => ("Miami", "Midnight purple, hot pink and teal, with a 16-bit sunset"),
+                Theme::Miami => (
+                    "Miami",
+                    "Midnight purple, hot pink and teal, with a 16-bit sunset",
+                ),
             };
             if ui.radio(s.theme == t, label).on_hover_text(tip).clicked() && s.theme != t {
                 s.theme = t;
@@ -374,19 +595,23 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             let mine = match &s.backdrop {
                 Source::Image(p) => format!(
                     "Your image: {}",
-                    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+                    p.file_name().map_or_else(
+                        || p.display().to_string(),
+                        |n| n.to_string_lossy().into_owned()
+                    )
                 ),
                 _ => "Your image…".to_string(),
             };
             if ui
                 .radio(matches!(s.backdrop, Source::Image(_)), mine)
-                .on_hover_text("Pick a picture from this computer. It stays here; only its path is remembered.")
+                .on_hover_text("Pick a picture (only its path is saved)")
                 .clicked()
             {
                 act = Some(MenuAction::PickImage);
                 ui.close();
             }
-            if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None {
+            if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
+            {
                 s.backdrop = Source::None;
                 act = Some(MenuAction::Changed);
             }
@@ -395,15 +620,23 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             } else {
                 "10 frames a second (no usable GPU), paused while the window isn't focused"
             };
-            if ui.checkbox(&mut s.animate, "Animate").on_hover_text(tip).changed() {
+            if ui
+                .checkbox(&mut s.animate, "Animate")
+                .on_hover_text(tip)
+                .changed()
+            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
-                "A soft glow and haze on the bright parts: the sun, neon and windows, or your picture's highlights"
+                "Soft glow on bright parts"
             } else {
                 "A soft glow on your picture's highlights (the 16-bit scene glows only on the GPU)"
             };
-            if ui.checkbox(&mut s.glow, "Glow").on_hover_text(tip).changed() {
+            if ui
+                .checkbox(&mut s.glow, "Glow")
+                .on_hover_text(tip)
+                .changed()
+            {
                 act = Some(MenuAction::Changed);
             }
             ui.label(egui::RichText::new(renderer).small().weak())
@@ -411,6 +644,24 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
         });
     });
     act
+}
+
+/// Write a file in the profile only this user can read (notes can hold
+/// site details); on Windows the profile folder already is.
+pub fn write_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        o.mode(0o600);
+        // An older file keeps its mode on open: narrow it too.
+        if path.exists() {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    o.open(path)?.write_all(data.as_ref())
 }
 
 /// This app's folder in the user's profile (settings, autosaved notes).
@@ -457,6 +708,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn emoji_are_a_size_up_and_in_their_own_sections() {
+        let mut job = egui::text::LayoutJob::default();
+        let f = egui::TextFormat::simple(egui::FontId::proportional(10.0), Color32::WHITE);
+        append_with_emoji(&mut job, "ok ✅ done ⚠\u{FE0F}!", &f);
+        assert_eq!(job.text, "ok ✅ done ⚠\u{FE0F}!");
+        let sizes: Vec<f32> = job.sections.iter().map(|s| s.format.font_id.size).collect();
+        assert_eq!(
+            sizes,
+            [10.0, 10.0 * EMOJI_SCALE, 10.0, 10.0 * EMOJI_SCALE, 10.0]
+        );
+        assert!(is_emoji('🔑') && is_emoji('⭐') && !is_emoji('\u{2192}') && !is_emoji('a'));
+    }
+
+    #[test]
     fn keys_round_trip() {
         for t in Theme::ALL {
             assert_eq!(Theme::from_key(t.key()), Some(t));
@@ -473,8 +738,16 @@ mod tests {
             size: Some((1280, 800)),
             map_note: false,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
+            notes_font: "DejaVu Sans Mono".into(),
+            notes_size: 16,
+            notes_split: 0.625,
+            emoji: EmojiStyle::Color,
         };
         assert_eq!(Settings::parse(&s.text()), s);
+        assert_eq!(
+            Settings::parse("notes_font=sans\n").notes_font,
+            crate::fonts::SANS
+        );
         assert_eq!(Settings::parse(""), Settings::default());
         // A file from 0.10.0 had only the theme line.
         let old = Settings::parse("theme=miami\n");

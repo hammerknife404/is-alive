@@ -298,6 +298,24 @@ pub fn zip_find(
     }
 }
 
+/// Every file in a zip whose name `pick` accepts, as (name, bytes); at most
+/// `max` of them.
+pub fn zip_all(
+    b: &[u8],
+    pick: impl Fn(&str) -> bool,
+    max: usize,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if !b.starts_with(ZIP_LOCAL) {
+        return Ok(Vec::new());
+    }
+    zip_entries(b)?
+        .into_iter()
+        .filter(|e| pick(&e.name))
+        .take(max)
+        .map(|e| zip_read(b, &e).map(|d| (e.name, d)))
+        .collect()
+}
+
 fn from_zip(b: &[u8], d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
     let entries = zip_entries(b)?;
     // Version first so it's known even when the dump sits in a nested backup.

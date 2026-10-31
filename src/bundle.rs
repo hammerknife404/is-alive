@@ -9,6 +9,7 @@ use std::io::Write;
 
 pub const UNIFI: &str = "unifi.unifidump.json";
 pub const SONICWALL: &str = "sonicwall.json";
+pub const MERAKI: &str = "meraki.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
 pub const NOTES: &str = "notes.md";
@@ -75,6 +76,16 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
                 })
             })
             .collect();
+        // One firewall's file by name, as before; both as a list.
+        let fw: Vec<&str> = [SONICWALL, MERAKI]
+            .into_iter()
+            .filter(|f| self.has(f))
+            .collect();
+        let firewall = match fw.as_slice() {
+            [] => Value::Null,
+            [one] => json!(one),
+            _ => json!(fw),
+        };
         json!({
             "kind": "is-alive site bundle",
             "format": 1,
@@ -98,7 +109,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
             "mapnetwork_preflight": {
                 "site_name": self.site.trim(),
                 "scan": self.has(INVENTORY).then_some(INVENTORY),
-                "firewall_config": self.has(SONICWALL).then_some(SONICWALL),
+                "firewall_config": firewall,
                 "known_problems": self.notes(),
                 "existing_map": self.has(MAP).then_some(MAP),
                 "map_clients": self.map_clients,
@@ -124,7 +135,7 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
         if self.has(UNIFI) {
             inputs.push("the unifidump summary".to_string());
         }
-        for f in [SONICWALL, INVENTORY, RESULTS, NOTES] {
+        for f in [SONICWALL, MERAKI, INVENTORY, RESULTS, NOTES] {
             if self.has(f) {
                 inputs.push(f.to_string());
             }
@@ -376,6 +387,18 @@ sonicwall.json and inventory.json"
             fw_only.contains(
                 "1. Run /mapnetwork for McClendon Baptist (new map), using sonicwall.json."
             )
+        );
+
+        let meraki = bundle(vec![part(MERAKI, "")]);
+        assert!(meraki.kickoff("z.zip").contains("using meraki.json."));
+        assert_eq!(
+            meraki.manifest()["mapnetwork_preflight"]["firewall_config"],
+            MERAKI
+        );
+        let both = bundle(vec![part(SONICWALL, ""), part(MERAKI, "")]).manifest();
+        assert_eq!(
+            both["mapnetwork_preflight"]["firewall_config"],
+            json!([SONICWALL, MERAKI])
         );
     }
 

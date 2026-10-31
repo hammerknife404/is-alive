@@ -28,6 +28,10 @@ pub struct Report {
     pub counts: Vec<(&'static str, usize)>,
     pub system: Vec<(String, String)>,
     pub json: String,
+    /// Values of the credential settings left behind (admin and user
+    /// passwords, VPN keys, SNMP communities…), held in memory only so notes
+    /// can be checked for them. Never written, copied or bundled.
+    pub secrets: Vec<String>,
 }
 
 impl Report {
@@ -229,7 +233,7 @@ const CREDENTIAL: &[&str] = &[
 /// A free-text comment, withheld if it looks like it holds a credential,
 /// and otherwise put through the same redaction as tech notes; `withheld`
 /// counts either.
-fn clean_comment(v: &str, withheld: &Cell<usize>) -> Value {
+pub(crate) fn clean_comment(v: &str, withheld: &Cell<usize>) -> Value {
     if credential_like(v) {
         withheld.set(withheld.get() + 1);
         return json!("[withheld: may contain a credential]");
@@ -533,6 +537,17 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         "nat_rules": nat,
     });
     let used = c.used.borrow().len();
+    let mut secrets: Vec<String> = c
+        .map
+        .iter()
+        .filter(|(k, v)| {
+            (credential_like(k) || k.to_ascii_lowercase().contains("key"))
+                && crate::redact::secret_value(v)
+        })
+        .map(|(_, v)| v.trim().to_string())
+        .collect();
+    secrets.sort();
+    secrets.dedup();
     Ok(Report {
         format,
         keys: c.map.len(),
@@ -541,6 +556,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         counts,
         system,
         json: serde_json::to_string_pretty(&v).unwrap_or_default() + "\n",
+        secrets,
     })
 }
 
@@ -645,6 +661,15 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         assert!(credential_like("wifi PSK: abc"));
         assert!(r.used < r.keys);
         assert!(r.summary().contains("left behind"));
+        for s in ["S3cretPass", "TunnelPSK", "AdminPass", "FwPass"] {
+            assert!(
+                r.secrets.contains(&s.to_string()),
+                "{s} not kept: {:?}",
+                r.secrets
+            );
+        }
+        // A stock community name would blank out ordinary words.
+        assert!(!r.secrets.contains(&"private".to_string()));
     }
 
     #[test]

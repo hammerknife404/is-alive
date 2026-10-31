@@ -3,17 +3,64 @@
 //! and [links](…) inline. Links are shown, not followed. Redaction markers
 //! are picked out so it's plain what was removed.
 
-use eframe::egui::{self, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
+use eframe::egui::{self, FontFamily, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
+
+/// The emoji picker's emoji with their Markdown shortcodes (GitHub's names)
+/// and what they're for. Preview draws `:fire:` as the emoji.
+pub const SHORTCODES: &[(&str, &str, &str)] = &[
+    ("✅", "white_check_mark", "Done / OK"),
+    ("❌", "x", "Failed / no"),
+    ("⚠", "warning", "Warning"),
+    ("❗", "exclamation", "Important"),
+    ("❓", "question", "Question / unknown"),
+    ("⭐", "star", "Star"),
+    ("👍", "+1", "Thumbs up"),
+    ("👎", "-1", "Thumbs down"),
+    ("🔥", "fire", "Fire / urgent"),
+    ("💡", "bulb", "Idea"),
+    ("📌", "pushpin", "Pinned"),
+    ("📝", "memo", "Note"),
+    ("🔒", "lock", "Locked"),
+    ("🔓", "unlock", "Unlocked"),
+    ("🔑", "key", "Key / credential"),
+    ("🔧", "wrench", "Fix / config"),
+    ("🖥", "desktop_computer", "Desktop"),
+    ("💻", "computer", "Laptop"),
+    ("📱", "iphone", "Phone"),
+    ("📠", "fax", "Fax / printer"),
+    ("📞", "telephone_receiver", "Call"),
+    ("🌐", "globe_with_meridians", "Internet / web"),
+    ("📶", "signal_strength", "Signal / Wi-Fi"),
+    ("🔌", "electric_plug", "Power / cable"),
+    ("🔋", "battery", "Battery / UPS"),
+    ("📦", "package", "Package / install"),
+    ("📅", "date", "Date"),
+    ("⏰", "alarm_clock", "Time / reminder"),
+    ("🐛", "bug", "Bug"),
+    ("🚧", "construction", "Work in progress"),
+    ("✨", "sparkles", "New"),
+    ("☺", "relaxed", "Smile"),
+];
+
+/// The emoji for the shortcode `rest` starts with, and the code's length.
+fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
+    let end = rest[1..].find(':')? + 2;
+    let code = &rest[1..end - 1];
+    SHORTCODES
+        .iter()
+        .find(|(_, c, _)| *c == code)
+        .map(|(e, ..)| (*e, end))
+}
 
 /// Inline spans of one line, styled.
-fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
+fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> LayoutJob {
     let vis = ui.visuals();
     let body = if strong {
         vis.strong_text_color()
     } else {
         vis.text_color()
     };
-    let base = TextFormat::simple(FontId::proportional(size), body);
+    let base = TextFormat::simple(FontId::new(size, family.clone()), body);
     let mut job = LayoutJob::default();
     let mut rest = text;
     let mut bold = false;
@@ -27,12 +74,12 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
             f.color = vis.strong_text_color();
         }
         f.italics = italic;
-        job.append(s, 0.0, f);
+        crate::theme::append_with_emoji(job, s, &f);
     };
     while !rest.is_empty() {
         let next = rest
             .char_indices()
-            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '['))
+            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '[' | ':'))
             .map(|(i, _)| i);
         let Some(i) = next else {
             push(&mut job, rest, bold, italic);
@@ -43,6 +90,11 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
         if let Some(r) = rest.strip_prefix("**") {
             bold = !bold;
             rest = r;
+        } else if rest.starts_with(':')
+            && let Some((emoji, len)) = shortcode(rest)
+        {
+            push(&mut job, emoji, bold, italic);
+            rest = &rest[len..];
         } else if let Some(r) = rest.strip_prefix('`')
             && let Some(end) = r.find('`')
         {
@@ -50,11 +102,11 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
             f.background = vis.code_bg_color;
             job.append(&r[..end], 0.0, f);
             rest = &r[end + 1..];
-        } else if rest.starts_with("[REDACTED: ")
+        } else if (rest.starts_with("[🔑 REDACTED: ") || rest.starts_with("[REDACTED: "))
             && let Some(end) = rest.find(']')
         {
             let warn = crate::widgets::warn();
-            let mut f = TextFormat::simple(FontId::proportional(size * 0.9), warn);
+            let mut f = TextFormat::simple(FontId::new(size * 0.9, family.clone()), warn);
             f.background = warn.gamma_multiply(0.15);
             job.append(&rest[..=end], 0.0, f);
             rest = &rest[end + 1..];
@@ -68,8 +120,15 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool) -> LayoutJob {
             job.append(&rest[1..mid], 0.0, f);
             rest = &rest[mid + end + 1..];
         } else if (rest.starts_with('*') || rest.starts_with('_'))
-            // A lone * or _ inside a word (snake_case) isn't emphasis.
+            // A lone * or _ before a space isn't emphasis.
             && (italic || rest[1..].starts_with(|c: char| !c.is_whitespace()))
+            // An _ inside a word (snake_case, IS_ALIVE_GPU) isn't either.
+            && (rest.starts_with('*') || {
+                let prev = text[..text.len() - rest.len()].chars().next_back();
+                let next = rest[1..].chars().next();
+                let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+                if italic { !word(next) } else { !word(prev) }
+            })
         {
             italic = !italic;
             rest = &rest[1..];
@@ -108,10 +167,11 @@ fn item(line: &str) -> Option<(usize, Item<'_>)> {
     None
 }
 
-/// Draw `text`. Returns the line of a task box that was clicked.
-pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
+/// Draw `text` in `font` (headings scale from its size). Returns the line
+/// of a task box that was clicked.
+pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
     let mut toggled = None;
-    let body = egui::TextStyle::Body.resolve(ui.style()).size;
+    let body = font.size;
     let mut lines = text.lines().enumerate().peekable();
     while let Some((n, line)) = lines.next() {
         let t = line.trim_start();
@@ -129,7 +189,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                 .inner_margin(6)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(code.join("\n")).monospace());
+                    ui.label(RichText::new(code.join("\n")).monospace().size(body * 0.95));
                 });
             continue;
         }
@@ -145,7 +205,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
         if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
             let size = body * [1.6, 1.35, 1.15, 1.05, 1.0, 1.0][hashes - 1];
             ui.add_space(body * 0.3);
-            ui.label(inline(ui, t[hashes..].trim(), size, true));
+            ui.label(inline(ui, t[hashes..].trim(), size, true, &font.family));
             if hashes <= 2 {
                 let r = ui.min_rect();
                 let y = ui.cursor().top();
@@ -164,7 +224,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                     ui.allocate_exact_size(egui::vec2(3.0, body * 1.3), egui::Sense::hover());
                 ui.painter()
                     .rect_filled(r, 1, crate::theme::accent().gamma_multiply(0.6));
-                ui.label(inline(ui, q.trim(), body, false));
+                ui.label(inline(ui, q.trim(), body, false, &font.family));
             });
             continue;
         }
@@ -173,19 +233,19 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
                 ui.add_space(8.0 + indent as f32 * 6.0);
                 match it {
                     Item::Bullet(r) => {
-                        ui.label(RichText::new("•").color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false));
+                        ui.label(RichText::new("•").size(body).color(crate::theme::accent()));
+                        ui.label(inline(ui, r, body, false, &font.family));
                     }
                     Item::Number(num, r) => {
-                        ui.label(RichText::new(num).color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false));
+                        ui.label(RichText::new(num).size(body).color(crate::theme::accent()));
+                        ui.label(inline(ui, r, body, false, &font.family));
                     }
                     Item::Task(done, r) => {
                         let mut d = done;
                         if ui.checkbox(&mut d, "").clicked() {
                             toggled = Some(n);
                         }
-                        let mut job = inline(ui, r, body, false);
+                        let mut job = inline(ui, r, body, false, &font.family);
                         if done {
                             for s in &mut job.sections {
                                 s.format.strikethrough =
@@ -199,7 +259,7 @@ pub fn render(ui: &mut Ui, text: &str) -> Option<usize> {
             });
             continue;
         }
-        ui.label(inline(ui, line, body, false));
+        ui.label(inline(ui, line, body, false, &font.family));
     }
     toggled
 }
@@ -246,6 +306,45 @@ pub fn continue_list(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draws_the_format_test_file() {
+        // assets/notes-format-test.md: every element, drawn without a panic.
+        let text = include_str!("../assets/notes-format-test.md");
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(render(ui, text, &FontId::proportional(13.0)), None);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn shortcodes_become_emoji() {
+        assert_eq!(shortcode(":fire: hot"), Some(("🔥", 6)));
+        assert_eq!(shortcode(":+1:"), Some(("👍", 4)));
+        assert_eq!(shortcode(":nope:"), None);
+        assert_eq!(shortcode("10:30"), None);
+        assert_eq!(shortcode(":"), None);
+        // Every picker emoji has one code, and no code is used twice.
+        let mut codes: Vec<_> = SHORTCODES.iter().map(|s| s.1).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), SHORTCODES.len());
+    }
+
+    #[test]
+    fn underscores_inside_words_are_literal() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let text = |t: &str| inline(ui, t, 14.0, false, &FontFamily::Proportional).text;
+            assert_eq!(text("IS_ALIVE_GPU=off"), "IS_ALIVE_GPU=off");
+            assert_eq!(text("snake_case_name"), "snake_case_name");
+            // Real emphasis still works, and drops its markers.
+            assert_eq!(text("an _italic_ word"), "an italic word");
+            assert_eq!(text("**bold** and *it*"), "bold and it");
+        });
+        out.textures_delta.clear();
+    }
 
     #[test]
     fn task_toggles_only_that_line() {

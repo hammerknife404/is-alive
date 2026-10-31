@@ -10,12 +10,18 @@ mod bson;
 mod container;
 
 use serde_json::{Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Sites, devices, networks, switch port profiles, WLANs.
 /// Largest file Config Export will read.
 pub const MAX_INPUT: usize = container::MAX_UNPACKED;
-pub use container::zip_find;
+pub use container::{zip_all, zip_find};
+
+/// A stored zip of `files`, for other modules' tests.
+#[cfg(test)]
+pub fn container_test_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    container::tests::zip(files, false)
+}
 
 pub const CONFIG: &[&str] = &["site", "device", "networkconf", "portconf", "wlanconf"];
 /// Client (station) table: hostnames, MACs, last IPs.
@@ -134,22 +140,43 @@ fn holds_secret(v: &Value) -> bool {
     })
 }
 
-/// Drop secret fields at any depth; count each by `collection.path.field`.
-fn redact(v: &mut Value, path: &str, removed: &mut BTreeMap<String, usize>) {
+/// Drop secret fields at any depth; count each by `collection.path.field`,
+/// and keep the dropped values in `secrets` (memory only) so notes can be
+/// checked for them.
+fn redact(
+    v: &mut Value,
+    path: &str,
+    removed: &mut BTreeMap<String, usize>,
+    secrets: &mut BTreeSet<String>,
+) {
     match v {
         Value::Object(m) => {
             m.retain(|k, v| {
                 let keep = !is_secret(k) && !holds_secret(v);
                 if !keep {
                     *removed.entry(format!("{path}.{k}")).or_default() += 1;
+                    strings(v, secrets);
                 }
                 keep
             });
             for (k, child) in m.iter_mut() {
-                redact(child, &format!("{path}.{k}"), removed);
+                redact(child, &format!("{path}.{k}"), removed, secrets);
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(|c| redact(c, path, removed)),
+        Value::Array(a) => a.iter_mut().for_each(|c| redact(c, path, removed, secrets)),
+        _ => {}
+    }
+}
+
+/// Every string worth checking notes for, at any depth (a PPSK list holds
+/// one password per entry).
+fn strings(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) if crate::redact::secret_value(s) => {
+            out.insert(s.trim().to_string());
+        }
+        Value::Array(a) => a.iter().for_each(|c| strings(c, out)),
+        Value::Object(m) => m.values().for_each(|c| strings(c, out)),
         _ => {}
     }
 }
@@ -167,6 +194,9 @@ pub struct Report {
     /// Client records whose names were replaced.
     pub anonymized: usize,
     pub json: String,
+    /// The secret values that were stripped, held in memory only so notes
+    /// can be checked for them. Never written, copied or bundled.
+    pub secrets: Vec<String>,
 }
 
 impl Report {
@@ -230,6 +260,7 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
     let mut kept: Vec<(String, usize)> = Vec::new();
     let mut dropped = BTreeMap::new();
     let mut redacted = BTreeMap::new();
+    let mut secrets = BTreeSet::new();
     let mut sites = Vec::new();
     let mut current: Option<String> = None;
 
@@ -263,7 +294,7 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
                     drop_details(&mut doc);
                 }
                 let mut v = Value::Object(std::mem::take(&mut doc));
-                redact(&mut v, c, &mut redacted);
+                redact(&mut v, c, &mut redacted, &mut secrets);
                 out.push(v.to_string());
                 kept.last_mut().expect("marker precedes rows").1 += 1;
                 continue;
@@ -287,6 +318,7 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
         clients,
         anonymized,
         json: format!("[\n{}\n]\n", out.join(",\n")),
+        secrets: secrets.into_iter().collect(),
     })
 }
 
@@ -376,6 +408,14 @@ mod tests {
         );
         assert!(text.contains("\"purpose\":\"vpn-client\""));
         assert!(r.summary().contains("Secret fields removed: 8"));
+        // What was stripped is kept in memory for Notes, not in the output.
+        assert!(
+            r.secrets.contains(&"hunter2".to_string()),
+            "{:?}",
+            r.secrets
+        );
+        assert!(r.secrets.iter().all(|s| !r.json.contains(s.as_str())));
+        assert!(!r.secrets.iter().any(|s| s.starts_with('$')));
     }
 
     #[test]

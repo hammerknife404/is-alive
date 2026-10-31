@@ -1,6 +1,6 @@
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
-use crate::net::hostinfo::{self, HostInfo};
+use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
 use crate::net::{self, TcpState, ports, targets};
@@ -183,10 +183,7 @@ impl SweepTool {
                 ui.add_enabled_ui(self.total > 0 && !running, |ui| {
                     if ui
                         .button("Inventory…")
-                        .on_hover_text(
-                            "Save live hosts with MAC, vendor, name and open ports as JSON, \
-plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
-                        )
+                        .on_hover_text("Save live hosts as JSON for /mapnetwork")
                         .clicked()
                     {
                         widgets::save_file(
@@ -405,6 +402,13 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
         self.job.is_some()
     }
 
+    /// While running: hosts probed, how many in all, since when, and the range.
+    pub fn progress(&self) -> Option<(usize, usize, Instant, &str)> {
+        self.job
+            .is_some()
+            .then(|| (self.probed, self.total, self.started_at, self.range.trim()))
+    }
+
     /// Range and live-host count of a finished run, if there is one.
     pub fn finished(&self) -> Option<(String, usize)> {
         (self.total > 0 && self.job.is_none())
@@ -445,11 +449,7 @@ plus this machine's LAN, gateway and WAN: the scan input for /mapnetwork",
             Err(e) => return self.err = Some(e),
         };
         self.total = ips.len();
-        self.local = HostInfo {
-            lan: hostinfo::lan(),
-            gateway: hostinfo::gateway(),
-            wan: None,
-        };
+        self.local = HostInfo::local();
         self.checked_ports = self.check_ports;
         let (timeout, threads, rate, names, check_ports) = (
             self.timeout_ms,

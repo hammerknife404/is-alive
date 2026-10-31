@@ -2,11 +2,13 @@
 
 mod backdrop;
 mod bundle;
+mod fonts;
 mod job;
 mod log;
 mod map;
 mod mapnetwork;
 mod markdown;
+mod meraki;
 mod net;
 mod redact;
 mod sonicwall;
@@ -25,8 +27,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the title bar, the footer and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: pings your gateway, checks its common ports, traces the route to the \
-internet, tests DNS, runs a speed test and sweeps your LAN, all at once. Opens Results to watch them run.";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS and speed, sweep the LAN. Results opens to show them.";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -48,65 +49,45 @@ const TABS: &[(Tab, &str, &str)] = &[
     (
         Tab::Ping,
         "Ping",
-        "ICMP or TCP ping, continuous or a set count, with a live latency graph and loss/min/avg/max.",
+        "ICMP or TCP ping with a live latency graph",
     ),
-    (
-        Tab::Ports,
-        "Port Check",
-        "Check which TCP ports are open on a host: lists, ranges or presets, with service names.",
-    ),
-    (
-        Tab::Trace,
-        "Traceroute",
-        "Show each router hop on the way to a host, 3 probes per hop.",
-    ),
+    (Tab::Ports, "Port Check", "Find open TCP ports on a host"),
+    (Tab::Trace, "Traceroute", "Show each router hop to a host"),
     (
         Tab::Sweep,
         "Subnet Sweep",
-        "Find live hosts on a subnet or range, with name, MAC and vendor.",
+        "Find live hosts on a subnet, with name, MAC and vendor",
     ),
     (
         Tab::Dns,
         "DNS Lookup",
-        "Look up any record type, or all of them, against the system resolver or a public one; \
-Compare all spots split DNS and stale caches.",
+        "Look up DNS records; Compare all spots split DNS and stale caches",
     ),
     (
         Tab::Advanced,
         "Advanced",
-        "Mail and domain health for a domain: MX, SPF, DMARC, DKIM, nameservers, SMTP, blacklists and more.",
+        "Mail and domain health: MX, SPF, DMARC, DKIM, blacklists and more",
     ),
     (
         Tab::Export,
         "Config Export",
-        "Decode a UniFi backup (.unf / .unifi) or SonicWall settings export (.exp) or tech support \
-report (.wri) on this machine into sanitized JSON for /unifidump and /mapnetwork. Secrets are left \
-out. Also reads a /mapnetwork map (.dc.html) back in for the Map tab.",
+        "Convert UniFi and SonicWall configs to JSON for the skills; open /mapnetwork maps",
     ),
     (
         Tab::Map,
         "Map",
-        "Network map from the sweep and any UniFi backup or SonicWall export, or a /mapnetwork map \
-redrawn in this style: roles, real uplinks \
-where the data has them, and findings. Drag to pan, scroll to zoom, click a device to trace it.",
+        "Network map from the sweep, configs or a /mapnetwork map. Drag to pan, scroll to zoom",
     ),
-    (
-        Tab::Notes,
-        "Notes",
-        "Tech notes in Markdown, autosaved. Passwords, keys and patient details are highlighted \
-and replaced before anything is saved, copied or bundled.",
-    ),
+    (Tab::Notes, "Notes", "Site notes in Markdown, autosaved"),
     (
         Tab::Speed,
         "Speed Test",
-        "Download and upload speed against Cloudflare, with latency, jitter and loss at idle and \
-under load (bufferbloat) and a VoIP call-quality score.",
+        "Speed, latency, bufferbloat and VoIP quality",
     ),
     (
         Tab::Results,
         "Results",
-        "Every finished run with start and end times. Filter, copy, save, or export as CSV, JSON, \
-Markdown or HTML.",
+        "Every finished run. Filter, copy or export",
     ),
 ];
 
@@ -173,6 +154,7 @@ impl eframe::App for App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ui.ctx());
         self.collect();
         self.dropped_files(ui.ctx());
@@ -248,10 +230,8 @@ impl eframe::App for App {
                     tab_underline(ui, r);
                 }
                 let bundle = |ui: &mut egui::Ui| {
-                    ui.button("Site Bundle…").on_hover_text(
-                        "Wrap the UniFi and SonicWall exports, the sweep inventory and \
-(optionally) the Results log into one zip with a manifest for /unifidump and /mapnetwork.",
-                    )
+                    ui.button("Site Bundle…")
+                        .on_hover_text("Zip everything for /unifidump and /mapnetwork")
                 };
                 // Right-aligned when the row has room; otherwise it wraps with the tabs.
                 let need = egui::WidgetText::from("Site Bundle…")
@@ -261,7 +241,7 @@ impl eframe::App for App {
                     + 2.0 * ui.spacing().button_padding.x
                     + ui.spacing().item_spacing.x
                     + 8.0;
-                let button = if ui.available_width() > need {
+                let button = if ui.available_size_before_wrap().x > need {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
                         .inner
                 } else {
@@ -303,20 +283,15 @@ impl eframe::App for App {
                     (None, false, true) => na(),
                     (None, false, false) => "not looked up".into(),
                 };
-                ui.label(format!("WAN {wan}")).on_hover_text(
-                    "This network's public address, asked of OpenDNS's resolver (208.67.222.222) \
-only when you press Refresh or run a full scan.",
-                );
+                ui.label(format!("WAN {wan}"))
+                    .on_hover_text("Public IP, looked up via OpenDNS on Refresh or a full scan");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
                             self.info_job.is_none(),
                             egui::Button::new("Refresh").small(),
                         )
-                        .on_hover_text(
-                            "Re-read LAN and gateway, and look up the public IP (a DNS query to \
-OpenDNS)",
-                        )
+                        .on_hover_text("Re-read LAN and gateway, look up the public IP")
                         .clicked()
                     {
                         self.refresh_info(ui.ctx());
@@ -414,7 +389,8 @@ impl App {
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => self.export.ui(ui),
             Tab::Map => {
-                let busy = self.ping.is_running() || self.ports.is_running();
+                let busy =
+                    self.ping.is_running() || self.ports.is_running() || self.trace.is_running();
                 let act = self.map.ui(
                     ui,
                     map::view::Sources {
@@ -427,7 +403,7 @@ impl App {
                 );
                 self.map_action(ui.ctx(), act);
             }
-            Tab::Notes => self.notes.ui(ui, &self.info),
+            Tab::Notes => self.notes.ui(ui, &self.info, &mut self.look),
             Tab::Results => self.results_ui(ui),
         }
     }
@@ -489,6 +465,10 @@ impl App {
             Some(Action::Ports(ip)) => {
                 self.ports.run(ctx, &ip);
                 self.tab = Tab::Ports;
+            }
+            Some(Action::Trace(ip)) => {
+                self.trace.run(ctx, &ip);
+                self.tab = Tab::Trace;
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::HideNote) => {
@@ -688,11 +668,12 @@ impl App {
             ui.label("Filter");
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
+                    .char_limit(widgets::FIELD_MAX)
                     .desired_width(240.0)
                     .hint_text("tool or text, e.g. FAIL, 443, timeout"),
             )
-            .on_hover_text("Show only runs whose tool or output contains this. Copy, Save and Export use the filtered set.");
-            if filtered && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
+            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
                 self.filter.clear();
             }
         });
@@ -746,6 +727,7 @@ fn shortcuts(ui: &mut egui::Ui) {
                 ("Ctrl+0", "Results"),
                 ("Enter / Esc", "Start / stop the run in a tool's field"),
                 ("Ctrl+B / Ctrl+I", "Bold / italic in Notes"),
+                ("Ctrl+R", "Redact / unredact in Notes"),
                 (
                     "Enter in a list",
                     "Next item in Notes (twice ends the list)",
@@ -858,9 +840,10 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let look = theme::load();
+    theme::set_emoji_style(look.emoji);
     let size = look
         .size
-        .map_or([980.0, 660.0], |(w, h)| [w as f32, h as f32]);
+        .map_or([1120.0, 720.0], |(w, h)| [w as f32, h as f32]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))
@@ -877,6 +860,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
+            net::clock::warm();
             let mut app = App {
                 tab: Tab::Ping,
                 shown_tab: Tab::Ping,

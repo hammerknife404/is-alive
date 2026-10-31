@@ -11,6 +11,13 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = "speed.cloudflare.com";
 pub const BASE: &str = "https://speed.cloudflare.com";
+/// The file "Download a file" starts with: ThinkBroadband's public test
+/// file (London), large enough that a stream never runs out.
+pub const DEFAULT_FILE: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
+/// Latency target when downloading a file: Cloudflare's resolver, nearby
+/// on any line, so idle latency, jitter and bufferbloat read the local
+/// line rather than the path to wherever the file lives.
+pub const FILE_PROBE: &str = "1.1.1.1";
 /// Per request. Cloudflare answers 403 to large ones (100 MB was refused in
 /// the field; others report 50 MB working), so stay well under that; each
 /// stream asks again as soon as one ends. Runs are cut at the deadline.
@@ -39,6 +46,14 @@ impl Server {
         match self {
             Server::Cloudflare => Ok(HOST.into()),
             Server::File(url) => file_host(url),
+        }
+    }
+
+    /// Where latency is probed.
+    pub fn probe_host(&self) -> Result<String, String> {
+        match self {
+            Server::Cloudflare => Ok(HOST.into()),
+            Server::File(url) => file_host(url).map(|_| FILE_PROBE.into()),
         }
     }
 
@@ -97,8 +112,43 @@ pub fn agent(streams: usize) -> ureq::Agent {
         // Every stream keeps its connection between requests.
         .max_idle_connections_per_host(streams.max(3))
         .user_agent(concat!("is-alive/", env!("CARGO_PKG_VERSION")))
+        // Statuses are read here, so a refusal can say why.
+        .http_status_as_error(false)
         .build()
         .into()
+}
+
+/// Why a response can't be measured, or None if it can: a refusal, with
+/// the reason when the headers give it away, or a web page where a file
+/// was expected.
+fn refusal(resp: &ureq::http::Response<ureq::Body>, dir: Dir) -> Option<String> {
+    let header = |k: &str| {
+        resp.headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    };
+    let code = resp.status().as_u16();
+    if !resp.status().is_success() {
+        let why = if header("cf-mitigated") == "challenge" {
+            ": the site's Cloudflare bot check refuses anything but a browser; use a host that \
+serves the file directly"
+        } else if code == 429 {
+            ": too many requests; the server is rate-limiting"
+        } else {
+            ""
+        };
+        return Some(format!("http status: {code}{why}"));
+    }
+    if dir == Dir::Down && header("content-type").starts_with("text/html") {
+        return Some(
+            "the URL is a web page, not a file: open it in a browser, copy the actual download \
+link (it usually ends in .bin, .zip or .dat) and use that"
+                .into(),
+        );
+    }
+    None
 }
 
 /// Where the test ran, from Cloudflare's `/meta`.
@@ -248,6 +298,10 @@ impl Stream<'_> {
                     continue;
                 }
             };
+            if let Some(why) = refusal(&resp, Dir::Down) {
+                self.failed(why);
+                continue;
+            }
             let mut body = resp.body_mut().as_reader();
             while !self.stopped() {
                 match body.read(&mut buf) {
@@ -279,6 +333,9 @@ impl Stream<'_> {
                 .send(ureq::SendBody::from_reader(&mut src));
             match sent {
                 Ok(mut r) => {
+                    if let Some(why) = refusal(&r, Dir::Up) {
+                        self.failed(why);
+                    }
                     let _ = r.body_mut().with_config().limit(64 * 1024).read_to_vec();
                 }
                 Err(e) => self.failed(e),
@@ -468,9 +525,14 @@ pub(crate) mod tests {
                             return;
                         }
                         let path = line.split_whitespace().nth(1).unwrap_or("");
-                        let (status, body): (&str, Vec<u8>) = if let Some(n) =
-                            path.strip_prefix("/__down?bytes=")
-                        {
+                        let mut extra = "";
+                        let (status, body): (&str, Vec<u8>) = if path == "/page" {
+                            extra = "content-type: text/html; charset=utf-8\r\n";
+                            ("200 OK", b"<html>download here</html>".to_vec())
+                        } else if path == "/challenge" {
+                            extra = "cf-mitigated: challenge\r\ncontent-type: text/html\r\n";
+                            ("403 Forbidden", b"<html>just a moment</html>".to_vec())
+                        } else if let Some(n) = path.strip_prefix("/__down?bytes=") {
                             ("200 OK", vec![0; n.parse::<usize>().unwrap().min(1 << 20)])
                         } else if path == "/__up" {
                             ("200 OK", Vec::new())
@@ -483,7 +545,7 @@ pub(crate) mod tests {
                             ("404 Not Found", Vec::new())
                         };
                         let head = format!(
-                            "HTTP/1.1 {status}\r\ncontent-length: {}\r\n\r\n",
+                            "HTTP/1.1 {status}\r\n{extra}content-length: {}\r\n\r\n",
                             body.len()
                         );
                         if w.write_all(head.as_bytes()).is_err() || w.write_all(&body).is_err() {
@@ -540,6 +602,21 @@ pub(crate) mod tests {
         assert_eq!(t.bytes(), 0);
         assert!(t.error().is_some_and(|e| e.contains("404")));
         t.stop(Duration::from_secs(1));
+        // A page behind a bot check, and a page where a file should be.
+        for (path, says) in [
+            ("/challenge", "bot check"),
+            ("/page", "web page, not a file"),
+        ] {
+            let t = Transfer::start(&agent(1), &format!("{base}{path}"), Dir::Down, 1);
+            let end = Instant::now() + Duration::from_secs(5);
+            while t.error().is_none() && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(t.bytes(), 0, "{path} counted as download");
+            let e = t.error().unwrap_or_default();
+            assert!(e.contains(says), "{path}: {e}");
+            t.stop(Duration::from_secs(1));
+        }
     }
 
     #[test]
@@ -550,6 +627,13 @@ pub(crate) mod tests {
         assert!(cf.url(Dir::Down).ends_with("__down?bytes=25000000"));
         let f = Server::File(" https://files.example.net:8443/1GB.bin?x=1 ".into());
         assert_eq!(f.host().unwrap(), "files.example.net");
+        assert_eq!(f.probe_host().unwrap(), FILE_PROBE);
+        assert_eq!(cf.probe_host().unwrap(), HOST);
+        assert!(Server::File("ftp://x".into()).probe_host().is_err());
+        assert_eq!(
+            file_host(DEFAULT_FILE).unwrap(),
+            "ipv4.download.thinkbroadband.com"
+        );
         assert!(!f.uploads());
         assert_eq!(
             f.url(Dir::Down),

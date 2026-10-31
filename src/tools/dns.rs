@@ -143,7 +143,7 @@ impl DnsTool {
         });
         ui.weak(match self.source {
             Source::System => {
-                "System: addresses as apps see them (hosts file, DNS suffixes); other types from this machine's DNS server."
+                "System: as apps see it (hosts file, suffixes)."
             }
             Source::Authoritative => {
                 "Authoritative: asks the zone's own nameserver, so you see what is published before any caching."

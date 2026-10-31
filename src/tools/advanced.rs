@@ -99,9 +99,7 @@ impl AdvancedTool {
                 self.start(ui.ctx());
             }
         });
-        ui.weak(
-            "Mail and DNS health: asks the resolver above directly, not the system one, so you see what the internet sees.",
-        );
+        ui.weak("Asks the resolver above directly, so you see what the internet sees.");
         widgets::error(ui, &self.err);
         ui.separator();
 

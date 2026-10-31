@@ -281,7 +281,10 @@ fn csv(entries: &[&Entry]) -> String {
 /// Quote when needed, and defuse cells Excel would run as a formula: names
 /// and records come from the network (a PTR or TXT of "=HYPERLINK(…)").
 fn csv_field(v: &str) -> String {
-    let formula = v.starts_with(['=', '+', '-', '@', '\t', '\r']) && v.parse::<f64>().is_err();
+    // Full-width = + - @ count too: Excel reads them as the ASCII ones.
+    let formula = v.starts_with([
+        '=', '+', '-', '@', '|', '\t', '\r', '\u{FF1D}', '\u{FF0B}', '\u{FF0D}', '\u{FF20}',
+    ]) && v.parse::<f64>().is_err();
     let v = &if formula {
         format!("'{v}")
     } else {
@@ -382,6 +385,8 @@ mod tests {
     fn csv_defuses_formulas() {
         assert_eq!(csv_field("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
         assert_eq!(csv_field("@cmd"), "'@cmd");
+        assert_eq!(csv_field("|calc"), "'|calc");
+        assert_eq!(csv_field("\u{FF1D}1+1"), "'\u{FF1D}1+1");
         assert_eq!(csv_field("-1"), "-1");
         assert_eq!(csv_field("+5.5"), "+5.5");
         assert_eq!(csv_field("v=spf1 -all"), "v=spf1 -all");

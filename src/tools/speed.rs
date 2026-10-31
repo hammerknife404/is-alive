@@ -166,7 +166,7 @@ impl Default for SpeedTool {
     fn default() -> Self {
         Self {
             use_file: false,
-            file_url: String::new(),
+            file_url: speed::DEFAULT_FILE.into(),
             secs: 10,
             streams: 4,
             down: true,
@@ -230,26 +230,20 @@ impl SpeedTool {
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.use_file, false, speed::HOST)
-                            .on_hover_text(
-                                "Cloudflare's speed test service: download and upload. It's \
-anycast: the nearest Cloudflare data centre answers, usually inside your ISP's region.",
-                            );
+                            .on_hover_text("Cloudflare: download and upload, nearest data centre");
                         ui.selectable_value(&mut self.use_file, true, "Download a file")
                             .on_hover_text(
-                                "Any large file over HTTPS, fetched again and again on each \
-stream: your own server, a client's, or a host's test file. Download only.",
+                                "Download any large file. Download only; latency goes to 1.1.1.1",
                             );
                     });
                 if self.use_file {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.file_url)
+                            .char_limit(widgets::URL_MAX)
                             .desired_width(240.0)
                             .hint_text("https://host/100MB.bin"),
                     )
-                    .on_hover_text(
-                        "A file of 100 MB or more downloads best. Latency is measured to the \
-same host.",
-                    );
+                    .on_hover_text("The file's direct link. 1 GB or more works best");
                 }
             });
             ui.separator();
@@ -260,13 +254,10 @@ same host.",
                         .range(5..=60)
                         .suffix(" s"),
                 )
-                .on_hover_text("Per direction. Latency at idle is measured first, about 4 s.");
+                .on_hover_text("Per direction");
                 ui.label("Streams");
                 ui.add(egui::DragValue::new(&mut self.streams).range(1..=16))
-                    .on_hover_text(
-                        "Parallel connections per direction. 4 fills most lines; raise it for \
-multi-gigabit or long-distance links.",
-                    );
+                    .on_hover_text("Parallel connections. 4 suits most lines");
                 ui.checkbox(&mut self.down, "Download");
                 ui.add_enabled(!self.use_file, egui::Checkbox::new(&mut self.up, "Upload"))
                     .on_disabled_hover_text("A file download can't measure upload");
@@ -297,9 +288,7 @@ multi-gigabit or long-distance links.",
         if !self.has_results() && !running {
             widgets::empty_hint(
                 ui,
-                "Press Start: latency and jitter at idle, then download and upload with latency \
-probed under load (bufferbloat), and a VoIP call-quality estimate.\nIt saturates the line while it \
-runs, and a gigabit line moves over 1 GB each way.",
+                "Press Start. Measures latency, then download and upload under load. It fills the line while it runs.",
             );
             return;
         }
@@ -835,7 +824,7 @@ impl Prober {
 }
 
 fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {
-    let host = server.host().unwrap_or_default();
+    let host = server.probe_host().unwrap_or_default();
     let ip = match net::resolve(&host, false) {
         Ok(ip) => ip,
         Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
@@ -939,6 +928,10 @@ fn transfer(
     t.stop(Duration::from_secs(2));
     if total == 0 {
         let why = match err {
+            // The error already says why: no guessing at web filters.
+            Some(e) if e.contains("bot check") || e.contains("web page") => {
+                format!("{} failed: {e}.", phase.name())
+            }
             Some(e) => format!("{} failed: {e}. {BLOCKED_HINT}", phase.name()),
             None => format!("{} stopped before any data arrived.", phase.name()),
         };

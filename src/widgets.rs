@@ -169,26 +169,10 @@ pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
 /// Threads only cap how many probes are in flight; against targets that answer
 /// fast (RST, live hosts) the rate limit is what keeps a scan from bursting.
 pub const SPEEDS: &[(&str, usize, u32, &str)] = &[
-    (
-        "Gentle",
-        4,
-        10,
-        "10 probes/s, 4 in flight. Slowest; least load and least scan-like to IDS/EDR.",
-    ),
-    ("Normal", 16, 50, "50 probes/s, 16 in flight."),
-    (
-        "Fast",
-        64,
-        500,
-        "500 probes/s, 64 in flight. Expect IDS/EDR scan alerts.",
-    ),
-    (
-        "Unthrottled",
-        256,
-        0,
-        "No rate limit, 256 in flight. Tens of thousands of probes/s on a LAN; \
-will be flagged as a scan.",
-    ),
+    ("Gentle", 4, 10, "10 probes/s. Least likely to trip IDS/EDR"),
+    ("Normal", 16, 50, "50 probes/s"),
+    ("Fast", 64, 500, "500 probes/s. Expect IDS/EDR alerts"),
+    ("Unthrottled", 256, 0, "No limit. Will be flagged as a scan"),
 ];
 pub const DEFAULT_SPEED: usize = 1;
 
@@ -252,7 +236,7 @@ pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
             }
         });
     ui.add(egui::DragValue::new(rate).range(0..=100_000).suffix(" /s"))
-        .on_hover_text("Max probes started per second across all threads (0 = unlimited)");
+        .on_hover_text("Probes per second (0 = no limit)");
     ui.add(egui::DragValue::new(threads).range(1..=1024).suffix(" thr"))
         .on_hover_text("Max probes in flight at once");
 }
@@ -284,11 +268,22 @@ pub fn empty_hint(ui: &mut Ui, text: &str) {
     ui.vertical_centered(|ui| ui.weak(text));
 }
 
+/// Most characters a field takes. A host, domain or search never needs
+/// more; a paste of a whole log into one is cut off, not carried around.
+pub const FIELD_MAX: usize = 255;
+/// A link (Speed Test's file).
+pub const URL_MAX: usize = 2048;
+/// Notes: about 1 MB of text, far beyond any site's notes.
+pub const NOTES_MAX: usize = 1_000_000;
+/// Known problems in the site bundle.
+pub const PROBLEMS_MAX: usize = 20_000;
+
 /// Single-line text field; returns true if Enter was pressed in it.
 pub fn field(ui: &mut Ui, label: &str, value: &mut String, width: f32, hint: &str) -> bool {
     ui.label(label);
     let r = ui.add(
         egui::TextEdit::singleline(value)
+            .char_limit(FIELD_MAX)
             .desired_width(width)
             .hint_text(hint),
     );
@@ -360,6 +355,24 @@ pub fn export_menu<'a>(
     }
 }
 
+/// The saved file's path, ending in one of `exts`: a name typed as
+/// "notes.bat" or "report.xlsm" saves as "notes.bat.txt", so nothing this
+/// app writes can be run by a double-click or open with macros.
+pub fn safe_path(path: std::path::PathBuf, exts: &[&str]) -> std::path::PathBuf {
+    let ok = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)));
+    match exts.first() {
+        Some(x) if !ok => {
+            let mut s = path.into_os_string();
+            s.push(format!(".{x}"));
+            s.into()
+        }
+        _ => path,
+    }
+}
+
 pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
     std::thread::spawn(move || {
         let Some(path) = rfd::FileDialog::new()
@@ -369,6 +382,7 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
         else {
             return;
         };
+        let path = safe_path(path, &exts);
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -499,5 +513,21 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
             }
         }
         line.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn saves_only_with_an_allowed_extension() {
+        let p = |s: &str| safe_path(PathBuf::from(s), &["txt", "log"]);
+        assert_eq!(p("a.txt"), PathBuf::from("a.txt"));
+        assert_eq!(p("a.LOG"), PathBuf::from("a.LOG"));
+        assert_eq!(p("a.bat"), PathBuf::from("a.bat.txt"));
+        assert_eq!(p("report.xlsm"), PathBuf::from("report.xlsm.txt"));
+        assert_eq!(p("noext"), PathBuf::from("noext.txt"));
     }
 }

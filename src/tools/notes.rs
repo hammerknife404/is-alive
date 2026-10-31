@@ -3,6 +3,7 @@
 //! the editor highlights every value that will be redacted. The raw text
 //! lives only in memory: after a restart the notes come back sanitized.
 
+use crate::job::Job;
 use crate::markdown;
 use crate::net::hostinfo::HostInfo;
 use crate::redact::{self, Hit, Pick};
@@ -45,6 +46,59 @@ pub struct NotesTool {
     cache: RefCell<(u64, Vec<Hit>)>,
     /// The same for the sanitized text (preview, status, Site Bundle).
     clean: RefCell<(u64, (String, Vec<Hit>))>,
+    /// A text file opened to read, and whether its tab is showing.
+    file: Option<Viewed>,
+    on_file: bool,
+    opening: Option<Job<Result<Viewed, String>>>,
+}
+
+/// A text or config file open in the viewer: read-only, never saved or
+/// bundled with the notes.
+struct Viewed {
+    path: PathBuf,
+    text: String,
+    lines: usize,
+    bytes: u64,
+}
+
+/// Larger files are refused: this is for reading configs, not big logs.
+const VIEW_MAX: u64 = 5 * 1024 * 1024;
+
+/// Read `path` as text: UTF-8 (BOM or not), UTF-16 with a BOM, else
+/// whatever decodes. A file with NUL bytes and no UTF-16 BOM is binary.
+fn read_text(path: &std::path::Path) -> Result<Viewed, String> {
+    let name = crate::tools::export::file_name(path);
+    let meta = std::fs::metadata(path).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a file"));
+    }
+    if meta.len() > VIEW_MAX {
+        return Err(format!(
+            "{name}: {:.1} MB; the viewer opens files up to 5 MB",
+            meta.len() as f64 / 1048576.0
+        ));
+    }
+    let data = std::fs::read(path).map_err(|e| format!("{name}: {e}"))?;
+    let utf16 = |b: &[u8], word: fn([u8; 2]) -> u16| {
+        let w: Vec<u16> = b.as_chunks::<2>().0.iter().map(|&c| word(c)).collect();
+        String::from_utf16_lossy(&w)
+    };
+    let text = match data.as_slice() {
+        [0xef, 0xbb, 0xbf, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xff, 0xfe, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xfe, 0xff, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        d if d[..d.len().min(8192)].contains(&0) => {
+            return Err(format!("{name}: not a text file"));
+        }
+        d => String::from_utf8_lossy(d).into_owned(),
+    };
+    let text = text.replace("\r\n", "\n");
+    Ok(Viewed {
+        path: path.to_path_buf(),
+        lines: text.lines().count(),
+        bytes: meta.len(),
+        text,
+    })
 }
 
 fn path() -> Option<PathBuf> {
@@ -67,6 +121,7 @@ impl Default for NotesTool {
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok())
                 .unwrap_or_default(),
+            known: Vec::new(),
         };
         // A file with anything redactable in it (edited by hand, or from an
         // older build) is rewritten sanitized at once, not on the next edit.
@@ -74,7 +129,7 @@ impl Default for NotesTool {
         let mut notes = Self {
             text,
             ov,
-            view: View::Split,
+            view: View::Edit,
             show_hits: true,
             dirty: None,
             saved: None,
@@ -83,6 +138,9 @@ impl Default for NotesTool {
             flash: f64::NEG_INFINITY,
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            file: None,
+            on_file: false,
+            opening: None,
         };
         if unclean {
             notes.write();
@@ -130,7 +188,7 @@ impl NotesTool {
         let r = p
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|_| std::fs::write(&tmp, clean))
+            .and_then(|_| crate::theme::write_private(&tmp, clean))
             .and_then(|_| std::fs::rename(&tmp, &p));
         match r {
             Ok(()) => {
@@ -153,13 +211,24 @@ impl NotesTool {
                 _ => Ok(()),
             }
         } else {
-            std::fs::write(
+            crate::theme::write_private(
                 &p,
                 serde_json::to_string(&self.ov.allow).unwrap_or_default(),
             )
         };
         if let Err(e) = r {
             self.err = Some(format!("Couldn't save the allowed values: {e}"));
+        }
+    }
+
+    /// Secret values from the loaded backups and exports. When they change,
+    /// the saved notes are rewritten so none of them stays on disk.
+    pub fn set_known(&mut self, known: &[String], now: f64) {
+        if self.ov.known != known {
+            self.ov.known = known.to_vec();
+            if !self.text.is_empty() {
+                self.changed(now);
+            }
         }
     }
 
@@ -263,7 +332,11 @@ impl NotesTool {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
+    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo, look: &mut crate::theme::Settings) {
+        let font = FontId::new(
+            look.notes_size as f32,
+            crate::fonts::family(ui.ctx(), &look.notes_font),
+        );
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         let hits = hits_for(&self.cache, &self.text, &self.ov);
@@ -272,10 +345,47 @@ impl NotesTool {
         }
         self.known_hits = hits.len();
 
-        self.toolbar(ui, info, &hits);
-        self.status(ui, &hits, now);
+        let mut opened = None;
+        crate::job::pump(&mut self.opening, |r| opened = Some(r));
+        match opened {
+            Some(Ok(v)) => {
+                self.file = Some(v);
+                self.on_file = true;
+            }
+            Some(Err(e)) => self.err = Some(e),
+            None => {}
+        }
+        if self.file.is_some() {
+            self.tabs(ui);
+        }
+        if self.on_file && self.file.is_some() {
+            ui.horizontal(|ui| {
+                ui.weak("Read-only");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    font_menus(ui, look)
+                });
+            });
+        } else {
+            self.on_file = false;
+            self.toolbar(ui, info, &hits, &font, look);
+        }
         widgets::error(ui, &self.err);
-        ui.separator();
+        egui::Panel::bottom("notes_footer")
+            .show_separator_line(true)
+            .show(ui, |ui| {
+                ui.add_space(2.0);
+                if self.on_file {
+                    self.file_footer(ui);
+                } else {
+                    self.footer(ui, &hits, now);
+                }
+            });
+        if self.on_file {
+            if let Some(v) = &self.file {
+                viewer(ui, v, &font);
+            }
+            return;
+        }
 
         let narrow = ui.available_width() < 720.0;
         let view = if narrow && self.view == View::Split {
@@ -284,28 +394,89 @@ impl NotesTool {
             self.view
         };
         match view {
-            View::Edit => self.editor(ui),
-            View::Preview => self.preview(ui),
-            View::Split => {
-                ui.columns(2, |c| {
-                    self.editor(&mut c[0]);
-                    self.preview(&mut c[1]);
-                });
-            }
+            View::Edit => self.editor(ui, &font),
+            View::Preview => self.preview(ui, &font),
+            View::Split => self.split(ui, &font, look),
         }
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, info: &HostInfo, hits: &[Hit]) {
+    /// Editor and preview side by side, with a divider that drags between
+    /// 20% and 80% of the width (double-click: back to half).
+    fn split(&mut self, ui: &mut Ui, font: &FontId, look: &mut crate::theme::Settings) {
+        const GAP: f32 = 10.0;
+        const MIN: f32 = 160.0;
+        let full = ui.available_rect_before_wrap();
+        let w = full.width();
+        let left_w = (w * look.notes_split).clamp(MIN.min(w / 2.0), (w - GAP - MIN).max(w / 2.0));
+        let left =
+            egui::Rect::from_min_size(full.min, egui::vec2(left_w - GAP / 2.0, full.height()));
+        let handle = egui::Rect::from_min_size(
+            egui::pos2(left.right(), full.top()),
+            egui::vec2(GAP, full.height()),
+        );
+        let right = egui::Rect::from_min_max(egui::pos2(handle.right(), full.top()), full.max);
+
+        let r = ui.interact(
+            handle,
+            ui.id().with("notes_split"),
+            egui::Sense::click_and_drag(),
+        );
+        let active = r.hovered() || r.dragged();
+        if active {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if r.dragged()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            look.notes_split = ((p.x - full.left()) / w).clamp(0.2, 0.8);
+        }
+        if r.double_clicked() {
+            look.notes_split = 0.5;
+        }
+        if r.drag_stopped() || r.double_clicked() {
+            crate::theme::save(look);
+        }
+        let colour = if active {
+            crate::theme::accent()
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke.color
+        };
+        let x = handle.center().x;
+        ui.painter().vline(
+            x,
+            handle.y_range(),
+            Stroke::new(if active { 2.0 } else { 1.0 }, colour),
+        );
+        // A grip in the middle, so it reads as something to drag.
+        for dy in [-6.0, 0.0, 6.0] {
+            ui.painter()
+                .circle_filled(egui::pos2(x, handle.center().y + dy), 1.5, colour);
+        }
+
+        ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
+            self.editor(ui, font)
+        });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+            self.preview(ui, font)
+        });
+        ui.allocate_rect(full, egui::Sense::hover());
+    }
+
+    fn toolbar(
+        &mut self,
+        ui: &mut Ui,
+        info: &HostInfo,
+        hits: &[Hit],
+        font: &FontId,
+        look: &mut crate::theme::Settings,
+    ) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
+        // Wraps onto a second row when the window is narrow.
+        ui.horizontal_wrapped(|ui| {
             for (v, name, tip) in [
-                (View::Edit, "Edit", "Just the editor"),
-                (View::Split, "Split", "Editor and preview side by side"),
-                (
-                    View::Preview,
-                    "Preview",
-                    "The notes as they'll be exported: sanitized and formatted",
-                ),
+                (View::Edit, "Edit", "Editor only"),
+                (View::Split, "Split", "Editor and preview"),
+                (View::Preview, "Preview", "Formatted, as saved"),
             ] {
                 if ui
                     .selectable_label(self.view == v, name)
@@ -350,82 +521,270 @@ impl NotesTool {
             if ui.button("H").on_hover_text("Heading").clicked() {
                 self.line_prefix(&ctx, "## ");
             }
-            if ui
-                .button("•")
-                .on_hover_text("Bullet list (Enter continues it)")
-                .clicked()
-            {
+            if ui.button("•").on_hover_text("Bullet list").clicked() {
                 self.line_prefix(&ctx, "- ");
             }
             if ui
                 .button("☐")
-                .on_hover_text("Task box: tick it in the preview")
+                .on_hover_text("Task box (tick it in the preview)")
                 .clicked()
             {
                 self.line_prefix(&ctx, "- [ ] ");
             }
+            let mut emoji = None;
+            // Picking a style keeps the menu open; picking an emoji closes it.
+            let stay = egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            egui::containers::menu::MenuButton::new(RichText::new("☺").size(16.0))
+                .config(stay)
+                .ui(ui, |ui| {
+                    // Every style is on offer in every theme.
+                    ui.horizontal(|ui| {
+                        ui.weak("Style");
+                        for s in crate::theme::EmojiStyle::ALL {
+                            if ui.selectable_label(look.emoji == s, s.name()).clicked() {
+                                look.emoji = s;
+                                crate::theme::set_emoji_style(s);
+                                crate::theme::save(look);
+                            }
+                        }
+                    });
+                    ui.separator();
+                    egui::Grid::new("notes_emoji")
+                        .spacing([2.0, 2.0])
+                        .show(ui, |ui| {
+                            for (i, (e, code, what)) in markdown::SHORTCODES.iter().enumerate() {
+                                let c = e.chars().next().unwrap_or(' ');
+                                let glyph = RichText::new(*e)
+                                    .size(font.size * crate::theme::EMOJI_SCALE)
+                                    .color(crate::theme::emoji_colour(
+                                        c,
+                                        ui.visuals().text_color(),
+                                    ));
+                                if ui
+                                    .button(glyph)
+                                    .on_hover_text(format!(
+                                        "{what}\n:{code}:  (Preview draws the code as the emoji)"
+                                    ))
+                                    .clicked()
+                                {
+                                    emoji = Some(*e);
+                                    ui.close();
+                                }
+                                if i % 8 == 7 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                })
+                .0
+                .on_hover_text("Emoji");
+            if let Some(e) = emoji {
+                let n = e.chars().count();
+                self.edit_at_cursor(&ctx, |_| (e.to_string(), n));
+            }
+            ui.separator();
+            if ui
+                .button("Time")
+                .on_hover_text("Insert the date, time, time zone and clock source")
+                .clicked()
+            {
+                let stamp = crate::net::clock::stamp();
+                let n = stamp.chars().count();
+                self.edit_at_cursor(&ctx, |_| (stamp, n));
+            }
+            if ui
+                .button("Host info")
+                .on_hover_text("Insert this computer's name, LAN, MAC, gateway and WAN")
+                .clicked()
+            {
+                let mut block = info.markdown();
+                // On a line of its own.
+                let at = widgets::text_selection(&ctx, egui::Id::new(EDITOR_ID), &self.text)
+                    .map_or(self.text.len(), |r| r.start);
+                if at > 0 && !self.text[..at].ends_with('\n') {
+                    block.insert(0, '\n');
+                }
+                let n = block.chars().count();
+                self.edit_at_cursor(&ctx, |_| (block, n));
+            }
             ui.separator();
             let pick = self.pick(&ctx, hits);
             let (label, tip) = match &pick {
-                Some(Pick::Unredact(_)) => (
-                    "Unredact",
-                    "Keep this value as written, here and wherever else it appears (Ctrl+R). \
-It's then saved, copied and bundled in plain text.",
-                ),
+                Some(Pick::Unredact(_)) => {
+                    ("Unredact", "Show this value again, everywhere (Ctrl+R)")
+                }
                 _ => (
                     "Redact",
-                    "Redact the selected text, here and wherever else it appears (Ctrl+R). \
-Put the cursor on a highlighted value to unredact it instead.",
+                    "Hide the selected text, everywhere it appears (Ctrl+R)",
                 ),
             };
             if ui
                 .add_enabled(pick.is_some(), egui::Button::new(label))
                 .on_hover_text(tip)
-                .on_disabled_hover_text(
-                    "Select text to redact it, or put the cursor on a highlighted value to keep it",
-                )
+                .on_disabled_hover_text("Select text to redact")
                 .clicked()
                 && let Some(p) = pick
             {
                 self.apply(&ctx, p);
             }
             self.overrides_menu(ui);
-            ui.separator();
+            // Font on the right; on its own row when this one is full.
+            if ui.available_size_before_wrap().x <= 130.0 {
+                ui.end_row();
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                font_menus(ui, look)
+            });
+        });
+    }
+
+    /// Notes and the open file, when there is one.
+    fn tabs(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.on_file, "Notes").clicked() {
+                self.on_file = false;
+            }
+            let Some(v) = &self.file else { return };
+            let name = crate::tools::export::file_name(&v.path);
             if ui
-                .button("Time")
-                .on_hover_text("Insert the date and time")
+                .selectable_label(self.on_file, &name)
+                .on_hover_text(v.path.display().to_string())
                 .clicked()
             {
-                let stamp = chrono::Local::now()
-                    .format("**%Y-%m-%d %H:%M** ")
-                    .to_string();
-                let n = stamp.chars().count();
-                self.edit_at_cursor(&ctx, |_| (stamp, n));
+                self.on_file = true;
             }
             if ui
-                .button("Host info")
-                .on_hover_text("Insert this machine's LAN, gateway and WAN")
+                .small_button("×")
+                .on_hover_text("Close the file")
                 .clicked()
             {
-                let line = format!(
-                    "{} · {}\n",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M"),
-                    info.summary().lines().collect::<Vec<_>>().join(" · ")
-                );
-                let n = line.chars().count();
-                self.edit_at_cursor(&ctx, |_| (line, n));
+                self.file = None;
+                self.on_file = false;
+            }
+        });
+        ui.separator();
+    }
+
+    /// Ask for a text file to read, off the UI thread.
+    fn open(&mut self, ctx: &egui::Context) {
+        if self.opening.is_some() {
+            return;
+        }
+        self.err = None;
+        self.opening = Some(Job::spawn(ctx, |tx| {
+            let picked = rfd::FileDialog::new()
+                .set_title("Open a text file")
+                .add_filter(
+                    "Text and config files",
+                    &[
+                        "txt", "log", "cfg", "conf", "config", "ini", "md", "json", "xml", "csv",
+                        "yaml", "yml", "toml", "ps1", "bat", "cmd", "sh", "reg", "inf",
+                    ],
+                )
+                .add_filter("All files", &["*"])
+                .pick_file();
+            if let Some(p) = picked {
+                tx.send(read_text(&p));
+            }
+        }));
+    }
+
+    /// Under an open file: what it is, and Open / Copy / Close.
+    fn file_footer(&mut self, ui: &mut Ui) {
+        let Some(v) = &self.file else { return };
+        let (mut close, mut open) = (false, false);
+        ui.horizontal(|ui| {
+            ui.weak(format!(
+                "{} · {} line{} · {:.1} KB",
+                v.path.display(),
+                v.lines,
+                if v.lines == 1 { "" } else { "s" },
+                v.bytes as f64 / 1024.0
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.button("Close").clicked();
+                if ui
+                    .button("Copy")
+                    .on_hover_text("Copy the whole file")
+                    .clicked()
+                {
+                    widgets::copy(ui.ctx(), v.text.clone());
+                    widgets::toast("File copied", true);
+                }
+                open = ui
+                    .button("Open…")
+                    .on_hover_text("Open another text file")
+                    .clicked();
+            });
+        });
+        if open {
+            self.open(ui.ctx());
+        }
+        if close {
+            self.file = None;
+            self.on_file = false;
+        }
+    }
+
+    /// Under the notes: counts, what's redacted, autosave, and the ways out.
+    fn footer(&mut self, ui: &mut Ui, hits: &[Hit], now: f64) {
+        ui.horizontal_wrapped(|ui| {
+            let (words, lines) = (
+                self.text.split_whitespace().count(),
+                self.text.lines().count(),
+            );
+            let s = |n: usize| if n == 1 { "" } else { "s" };
+            ui.weak(format!(
+                "{words} word{} · {lines} line{}",
+                s(words),
+                s(lines)
+            ));
+            ui.separator();
+            if hits.is_empty() {
+                ui.weak("Nothing redacted");
+            } else {
+                let age = (now - self.flash) as f32;
+                let warn = widgets::warn();
+                let glow = if age < 2.0 {
+                    ui.ctx().request_repaint();
+                    0.5 + 0.5 * (age * 6.0).cos().abs() * (1.0 - age / 2.0)
+                } else {
+                    0.0
+                };
+                let text = RichText::new(format!("🔑 {}", redact::summary(hits))).color(warn);
+                egui::Frame::new()
+                    .fill(warn.gamma_multiply(0.10 + 0.25 * glow))
+                    .corner_radius(4)
+                    .inner_margin(egui::Margin::symmetric(6, 1))
+                    .show(ui, |ui| ui.label(text))
+                    .response
+                    .on_hover_text("Hidden in saves, copies and the Site Bundle");
+                ui.checkbox(&mut self.show_hits, "Highlight")
+                    .on_hover_text("Highlight them in the editor");
+            }
+            ui.separator();
+            let saved = match (&self.dirty, &self.saved) {
+                (Some(_), _) => "Saving…".to_string(),
+                (None, Some(t)) => format!("Autosaved {t}"),
+                (None, None) => "Autosave on".to_string(),
+            };
+            ui.weak(saved).on_hover_text(
+                path().map_or("No profile folder".into(), |p| p.display().to_string()),
+            );
+            if ui.available_size_before_wrap().x <= 340.0 {
+                ui.end_row();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let empty = self.is_empty();
                 if widgets::confirm_button(ui, "notes_clear", !empty, "Clear", "Empty the notes") {
                     self.text.clear();
-                    let now = ui.input(|i| i.time);
                     self.changed(now);
                 }
                 ui.add_enabled_ui(!empty, |ui| {
                     if ui
                         .button("Save .md…")
-                        .on_hover_text("Save the sanitized notes as a Markdown file")
+                        .on_hover_text("Save as Markdown, redacted")
                         .clicked()
                     {
                         widgets::save_file(
@@ -435,15 +794,28 @@ Put the cursor on a highlighted value to unredact it instead.",
                             self.sanitized().0,
                         );
                     }
-                    if ui
-                        .button("Copy")
-                        .on_hover_text("Copy the sanitized notes")
-                        .clicked()
-                    {
+                    if widgets::confirm_button(
+                        ui,
+                        "notes_raw_copy",
+                        true,
+                        "Raw copy",
+                        "Copy as written, nothing hidden",
+                    ) {
+                        widgets::copy(ui.ctx(), self.text.clone());
+                        widgets::toast("Copied unredacted", false);
+                    }
+                    if ui.button("Copy").on_hover_text("Copy, redacted").clicked() {
                         widgets::copy(ui.ctx(), self.sanitized().0);
-                        widgets::toast("Notes copied (sanitized)", true);
+                        widgets::toast("Notes copied", true);
                     }
                 });
+                if ui
+                    .button("Open…")
+                    .on_hover_text("Open a text or config file to read")
+                    .clicked()
+                {
+                    self.open(ui.ctx());
+                }
             });
         });
     }
@@ -458,12 +830,12 @@ Put the cursor on a highlighted value to unredact it instead.",
         ui.menu_button(format!("By hand ({n})"), |ui| {
             if !self.ov.redact.is_empty() {
                 ui.label(RichText::new("Redacted").strong());
-                ui.weak("Only in memory: after a restart the notes hold the [REDACTED] marker.");
+                ui.weak("In memory only; after a restart just the marker remains.");
                 let mut drop = None;
                 for (i, v) in self.ov.redact.iter().enumerate() {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("✕")
+                            .small_button("×")
                             .on_hover_text("Stop redacting it")
                             .clicked()
                         {
@@ -480,12 +852,12 @@ Put the cursor on a highlighted value to unredact it instead.",
             }
             if !self.ov.allow.is_empty() {
                 ui.label(RichText::new("Kept as written").strong());
-                ui.weak("Saved, copied and bundled in plain text.");
+                ui.weak("Shown in saves and copies.");
                 let mut drop = None;
                 for (i, v) in self.ov.allow.iter().enumerate() {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("✕")
+                            .small_button("×")
                             .on_hover_text("Redact it again")
                             .clicked()
                         {
@@ -502,78 +874,14 @@ Put the cursor on a highlighted value to unredact it instead.",
             }
         })
         .response
-        .on_hover_text("Values redacted or kept by hand");
+        .on_hover_text("Redacted or kept by hand");
         if changed {
             let now = ui.input(|i| i.time);
             self.changed(now);
         }
     }
 
-    /// Word count, what will be redacted (flashing when it grows), and the
-    /// autosave state.
-    fn status(&mut self, ui: &mut Ui, hits: &[Hit], now: f64) {
-        ui.horizontal(|ui| {
-            let words = self.text.split_whitespace().count();
-            ui.weak(format!(
-                "{words} word{} · {} line{}",
-                if words == 1 { "" } else { "s" },
-                self.text.lines().count(),
-                if self.text.lines().count() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ));
-            ui.separator();
-            if hits.is_empty() {
-                ui.label(
-                    RichText::new("✔ nothing to redact")
-                        .color(widgets::ok())
-                        .small(),
-                );
-            } else {
-                let age = (now - self.flash) as f32;
-                let warn = widgets::warn();
-                let glow = if age < 2.0 {
-                    ui.ctx().request_repaint();
-                    0.5 + 0.5 * (age * 6.0).cos().abs() * (1.0 - age / 2.0)
-                } else {
-                    0.0
-                };
-                let text = RichText::new(format!("⚠ {}", redact::summary(hits))).color(warn);
-                let r = egui::Frame::new()
-                    .fill(warn.gamma_multiply(0.10 + 0.25 * glow))
-                    .corner_radius(4)
-                    .inner_margin(egui::Margin::symmetric(6, 1))
-                    .show(ui, |ui| ui.label(text))
-                    .response;
-                let mut tip = "Replaced with [REDACTED: …] in everything that leaves the editor: \
-autosave, Copy, Save and Site Bundle."
-                    .to_string();
-                for h in hits.iter().take(12) {
-                    let s: String = self.text[h.span.clone()].chars().take(3).collect();
-                    tip += &format!("\n• {}: {s}…", h.kind.label());
-                }
-                r.on_hover_text(tip);
-                ui.checkbox(&mut self.show_hits, "Highlight")
-                    .on_hover_text("Mark each value that will be redacted in the editor");
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = match (&self.dirty, &self.saved) {
-                    (Some(_), _) => "Saving…".to_string(),
-                    (None, Some(t)) => format!("Autosaved {t} (sanitized)"),
-                    (None, None) => "Autosave keeps a sanitized copy".to_string(),
-                };
-                ui.weak(label).on_hover_text(format!(
-                    "Saved to {} with sensitive values replaced, so nothing redactable is ever \
-written to disk. After a restart the notes come back sanitized.",
-                    path().map_or("(no profile folder)".into(), |p| p.display().to_string())
-                ));
-            });
-        });
-    }
-
-    fn editor(&mut self, ui: &mut Ui) {
+    fn editor(&mut self, ui: &mut Ui, font: &FontId) {
         let id = egui::Id::new(EDITOR_ID);
         let focused = ui.memory(|m| m.has_focus(id));
         let ctx = ui.ctx().clone();
@@ -606,7 +914,7 @@ written to disk. After a restart the notes come back sanitized.",
                 .into_iter()
                 .map(|h| h.span)
                 .collect();
-            let mut job = highlight(ui, text, if show { &hits } else { &[] });
+            let mut job = highlight(ui, text, if show { &hits } else { &[] }, font);
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
@@ -617,14 +925,11 @@ written to disk. After a restart the notes come back sanitized.",
                 let fill = ui.available_size();
                 egui::TextEdit::multiline(&mut self.text)
                     .id(id)
+                    .char_limit(widgets::NOTES_MAX)
                     .desired_width(f32::INFINITY)
                     .min_size(fill)
                     .lock_focus(true)
-                    .hint_text(
-                        "Site notes in Markdown: # headings, - lists, - [ ] tasks, **bold**, `code`.\n\
-Passwords, keys, tokens and patient details are highlighted here and replaced before anything is \
-saved, copied or bundled.",
-                    )
+                    .hint_text("Notes in Markdown. Select text and press Ctrl+R to redact it.")
                     .layouter(&mut layouter)
                     .show(ui)
             })
@@ -672,18 +977,18 @@ saved, copied or bundled.",
         state.store(ctx, id);
     }
 
-    fn preview(&mut self, ui: &mut Ui) {
+    fn preview(&mut self, ui: &mut Ui, font: &FontId) {
         let (clean, _) = self.sanitized();
         egui::ScrollArea::vertical()
             .id_salt("notes_preview_scroll")
             .auto_shrink(false)
             .show(ui, |ui| {
                 if clean.trim().is_empty() {
-                    ui.weak("The preview shows the notes as they'll leave this machine.");
+                    ui.weak("Formatted, as saved.");
                     return;
                 }
                 // Line numbers match the raw text, so a ticked box maps back.
-                if let Some(line) = markdown::render(ui, &clean) {
+                if let Some(line) = markdown::render(ui, &clean, font) {
                     markdown::toggle_task(&mut self.text, line);
                     let now = ui.input(|i| i.time);
                     self.changed(now);
@@ -692,9 +997,76 @@ saved, copied or bundled.",
     }
 }
 
+/// Font and size menus, laid out right to left; saved when changed.
+fn font_menus(ui: &mut Ui, look: &mut crate::theme::Settings) {
+    let before = (look.notes_font.clone(), look.notes_size);
+    egui::ComboBox::from_id_salt("notes_size")
+        .width(44.0)
+        .selected_text(look.notes_size.to_string())
+        .show_ui(ui, |ui| {
+            for &n in crate::theme::NOTES_SIZES {
+                ui.selectable_value(&mut look.notes_size, n, n.to_string());
+            }
+        })
+        .response
+        .on_hover_text("Text size");
+    egui::ComboBox::from_id_salt("notes_font")
+        .width(130.0)
+        .selected_text(look.notes_font.as_str())
+        .show_ui(ui, |ui| {
+            for name in crate::fonts::names() {
+                ui.selectable_value(&mut look.notes_font, name.to_string(), name);
+            }
+        })
+        .response
+        .on_hover_text("Font (the monospace ones this computer has are listed too)");
+    if (look.notes_font.clone(), look.notes_size) != before {
+        crate::theme::save(look);
+    }
+}
+
+/// An open file, read-only: line numbers, no wrapping, select and copy.
+fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
+    let numbers: String = (1..=v.lines.max(1)).map(|n| format!("{n}\n")).collect();
+    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
+        let mut job = LayoutJob::simple(
+            buf.as_str().to_string(),
+            font.clone(),
+            ui.visuals().text_color(),
+            f32::INFINITY,
+        );
+        job.wrap.max_width = f32::INFINITY;
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    egui::ScrollArea::both()
+        .id_salt("notes_viewer")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(numbers.trim_end())
+                            .font(font.clone())
+                            .color(ui.visuals().weak_text_color()),
+                    )
+                    .selectable(false),
+                );
+                ui.separator();
+                let mut text = v.text.as_str();
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .font(font.clone())
+                        .frame(egui::Frame::NONE)
+                        .desired_width(f32::INFINITY)
+                        .layouter(&mut layouter),
+                );
+            });
+        });
+}
+
 /// Editor colouring: headings, list markers and code, and a highlight on
 /// every value that will be redacted.
-pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob {
+pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontId) -> LayoutJob {
     const PLAIN: u8 = 0;
     const HEAD: u8 = 1;
     const MARK: u8 = 2;
@@ -749,7 +1121,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob
         }
     }
     let vis = ui.visuals();
-    let font = FontId::monospace(13.0);
+    let font = font.clone();
     let warn = widgets::warn();
     let mut job = LayoutJob::default();
     let mut start = 0;
@@ -769,7 +1141,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob
             },
         );
         if s & !HIT == HEAD {
-            f.font_id = FontId::monospace(14.0);
+            f.font_id = FontId::new(font.size + 1.0, font.family.clone());
         }
         if s & !HIT == CODE {
             f.background = vis.code_bg_color;
@@ -783,7 +1155,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>]) -> LayoutJob
                 Color32::BLACK
             };
         }
-        job.append(&text[start..i], 0.0, f);
+        crate::theme::append_with_emoji(&mut job, &text[start..i], &f);
         start = i;
     }
     job
@@ -806,6 +1178,9 @@ mod tests {
             ov: Default::default(),
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            file: None,
+            on_file: false,
+            opening: None,
         }
     }
 
@@ -821,25 +1196,84 @@ mod tests {
     }
 
     #[test]
+    fn opens_text_files_and_refuses_binary_ones() {
+        let dir = std::env::temp_dir().join(format!("is-alive-view-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |n: &str, d: &[u8]| {
+            let p = dir.join(n);
+            std::fs::write(&p, d).unwrap();
+            p
+        };
+        let v = read_text(&write(
+            "a.cfg",
+            b"\xef\xbb\xbfhostname fw1\r\ninterface X0\r\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            (v.text.as_str(), v.lines),
+            ("hostname fw1\ninterface X0\n", 2)
+        );
+        let mut wide = vec![0xff, 0xfe];
+        wide.extend(
+            "[global]\nname=x\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        assert_eq!(
+            read_text(&write("b.ini", &wide)).unwrap().text,
+            "[global]\nname=x\n"
+        );
+        let e = read_text(&write("c.bin", b"MZ\x90\x00\x03")).err().unwrap();
+        assert!(e.contains("not a text file"), "{e}");
+        let big = write("d.log", &vec![b'a'; (VIEW_MAX + 1) as usize]);
+        assert!(read_text(&big).err().unwrap().contains("up to 5 MB"));
+        // Drawn without trouble, line numbers and all.
+        let v = read_text(&write("e.txt", b"one\ntwo\nthree")).unwrap();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            viewer(ui, &v, &FontId::monospace(13.0));
+        });
+        out.textures_delta.clear();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn secrets_from_a_loaded_backup_are_redacted() {
+        let mut n = notes("staff wifi: see board. Bobcat2019 works");
+        assert!(n.sanitized().0.contains("Bobcat2019"));
+        n.set_known(&["Bobcat2019".into()], 1.0);
+        assert!(n.dirty.is_some(), "the saved copy is rewritten");
+        let clean = n.sanitized().0;
+        assert!(
+            !clean.contains("Bobcat2019") && !clean.contains("4471"),
+            "{clean}"
+        );
+        assert!(clean.contains("[🔑 REDACTED: from config]"));
+    }
+
+    #[test]
     fn redact_and_unredact_by_hand() {
         let ctx = egui::Context::default();
         let mut n = notes("Lockbox 4471, again 4471\nOffice365\npassword: hunter2");
         let hits = |n: &NotesTool| hits_for(&n.cache, &n.text, &n.ov);
-        assert_eq!(hits(&n).len(), 2);
+        // Nothing is guessed: only the loaded config's secret is redacted.
+        assert!(hits(&n).is_empty());
+        n.set_known(&["Office365".into()], 0.0);
+        assert_eq!(hits(&n).len(), 1);
 
-        // Select a value nothing detects: Redact, everywhere.
+        // Select a value: Redact, everywhere.
         select(&ctx, &n, "4471");
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         assert!(matches!(p, Pick::Redact(_)));
         n.apply(&ctx, p);
-        assert_eq!(hits(&n).len(), 4);
+        assert_eq!(hits(&n).len(), 3);
         assert!(
             n.sanitized()
                 .0
-                .starts_with("Lockbox [REDACTED: by hand], again [REDACTED: by hand]")
+                .starts_with("Lockbox [🔑 REDACTED: by hand], again [🔑 REDACTED: by hand]")
         );
 
-        // Cursor on a false positive: Unredact keeps it.
+        // Cursor on a config value that's fine to show: Unredact keeps it.
         select(&ctx, &n, "fice");
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         assert!(matches!(p, Pick::Unredact(_)));
@@ -852,7 +1286,7 @@ mod tests {
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         n.apply(&ctx, p);
         assert!(n.ov.redact.is_empty());
-        assert!(n.sanitized().0.ends_with("password: [REDACTED: password]"));
+        assert!(n.sanitized().0.ends_with("password: hunter2"));
         // Nothing selected and no hit under the cursor: nothing to do.
         select(&ctx, &n, "");
         assert!(n.pick(&ctx, &hits(&n)).is_none());
@@ -865,7 +1299,7 @@ mod tests {
             let t = "# Héading\n- pass: ünïcode\n`x` done";
             let hits: Vec<_> = redact::find(t).into_iter().map(|h| h.span).collect();
             assert_eq!(hits.len(), 1);
-            let job = highlight(ui, t, &hits);
+            let job = highlight(ui, t, &hits, &FontId::monospace(13.0));
             assert_eq!(job.text, t);
         });
         out.textures_delta.clear();

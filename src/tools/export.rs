@@ -1,6 +1,6 @@
 use crate::job::{Job, pump};
 use crate::widgets;
-use crate::{mapnetwork, sonicwall, unifi};
+use crate::{mapnetwork, meraki, sonicwall, unifi};
 use eframe::egui::{self, Ui};
 use std::path::PathBuf;
 
@@ -9,6 +9,7 @@ enum Export {
     Unifi(unifi::Report),
     SonicWall(sonicwall::Report),
     Map(Box<mapnetwork::Doc>),
+    Meraki(meraki::Report),
 }
 
 impl Export {
@@ -32,6 +33,14 @@ impl Export {
                 r.count("access rules"),
                 r.count("NAT rules"),
             ),
+            Export::Meraki(r) => format!(
+                "Meraki: {} network(s), {} device(s), {} VLAN(s), {} firewall rule(s), {} port forward(s)",
+                r.count("networks"),
+                r.count("devices"),
+                r.count("VLANs"),
+                r.count("firewall rules"),
+                r.count("port forwards"),
+            ),
             Export::Map(d) => format!(
                 "/mapnetwork map: {}: {} device(s), {} link(s), {} finding(s)",
                 if d.title.is_empty() {
@@ -50,7 +59,18 @@ impl Export {
         match self {
             Export::Unifi(r) => r.summary(),
             Export::SonicWall(r) => r.summary(),
+            Export::Meraki(r) => r.summary(),
             Export::Map(d) => d.summary(),
+        }
+    }
+
+    /// Secret values the conversion stripped, held in memory only.
+    fn secrets(&self) -> &[String] {
+        match self {
+            Export::Unifi(r) => &r.secrets,
+            Export::SonicWall(r) => &r.secrets,
+            Export::Meraki(r) => &r.secrets,
+            Export::Map(_) => &[],
         }
     }
 
@@ -58,6 +78,7 @@ impl Export {
         match self {
             Export::Unifi(r) => &r.json,
             Export::SonicWall(r) => &r.json,
+            Export::Meraki(r) => &r.json,
             Export::Map(d) => &d.json,
         }
     }
@@ -68,6 +89,7 @@ impl Export {
             Export::Unifi(_) => "UniFi",
             Export::SonicWall(r) if r.format.contains(".wri") => "SonicWall report",
             Export::SonicWall(_) => "SonicWall",
+            Export::Meraki(_) => "Meraki",
             Export::Map(_) => "/mapnetwork map",
         }
     }
@@ -77,6 +99,7 @@ impl Export {
         match self {
             Export::Unifi(_) => "unifidump",
             Export::SonicWall(_) => "sonicwall",
+            Export::Meraki(_) => "meraki",
             Export::Map(_) => "mapnetwork",
         }
     }
@@ -84,18 +107,10 @@ impl Export {
     fn hint(&self) -> &'static str {
         match self {
             Export::Unifi(_) => "Save the sanitized export to hand to /unifidump",
-            Export::SonicWall(_) => "Save the sanitized config to hand to /mapnetwork",
+            Export::SonicWall(_) | Export::Meraki(_) => {
+                "Save the sanitized config to hand to /mapnetwork"
+            }
             Export::Map(_) => "Save the map's devices, links and findings as JSON",
-        }
-    }
-
-    /// Which slot it fills: one result per kind, so opening a SonicWall
-    /// export never discards an unsaved UniFi one, and vice versa.
-    fn slot(&self) -> usize {
-        match self {
-            Export::Unifi(_) => 0,
-            Export::SonicWall(_) => 1,
-            Export::Map(_) => 2,
         }
     }
 }
@@ -105,9 +120,34 @@ struct Slot {
     export: Export,
 }
 
+/// Sub-tabs shown side by side; older files fold into a menu.
+const TABS: usize = 6;
+
+impl Slot {
+    /// "SonicWall · fw-main", short enough for a sub-tab.
+    fn label(&self) -> String {
+        // "fw-main.dc.html" → "fw-main".
+        let name = file_name(&self.path);
+        let stem = match name.split_once('.') {
+            Some((s, _)) if !s.is_empty() => s.to_string(),
+            _ => name,
+        };
+        let stem: String = if stem.chars().count() > 22 {
+            stem.chars().take(21).collect::<String>() + "…"
+        } else {
+            stem
+        };
+        let kind = match self.export {
+            Export::Map(_) => "Map",
+            _ => self.export.tab(),
+        };
+        format!("{kind} · {stem}")
+    }
+}
+
 enum Ev {
     Picked(PathBuf),
-    Done(PathBuf, Result<Export, String>),
+    Done(PathBuf, Box<Result<Export, String>>),
 }
 
 #[derive(Default)]
@@ -117,8 +157,11 @@ pub struct ExportTool {
     job: Option<Job<Ev>>,
     /// File being read while the job runs.
     pending: Option<PathBuf>,
-    /// UniFi, SonicWall, /mapnetwork map.
-    slots: [Option<Slot>; 3],
+    /// Every file converted, in the order opened; each has its own sub-tab.
+    /// Opening a file again replaces its result.
+    slots: Vec<Slot>,
+    /// Every loaded file's stripped secret values, for Notes to redact.
+    secrets: Vec<String>,
     /// The slot whose sub-tab is showing: the one opened last, until
     /// another tab is picked.
     shown: usize,
@@ -154,13 +197,15 @@ Claude made from it, or a zip you saved it into"
     }
     if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
+    } else if meraki::sniff(&data) {
+        meraki::convert(&data).map(Export::Meraki)
     } else {
         unifi::convert(data, clients)
             .map(Export::Unifi)
             .map_err(|e| {
                 if e.starts_with("not a UniFi backup") {
                     "not a UniFi backup (.unf, .unifi, db.gz), SonicWall settings export (.exp) or \
-tech support report (.wri), or /mapnetwork map (.dc.html)"
+tech support report (.wri), Meraki API export (.json), or /mapnetwork map (.dc.html)"
                         .into()
                 } else {
                     e
@@ -171,10 +216,8 @@ tech support report (.wri), or /mapnetwork map (.dc.html)"
 
 /// "UniFi clients: none / anonymized / full" picker; true when changed.
 pub fn clients_choice(ui: &mut Ui, id: &str, clients: &mut unifi::Clients) -> bool {
-    ui.label("UniFi clients").on_hover_text(
-        "The UniFi client table: every device that has connected. unifidump uses it for client \
-counts and to spot unadopted gear plugged in as a client.",
-    );
+    ui.label("UniFi clients")
+        .on_hover_text("Include the UniFi client table (every device that has connected)");
     let mut changed = false;
     egui::ComboBox::from_id_salt(id)
         .selected_text(clients.label())
@@ -218,55 +261,85 @@ impl ExportTool {
         self.job.is_some()
     }
 
-    /// The UniFi backup currently loaded, and its conversion.
+    /// The UniFi backup opened last, and its conversion.
     pub fn unifi(&self) -> Option<(&PathBuf, &unifi::Report)> {
-        match &self.slots[0] {
-            Some(Slot {
-                path,
-                export: Export::Unifi(r),
-            }) => Some((path, r)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Unifi(r) => Some((&s.path, r)),
             _ => None,
-        }
+        })
     }
 
-    /// The /mapnetwork map currently loaded.
+    /// Secret values from every loaded backup and export (memory only).
+    pub fn secrets(&self) -> &[String] {
+        &self.secrets
+    }
+
+    fn gather_secrets(&mut self) {
+        let mut all: Vec<String> = self
+            .slots
+            .iter()
+            .flat_map(|s| s.export.secrets().iter().cloned())
+            .collect();
+        all.sort();
+        all.dedup();
+        self.secrets = all;
+    }
+
+    /// The /mapnetwork map opened last.
     pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
-        match &self.slots[2] {
-            Some(Slot {
-                path,
-                export: Export::Map(d),
-            }) => Some((path, &**d)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Map(d) => Some((&s.path, &**d)),
             _ => None,
-        }
+        })
     }
 
-    /// The SonicWall export currently loaded, and its conversion.
-    pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
-        match &self.slots[1] {
-            Some(Slot {
-                path,
-                export: Export::SonicWall(r),
-            }) => Some((path, r)),
+    /// The Meraki export opened last, and its conversion.
+    pub fn meraki(&self) -> Option<(&PathBuf, &meraki::Report)> {
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Meraki(r) => Some((&s.path, r)),
             _ => None,
-        }
+        })
+    }
+
+    /// The SonicWall export opened last, and its conversion.
+    pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::SonicWall(r) => Some((&s.path, r)),
+            _ => None,
+        })
     }
 
     pub fn poll(&mut self) -> bool {
+        let mut loaded = false;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Picked(p) => self.pending = Some(p),
-            Ev::Done(path, Ok(export)) => {
-                let i = export.slot();
-                self.slots[i] = Some(Slot { path, export });
-                self.shown = i;
-            }
-            Ev::Done(path, Err(e)) => {
-                let e = format!("{}: {e}", file_name(&path));
-                self.err = Some(match self.err.take() {
-                    Some(prev) => format!("{prev}\n{e}"),
-                    None => e,
-                });
-            }
+            Ev::Done(path, r) => match *r {
+                Ok(export) => {
+                    let slot = Slot { path, export };
+                    self.shown = match self.slots.iter().position(|s| s.path == slot.path) {
+                        Some(i) => {
+                            self.slots[i] = slot;
+                            i
+                        }
+                        None => {
+                            self.slots.push(slot);
+                            self.slots.len() - 1
+                        }
+                    };
+                    loaded = true;
+                }
+                Err(e) => {
+                    let e = format!("{}: {e}", file_name(&path));
+                    self.err = Some(match self.err.take() {
+                        Some(prev) => format!("{prev}\n{e}"),
+                        None => e,
+                    });
+                }
+            },
         });
+        if loaded {
+            self.gather_secrets();
+        }
         if !running {
             self.pending = None;
         }
@@ -291,9 +364,9 @@ impl ExportTool {
                 rfd::FileDialog::new()
                     .set_title("Open config export")
                     .add_filter(
-                        "UniFi backup, SonicWall settings or /mapnetwork map",
+                        "UniFi backup, SonicWall or Meraki config, or /mapnetwork map",
                         &[
-                            "unf", "unifi", "exp", "wri", "html", "htm", "zip", "gz", "txt",
+                            "unf", "unifi", "exp", "wri", "json", "html", "htm", "zip", "gz", "txt",
                         ],
                     )
                     .pick_files()
@@ -303,7 +376,7 @@ impl ExportTool {
             for path in paths {
                 tx.send(Ev::Picked(path.clone()));
                 let r = read_input(&path).and_then(|data| convert(data, clients));
-                tx.send(Ev::Done(path, r));
+                tx.send(Ev::Done(path, Box::new(r)));
             }
         }));
     }
@@ -315,10 +388,7 @@ impl ExportTool {
             if ui
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
-                    "UniFi: .unf (site export or autobackup), .unifi (UniFi OS console backup), \
-a .zip holding one, or db.gz. SonicWall: .exp settings export or .wri tech support report. \
-/mapnetwork: the .dc.html map, or a site bundle .zip it was saved into; it opens in the Map tab \
-in is-alive's style. Pick several at once, or drop them on the window. Each kind keeps its own result; opening another file of the same kind replaces it.",
+                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, Meraki API .json (or a zip of them), or a /mapnetwork .dc.html. Several at once, or drop them on the window",
                 )
                 .clicked()
             {
@@ -329,8 +399,8 @@ in is-alive's style. Pick several at once, or drop them on the window. Each kind
                     clients_choice(ui, "export_clients", &mut self.clients)
                 })
                 .inner;
-            if toggled && let Some(s) = &self.slots[0] {
-                self.start(ui.ctx(), Some(vec![s.path.clone()]));
+            if toggled && let Some((p, _)) = self.unifi() {
+                self.start(ui.ctx(), Some(vec![p.clone()]));
             }
             if let Some(p) = &self.pending {
                 widgets::spinner(ui);
@@ -338,49 +408,74 @@ in is-alive's style. Pick several at once, or drop them on the window. Each kind
             }
         });
         ui.weak(
-            "Decodes a UniFi backup, or a SonicWall settings export or tech support report, on this \
-machine and saves JSON with the topology and config the skills need, or reads a /mapnetwork map \
-back in for the Map tab. Each file gets its own tab below. Passwords, keys and secrets are left out. Nothing is sent anywhere.",
+            "Converts configs on this machine into JSON for the skills. Secrets are stripped; nothing is sent.",
         );
         widgets::error(ui, &self.err);
         ui.separator();
 
-        if self.slots.iter().all(Option::is_none) {
+        if self.slots.is_empty() {
             if !running {
                 widgets::empty_hint(
                     ui,
-                    "Open or drop a .unf / .unifi UniFi backup (for /unifidump), a SonicWall .exp or .wri \
-(for /mapnetwork), or a /mapnetwork .dc.html to see it on the Map tab.",
+                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, or /mapnetwork map.",
                 );
             }
             return;
         }
-        if self.slots[self.shown].is_none() {
-            self.shown = self.slots.iter().position(Option::is_some).unwrap_or(0);
-        }
-        // One sub-tab per decoded file.
-        ui.horizontal(|ui| {
-            for (i, slot) in self.slots.iter().enumerate() {
-                let Some(Slot { path, export: r }) = slot else {
-                    continue;
+        self.shown = self.shown.min(self.slots.len() - 1);
+        // One sub-tab per file; past TABS the oldest fold into a menu.
+        ui.horizontal_wrapped(|ui| {
+            let n = self.slots.len();
+            let folded = n.saturating_sub(TABS);
+            let mut pick = None;
+            if folded > 0 {
+                let shown_folded = self.shown < folded;
+                let label = if shown_folded {
+                    format!("{} ⏷", self.slots[self.shown].label())
+                } else {
+                    format!("{folded} more ⏷")
                 };
+                ui.menu_button(label, |ui| {
+                    for (i, s) in self.slots[..folded].iter().enumerate() {
+                        if ui
+                            .selectable_label(self.shown == i, s.label())
+                            .on_hover_text(format!(
+                                "{}\n{}",
+                                s.export.headline(),
+                                file_name(&s.path)
+                            ))
+                            .clicked()
+                        {
+                            pick = Some(i);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Files opened earlier");
+                ui.separator();
+            }
+            for (i, s) in self.slots.iter().enumerate().skip(folded) {
                 let on = self.shown == i;
-                let mut text = egui::RichText::new(r.tab());
+                let mut text = egui::RichText::new(s.label());
                 if on {
                     text = text.color(crate::theme::accent()).strong();
                 }
                 if ui
                     .selectable_label(on, text)
-                    .on_hover_text(format!("{}\n{}", r.headline(), file_name(path)))
+                    .on_hover_text(format!("{}\n{}", s.export.headline(), file_name(&s.path)))
                     .clicked()
                 {
-                    self.shown = i;
+                    pick = Some(i);
                 }
+            }
+            if let Some(i) = pick {
+                self.shown = i;
             }
         });
         ui.separator();
         let mut clear = None;
-        if let Some(Slot { path, export: r }) = &self.slots[self.shown] {
+        if let Some(Slot { path, export: r }) = self.slots.get(self.shown) {
             ui.label(egui::RichText::new(r.headline()).strong());
             ui.horizontal(|ui| {
                 if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
@@ -405,6 +500,13 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
                 ui.add(egui::Label::new(egui::RichText::new(file_name(path)).weak()).truncate())
                     .on_hover_text(path.display().to_string());
             });
+            let n = r.secrets().len();
+            if n > 0 {
+                ui.weak(format!(
+                    "🔑 {n} secret{} from this file hidden in Notes (kept in memory only)",
+                    if n == 1 { "" } else { "s" },
+                ));
+            }
             ui.add_space(4.0);
             egui::ScrollArea::vertical()
                 .id_salt(("export_summary", self.shown))
@@ -417,7 +519,9 @@ back in for the Map tab. Each file gets its own tab below. Passwords, keys and s
                 });
         }
         if let Some(i) = clear {
-            self.slots[i] = None;
+            self.slots.remove(i);
+            self.shown = self.shown.min(self.slots.len().saturating_sub(1));
+            self.gather_secrets();
         }
     }
 }

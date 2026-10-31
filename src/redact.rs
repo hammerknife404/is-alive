@@ -1,8 +1,13 @@
-//! Redaction for free text the technician writes (tech notes, known
-//! problems): anything that looks like a credential, key or personal
-//! identifier is replaced before the text is saved, copied or bundled.
-//! Zero trust: when in doubt it redacts, and the Notes tab highlights every
-//! hit so the technician sees exactly what will go.
+//! Redaction for free text.
+//!
+//! The technician's own text (tech notes, known problems) is redacted only
+//! where they say so: values picked by hand and the secret
+//! values of the backups and exports loaded in Config Export
+//! (`find_with` / `sanitize_with`). Nothing is guessed from patterns there.
+//!
+//! The pattern rules below (`find` / `sanitize`: credentials, keys, tokens,
+//! personal and payment identifiers) are for text the app copies out of a
+//! firewall config, such as rule comments, before it goes in a bundle.
 
 use regex::Regex;
 use std::ops::Range;
@@ -18,8 +23,13 @@ pub enum Kind {
     Patient,
     Email,
     Phone,
+    Address,
+    /// Bank routing and account numbers.
+    Account,
     /// Picked by the technician.
     Manual,
+    /// A secret value from a loaded backup or export.
+    Known,
 }
 
 impl Kind {
@@ -33,7 +43,10 @@ impl Kind {
             Kind::Patient => "patient details",
             Kind::Email => "emails",
             Kind::Phone => "phone numbers",
+            Kind::Address => "addresses",
+            Kind::Account => "account numbers",
             Kind::Manual => "picked by hand",
+            Kind::Known => "from the config",
         }
     }
 
@@ -47,7 +60,10 @@ impl Kind {
             Kind::Patient => "patient detail",
             Kind::Email => "email",
             Kind::Phone => "phone",
+            Kind::Address => "address",
+            Kind::Account => "account number",
             Kind::Manual => "by hand",
+            Kind::Known => "from config",
         }
     }
 }
@@ -74,9 +90,20 @@ fn rule(kind: Kind, group: usize, re: &str) -> Rule {
     }
 }
 
-/// What `sanitize` leaves behind; never redacted again.
+/// From a diagnosis label to the end of its line.
+static DX_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)\b(?:dx|diagnos[a-z]*|icd(?:-?10)?(?:\s+codes?)?)\b[^\n]*")
+        .expect("valid pattern")
+});
+/// An ICD-10-CM code: letter, two characters, optional decimal part.
+static ICD10: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[A-TV-Z][0-9][0-9AB](?:\.[0-9A-TV-Z]{1,4})?\b").expect("valid pattern")
+});
+
+/// What `sanitize` leaves behind; never redacted again. Notes saved before
+/// the key was added hold the plain `[REDACTED: …]` form.
 static MARKER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[REDACTED: [^\]\n]*\]").expect("valid pattern"));
+    LazyLock::new(|| Regex::new(r"\[(?:🔑 )?REDACTED: [^\]\n]*\]").expect("valid pattern"));
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     // A value: quoted, or a run of non-space characters.
@@ -107,6 +134,35 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         rule(Kind::Token, 0, r"\b[A-Za-z0-9+/_-]{32,}={0,2}"),
         rule(Kind::Ssn, 0, r"\b\d{3}-\d{2}-\d{4}\b"),
         rule(Kind::Card, 0, r"\b(?:\d[ -]?){12,18}\d\b"),
+        // The rest of a card: its security code and an expiry written mm/yy.
+        rule(
+            Kind::Card,
+            1,
+            r"(?i)\b(?:cvv2?|cvc2?|csc|security\s+code)\s*[:#=]?\s*(\d{3,4})\b",
+        ),
+        rule(
+            Kind::Card,
+            1,
+            r"(?i)\b(?:exp(?:iry|iration|ires)?\.?(?:\s+date)?)\s*[:#=]?\s*((?:0?[1-9]|1[0-2])\s*/\s*(?:\d{2}|\d{4}))\b",
+        ),
+        // Bank details: a 9-digit routing number, an account number.
+        rule(
+            Kind::Account,
+            1,
+            r"(?i)\b(?:routing|aba|rtn)(?:\s*(?:no\.?|number|#))?\s*[:#=]?\s*(\d{9})\b",
+        ),
+        rule(
+            Kind::Account,
+            1,
+            r"(?i)\b(?:acct|account)(?:\s*(?:no\.?|number|#))?\s*[:#=]?\s*(\d{6,17})\b",
+        ),
+        // A street address: number, name, street type, then city, state
+        // and ZIP when they follow.
+        rule(
+            Kind::Address,
+            0,
+            r"\b\d{1,6}\s+(?:[NSEW]\.?\s+)?(?:[A-Z][a-z]+\s+){1,3}(?:St|Street|Ave|Avenue|Rd|Road|Ln|Lane|Dr|Drive|Blvd|Boulevard|Ct|Court|Way|Pl|Place|Hwy|Highway|Pkwy|Parkway|Cir|Circle|Ter|Terrace|Trl|Trail)\b\.?(?:,?\s+(?:Apt|Suite|Ste|Unit|#)\.?\s*[\w-]+)?(?:,\s*(?:[A-Z][a-z]+\s*){1,3})?(?:,?\s*[A-Z]{2})?(?:\s+\d{5}(?:-\d{4})?)?",
+        ),
         // HIPAA identifiers: the rest of the line after the label.
         rule(
             Kind::Patient,
@@ -116,7 +172,14 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         rule(
             Kind::Patient,
             2,
-            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b\s*[:#=-]?\s*([^\n]+)",
+            // With a separator any value; without one, only a number or
+            // date, so prose ("not a date of birth or card") stays.
+            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b(?:\s*[:#=]\s*|\s+-\s+)([^\n]+)",
+        ),
+        rule(
+            Kind::Patient,
+            2,
+            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b\s+(\d[^\n]*)",
         ),
         rule(
             Kind::Email,
@@ -334,7 +397,12 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
                 continue;
             }
             let len = if matches!(first, '"' | '\'') {
-                rest[1..].find(first).map_or(rest.len(), |j| j + 2)
+                // Unclosed, or right against the word ("password"): the
+                // word's own quote, not a quoted value.
+                match rest[1..].find(first) {
+                    Some(j) if i != m.end() => j + 2,
+                    _ => 1,
+                }
             } else {
                 rest.find(char::is_whitespace).unwrap_or(rest.len())
             };
@@ -353,16 +421,28 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
         }
         let word = |r: &Range<usize>| {
             text[r.clone()]
-                .trim_matches(|c: char| ".,;:)(!?".contains(c))
+                .trim_matches(|c: char| ".,;:)(!?\"'".contains(c))
                 .to_lowercase()
         };
         let pick = match toks.iter().position(|t| t.1) {
-            Some(link) => toks[link + 1..]
-                .iter()
-                .find(|t| !t.1 && !FILLER.contains(&word(&t.0).as_str())),
+            // After "is"/"was" the sentence may just go on ("password is in
+            // the vault"); after ":" or "=" whatever follows is the value.
+            Some(link) => {
+                let spoken = text[toks[link].0.clone()].chars().all(char::is_alphabetic);
+                toks[link + 1..]
+                    .iter()
+                    .find(|t| {
+                        !t.1 && !FILLER.contains(&word(&t.0).as_str()) && !word(&t.0).is_empty()
+                    })
+                    .filter(|t| {
+                        let w = word(&t.0);
+                        !spoken
+                            || (!PLAIN.contains(&w.as_str()) && !NOT_VALUE.contains(&w.as_str()))
+                    })
+            }
             None => toks
                 .iter()
-                .find(|t| !FILLER.contains(&word(&t.0).as_str()))
+                .find(|t| !FILLER.contains(&word(&t.0).as_str()) && !word(&t.0).is_empty())
                 .filter(|t| {
                     let w = word(&t.0);
                     !NOT_VALUE.contains(&w.as_str()) && !PLAIN.contains(&w.as_str())
@@ -402,6 +482,26 @@ fn luhn(s: &str) -> bool {
     sum.is_multiple_of(10)
 }
 
+/// A SHA-1 or SHA-256 the text calls a commit, hash or checksum: an
+/// identifier, not a secret. Hex with no such word stays redacted, since
+/// plenty of API keys are hex too.
+fn named_hash(text: &str, at: usize, s: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "commit", "sha", "sha1", "sha-1", "sha256", "sha-256", "hash", "checksum", "digest",
+        "revision", "rev",
+    ];
+    if !matches!(s.len(), 40 | 64) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    let before = text[..at].trim_end_matches([' ', ':', '=', '\t']);
+    let word = before
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    WORDS.contains(&word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
+}
+
 /// A long run that has letters and digits: a key, not a word or a number.
 fn random_looking(s: &str) -> bool {
     s.chars().any(|c| c.is_ascii_digit()) && s.chars().any(|c| c.is_ascii_alphabetic())
@@ -412,12 +512,44 @@ pub fn markers(text: &str) -> Vec<Range<usize>> {
     MARKER.find_iter(text).map(|m| m.range()).collect()
 }
 
+/// Worth redacting from notes when a loaded backup or export holds it as a
+/// secret: long enough not to be a flag or a stray number, one line, and not
+/// a stock word ("public", "admin") that would blank out ordinary text.
+pub fn secret_value(v: &str) -> bool {
+    const STOCK: &[&str] = &[
+        "public",
+        "private",
+        "admin",
+        "administrator",
+        "password",
+        "default",
+        "none",
+        "null",
+        "true",
+        "false",
+        "changeme",
+        "guest",
+        "user",
+        "root",
+    ];
+    let v = v.trim();
+    let digits = v.chars().all(|c| c.is_ascii_digit());
+    (4..=128).contains(&v.chars().count())
+        && !v.contains('\n')
+        && !v.starts_with('$')
+        && (!digits || v.len() >= 6)
+        && !STOCK.contains(&v.to_ascii_lowercase().as_str())
+}
+
 /// The technician's own calls: values to redact that nothing detects, and
 /// detected values that are fine to keep.
 #[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct Overrides {
     pub redact: Vec<String>,
     pub allow: Vec<String>,
+    /// Secret values from the loaded backups and exports, matched as whole
+    /// words. Memory only.
+    pub known: Vec<String>,
 }
 
 impl Overrides {
@@ -452,6 +584,11 @@ impl Overrides {
     /// the shared one.
     pub fn merged(&self, local: &Overrides) -> Overrides {
         let mut out = self.clone();
+        for v in &local.known {
+            if !out.known.contains(v) {
+                out.known.push(v.clone());
+            }
+        }
         for v in &local.redact {
             out.add_redact(v);
         }
@@ -503,21 +640,40 @@ pub fn pick(text: &str, sel: Range<usize>, hits: &[Hit]) -> Option<Pick> {
     }
 }
 
-/// Everything that would be redacted, in order, without overlaps. The app
-/// always passes the technician's overrides (`find_with`).
-#[cfg(test)]
+/// Everything the pattern rules would redact, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
-    find_with(text, &Overrides::default())
+    detect(text)
 }
 
-/// As `find`, with the technician's overrides: their picks are added,
-/// whatever they allowed is left out.
+/// What the technician asked for: hand picks and the loaded
+/// configs' secrets, minus whatever they chose to keep. No pattern rules.
 pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
-    let mut hits: Vec<Hit> = detect(text)
-        .into_iter()
-        .filter(|h| !ov.allow.iter().any(|a| a == text[h.span.clone()].trim()))
-        .collect();
+    let allowed = |span: &Range<usize>| ov.allow.iter().any(|a| a == text[span.clone()].trim());
+    let mut hits: Vec<Hit> = Vec::new();
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
+    let fresh = |span: &Range<usize>| {
+        !done
+            .iter()
+            .any(|d| span.start < d.end && d.start < span.end)
+    };
+    // A known secret counts as a whole word, so "admin1" doesn't blank out
+    // "admin12" or a hostname that happens to contain it.
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    for v in ov.known.iter().filter(|v| !v.is_empty()) {
+        for (i, _) in text.match_indices(v.as_str()) {
+            let span = i..i + v.len();
+            let (before, after) = (
+                text[..i].chars().next_back(),
+                text[span.end..].chars().next(),
+            );
+            if !word(before) && !word(after) && fresh(&span) && !allowed(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Known,
+                });
+            }
+        }
+    }
     for v in ov.redact.iter().filter(|v| !v.is_empty()) {
         for (i, _) in text.match_indices(v.as_str()) {
             let span = i..i + v.len();
@@ -559,8 +715,11 @@ fn detect(text: &str) -> Vec<Hit> {
                 .rfind(char::is_whitespace)
                 .map_or(0, |i| i + 1);
             let keep = match r.kind {
-                Kind::Card => luhn(s),
-                Kind::Token if s.len() >= 32 && !s.starts_with("AKIA") => random_looking(s),
+                // The number itself must pass Luhn; its CVV and expiry can't.
+                Kind::Card => s.chars().filter(char::is_ascii_digit).count() < 12 || luhn(s),
+                Kind::Token if s.len() >= 32 && !s.starts_with("AKIA") => {
+                    random_looking(s) && !named_hash(text, m.start(), s)
+                }
                 Kind::Password | Kind::Patient => !s.trim().is_empty(),
                 // user:password@host is a URL login, handled above.
                 Kind::Email => !text[token_start..m.start()].contains("://"),
@@ -570,6 +729,18 @@ fn detect(text: &str) -> Vec<Hit> {
                 hits.push(Hit {
                     span: m.range(),
                     kind: r.kind,
+                });
+            }
+        }
+    }
+    // ICD-10 codes on a line that says it's a diagnosis.
+    for line in DX_LINE.find_iter(text) {
+        for m in ICD10.find_iter(line.as_str()) {
+            let span = line.start() + m.start()..line.start() + m.end();
+            if fresh(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Patient,
                 });
             }
         }
@@ -592,20 +763,23 @@ fn merge(mut hits: Vec<Hit>) -> Vec<Hit> {
     out
 }
 
-/// The text with every hit replaced by `[REDACTED: kind]`. Line breaks
+/// The text with every hit replaced by `[🔑 REDACTED: kind]`. Line breaks
 /// inside a hit are kept, so line N of the result is line N of the input.
 pub fn sanitize(text: &str) -> (String, Vec<Hit>) {
-    sanitize_with(text, &Overrides::default())
+    replace(text, find(text))
 }
 
-/// As `sanitize`, with the technician's overrides.
+/// The technician's text with what they asked for replaced (`find_with`).
 pub fn sanitize_with(text: &str, ov: &Overrides) -> (String, Vec<Hit>) {
-    let hits = find_with(text, ov);
+    replace(text, find_with(text, ov))
+}
+
+fn replace(text: &str, hits: Vec<Hit>) -> (String, Vec<Hit>) {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     for h in &hits {
         out += &text[at..h.span.start];
-        out += &format!("[REDACTED: {}]", h.kind.label());
+        out += &format!("[🔑 REDACTED: {}]", h.kind.label());
         out.extend(text[h.span.clone()].chars().filter(|&c| c == '\n'));
         at = h.span.end;
     }
@@ -642,41 +816,41 @@ mod tests {
     fn credentials() {
         assert_eq!(
             red("admin password: hunter2!"),
-            "admin password: [REDACTED: password]"
+            "admin password: [🔑 REDACTED: password]"
         );
-        assert_eq!(red("Password hunter2"), "Password [REDACTED: password]");
+        assert_eq!(red("Password hunter2"), "Password [🔑 REDACTED: password]");
         assert_eq!(
             red("wifi password is \"Spring 2026!\""),
-            "wifi password is [REDACTED: password]"
+            "wifi password is [🔑 REDACTED: password]"
         );
-        assert_eq!(red("PSK=abc123xyz"), "PSK=[REDACTED: password]");
+        assert_eq!(red("PSK=abc123xyz"), "PSK=[🔑 REDACTED: password]");
         assert_eq!(
             red("snmp community: public"),
-            "snmp community: [REDACTED: password]"
+            "snmp community: [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("u: admin p: Tr0ub4dor"),
-            "u: admin p: [REDACTED: password]"
+            "u: admin p: [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("https://bob:s3cret@nas.local/x"),
-            "https://bob:[REDACTED: password]@nas.local/x"
+            "https://bob:[🔑 REDACTED: password]@nas.local/x"
         );
         // Read like a sentence: the value after "was", not "was".
         assert_eq!(
             red("There is no way her password was hunter2."),
-            "There is no way her password was [REDACTED: password]."
+            "There is no way her password was [🔑 REDACTED: password]."
         );
         let r = red("password for the router is Spring2026!");
-        assert_eq!(r, "password for the router is [REDACTED: password]");
-        assert_eq!(red("pw:x1 then"), "pw:[REDACTED: password] then");
+        assert_eq!(r, "password for the router is [🔑 REDACTED: password]");
+        assert_eq!(red("pw:x1 then"), "pw:[🔑 REDACTED: password] then");
         assert_eq!(
             red("the password -> Tr0ub4dor"),
-            "the password -> [REDACTED: password]"
+            "the password -> [🔑 REDACTED: password]"
         );
         assert_eq!(
             red("set the new password to Winter25"),
-            "set the new password to [REDACTED: password]"
+            "set the new password to [🔑 REDACTED: password]"
         );
         assert_eq!(red("password reset done"), "password reset done");
         assert_eq!(
@@ -689,7 +863,7 @@ mod tests {
         );
         assert_eq!(
             red("the api key was abc123"),
-            "the api key was [REDACTED: password]"
+            "the api key was [🔑 REDACTED: password]"
         );
         // Not credentials.
         assert_eq!(
@@ -704,10 +878,10 @@ mod tests {
         let pem =
             "before\n-----BEGIN PRIVATE KEY-----\nMIIEv\nabc\n-----END PRIVATE KEY-----\nafter";
         let (s, h) = sanitize(pem);
-        assert_eq!(s, "before\n[REDACTED: key or certificate]\n\n\n\nafter");
+        assert_eq!(s, "before\n[🔑 REDACTED: key or certificate]\n\n\n\nafter");
         assert_eq!(s.lines().count(), pem.lines().count(), "line numbers kept");
         assert_eq!(h.len(), 1);
-        assert!(red("api AKIAIOSFODNN7EXAMPLE here").contains("[REDACTED: token]"));
+        assert!(red("api AKIAIOSFODNN7EXAMPLE here").contains("[🔑 REDACTED: token]"));
         assert!(red("ghp_abcdefghijklmnopqrstuvwxyz0123456789").contains("REDACTED"));
         assert!(red("k 3f9a1c0e7b2d4a6f8e0c1b3d5f7a9c2e4b6d8f0a").contains("REDACTED"));
         // Long but not random: a path or a word run stays.
@@ -723,11 +897,11 @@ mod tests {
 
     #[test]
     fn personal_identifiers() {
-        assert_eq!(red("SSN 123-45-6789"), "SSN [REDACTED: SSN]");
-        assert_eq!(red("call 123-45-6789"), "call [REDACTED: SSN]");
+        assert_eq!(red("SSN 123-45-6789"), "SSN [🔑 REDACTED: SSN]");
+        assert_eq!(red("call 123-45-6789"), "call [🔑 REDACTED: SSN]");
         assert_eq!(
             red("card 4111 1111 1111 1111 ok"),
-            "card [REDACTED: card number] ok"
+            "card [🔑 REDACTED: card number] ok"
         );
         assert_eq!(
             red("serial 1234 5678 9012 3456"),
@@ -736,17 +910,17 @@ mod tests {
         );
         assert_eq!(
             red("Patient: Jane Q. Doe\nnext"),
-            "Patient: [REDACTED: patient detail]\nnext"
+            "Patient: [🔑 REDACTED: patient detail]\nnext"
         );
-        assert_eq!(red("DOB 01/02/1980"), "DOB [REDACTED: patient detail]");
-        assert_eq!(red("MRN# 00123456"), "MRN# [REDACTED: patient detail]");
+        assert_eq!(red("DOB 01/02/1980"), "DOB [🔑 REDACTED: patient detail]");
+        assert_eq!(red("MRN# 00123456"), "MRN# [🔑 REDACTED: patient detail]");
         assert_eq!(red("patient portal is down"), "patient portal is down");
         assert_eq!(
             red("mail jane.doe@clinic.org now"),
-            "mail [REDACTED: email] now"
+            "mail [🔑 REDACTED: email] now"
         );
-        assert_eq!(red("(555) 123-4567"), "[REDACTED: phone]");
-        assert_eq!(red("+1 555.123.4567"), "[REDACTED: phone]");
+        assert_eq!(red("(555) 123-4567"), "[🔑 REDACTED: phone]");
+        assert_eq!(red("+1 555.123.4567"), "[🔑 REDACTED: phone]");
     }
 
     /// A real-world note's shape (names and values made up).
@@ -779,9 +953,9 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Strong anywhere; weaker only alone on a line.
         assert_eq!(
             red("login jsmith / Spring26$ ok"),
-            "login jsmith / [REDACTED: password] ok"
+            "login jsmith / [🔑 REDACTED: password] ok"
         );
-        assert_eq!(red("Welcome1\n"), "[REDACTED: password]\n");
+        assert_eq!(red("Welcome1\n"), "[🔑 REDACTED: password]\n");
         for t in [
             "Win11",
             "Office 365 E3",
@@ -811,23 +985,110 @@ give it a password when prompt comes up. Import it the same - Enter password you
         let (clean, hits) = sanitize_with(t, &ov);
         assert_eq!(
             clean,
-            "Lockbox code [REDACTED: by hand] at the door. License Office365\nlockbox again: [REDACTED: by hand]"
+            "Lockbox code [🔑 REDACTED: by hand] at the door. License Office365\nlockbox again: [🔑 REDACTED: by hand]"
         );
         assert_eq!(summary(&hits), "2 redacted: 2 picked by hand");
 
+        // Notes aren't pattern-checked: only what the technician asked for.
         let t = "Office365\npassword: hunter2";
-        assert_eq!(find(t).len(), 2);
-        let mut ov = Overrides::default();
+        assert!(sanitize_with(t, &Overrides::default()).1.is_empty());
+        let mut ov = Overrides {
+            known: vec!["Office365".into()],
+            ..Default::default()
+        };
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
         ov.add_allow("Office365");
-        let (clean, _) = sanitize_with(t, &ov);
-        assert_eq!(clean, "Office365\npassword: [REDACTED: password]");
+        assert!(sanitize_with(t, &ov).1.is_empty());
         // Redacting it again takes it off the allow list.
         ov.add_redact("Office365");
         assert!(ov.allow.is_empty());
-        assert_eq!(sanitize_with(t, &ov).1.len(), 2);
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
+    }
+
+    #[test]
+    fn payment_address_and_diagnosis() {
+        assert_eq!(
+            red("Card 4111 1111 1111 1111 exp 09/29 cvv 123"),
+            "Card [🔑 REDACTED: card number] exp [🔑 REDACTED: card number] cvv [🔑 REDACTED: card number]"
+        );
+        assert_eq!(
+            red("Routing 021000021  Acct 000123456789"),
+            "Routing [🔑 REDACTED: account number]  Acct [🔑 REDACTED: account number]"
+        );
+        assert_eq!(
+            red("Lives at 418 Cypress Ln, West Monroe LA 71291"),
+            "Lives at [🔑 REDACTED: address]"
+        );
+        assert_eq!(
+            red("Dx: K02.9, E11.9. Prior anesthesia reaction 2019."),
+            "Dx: [🔑 REDACTED: patient detail], [🔑 REDACTED: patient detail]. Prior anesthesia reaction 2019."
+        );
+        for kept in [
+            "X0 to switch port 24, VLAN 30",
+            "E11 error on the printer",
+            "3 way switch in room 4",
+            "fw expires 2027, renew account soon",
+            "exp. 3 years in the field",
+            "Ticket 2026-10-30-0418, P2, Block 4",
+        ] {
+            assert_eq!(red(kept), kept);
+        }
+    }
+
+    /// From a technician's redaction test file.
+    #[test]
+    fn field_test_regressions() {
+        for kept in [
+            "git commit 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+            "Version 1.21.1, build 20261030      (not a date of birth or card)",
+            "Reset password policy: minimum 14 characters.  (word \"password\" with no value)",
+            "Password is in the vault, not here.",
+        ] {
+            assert_eq!(red(kept), kept);
+        }
+        // Still caught: a hash-shaped key with no commit/sha word, a DOB.
+        assert!(red("api 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a").contains("REDACTED"));
+        assert!(red("DOB 04/12/1961").contains("REDACTED"));
+        assert!(red("date of birth: 1961-04-12").contains("REDACTED"));
+        assert_eq!(
+            red("password is hunter2"),
+            "password is [🔑 REDACTED: password]"
+        );
+    }
+
+    #[test]
+    fn known_secrets() {
+        let mut ov = Overrides {
+            known: vec!["Bobcat2019".into(), "s3cr3t-ppsk".into()],
+            ..Default::default()
+        };
+        let t = "staff wifi is Bobcat2019, guest is Bobcat20190\nppsk s3cr3t-ppsk.";
+        let (clean, hits) = sanitize_with(t, &ov);
+        assert_eq!(
+            clean,
+            "staff wifi is [🔑 REDACTED: from config], guest is Bobcat20190\nppsk [🔑 REDACTED: from config]."
+        );
+        assert_eq!(summary(&hits), "2 redacted: 2 from the config");
+        // Unredact wins here too.
+        ov.add_allow("Bobcat2019");
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
+
+        // Twice is a no-op.
+        let (clean, _) = sanitize_with(t, &ov);
+        assert_eq!(sanitize_with(&clean, &ov).0, clean);
+        assert!(secret_value("Bobcat2019") && !secret_value("public") && !secret_value("1"));
+        assert!(!secret_value("1234") && secret_value("843921") && !secret_value("$6$salt$hash"));
+    }
+
+    #[test]
+    fn markers_old_and_new_are_left_alone() {
+        let t = "pw: [REDACTED: password] and [🔑 REDACTED: by hand]";
+        assert_eq!(markers(t).len(), 2);
+        assert_eq!(red(t), t);
+        assert_eq!(red("password: x1"), "password: [🔑 REDACTED: password]");
     }
 
     #[test]
