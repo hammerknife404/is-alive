@@ -135,11 +135,23 @@ impl Level {
     }
 }
 
+/// What the test runs against.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+enum Pick {
+    #[default]
+    Cloudflare,
+    /// Download the file at `file_url`.
+    File,
+    /// Upload to `upload_url`.
+    Upload,
+}
+
 pub struct SpeedTool {
-    /// Cloudflare, or the custom file below.
-    use_file: bool,
+    pick: Pick,
     /// A large file to download instead of Cloudflare.
     file_url: String,
+    /// Somewhere to POST to instead of Cloudflare.
+    upload_url: String,
     secs: u32,
     streams: usize,
     down: bool,
@@ -165,8 +177,9 @@ pub struct SpeedTool {
 impl Default for SpeedTool {
     fn default() -> Self {
         Self {
-            use_file: false,
+            pick: Pick::Cloudflare,
             file_url: speed::DEFAULT_FILE.into(),
+            upload_url: String::new(),
             secs: 10,
             streams: 4,
             down: true,
@@ -223,27 +236,49 @@ impl SpeedTool {
             ui.add_enabled_ui(!running, |ui| {
                 ui.label("Server");
                 egui::ComboBox::from_id_salt("speed_server")
-                    .selected_text(if self.use_file {
-                        "Download a file"
-                    } else {
-                        speed::HOST
+                    .selected_text(match self.pick {
+                        Pick::Cloudflare => speed::HOST,
+                        Pick::File => "Download a file",
+                        Pick::Upload => "Upload to a URL",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.use_file, false, speed::HOST)
+                        ui.selectable_value(&mut self.pick, Pick::Cloudflare, speed::HOST)
                             .on_hover_text("Cloudflare: download and upload, nearest data centre");
-                        ui.selectable_value(&mut self.use_file, true, "Download a file")
+                        ui.selectable_value(&mut self.pick, Pick::File, "Download a file")
                             .on_hover_text(
                                 "Download any large file. Download only; latency goes to 1.1.1.1",
                             );
+                        ui.selectable_value(&mut self.pick, Pick::Upload, "Upload to a URL")
+                            .on_hover_text(
+                                "Post to any URL that accepts and discards uploads: your own \
+                                 server, or a LibreSpeed server's …/backend/empty.php. Upload \
+                                 only; latency goes to 1.1.1.1. Useful when Cloudflare is \
+                                 rate-limiting you.",
+                            );
                     });
-                if self.use_file {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.file_url)
-                            .char_limit(widgets::URL_MAX)
-                            .desired_width(240.0)
-                            .hint_text("https://host/100MB.bin"),
-                    )
-                    .on_hover_text("The file's direct link. 1 GB or more works best");
+                match self.pick {
+                    Pick::File => {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.file_url)
+                                .char_limit(widgets::URL_MAX)
+                                .desired_width(240.0)
+                                .hint_text("https://host/100MB.bin"),
+                        )
+                        .on_hover_text("The file's direct link. 1 GB or more works best");
+                    }
+                    Pick::Upload => {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.upload_url)
+                                .char_limit(widgets::URL_MAX)
+                                .desired_width(240.0)
+                                .hint_text("https://host/backend/empty.php"),
+                        )
+                        .on_hover_text(
+                            "Where to POST. It must answer 2xx and throw the data away; \
+                             about 25 MB goes per request, repeated for the test's duration",
+                        );
+                    }
+                    Pick::Cloudflare => {}
                 }
             });
             ui.separator();
@@ -258,9 +293,16 @@ impl SpeedTool {
                 ui.label("Streams");
                 ui.add(egui::DragValue::new(&mut self.streams).range(1..=16))
                     .on_hover_text("Parallel connections. 4 suits most lines");
-                ui.checkbox(&mut self.down, "Download");
-                ui.add_enabled(!self.use_file, egui::Checkbox::new(&mut self.up, "Upload"))
-                    .on_disabled_hover_text("A file download can't measure upload");
+                ui.add_enabled(
+                    self.pick != Pick::Upload,
+                    egui::Checkbox::new(&mut self.down, "Download"),
+                )
+                .on_disabled_hover_text("An upload URL can't measure download");
+                ui.add_enabled(
+                    self.pick != Pick::File,
+                    egui::Checkbox::new(&mut self.up, "Upload"),
+                )
+                .on_disabled_hover_text("A file download can't measure upload");
             });
             ui.separator();
             match widgets::run_button(ui, running, false) {
@@ -764,21 +806,25 @@ loss is less reliable that way."
 
     /// Start a test with the current settings (also the full scan's).
     pub fn run(&mut self, ctx: &egui::Context) {
-        let server = if self.use_file {
-            Server::File(self.file_url.trim().to_string())
-        } else {
-            Server::Cloudflare
+        let server = match self.pick {
+            Pick::Cloudflare => Server::Cloudflare,
+            Pick::File => Server::File(self.file_url.trim().to_string()),
+            Pick::Upload => Server::Upload(self.upload_url.trim().to_string()),
         };
-        let (secs, streams, down) = (self.secs, self.streams, self.down);
+        let (secs, streams) = (self.secs, self.streams);
         let up = self.up && server.uploads();
-        let (use_file, file_url, keep_up) = (self.use_file, self.file_url.clone(), self.up);
+        let down = self.down && server.downloads();
+        let (pick, file_url, upload_url) =
+            (self.pick, self.file_url.clone(), self.upload_url.clone());
+        let (keep_down, keep_up) = (self.down, self.up);
         let host = server.host();
         *self = Self {
-            use_file,
+            pick,
             file_url,
+            upload_url,
             secs,
             streams,
-            down,
+            down: keep_down,
             up: keep_up,
             ran: (secs, streams),
             ran_host: host.clone().unwrap_or_default(),
@@ -1071,7 +1117,7 @@ mod tests {
     fn a_bad_file_url_says_so_and_nothing_runs() {
         let ctx = egui::Context::default();
         let mut t = SpeedTool {
-            use_file: true,
+            pick: Pick::File,
             file_url: "ftp://files.example.net/1GB.bin".into(),
             ..Default::default()
         };
@@ -1079,7 +1125,7 @@ mod tests {
         assert!(t.job.is_none() && t.run_started.is_none());
         assert!(t.err.as_deref().unwrap().contains("https://"));
         // The settings survive the reset.
-        assert!(t.use_file && t.up);
+        assert!(t.pick == Pick::File && t.up);
         assert_eq!(t.file_url, "ftp://files.example.net/1GB.bin");
     }
 

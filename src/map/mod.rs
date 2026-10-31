@@ -300,6 +300,11 @@ pub struct Input<'a> {
     /// A /mapnetwork map: when loaded, it is the map.
     pub mapnetwork: Option<&'a crate::mapnetwork::Doc>,
     pub clients: bool,
+    /// Every client gets a card: no per-uplink cap, no budget.
+    pub all_clients: bool,
+    /// Ids of uplinks whose clients are all shown ("Show all" on a
+    /// +N more card), whatever the cap.
+    pub open: Option<&'a HashSet<String>>,
 }
 
 impl Input<'_> {
@@ -802,6 +807,8 @@ pub fn build(input: &Input) -> Map {
             unifi: input.unifi,
             sonicwall: input.sonicwall,
             clients: input.clients,
+            all_clients: input.all_clients,
+            open: input.open,
             ..Default::default()
         };
         &away
@@ -1514,7 +1521,7 @@ pub fn build(input: &Input) -> Map {
     } else if !local {
         summary += " · sweep here to add what this machine sees";
     }
-    let mut map = limit(b, input.clients);
+    let mut map = limit(b, input);
     map.summary = summary;
     if map.hidden > 0 && !input.clients {
         map.summary += " · clients not mapped";
@@ -1583,14 +1590,21 @@ fn summary(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> Strin
 
 /// Clients off: fold them into a count on their parent. On: at most
 /// PER_UPLINK under each parent and the rest in one card, tightening until
-/// the map fits the budget.
-fn limit(b: B, clients: bool) -> Map {
+/// the map fits the budget; uplinks opened with Show all, or every one with
+/// all clients, show them all.
+fn limit(b: B, input: &Input) -> Map {
+    let clients = input.clients || input.all_clients;
     let B {
         mut nodes,
         findings,
         ..
     } = b;
     let n = nodes.len();
+    let open: HashSet<usize> = (0..n)
+        .filter(|&p| {
+            clients && (input.all_clients || input.open.is_some_and(|o| o.contains(&nodes[p].id)))
+        })
+        .collect();
     let mut by_parent: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, node) in nodes.iter().enumerate() {
         if node.client
@@ -1604,14 +1618,19 @@ fn limit(b: B, clients: bool) -> Map {
     }
     let infra = n - by_parent.values().map(Vec::len).sum::<usize>();
     let mut cap = if clients { PER_UPLINK } else { 0 };
+    let cap_of = |p: usize, cap: usize| if open.contains(&p) { usize::MAX } else { cap };
     let cost = |cap: usize| {
         infra
             + by_parent
-                .values()
-                .map(|k| k.len().min(cap) + usize::from(k.len() > cap && clients))
+                .iter()
+                .map(|(&p, k)| {
+                    let c = cap_of(p, cap);
+                    k.len().min(c) + usize::from(k.len() > c && clients)
+                })
                 .sum::<usize>()
     };
-    while cap > 0 && cost(cap) > BUDGET {
+    // Shown in full on request, so the budget only tightens the rest.
+    while cap > 0 && cost(cap) > BUDGET && !input.all_clients {
         cap = match cap {
             c if c > 5 => 5,
             c if c > 3 => 3,
@@ -1623,7 +1642,7 @@ fn limit(b: B, clients: bool) -> Map {
     let mut extra = Vec::new();
     let mut hidden = 0;
     for (&p, kids) in &by_parent {
-        let rest = &kids[kids.len().min(cap)..];
+        let rest = &kids[kids.len().min(cap_of(p, cap))..];
         if rest.is_empty() {
             continue;
         }
@@ -1632,7 +1651,7 @@ fn limit(b: B, clients: bool) -> Map {
             keep[i] = false;
             folded.insert(nodes[i].id.clone());
         }
-        if clients && cost(cap) <= BUDGET {
+        if clients && (cost(cap) <= BUDGET || open.contains(&p)) {
             let mut more = Node {
                 id: format!("more:{}", nodes[p].id),
                 zone: Zone::Client,
@@ -1905,6 +1924,34 @@ mod tests {
         assert_eq!(more.label, "+290 more");
         assert_eq!(by_label(&m, "pc299").kind, "CLIENT", "most recent first");
         assert!(m.nodes.len() <= BUDGET);
+
+        // All: a card for every one of the 300, past the budget.
+        let count = |m: &Map| {
+            m.nodes
+                .iter()
+                .filter(|n| n.client && n.kind != "MORE CLIENTS")
+                .count()
+        };
+        let all = build(&Input {
+            unifi: Some(&j),
+            clients: true,
+            all_clients: true,
+            ..Default::default()
+        });
+        assert_eq!(count(&all), 300);
+        assert!(all.nodes.iter().all(|n| n.kind != "MORE CLIENTS"));
+        assert!(all.folded.is_empty());
+        // Show all on the +N more card opens just that uplink.
+        let core = m.nodes[more.parent().unwrap()].id.clone();
+        let open: HashSet<String> = [core].into();
+        let opened = build(&Input {
+            unifi: Some(&j),
+            clients: true,
+            open: Some(&open),
+            ..Default::default()
+        });
+        assert_eq!(count(&opened), 300);
+        assert!(m.folded.contains(&by_label(&all, "pc0").id));
 
         let off = build(&Input {
             unifi: Some(&j),

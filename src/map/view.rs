@@ -35,8 +35,48 @@ pub enum Action {
     Layout(Mode),
 }
 
+/// Which end devices get cards.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Clients {
+    #[default]
+    Off,
+    /// Up to 10 per switch or AP, the rest in a +N more card, fewer per
+    /// uplink on a big map.
+    Some,
+    /// A card for every one.
+    All,
+}
+
+impl Clients {
+    const ALL: [Clients; 3] = [Clients::Off, Clients::Some, Clients::All];
+
+    fn name(self) -> &'static str {
+        match self {
+            Clients::Off => "Off",
+            Clients::Some => "Some",
+            Clients::All => "All",
+        }
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            Clients::Off => "No end devices: a count on each switch or AP instead",
+            Clients::Some => {
+                "Up to 10 per switch or AP, the rest in a +N more card (Show all on it opens \
+                 that one up)"
+            }
+            Clients::All => {
+                "A card for every end device. A big site can mean hundreds of cards; Zones \
+                 keeps them tidy"
+            }
+        }
+    }
+}
+
 /// What the detail panel asked for.
 enum PanelEv {
+    /// Show every client under this uplink, or fold them back.
+    Open(usize, bool),
     /// × on a card: take it out of the selection.
     Drop(usize),
     /// The pin: keep it selected, or not.
@@ -69,7 +109,9 @@ const MAX_ZOOM: f32 = 2.5;
 pub struct MapView {
     map: Map,
     key: u64,
-    clients: bool,
+    clients: Clients,
+    /// Uplinks whose clients are all shown (Show all on a +N more card).
+    open: HashSet<String>,
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
@@ -248,7 +290,7 @@ impl MapView {
         self.runs.poll(ctx);
     }
 
-    fn input<'a>(&self, src: &'a Sources) -> Input<'a> {
+    fn input<'a>(&'a self, src: &'a Sources) -> Input<'a> {
         let sw = src.sweep;
         Input {
             sweep: sw.seen(),
@@ -260,7 +302,9 @@ impl MapView {
             unifi: src.export.unifi().map(|u| u.1.json.as_str()),
             sonicwall: src.export.sonicwall().map(|s| s.1.json.as_str()),
             mapnetwork: src.export.mapnetwork().map(|m| m.1),
-            clients: self.clients,
+            clients: self.clients != Clients::Off,
+            all_clients: self.clients == Clients::All,
+            open: Some(&self.open),
         }
     }
 
@@ -271,6 +315,9 @@ impl MapView {
         src.sweep.generation().hash(&mut h);
         src.export.generation().hash(&mut h);
         self.clients.hash(&mut h);
+        let mut open: Vec<&String> = self.open.iter().collect();
+        open.sort();
+        open.hash(&mut h);
         if let Some((p, r)) = src.export.unifi() {
             (p, r.json.len()).hash(&mut h);
         }
@@ -531,8 +578,16 @@ impl MapView {
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.clients, "Clients")
-                .on_hover_text("Show end devices (up to 10 per switch or AP)");
+            ui.label("Clients");
+            for c in Clients::ALL {
+                if ui
+                    .selectable_label(self.clients == c, c.name())
+                    .on_hover_text(c.tip())
+                    .clicked()
+                {
+                    self.clients = c;
+                }
+            }
             ui.separator();
             let subnet = src
                 .info
@@ -690,6 +745,14 @@ impl MapView {
             }
             Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
             Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
+            Some(PanelEv::Open(p, on)) => {
+                let id = self.map.nodes[p].id.clone();
+                if on {
+                    self.open.insert(id);
+                } else {
+                    self.open.remove(&id);
+                }
+            }
             _ => {}
         }
 
@@ -1155,6 +1218,24 @@ impl MapView {
                                 .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
                         }
                     }
+                    // A +N more card opens its uplink up; an opened uplink folds back.
+                    if n.id.starts_with("more:")
+                        && let Some(p) = n.parent()
+                        && ui
+                            .small_button(format!("Show all {}", n.label.trim_start_matches('+')))
+                            .on_hover_text("A card for each of them")
+                            .clicked()
+                    {
+                        *ev = Some(PanelEv::Open(p, true));
+                    }
+                    if self.open.contains(&n.id)
+                        && ui
+                            .small_button("Fold clients")
+                            .on_hover_text("Back to 10 cards and a +N more")
+                            .clicked()
+                    {
+                        *ev = Some(PanelEv::Open(i, false));
+                    }
                     if ui
                         .small_button("Copy")
                         .on_hover_text("Copy this card's details as text")
@@ -1479,19 +1560,27 @@ impl MapView {
         // its end. True while it flows.
         let draw = |pts: &[Pos2],
                     base: Color32,
+                    lit_colour: Color32,
                     link: Link,
                     w: f32,
                     alpha: f32,
                     on: bool,
                     label: Option<(Pos2, egui::Align2, &str)>|
          -> bool {
+            // Lit, an assumed link takes its card's colour rather than grey,
+            // so the whole path reads as one.
+            let base = if on && link == Link::Assumed {
+                lit_colour
+            } else {
+                base
+            };
             let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
             // A soft halo in the link's colour under it (not under the
-            // grey assumed ones, which should stay quiet).
-            if glow > 0.0 && link != Link::Assumed {
+            // grey assumed ones, which should stay quiet unless lit).
+            if (glow > 0.0 || on) && (link != Link::Assumed || on) {
                 let halo = Stroke::new(
                     w + 5.0 * z.clamp(0.6, 1.4),
-                    base.gamma_multiply(glow * alpha * if on { 1.4 } else { 1.0 }),
+                    base.gamma_multiply(glow.max(0.12) * alpha * if on { 1.6 } else { 1.0 }),
                 );
                 if link == Link::Wireless {
                     p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
@@ -1508,18 +1597,18 @@ impl MapView {
                 }
             }
             if on {
-                // Packets flowing away from the internet.
-                // A growing offset moves the dashes downstream; kept within
-                // one period (a negative one draws past the line's start).
-                let off = (now as f32 * 40.0 * z).rem_euclid(18.0 * z);
-                let glow = Stroke::new(w + 1.0, Color32::WHITE.gamma_multiply(0.55 * alpha));
-                p.extend(Shape::dashed_line_with_offset(
-                    pts,
-                    glow,
-                    &[4.0 * z],
-                    &[14.0 * z],
-                    off,
-                ));
+                // Packets flowing away from the internet: glowing dots in a
+                // light tint of the link's colour, moving downstream.
+                let gap = 36.0 * z.max(0.6);
+                let off = (now as f32 * 60.0 * z.max(0.6)).rem_euclid(gap);
+                let core = base
+                    .lerp_to_gamma(Color32::WHITE, 0.6)
+                    .gamma_multiply(alpha);
+                let r = (w * 0.75).max(1.6);
+                for at in along(pts, off, gap) {
+                    p.circle_filled(at, r * 2.4, base.gamma_multiply(0.22 * alpha));
+                    p.circle_filled(at, r, core);
+                }
             }
             if let Some((pos, align, l)) = label
                 && z >= 0.7
@@ -1593,6 +1682,7 @@ impl MapView {
             flows |= draw(
                 &pts,
                 colour(n, *link),
+                self.accent(n),
                 *link,
                 width(*link, on),
                 alpha,
@@ -1639,7 +1729,16 @@ impl MapView {
                 )
             });
             let base = b.zone.map_or_else(|| colour(first, link), zone_colour);
-            flows |= draw(&pts, base, link, width(link, *on) + 0.6, *alpha, *on, label);
+            flows |= draw(
+                &pts,
+                base,
+                self.accent(first),
+                link,
+                width(link, *on) + 0.6,
+                *alpha,
+                *on,
+                label,
+            );
         }
 
         // Cards: infrastructure over clients.
@@ -2291,6 +2390,23 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
     act
 }
 
+/// Points `gap` apart along a polyline, the first `off` from its start.
+fn along(pts: &[Pos2], off: f32, gap: f32) -> Vec<Pos2> {
+    let mut out = Vec::new();
+    let mut next = off;
+    let mut walked = 0.0;
+    for seg in pts.windows(2) {
+        let (a, b) = (seg[0], seg[1]);
+        let len = a.distance(b);
+        while len > 0.0 && next <= walked + len {
+            out.push(a + (b - a) * ((next - walked) / len));
+            next += gap;
+        }
+        walked += len;
+    }
+    out
+}
+
 /// Pinned cards missing from the latest data: a red no role uses.
 pub fn gone_colour() -> Color32 {
     if crate::theme::current().is_light() {
@@ -2563,6 +2679,22 @@ mod tests {
         assert!(v.is_kept(2));
         assert_eq!(v.slots.get("mac:aa:bb:cc:dd:ee:ff"), Some(&0));
         assert_eq!(v.selected.as_deref(), Some("mac:aa:bb:cc:dd:ee:ff"));
+    }
+
+    #[test]
+    fn flow_dots_are_spaced_along_the_whole_route() {
+        let pts = [pos2(0.0, 0.0), pos2(0.0, 30.0), pos2(40.0, 30.0)];
+        let d = along(&pts, 5.0, 20.0);
+        assert_eq!(
+            d,
+            [
+                pos2(0.0, 5.0),
+                pos2(0.0, 25.0),
+                pos2(15.0, 30.0),
+                pos2(35.0, 30.0)
+            ]
+        );
+        assert!(along(&[pos2(0.0, 0.0)], 0.0, 10.0).is_empty());
     }
 
     #[test]

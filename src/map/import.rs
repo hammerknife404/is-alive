@@ -407,7 +407,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     } else if !input.sweep.is_empty() {
         summary += " · sweep not merged (no device on the map shares a MAC with it)";
     }
-    let mut map = limit(b, input.clients);
+    let mut map = limit(b, input);
     if map.hidden > 0 && !input.clients && !summary.contains("clients not mapped") {
         summary += " · clients not mapped";
     }
