@@ -166,6 +166,9 @@ pub struct ExportTool {
     /// another tab is picked.
     shown: usize,
     err: Option<String>,
+    /// Counts loads, so the map can tell a file read again from the same
+    /// file unchanged.
+    generation: u64,
 }
 
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
@@ -285,6 +288,26 @@ impl ExportTool {
         self.secrets = all;
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The files the Map is drawn from: the UniFi backup, SonicWall export
+    /// and /mapnetwork map opened last of each.
+    pub fn map_sources(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = [
+            self.unifi().map(|u| u.0),
+            self.sonicwall().map(|s| s.0),
+            self.mapnetwork().map(|m| m.0),
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+        v.dedup();
+        v
+    }
+
     /// The /mapnetwork map opened last.
     pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
         self.slots.iter().rev().find_map(|s| match &s.export {
@@ -339,6 +362,7 @@ impl ExportTool {
         });
         if loaded {
             self.gather_secrets();
+            self.generation += 1;
         }
         if !running {
             self.pending = None;

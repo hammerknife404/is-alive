@@ -3,7 +3,7 @@
 //! findings band. It rebuilds as the sweep finds hosts, so a scan can be
 //! watched filling in the map.
 
-use super::layout::{self, CARD, Layout};
+use super::layout::{self, CARD, Layout, Mode};
 use super::runs::{CardRuns, Out, Run, State, Tool};
 use super::{Input, Link, Map, Node, Sev, Zone};
 use crate::net::hostinfo::HostInfo;
@@ -29,6 +29,10 @@ pub enum Action {
     Bundle,
     /// The accuracy note was closed: don't show it again.
     HideNote,
+    /// Read the map's files again and rebuild it.
+    Reload,
+    /// A layout mode was picked: remember it.
+    Layout(Mode),
 }
 
 /// What the detail panel asked for.
@@ -102,15 +106,95 @@ pub struct MapView {
     side: bool,
     /// Spot checks run from cards, with their results.
     runs: CardRuns,
+    /// The layout mode picked; None until one is (then Sites when the map
+    /// has sites, else Cluster).
+    mode: Option<Mode>,
+    /// Rebuild on the next frame even if nothing seems to have changed.
+    stale: bool,
 }
 
+/// Flag on a pinned card that's missing from the latest data.
+pub const GONE_FLAG: &str =
+    "Not in the latest data. Kept because it's pinned: check it, then unpin it or × to let it go.";
+
 impl MapView {
-    pub fn new() -> Self {
+    pub fn new(mode: Option<Mode>) -> Self {
         Self {
             follow: true,
             side: true,
+            mode,
             ..Default::default()
         }
+    }
+
+    /// The layout in use: the one picked, if this map can do it.
+    fn mode(&self) -> Mode {
+        let sites = self.map.sites().len() > 1;
+        match self.mode {
+            Some(Mode::Sites) | None if sites => Mode::Sites,
+            Some(Mode::Sites) | None => Mode::Cluster,
+            Some(m) => m,
+        }
+    }
+
+    /// A card's colour: its role's, or the gone red.
+    fn accent(&self, n: &Node) -> Color32 {
+        if n.gone {
+            gone_colour()
+        } else {
+            zone_colour(n.zone)
+        }
+    }
+
+    /// Rebuild from the data on the next frame (Reload map).
+    pub fn reload(&mut self) {
+        self.stale = true;
+    }
+
+    /// Pinned cards missing from `new`, carried over from `old` and marked
+    /// gone, under their old parent when it's still there.
+    fn carry_gone(&self, old: &Map, new: &mut Map) {
+        if new.nodes.is_empty() {
+            return;
+        }
+        for id in &self.kept {
+            if new.nodes.iter().any(|n| n.id == *id) {
+                continue;
+            }
+            let Some(o) = old.nodes.iter().find(|n| n.id == *id) else {
+                continue;
+            };
+            let mut g = o.clone();
+            let parent = o
+                .parent()
+                .and_then(|p| old.nodes.get(p))
+                .and_then(|p| new.nodes.iter().position(|n| n.id == p.id))
+                .unwrap_or(0);
+            g.up = Some((parent, Link::Assumed, None));
+            if !g.gone {
+                g.gone = true;
+                g.kind = "NOT IN LATEST DATA".into();
+                g.flags.insert(0, GONE_FLAG.into());
+            }
+            new.nodes.push(g);
+        }
+    }
+
+    /// Take out gone cards that were let go (unpinned or ×).
+    fn drop_released(&mut self, ctx: &egui::Context) {
+        if !self
+            .map
+            .nodes
+            .iter()
+            .any(|n| n.gone && !self.kept.contains(&n.id))
+        {
+            return;
+        }
+        // Gone cards sit at the end and nothing hangs off them, so taking
+        // them out leaves every other index alone.
+        let kept = &self.kept;
+        self.map.nodes.retain(|n| !n.gone || kept.contains(&n.id));
+        self.relayout(ctx);
     }
 
     /// Keep cards' runs going while another tab is shown.
@@ -136,8 +220,10 @@ impl MapView {
 
     /// Rebuild when anything feeding the map changed.
     fn refresh(&mut self, ctx: &egui::Context, src: &Sources) {
+        self.drop_released(ctx);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         src.sweep.generation().hash(&mut h);
+        src.export.generation().hash(&mut h);
         self.clients.hash(&mut h);
         if let Some((p, r)) = src.export.unifi() {
             (p, r.json.len()).hash(&mut h);
@@ -150,7 +236,7 @@ impl MapView {
         }
         (src.info.gateway, src.info.lan, src.info.wan).hash(&mut h);
         let key = h.finish();
-        if key == self.key {
+        if key == self.key && !self.stale {
             return;
         }
         // A sweep adds hosts every frame: rebuild a few times a second.
@@ -161,17 +247,20 @@ impl MapView {
         }
         self.built_at = now;
         self.key = key;
+        self.stale = false;
         let input = self.input(src);
-        self.map = if input.is_empty() {
+        let mut map = if input.is_empty() {
             Map::default()
         } else {
             super::build(&input)
         };
+        self.carry_gone(&self.map, &mut map);
+        self.map = map;
         self.relayout(ctx);
     }
 
     fn relayout(&mut self, ctx: &egui::Context) {
-        self.lay = layout::layout(&self.map, &|_| true);
+        self.lay = layout::layout_in(&self.map, &|_| true, self.mode());
         let now = ctx.input(|i| i.time);
         // New cards grow out of their parent.
         for (i, n) in self.map.nodes.iter().enumerate() {
@@ -340,6 +429,9 @@ impl MapView {
                 r = r.union(Rect::from_min_size(p, CARD));
             }
         }
+        for b in &self.lay.boxes {
+            r = r.union(b.rect);
+        }
         r
     }
 
@@ -433,6 +525,37 @@ impl MapView {
                     self.placed.clear();
                     fit = true;
                 }
+                if ui
+                    .button("⟲ Reload")
+                    .on_hover_text(
+                        "Read the map's files again and rebuild it, keeping pins and the \
+                         selection. (It already updates by itself as a sweep finds hosts or a \
+                         file is loaded.)",
+                    )
+                    .clicked()
+                {
+                    act = Some(Action::Reload);
+                }
+                ui.separator();
+                let now = self.mode();
+                let sites = self.map.sites().len() > 1;
+                for m in Mode::ALL {
+                    if m == Mode::Sites && !sites {
+                        continue;
+                    }
+                    if ui
+                        .selectable_label(now == m, m.name())
+                        .on_hover_text(m.tip())
+                        .clicked()
+                        && now != m
+                    {
+                        self.mode = Some(m);
+                        self.placed.clear();
+                        self.relayout(&ctx);
+                        fit = true;
+                        act = Some(Action::Layout(m));
+                    }
+                }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_enabled_ui(!empty, |ui| {
@@ -451,6 +574,7 @@ impl MapView {
                                 &self.map,
                                 &pos,
                                 &self.lay.stacked,
+                                &self.lay.boxes,
                                 ui.visuals().dark_mode,
                             ),
                         );
@@ -731,7 +855,7 @@ impl MapView {
     ) -> (Option<Action>, egui::Response) {
         let mut act = None;
         let n = &self.map.nodes[i];
-        let accent = zone_colour(n.zone);
+        let accent = self.accent(n);
         let section = |ui: &mut Ui, title: &str| {
             ui.add_space(6.0);
             ui.label(
@@ -1269,53 +1393,69 @@ impl MapView {
                 .map(|w| self.to_screen(rect, *w))
         };
 
+        // Boxes (Zones and Sites modes), under everything else.
+        for b in &self.lay.boxes {
+            let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
+            if !r.intersects(rect) {
+                continue;
+            }
+            let c = b.zone.map_or(vis.weak_text_color(), zone_colour);
+            let a = if b.zone.is_some_and(|zn| self.hidden.contains(&zn)) {
+                0.2
+            } else {
+                1.0
+            };
+            p.rect(
+                r,
+                (10.0 * z) as u8,
+                c.gamma_multiply(0.07 * a),
+                Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
+                StrokeKind::Inside,
+            );
+            if z >= 0.25 {
+                p.text(
+                    r.min + vec2(layout::BOX_PAD * z, layout::BOX_TITLE * z / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{} · {}", b.title.to_uppercase(), b.count),
+                    FontId::proportional((11.0 * z).max(7.0)),
+                    c.gamma_multiply(a),
+                );
+            }
+        }
+
         // Links.
         let glow = glow_strength(vis);
         let mut flows = false;
-        for (i, n) in self.map.nodes.iter().enumerate() {
-            let Some((up, link, label)) = &n.up else {
-                continue;
-            };
-            let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
-            else {
-                continue;
-            };
-            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i])
-                .into_iter()
-                .map(|w| self.to_screen(rect, w))
-                .collect();
-            let alpha = fade(i).min(fade(*up));
-            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
-            let base = match link {
-                Link::Backbone => zone_colour(Zone::Gateway),
-                Link::Assumed => vis.weak_text_color(),
-                _ => zone_colour(n.zone),
-            };
-            let w = match link {
-                Link::Backbone => 3.2,
-                _ => 2.0,
-            } * z.clamp(0.6, 1.4)
-                + if on { 0.8 } else { 0.0 };
+        // One link's line: halo, stroke, the flow when lit, and a label at
+        // its end. True while it flows.
+        let draw = |pts: &[Pos2],
+                    base: Color32,
+                    link: Link,
+                    w: f32,
+                    alpha: f32,
+                    on: bool,
+                    label: Option<(Pos2, egui::Align2, &str)>|
+         -> bool {
             let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
             // A soft halo in the link's colour under it (not under the
             // grey assumed ones, which should stay quiet).
-            if glow > 0.0 && *link != Link::Assumed {
+            if glow > 0.0 && link != Link::Assumed {
                 let halo = Stroke::new(
                     w + 5.0 * z.clamp(0.6, 1.4),
                     base.gamma_multiply(glow * alpha * if on { 1.4 } else { 1.0 }),
                 );
-                if *link == Link::Wireless {
-                    p.extend(Shape::dashed_line(&pts, halo, 7.0 * z, 5.0 * z));
+                if link == Link::Wireless {
+                    p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
                 } else {
-                    p.add(Shape::line(pts.clone(), halo));
+                    p.add(Shape::line(pts.to_vec(), halo));
                 }
             }
             let stroke = Stroke::new(w, c);
             match link {
-                Link::Wireless => p.extend(Shape::dashed_line(&pts, stroke, 7.0 * z, 5.0 * z)),
-                Link::Assumed => p.extend(Shape::dashed_line(&pts, stroke, 2.5 * z, 4.0 * z)),
+                Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
+                Link::Assumed => p.extend(Shape::dashed_line(pts, stroke, 2.5 * z, 4.0 * z)),
                 _ => {
-                    p.add(Shape::line(pts.clone(), stroke));
+                    p.add(Shape::line(pts.to_vec(), stroke));
                 }
             }
             if on {
@@ -1325,29 +1465,17 @@ impl MapView {
                 let off = (now as f32 * 40.0 * z).rem_euclid(18.0 * z);
                 let glow = Stroke::new(w + 1.0, Color32::WHITE.gamma_multiply(0.55 * alpha));
                 p.extend(Shape::dashed_line_with_offset(
-                    &pts,
+                    pts,
                     glow,
                     &[4.0 * z],
                     &[14.0 * z],
                     off,
                 ));
-                flows = true;
             }
-            if let Some(l) = label
+            if let Some((pos, align, l)) = label
                 && z >= 0.7
                 && alpha > 0.3
             {
-                let end = *pts.last().expect("route has points");
-                // A stacked card's stub is short: just the number over it.
-                let (pos, align, l) = if self.lay.stacked[i] {
-                    (
-                        end - vec2(layout::INDENT / 4.0 * z, 2.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        l.trim_start_matches("port "),
-                    )
-                } else {
-                    (end + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, l.as_str())
-                };
                 p.text(
                     pos,
                     align,
@@ -1356,6 +1484,113 @@ impl MapView {
                     vis.weak_text_color().gamma_multiply(alpha),
                 );
             }
+            on
+        };
+        let width = |link: Link, on: bool| {
+            let base = if link == Link::Backbone { 3.2 } else { 2.0 };
+            base * z.clamp(0.6, 1.4) + if on { 0.8 } else { 0.0 }
+        };
+        let colour = |n: &Node, link: Link| match link {
+            Link::Backbone => zone_colour(Zone::Gateway),
+            Link::Assumed => vis.weak_text_color(),
+            _ => self.accent(n),
+        };
+        let group = |i: usize| self.lay.group.get(i).copied().flatten();
+        // Links from one card into another box fold into one trunk:
+        // (parent, box) → (children, any lit, brightest).
+        let mut trunks: std::collections::BTreeMap<(usize, usize), (Vec<usize>, bool, f32)> =
+            Default::default();
+        for (i, n) in self.map.nodes.iter().enumerate() {
+            let Some((up, link, label)) = &n.up else {
+                continue;
+            };
+            let alpha = fade(i).min(fade(*up));
+            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
+            if let Some(g) = group(i)
+                && group(*up) != Some(g)
+            {
+                let t = trunks.entry((*up, g)).or_default();
+                t.0.push(i);
+                t.1 |= on;
+                t.2 = t.2.max(alpha);
+                continue;
+            }
+            // Inside one box, links would cut across its grid: shown only
+            // while one end is selected.
+            if group(i).is_some() && group(i) == group(*up) && !on {
+                continue;
+            }
+            let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
+            else {
+                continue;
+            };
+            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i])
+                .into_iter()
+                .map(|w| self.to_screen(rect, w))
+                .collect();
+            let end = *pts.last().expect("route has points");
+            // A stacked card's stub is short: just the number over it.
+            let label = label.as_deref().map(|l| {
+                if self.lay.stacked[i] {
+                    (
+                        end - vec2(layout::INDENT / 4.0 * z, 2.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        l.trim_start_matches("port "),
+                    )
+                } else {
+                    (end + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, l)
+                }
+            });
+            flows |= draw(
+                &pts,
+                colour(n, *link),
+                *link,
+                width(*link, on),
+                alpha,
+                on,
+                label,
+            );
+        }
+        for ((up, g), (kids, on, alpha)) in &trunks {
+            let (Some(a), Some(b)) = (
+                self.pos.get(&self.map.nodes[*up].id),
+                self.lay.boxes.get(*g),
+            ) else {
+                continue;
+            };
+            let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
+            let world: Vec<Pos2> = if b.rect.top() > from.y + 8.0 {
+                // Below: into the middle of the box's top edge.
+                let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
+                layout::route(*a, into, false)
+            } else {
+                // Beside it (same row): under both boxes and up into its
+                // bottom, rather than along the cards' edges.
+                let own = group(*up).and_then(|g| self.lay.boxes.get(g));
+                let floor = own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom())
+                    + layout::BOX_PAD;
+                let x = b.rect.center().x;
+                vec![
+                    from,
+                    pos2(from.x, floor),
+                    pos2(x, floor),
+                    pos2(x, b.rect.bottom()),
+                ]
+            };
+            let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
+            let first = &self.map.nodes[kids[0]];
+            let link = first.link().unwrap_or(Link::Wired);
+            let count = format!("×{}", kids.len());
+            let end = *pts.last().expect("route has points");
+            let label = (kids.len() > 1).then(|| {
+                (
+                    end + vec2(5.0, -4.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    count.as_str(),
+                )
+            });
+            let base = b.zone.map_or_else(|| colour(first, link), zone_colour);
+            flows |= draw(&pts, base, link, width(link, *on) + 0.6, *alpha, *on, label);
         }
 
         // Cards: infrastructure over clients.
@@ -1408,7 +1643,7 @@ impl MapView {
         let n = &self.map.nodes[i];
         let z = self.zoom;
         let dark = vis.dark_mode;
-        let accent = zone_colour(n.zone);
+        let accent = self.accent(n);
         let round = (7.0 * z) as u8;
         let fill = if dark && vis.panel_fill.a() == 255 {
             vis.panel_fill.lerp_to_gamma(Color32::WHITE, 0.06)
@@ -1447,7 +1682,26 @@ impl MapView {
         } else {
             Stroke::new(1.0, accent.gamma_multiply(0.5 * a))
         };
-        p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
+        if n.gone {
+            // Dashed: it isn't in the data any more.
+            p.rect_filled(r, round, fill.gamma_multiply(a));
+            let q = r.shrink(1.0);
+            let outline = [
+                q.left_top(),
+                q.right_top(),
+                q.right_bottom(),
+                q.left_bottom(),
+                q.left_top(),
+            ];
+            p.extend(Shape::dashed_line(
+                &outline,
+                Stroke::new(border.width.max(1.5), accent.gamma_multiply(a)),
+                6.0 * z,
+                4.0 * z,
+            ));
+        } else {
+            p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
+        }
         let bar = Rect::from_min_max(r.min, pos2(r.min.x + 4.0 * z, r.max.y));
         p.rect_filled(
             bar,
@@ -1988,6 +2242,15 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
     act
 }
 
+/// Pinned cards missing from the latest data: a red no role uses.
+pub fn gone_colour() -> Color32 {
+    if crate::theme::current().is_light() {
+        Color32::from_rgb(200, 30, 30)
+    } else {
+        Color32::from_rgb(255, 64, 64)
+    }
+}
+
 /// A role's colour in the current theme.
 pub fn zone_colour(z: Zone) -> Color32 {
     z.colour_in(crate::theme::current())
@@ -2049,7 +2312,7 @@ mod tests {
     use crate::map::Node;
 
     fn view(n: usize) -> MapView {
-        let mut v = MapView::new();
+        let mut v = MapView::new(None);
         v.map.nodes = (0..n)
             .map(|i| Node {
                 id: format!("n{i}"),
@@ -2112,6 +2375,64 @@ mod tests {
         assert_eq!(v.ordered(), [3, 0, 2, 1]);
         v.toggle(2);
         assert_eq!(v.ordered(), [3, 0, 1]);
+    }
+
+    #[test]
+    fn a_pinned_card_missing_from_new_data_stays_marked_until_let_go() {
+        let mut v = view(4);
+        v.map.nodes[2].up = Some((1, Link::Wired, None));
+        v.select(Some(2));
+        v.keep(2);
+        v.select(Some(3));
+        let old = Map {
+            nodes: v.map.nodes.clone(),
+            ..Default::default()
+        };
+        // The new data has no n2, and n1 is now at index 0.
+        let mut new = Map {
+            nodes: old.nodes.iter().filter(|n| n.id != "n2").cloned().collect(),
+            ..Default::default()
+        };
+        new.nodes.swap(0, 1);
+        v.carry_gone(&old, &mut new);
+        let g = new.nodes.last().unwrap();
+        assert_eq!((g.id.as_str(), g.gone), ("n2", true));
+        assert_eq!(g.flags[0], GONE_FLAG);
+        // Under its old parent, by id, with an assumed link.
+        assert!(matches!(g.up, Some((0, Link::Assumed, _))));
+        assert_eq!(new.nodes[0].id, "n1");
+        // Rebuilt again, it isn't flagged twice.
+        let mut again = Map {
+            nodes: new.nodes[..3].to_vec(),
+            ..Default::default()
+        };
+        v.carry_gone(&new, &mut again);
+        assert_eq!(again.nodes[3].flags.len(), new.nodes[3].flags.len());
+        // Unpinned, it goes; the rest stay, still selected.
+        v.map = again;
+        v.relayout(&egui::Context::default());
+        assert_eq!(v.selection(), [3, 2]);
+        v.keep(3);
+        v.drop_released(&egui::Context::default());
+        assert_eq!(v.map.nodes.len(), 3);
+        assert!(v.map.nodes.iter().all(|n| !n.gone));
+        assert_eq!(v.selection(), [2]);
+    }
+
+    #[test]
+    fn a_card_that_wasnt_pinned_just_goes() {
+        let mut v = view(3);
+        v.select(Some(2));
+        let old = Map {
+            nodes: v.map.nodes.clone(),
+            ..Default::default()
+        };
+        let mut new = Map {
+            nodes: old.nodes[..2].to_vec(),
+            ..Default::default()
+        };
+        v.carry_gone(&old, &mut new);
+        assert_eq!(new.nodes.len(), 2);
     }
 
     /// Cards 0, 1, 2 selected in that order: the panel shows 2, 1, 0.

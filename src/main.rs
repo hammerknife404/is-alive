@@ -476,6 +476,26 @@ impl App {
                 self.look.map_note = false;
                 theme::save(&self.look);
             }
+            Some(Action::Layout(m)) => {
+                self.look.map_layout = Some(m);
+                theme::save(&self.look);
+            }
+            Some(Action::Reload) => {
+                let files = self.export.map_sources();
+                let n = files.len();
+                if n > 0 && !self.export.is_running() {
+                    self.export.open(ctx, files);
+                }
+                self.map.reload();
+                widgets::toast(
+                    match n {
+                        0 => "Map rebuilt".to_string(),
+                        1 => "Reloading the map's file…".to_string(),
+                        n => format!("Reloading the map's {n} files…"),
+                    },
+                    true,
+                );
+            }
             None => {}
         }
     }
@@ -902,7 +922,7 @@ fn main() -> eframe::Result {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
-                map: map::view::MapView::new(),
+                map: map::view::MapView::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),

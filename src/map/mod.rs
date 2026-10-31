@@ -188,6 +188,11 @@ pub struct Node {
     pub up: Option<(usize, Link, Option<String>)>,
     /// Ranks clients for the per-uplink cap: lower shows first.
     rank: (u8, u64),
+    /// The site it's at, when the source has sites (/mapnetwork maps).
+    pub site: Option<String>,
+    /// Pinned, then missing from the latest data: kept on the map, marked,
+    /// for the user to review.
+    pub gone: bool,
 }
 
 impl Node {
@@ -239,6 +244,17 @@ impl Map {
             }
         }
         c
+    }
+
+    /// Every site named on a card, in the order first seen.
+    pub fn sites(&self) -> Vec<String> {
+        let mut v: Vec<String> = Vec::new();
+        for s in self.nodes.iter().filter_map(|n| n.site.as_ref()) {
+            if !v.contains(s) {
+                v.push(s.clone());
+            }
+        }
+        v
     }
 
     /// Path from the internet down to `i`.
