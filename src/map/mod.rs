@@ -233,6 +233,9 @@ pub struct Map {
     pub summary: String,
     /// Clients known but not drawn.
     pub hidden: usize,
+    /// Ids of the cards left out to keep the map readable (clients off, or
+    /// past the per-uplink cap): still in the data, just not drawn.
+    pub folded: HashSet<String>,
 }
 
 impl Map {
@@ -1616,6 +1619,7 @@ fn limit(b: B, clients: bool) -> Map {
         };
     }
     let mut keep = vec![true; n];
+    let mut folded = HashSet::new();
     let mut extra = Vec::new();
     let mut hidden = 0;
     for (&p, kids) in &by_parent {
@@ -1626,6 +1630,7 @@ fn limit(b: B, clients: bool) -> Map {
         hidden += rest.len();
         for &i in rest {
             keep[i] = false;
+            folded.insert(nodes[i].id.clone());
         }
         if clients && cost(cap) <= BUDGET {
             let mut more = Node {
@@ -1704,6 +1709,7 @@ fn limit(b: B, clients: bool) -> Map {
         findings,
         summary: String::new(),
         hidden,
+        folded,
     }
 }
 

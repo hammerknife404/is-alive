@@ -169,6 +169,8 @@ pub struct ExportTool {
     /// Counts loads, so the map can tell a file read again from the same
     /// file unchanged.
     generation: u64,
+    /// Files the last load couldn't read or convert.
+    failed: Vec<String>,
 }
 
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
@@ -288,6 +290,11 @@ impl ExportTool {
         self.secrets = all;
     }
 
+    /// Files the last load couldn't read or convert.
+    pub fn failed(&self) -> &[String] {
+        &self.failed
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -352,6 +359,7 @@ impl ExportTool {
                     loaded = true;
                 }
                 Err(e) => {
+                    self.failed.push(file_name(&path));
                     let e = format!("{}: {e}", file_name(&path));
                     self.err = Some(match self.err.take() {
                         Some(prev) => format!("{prev}\n{e}"),
@@ -382,6 +390,7 @@ impl ExportTool {
     /// export picked together both show.
     fn start(&mut self, ctx: &egui::Context, paths: Option<Vec<PathBuf>>) {
         self.err = None;
+        self.failed.clear();
         let clients = self.clients;
         self.job = Some(Job::spawn(ctx, move |tx| {
             let Some(paths) = paths.or_else(|| {

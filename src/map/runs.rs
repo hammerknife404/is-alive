@@ -1,8 +1,8 @@
 //! Spot checks run from a Map card: Ping, Port Check and Traceroute against
 //! one device, with a condensed result kept in the card. They're for a quick
 //! look only, so they don't reach the Results tab or exports, and they're
-//! kept per card for the session (a map rebuild that changes a card's id,
-//! or a restart, lets them go). A full run is still one click away in the
+//! kept per card for the session (they follow a card whose id changes from
+//! IP to MAC; a card leaving the map, or a restart, stops and drops them). A full run is still one click away in the
 //! tool's own tab.
 
 use crate::job::Job;
@@ -286,6 +286,20 @@ impl CardRuns {
                 self.cards.remove(card);
             }
         }
+    }
+
+    /// A card's id changed (a sweep host the backup knows by MAC): its
+    /// runs go with it.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        if let Some(v) = self.cards.remove(from) {
+            self.cards.insert(to.to_string(), v);
+        }
+    }
+
+    /// Stop and forget the runs of cards no longer on the map, so they
+    /// don't probe on with no Stop button, or hold places in the queue.
+    pub fn keep_only(&mut self, ids: &std::collections::HashSet<&str>) {
+        self.cards.retain(|k, _| ids.contains(k.as_str()));
     }
 
     fn find(&mut self, card: &str, tool: Tool) -> Option<&mut Run> {
@@ -574,6 +588,21 @@ mod tests {
         // A stopped one frees its place too.
         c.stop("a", Tool::Ports);
         assert_eq!(c.due().len(), 2);
+    }
+
+    #[test]
+    fn runs_follow_a_renamed_card_and_go_with_a_removed_one() {
+        let mut c = CardRuns::default();
+        c.start("ip:1", Tool::Ping, ip());
+        c.start("b", Tool::Trace, ip());
+        c.rename("ip:1", "mac:1");
+        assert_eq!(c.runs("mac:1").len(), 1);
+        assert!(c.runs("ip:1").is_empty());
+        let ids: std::collections::HashSet<&str> = ["mac:1"].into();
+        c.keep_only(&ids);
+        assert!(c.runs("b").is_empty());
+        // The dropped one no longer holds a place in the queue.
+        assert_eq!(c.due(), [("mac:1".to_string(), Tool::Ping)]);
     }
 
     #[test]

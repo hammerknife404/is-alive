@@ -111,6 +111,8 @@ pub struct MapView {
     mode: Option<Mode>,
     /// Rebuild on the next frame even if nothing seems to have changed.
     stale: bool,
+    /// The map has two or more sites (Sites mode is offered).
+    multi_site: bool,
 }
 
 /// Flag on a pinned card that's missing from the latest data.
@@ -129,9 +131,8 @@ impl MapView {
 
     /// The layout in use: the one picked, if this map can do it.
     fn mode(&self) -> Mode {
-        let sites = self.map.sites().len() > 1;
         match self.mode {
-            Some(Mode::Sites) | None if sites => Mode::Sites,
+            Some(Mode::Sites) | None if self.multi_site => Mode::Sites,
             Some(Mode::Sites) | None => Mode::Cluster,
             Some(m) => m,
         }
@@ -152,24 +153,48 @@ impl MapView {
     }
 
     /// Pinned cards missing from `new`, carried over from `old` and marked
-    /// gone, under their old parent when it's still there.
-    fn carry_gone(&self, old: &Map, new: &mut Map) {
+    /// gone, under their nearest ancestor that's still there. A card only
+    /// folded away (clients off, or past the cap) isn't gone: its pin just
+    /// lapses, as before. One whose id changed (a sweep host a backup now
+    /// knows by MAC) is found by MAC or IP, and its pin moves to the new
+    /// card: returned as (old id, new id).
+    fn carry_gone(&self, old: &Map, new: &mut Map) -> Vec<(String, String)> {
+        let mut moved = Vec::new();
         if new.nodes.is_empty() {
-            return;
+            return moved;
         }
+        // Only cards from the data count as parents or matches, never the
+        // gone ones pushed below.
+        let base = new.nodes.len();
         for id in &self.kept {
-            if new.nodes.iter().any(|n| n.id == *id) {
+            if new.nodes[..base].iter().any(|n| n.id == *id) || new.folded.contains(id) {
                 continue;
             }
             let Some(o) = old.nodes.iter().find(|n| n.id == *id) else {
                 continue;
             };
-            let mut g = o.clone();
-            let parent = o
-                .parent()
-                .and_then(|p| old.nodes.get(p))
-                .and_then(|p| new.nodes.iter().position(|n| n.id == p.id))
+            if !o.gone
+                && let Some(n) = new.nodes[..base].iter().find(|n| {
+                    !self.kept.contains(&n.id)
+                        && ((o.mac.is_some() && n.mac == o.mac) || (o.ip.is_some() && n.ip == o.ip))
+                })
+            {
+                moved.push((id.clone(), n.id.clone()));
+                continue;
+            }
+            // Its parent, or the nearest card above it still in the data.
+            let parent = old
+                .path(old.nodes.iter().position(|n| n.id == *id).unwrap_or(0))
+                .into_iter()
+                .rev()
+                .skip(1)
+                .find_map(|a| {
+                    new.nodes[..base]
+                        .iter()
+                        .position(|n| n.id == old.nodes[a].id)
+                })
                 .unwrap_or(0);
+            let mut g = o.clone();
             g.up = Some((parent, Link::Assumed, None));
             if !g.gone {
                 g.gone = true;
@@ -178,6 +203,27 @@ impl MapView {
             }
             new.nodes.push(g);
         }
+        moved
+    }
+
+    /// A pinned card's id changed: the pin, its panel slot, the selection
+    /// and its card results move to the new id.
+    fn rename(&mut self, from: &str, to: &str) {
+        for v in [&mut self.kept, &mut self.also, &mut self.order] {
+            for s in v.iter_mut().filter(|s| *s == from) {
+                *s = to.to_string();
+            }
+        }
+        if self.selected.as_deref() == Some(from) {
+            self.selected = Some(to.to_string());
+        }
+        if let Some(k) = self.slots.remove(from) {
+            self.slots.insert(to.to_string(), k);
+        }
+        if let Some(p) = self.pos.remove(from) {
+            self.pos.insert(to.to_string(), p);
+        }
+        self.runs.rename(from, to);
     }
 
     /// Take out gone cards that were let go (unpinned or ×).
@@ -190,8 +236,8 @@ impl MapView {
         {
             return;
         }
-        // Gone cards sit at the end and nothing hangs off them, so taking
-        // them out leaves every other index alone.
+        // Gone cards sit at the end and hang only off cards from the data
+        // (never off each other), so taking them out moves no parent.
         let kept = &self.kept;
         self.map.nodes.retain(|n| !n.gone || kept.contains(&n.id));
         self.relayout(ctx);
@@ -254,12 +300,15 @@ impl MapView {
         } else {
             super::build(&input)
         };
-        self.carry_gone(&self.map, &mut map);
+        for (from, to) in self.carry_gone(&self.map, &mut map) {
+            self.rename(&from, &to);
+        }
         self.map = map;
         self.relayout(ctx);
     }
 
     fn relayout(&mut self, ctx: &egui::Context) {
+        self.multi_site = self.map.sites().len() > 1;
         self.lay = layout::layout_in(&self.map, &|_| true, self.mode());
         let now = ctx.input(|i| i.time);
         // New cards grow out of their parent.
@@ -281,6 +330,7 @@ impl MapView {
         self.also.retain(|s| ids.contains(s.as_str()));
         self.kept.retain(|s| ids.contains(s.as_str()));
         self.slots.retain(|s, _| ids.contains(s.as_str()));
+        self.runs.keep_only(&ids);
         if self
             .selected
             .as_ref()
@@ -538,9 +588,8 @@ impl MapView {
                 }
                 ui.separator();
                 let now = self.mode();
-                let sites = self.map.sites().len() > 1;
                 for m in Mode::ALL {
-                    if m == Mode::Sites && !sites {
+                    if m == Mode::Sites && !self.multi_site {
                         continue;
                     }
                     if ui
@@ -2417,6 +2466,103 @@ mod tests {
         assert_eq!(v.map.nodes.len(), 3);
         assert!(v.map.nodes.iter().all(|n| !n.gone));
         assert_eq!(v.selection(), [2]);
+    }
+
+    fn without(old: &Map, gone: &[&str]) -> Map {
+        Map {
+            nodes: old
+                .nodes
+                .iter()
+                .filter(|n| !gone.contains(&n.id.as_str()))
+                .cloned()
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn copy(m: &Map) -> Map {
+        Map {
+            nodes: m.nodes.clone(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_gone_card_never_hangs_off_another_gone_card() {
+        // n0 → n1 → n2 (pinned) → n3 (pinned).
+        let mut v = view(4);
+        for i in 1..4 {
+            v.map.nodes[i].up = Some((i - 1, Link::Wired, None));
+        }
+        v.keep(2);
+        v.keep(3);
+        let old = copy(&v.map);
+        let mut new = without(&old, &["n2", "n3"]);
+        v.carry_gone(&old, &mut new);
+        // Both under n1, the nearest card still in the data.
+        assert_eq!(new.nodes[2].id, "n2");
+        assert_eq!(new.nodes[3].id, "n3");
+        assert!(matches!(new.nodes[2].up, Some((1, Link::Assumed, _))));
+        assert!(matches!(new.nodes[3].up, Some((1, Link::Assumed, _))));
+        // Letting n2 go leaves n3 under n1, not under itself.
+        v.map = new;
+        v.relayout(&egui::Context::default());
+        v.keep(2);
+        v.drop_released(&egui::Context::default());
+        assert_eq!(v.map.nodes[2].id, "n3");
+        assert_eq!(v.map.nodes[2].parent(), Some(1));
+    }
+
+    #[test]
+    fn a_pinned_card_only_folded_away_isnt_called_gone() {
+        let mut v = view(3);
+        v.keep(2);
+        let old = copy(&v.map);
+        let mut new = without(&old, &["n2"]);
+        new.folded.insert("n2".into());
+        assert!(v.carry_gone(&old, &mut new).is_empty());
+        assert_eq!(new.nodes.len(), 2);
+    }
+
+    #[test]
+    fn a_pin_follows_a_card_whose_id_changed() {
+        let mut v = view(2);
+        v.map.nodes.push(Node {
+            id: "ip:10.0.0.5".into(),
+            ip: Some("10.0.0.5".parse().unwrap()),
+            up: Some((0, Link::Assumed, None)),
+            ..Default::default()
+        });
+        v.select(Some(2));
+        v.keep(2);
+        v.ordered();
+        let old = copy(&v.map);
+        let mut new = without(&old, &["ip:10.0.0.5"]);
+        new.nodes.push(Node {
+            id: "mac:aa:bb:cc:dd:ee:ff".into(),
+            ip: Some("10.0.0.5".parse().unwrap()),
+            up: Some((1, Link::Wired, None)),
+            ..Default::default()
+        });
+        let moved = v.carry_gone(&old, &mut new);
+        assert_eq!(
+            moved,
+            [(
+                "ip:10.0.0.5".to_string(),
+                "mac:aa:bb:cc:dd:ee:ff".to_string()
+            )]
+        );
+        // No red duplicate.
+        assert_eq!(new.nodes.len(), 3);
+        assert!(new.nodes.iter().all(|n| !n.gone));
+        for (from, to) in moved {
+            v.rename(&from, &to);
+        }
+        v.map = new;
+        v.relayout(&egui::Context::default());
+        assert!(v.is_kept(2));
+        assert_eq!(v.slots.get("mac:aa:bb:cc:dd:ee:ff"), Some(&0));
+        assert_eq!(v.selected.as_deref(), Some("mac:aa:bb:cc:dd:ee:ff"));
     }
 
     #[test]

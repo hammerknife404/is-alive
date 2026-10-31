@@ -256,12 +256,12 @@ fn grouped(
 ) -> Layout {
     let n = map.nodes.len();
     let mut out = empty(n);
-    let depth = |i: usize| map.path(i).len();
+    let depths: Vec<usize> = (0..n).map(|i| map.path(i).len()).collect();
     let sort = |v: &mut Vec<usize>| {
         v.sort_by(|&a, &b| {
             let (x, y) = (&map.nodes[a], &map.nodes[b]);
-            (depth(a), zone_order(x.zone), x.client, &x.label).cmp(&(
-                depth(b),
+            (depths[a], zone_order(x.zone), x.client, &x.label).cmp(&(
+                depths[b],
                 zone_order(y.zone),
                 y.client,
                 &y.label,

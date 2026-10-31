@@ -17,6 +17,12 @@ fn hex(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+/// A role's colour in the theme in use, as on screen.
+fn role(z: Zone) -> String {
+    let c = z.colour_in(crate::theme::current());
+    hex([c.r(), c.g(), c.b()])
+}
+
 /// Split into at most `rows` lines of about `width` characters, with an
 /// ellipsis when it doesn't fit.
 fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
@@ -97,9 +103,7 @@ pub fn render(
     for g in boxes {
         let r = g.rect;
         let p = at(r.min);
-        let colour = g
-            .zone
-            .map_or_else(|| weak.to_string(), |z| hex(z.rgb(dark)));
+        let colour = g.zone.map_or_else(|| weak.to_string(), role);
         let _ = writeln!(
             s,
             r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="10" fill="{colour}" fill-opacity="0.07" stroke="{colour}" stroke-opacity="0.5"/>"#,
@@ -133,9 +137,9 @@ pub fn render(
             .map(|(k, p)| format!("{}{:.1} {:.1}", if k == 0 { "M" } else { " L" }, p.x, p.y))
             .collect();
         let (colour, width, dash) = match link {
-            Link::Backbone => (hex(Zone::Gateway.rgb(dark)), 3.0, ""),
-            Link::Wired => (hex(n.zone.rgb(dark)), 1.6, ""),
-            Link::Wireless => (hex(n.zone.rgb(dark)), 1.6, r#" stroke-dasharray="7 5""#),
+            Link::Backbone => (role(Zone::Gateway), 3.0, ""),
+            Link::Wired => (role(n.zone), 1.6, ""),
+            Link::Wireless => (role(n.zone), 1.6, r#" stroke-dasharray="7 5""#),
             Link::Assumed => (weak.to_string(), 1.4, r#" stroke-dasharray="2.5 4""#),
         };
         let _ = writeln!(
@@ -167,7 +171,7 @@ pub fn render(
         let accent = if n.gone {
             (if dark { "#ff4040" } else { "#c81e1e" }).to_string()
         } else {
-            hex(n.zone.rgb(dark))
+            role(n.zone)
         };
         let (x, y) = (p.x, p.y);
         // A pinned card missing from the latest data: dashed, in red.
