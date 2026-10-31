@@ -11,6 +11,13 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = "speed.cloudflare.com";
 pub const BASE: &str = "https://speed.cloudflare.com";
+/// The file "Download a file" starts with: ThinkBroadband's public test
+/// file (London), large enough that a stream never runs out.
+pub const DEFAULT_FILE: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
+/// Latency target when downloading a file: Cloudflare's resolver, nearby
+/// on any line, so idle latency, jitter and bufferbloat read the local
+/// line rather than the path to wherever the file lives.
+pub const FILE_PROBE: &str = "1.1.1.1";
 /// Per request. Cloudflare answers 403 to large ones (100 MB was refused in
 /// the field; others report 50 MB working), so stay well under that; each
 /// stream asks again as soon as one ends. Runs are cut at the deadline.
@@ -39,6 +46,14 @@ impl Server {
         match self {
             Server::Cloudflare => Ok(HOST.into()),
             Server::File(url) => file_host(url),
+        }
+    }
+
+    /// Where latency is probed.
+    pub fn probe_host(&self) -> Result<String, String> {
+        match self {
+            Server::Cloudflare => Ok(HOST.into()),
+            Server::File(url) => file_host(url).map(|_| FILE_PROBE.into()),
         }
     }
 
@@ -612,6 +627,13 @@ pub(crate) mod tests {
         assert!(cf.url(Dir::Down).ends_with("__down?bytes=25000000"));
         let f = Server::File(" https://files.example.net:8443/1GB.bin?x=1 ".into());
         assert_eq!(f.host().unwrap(), "files.example.net");
+        assert_eq!(f.probe_host().unwrap(), FILE_PROBE);
+        assert_eq!(cf.probe_host().unwrap(), HOST);
+        assert!(Server::File("ftp://x".into()).probe_host().is_err());
+        assert_eq!(
+            file_host(DEFAULT_FILE).unwrap(),
+            "ipv4.download.thinkbroadband.com"
+        );
         assert!(!f.uploads());
         assert_eq!(
             f.url(Dir::Down),

@@ -166,7 +166,7 @@ impl Default for SpeedTool {
     fn default() -> Self {
         Self {
             use_file: false,
-            file_url: String::new(),
+            file_url: speed::DEFAULT_FILE.into(),
             secs: 10,
             streams: 4,
             down: true,
@@ -236,8 +236,10 @@ anycast: the nearest Cloudflare data centre answers, usually inside your ISP's r
                             );
                         ui.selectable_value(&mut self.use_file, true, "Download a file")
                             .on_hover_text(
-                                "Any large file over HTTPS, fetched again and again on each \
-stream: your own server, a client's, or a host's test file. Download only.",
+                                "Any large file over HTTP(S), fetched again and again on each \
+stream: ThinkBroadband's public 5 GB test file to start with, or your own server's, a client's \
+or a host's. Download only; latency is measured to 1.1.1.1 so it reads your line, not the \
+path to the file.",
                             );
                     });
                 if self.use_file {
@@ -247,8 +249,8 @@ stream: your own server, a client's, or a host's test file. Download only.",
                             .hint_text("https://host/100MB.bin"),
                     )
                     .on_hover_text(
-                        "A file of 100 MB or more downloads best. Latency is measured to the \
-same host.",
+                        "The file's direct link, not the page it's offered on. 1 GB or more \
+downloads best.",
                     );
                 }
             });
@@ -835,7 +837,7 @@ impl Prober {
 }
 
 fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {
-    let host = server.host().unwrap_or_default();
+    let host = server.probe_host().unwrap_or_default();
     let ip = match net::resolve(&host, false) {
         Ok(ip) => ip,
         Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
