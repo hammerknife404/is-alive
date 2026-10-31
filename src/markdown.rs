@@ -27,7 +27,7 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> 
             f.color = vis.strong_text_color();
         }
         f.italics = italic;
-        job.append(s, 0.0, f);
+        crate::theme::append_with_emoji(job, s, &f);
     };
     while !rest.is_empty() {
         let next = rest
@@ -68,8 +68,15 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> 
             job.append(&rest[1..mid], 0.0, f);
             rest = &rest[mid + end + 1..];
         } else if (rest.starts_with('*') || rest.starts_with('_'))
-            // A lone * or _ inside a word (snake_case) isn't emphasis.
+            // A lone * or _ before a space isn't emphasis.
             && (italic || rest[1..].starts_with(|c: char| !c.is_whitespace()))
+            // An _ inside a word (snake_case, IS_ALIVE_GPU) isn't either.
+            && (rest.starts_with('*') || {
+                let prev = text[..text.len() - rest.len()].chars().next_back();
+                let next = rest[1..].chars().next();
+                let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+                if italic { !word(next) } else { !word(prev) }
+            })
         {
             italic = !italic;
             rest = &rest[1..];
@@ -247,6 +254,20 @@ pub fn continue_list(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn underscores_inside_words_are_literal() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let text = |t: &str| inline(ui, t, 14.0, false, &FontFamily::Proportional).text;
+            assert_eq!(text("IS_ALIVE_GPU=off"), "IS_ALIVE_GPU=off");
+            assert_eq!(text("snake_case_name"), "snake_case_name");
+            // Real emphasis still works, and drops its markers.
+            assert_eq!(text("an _italic_ word"), "an italic word");
+            assert_eq!(text("**bold** and *it*"), "bold and it");
+        });
+        out.textures_delta.clear();
+    }
 
     #[test]
     fn task_toggles_only_that_line() {

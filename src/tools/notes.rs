@@ -511,7 +511,11 @@ Put the cursor on a highlighted value to unredact it instead.",
                     .spacing([2.0, 2.0])
                     .show(ui, |ui| {
                         for (i, e) in EMOJI.iter().enumerate() {
-                            if ui.button(RichText::new(*e).size(font.size + 3.0)).clicked() {
+                            let c = e.chars().next().unwrap_or(' ');
+                            let glyph = RichText::new(*e)
+                                .size(font.size * crate::theme::EMOJI_SCALE)
+                                .color(crate::theme::emoji_colour(c, ui.visuals().text_color()));
+                            if ui.button(glyph).clicked() {
                                 emoji = Some(*e);
                                 ui.close();
                             }
@@ -552,7 +556,7 @@ Put the cursor on a highlighted value to unredact it instead.",
                 let n = line.chars().count();
                 self.edit_at_cursor(&ctx, |_| (line, n));
             }
-            let mut right = |ui: &mut Ui| {
+            let right = |ui: &mut Ui| {
                 let empty = self.is_empty();
                 if widgets::confirm_button(ui, "notes_clear", !empty, "Clear", "Empty the notes") {
                     self.text.clear();
@@ -593,13 +597,12 @@ pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
                     }
                 });
             };
-            // Right-aligned when the row has room for it; otherwise it
-            // wraps with the rest instead of drawing over it.
-            if ui.available_size_before_wrap().x > 280.0 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
-            } else {
-                right(ui);
+            // Right-aligned; on its own row when this one has no room left,
+            // rather than drawn over the buttons before it.
+            if ui.available_size_before_wrap().x <= 280.0 {
+                ui.end_row();
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
         });
     }
 
@@ -938,7 +941,7 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontI
                 Color32::BLACK
             };
         }
-        job.append(&text[start..i], 0.0, f);
+        crate::theme::append_with_emoji(&mut job, &text[start..i], &f);
         start = i;
     }
     job

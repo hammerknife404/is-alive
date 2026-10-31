@@ -67,6 +67,60 @@ pub fn status() -> (Color32, Color32, Color32) {
     }
 }
 
+/// Emoji and pictographs: drawn a size up and coloured by `emoji_colour`
+/// so egui's monochrome glyphs read clearly. Arrows and plain symbols that
+/// sit in running text aren't included.
+pub fn is_emoji(c: char) -> bool {
+    matches!(c as u32,
+        0x2300..=0x23FF   // ⏰ ⌛
+        | 0x2600..=0x27BF // ☀ ⚠ ✅ ✔ ❌ ❗ ❓
+        | 0x2B50..=0x2B55 // ⭐
+        | 0x1F000..=0x1FAFF)
+}
+
+/// How much bigger an emoji is than the text around it.
+pub const EMOJI_SCALE: f32 = 1.3;
+
+/// Monochrome in Dark and Light, in the text's own colour. In Miami each
+/// emoji takes one of the scene's neons, the same one every time.
+pub fn emoji_colour(c: char, text: Color32) -> Color32 {
+    match current() {
+        Theme::Miami => {
+            const NEON: [Color32; 4] = [PINK, TEAL, SUNSET, Color32::from_rgb(178, 120, 255)];
+            NEON[c as usize % NEON.len()]
+        }
+        _ => text,
+    }
+}
+
+/// Append `text` to `job` in `format`, with every emoji a size up and
+/// coloured to match the theme.
+pub fn append_with_emoji(job: &mut egui::text::LayoutJob, text: &str, format: &egui::TextFormat) {
+    let mut start = 0;
+    for (i, c) in text.char_indices() {
+        if !is_emoji(c) {
+            continue;
+        }
+        if start < i {
+            job.append(&text[start..i], 0.0, format.clone());
+        }
+        let end = i + c.len_utf8();
+        // A variation selector belongs to the emoji before it.
+        let end = text[end..]
+            .strip_prefix('\u{FE0F}')
+            .map_or(end, |_| end + '\u{FE0F}'.len_utf8());
+        let mut f = format.clone();
+        f.font_id.size *= EMOJI_SCALE;
+        f.color = emoji_colour(c, format.color);
+        f.valign = egui::Align::Center;
+        job.append(&text[i..end], 0.0, f);
+        start = end;
+    }
+    if start < text.len() {
+        job.append(&text[start..], 0.0, format.clone());
+    }
+}
+
 /// Accent for the selected tab and other highlights.
 pub fn accent() -> Color32 {
     accent_for(current())
@@ -486,6 +540,20 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emoji_are_a_size_up_and_in_their_own_sections() {
+        let mut job = egui::text::LayoutJob::default();
+        let f = egui::TextFormat::simple(egui::FontId::proportional(10.0), Color32::WHITE);
+        append_with_emoji(&mut job, "ok ✅ done ⚠\u{FE0F}!", &f);
+        assert_eq!(job.text, "ok ✅ done ⚠\u{FE0F}!");
+        let sizes: Vec<f32> = job.sections.iter().map(|s| s.format.font_id.size).collect();
+        assert_eq!(
+            sizes,
+            [10.0, 10.0 * EMOJI_SCALE, 10.0, 10.0 * EMOJI_SCALE, 10.0]
+        );
+        assert!(is_emoji('🔑') && is_emoji('⭐') && !is_emoji('\u{2192}') && !is_emoji('a'));
+    }
 
     #[test]
     fn keys_round_trip() {
