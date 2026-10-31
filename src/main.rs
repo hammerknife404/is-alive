@@ -27,7 +27,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the title bar, the footer and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS and speed, sweep the LAN. Results opens to show them.";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN. Results opens to show them. (Speed Test runs from its own tab.)";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -533,7 +533,6 @@ impl App {
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
-        self.speed.run(ctx);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }

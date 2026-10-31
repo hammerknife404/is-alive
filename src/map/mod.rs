@@ -12,6 +12,8 @@ pub mod svg;
 pub mod view;
 
 use crate::net::mac::{self, Mac};
+use crate::theme::Theme;
+use eframe::egui::Color32;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::Ipv4Addr;
@@ -79,6 +81,59 @@ impl Zone {
             Zone::Unknown => ([0x8a, 0x93, 0xa3], [0x5d, 0x68, 0x78]),
         };
         if dark { d } else { l }
+    }
+
+    /// The five roles a theme menu shows as swatches, in /mapnetwork's
+    /// zone order (core, server, trusted, iot, guest).
+    pub const SWATCH: [Zone; 5] = [
+        Zone::Gateway,
+        Zone::Switch,
+        Zone::Wireless,
+        Zone::Device,
+        Zone::Server,
+    ];
+
+    /// Its colour in a theme: /mapnetwork's zone colours for that theme
+    /// (Miami's own neons), with gear, clients and the rest to match.
+    pub fn colour_in(self, t: Theme) -> Color32 {
+        // Internet, Gateway, Switch, Wireless, Gear, Server, Device, Client, Unknown.
+        let hex: [u32; 9] = match t {
+            Theme::Dark | Theme::Light => {
+                let [r, g, b] = self.rgb(!t.is_light());
+                return Color32::from_rgb(r, g, b);
+            }
+            Theme::Miami => [
+                0xbeaae6, 0xff48aa, 0xb278ff, 0x28e2dc, 0x5ab4ff, 0xff9646, 0xffdc5a, 0x9aa0f0,
+                0x9682b4,
+            ],
+            Theme::Slate => [
+                0x8a94a8, 0x7aa7ff, 0xb8a2ff, 0x72d49c, 0x6fd3e0, 0xe6c36a, 0xf2a566, 0x9fb0cc,
+                0x7f8899,
+            ],
+            Theme::Phosphor => [
+                0x6f9c7c, 0x4fd1ff, 0xc792ff, 0x5cf28a, 0x3ff0d0, 0xf2e05c, 0xffb454, 0x8fd4a2,
+                0x5f8c6c,
+            ],
+            Theme::Blueprint => [
+                0x8fb0d6, 0x8cc4ff, 0xc7b3ff, 0x8ee6b0, 0x7fe0ea, 0xffe08a, 0xffbd7a, 0xc3d8f0,
+                0x7c9dc4,
+            ],
+            Theme::Contrast => [
+                0xd0d0d0, 0x6cb6ff, 0xd2a8ff, 0x56f08a, 0x4fe0f0, 0xffe066, 0xffa657, 0xffffff,
+                0xb0b0b0,
+            ],
+            Theme::Rgb => [
+                0xa58cd6, 0x00e5ff, 0xb14dff, 0x39ff14, 0xff00c8, 0xfff200, 0xff8a00, 0x7a9cff,
+                0x8a6fc0,
+            ],
+            Theme::Paper => [
+                0x6a5f4c, 0x2f5fb3, 0x7046c2, 0x2b7d4b, 0x1f7f8a, 0x94700f, 0xb8561c, 0x5a6f8c,
+                0x8a7f6c,
+            ],
+        };
+        let i = Zone::ALL.iter().position(|z| *z == self).unwrap_or(0);
+        let h = hex[i];
+        Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8)
     }
 }
 

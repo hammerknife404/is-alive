@@ -731,8 +731,7 @@ impl MapView {
     ) -> (Option<Action>, egui::Response) {
         let mut act = None;
         let n = &self.map.nodes[i];
-        let dark = ui.visuals().dark_mode;
-        let accent = zone_colour(n.zone, dark);
+        let accent = zone_colour(n.zone);
         let section = |ui: &mut Ui, title: &str| {
             ui.add_space(6.0);
             ui.label(
@@ -887,7 +886,7 @@ impl MapView {
                 }
                 let row = |ui: &mut Ui, k: usize, via: String, tip: &str| -> bool {
                     let m = &self.map.nodes[k];
-                    let c = zone_colour(m.zone, dark);
+                    let c = zone_colour(m.zone);
                     let mut go = false;
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
@@ -1219,7 +1218,6 @@ impl MapView {
     fn paint(&self, ui: &Ui, rect: Rect) {
         let p = ui.painter_at(rect);
         let vis = ui.visuals();
-        let dark = vis.dark_mode;
         let z = self.zoom;
         let now = ui.input(|i| i.time);
         let focused = ui.input(|i| i.viewport().focused != Some(false));
@@ -1272,6 +1270,7 @@ impl MapView {
         };
 
         // Links.
+        let glow = glow_strength(vis);
         let mut flows = false;
         for (i, n) in self.map.nodes.iter().enumerate() {
             let Some((up, link, label)) = &n.up else {
@@ -1288,16 +1287,29 @@ impl MapView {
             let alpha = fade(i).min(fade(*up));
             let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
             let base = match link {
-                Link::Backbone => zone_colour(Zone::Gateway, dark),
+                Link::Backbone => zone_colour(Zone::Gateway),
                 Link::Assumed => vis.weak_text_color(),
-                _ => zone_colour(n.zone, dark),
+                _ => zone_colour(n.zone),
             };
             let w = match link {
-                Link::Backbone => 3.0,
-                _ => 1.6,
+                Link::Backbone => 3.2,
+                _ => 2.0,
             } * z.clamp(0.6, 1.4)
                 + if on { 0.8 } else { 0.0 };
-            let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.6 });
+            let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
+            // A soft halo in the link's colour under it (not under the
+            // grey assumed ones, which should stay quiet).
+            if glow > 0.0 && *link != Link::Assumed {
+                let halo = Stroke::new(
+                    w + 5.0 * z.clamp(0.6, 1.4),
+                    base.gamma_multiply(glow * alpha * if on { 1.4 } else { 1.0 }),
+                );
+                if *link == Link::Wireless {
+                    p.extend(Shape::dashed_line(&pts, halo, 7.0 * z, 5.0 * z));
+                } else {
+                    p.add(Shape::line(pts.clone(), halo));
+                }
+            }
             let stroke = Stroke::new(w, c);
             match link {
                 Link::Wireless => p.extend(Shape::dashed_line(&pts, stroke, 7.0 * z, 5.0 * z)),
@@ -1396,13 +1408,25 @@ impl MapView {
         let n = &self.map.nodes[i];
         let z = self.zoom;
         let dark = vis.dark_mode;
-        let accent = zone_colour(n.zone, dark);
+        let accent = zone_colour(n.zone);
         let round = (7.0 * z) as u8;
         let fill = if dark && vis.panel_fill.a() == 255 {
             vis.panel_fill.lerp_to_gamma(Color32::WHITE, 0.06)
         } else {
             vis.window_fill
-        };
+        }
+        // Tinted with its role's colour, so the map reads by colour at a glance.
+        .lerp_to_gamma(accent, if dark { 0.13 } else { 0.07 });
+        let glow = glow_strength(vis);
+        if glow > 0.0 && !selected && !hovered {
+            let halo = egui::Shadow {
+                offset: [0, 0],
+                blur: (12.0 * z) as u8,
+                spread: 0,
+                color: accent.gamma_multiply(glow * 0.8 * a),
+            };
+            p.add(halo.as_shape(r, round));
+        }
         if selected || hovered {
             let shadow = egui::Shadow {
                 offset: [0, (4.0 * z) as i8],
@@ -1421,10 +1445,7 @@ impl MapView {
         } else if hovered {
             Stroke::new(1.5, accent.gamma_multiply(0.8 * a))
         } else {
-            Stroke::new(
-                1.0,
-                vis.widgets.noninteractive.bg_stroke.color.gamma_multiply(a),
-            )
+            Stroke::new(1.0, accent.gamma_multiply(0.5 * a))
         };
         p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
         let bar = Rect::from_min_max(r.min, pos2(r.min.x + 4.0 * z, r.max.y));
@@ -1592,7 +1613,6 @@ impl MapView {
     /// Roles to fade in and out, and the action items, worst first: the
     /// sidebar /mapnetwork's maps have.
     fn sidebar(&mut self, ui: &mut Ui, focus: &mut Option<Vec<usize>>) {
-        let dark = ui.visuals().dark_mode;
         let counts: Vec<(Zone, usize)> = Zone::ALL
             .iter()
             .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
@@ -1631,7 +1651,7 @@ impl MapView {
                             .show(ui, |ui| {
                                 for (zone, n) in &counts {
                                     let off = self.hidden.contains(zone);
-                                    let c = zone_colour(*zone, dark);
+                                    let c = zone_colour(*zone);
                                     let r = ui
                                         .horizontal(|ui| {
                                             let (d, _) = ui.allocate_exact_size(
@@ -1724,7 +1744,6 @@ impl MapView {
 
     /// Role legend in the canvas corner; click a role to fade it out.
     fn legend(&mut self, ui: &mut Ui, rect: Rect) {
-        let dark = ui.visuals().dark_mode;
         let mut counts: Vec<(Zone, usize)> = Zone::ALL
             .iter()
             .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
@@ -1765,7 +1784,7 @@ impl MapView {
                 Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
                 StrokeKind::Inside,
             );
-            let c = zone_colour(zone, dark);
+            let c = zone_colour(zone);
             let dot = pos2(r.min.x + 11.0, r.center().y);
             if off {
                 p.circle_stroke(dot, 4.0, Stroke::new(1.5, c));
@@ -1969,9 +1988,19 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
     act
 }
 
-pub fn zone_colour(z: Zone, dark: bool) -> Color32 {
-    let [r, g, b] = z.rgb(dark);
-    Color32::from_rgb(r, g, b)
+/// A role's colour in the current theme.
+pub fn zone_colour(z: Zone) -> Color32 {
+    z.colour_in(crate::theme::current())
+}
+
+/// How strongly links and cards glow: none on light themes, most on RGB
+/// and Miami.
+fn glow_strength(vis: &egui::Visuals) -> f32 {
+    match crate::theme::current() {
+        _ if !vis.dark_mode => 0.0,
+        crate::theme::Theme::Rgb | crate::theme::Theme::Miami => 0.32,
+        _ => 0.16,
+    }
 }
 
 fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
