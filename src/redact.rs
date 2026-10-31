@@ -1,8 +1,13 @@
-//! Redaction for free text the technician writes (tech notes, known
-//! problems): anything that looks like a credential, key or personal
-//! identifier is replaced before the text is saved, copied or bundled.
-//! Zero trust: when in doubt it redacts, and the Notes tab highlights every
-//! hit so the technician sees exactly what will go.
+//! Redaction for free text.
+//!
+//! The technician's own text (tech notes, known problems) is redacted only
+//! where they say so: values picked by hand, secret blocks, and the secret
+//! values of the backups and exports loaded in Config Export
+//! (`find_with` / `sanitize_with`). Nothing is guessed from patterns there.
+//!
+//! The pattern rules below (`find` / `sanitize`: credentials, keys, tokens,
+//! personal and payment identifiers) are for text the app copies out of a
+//! firewall config, such as rule comments, before it goes in a bundle.
 
 use regex::Regex;
 use std::ops::Range;
@@ -646,21 +651,16 @@ pub fn pick(text: &str, sel: Range<usize>, hits: &[Hit]) -> Option<Pick> {
     }
 }
 
-/// Everything that would be redacted, in order, without overlaps. The app
-/// always passes the technician's overrides (`find_with`).
-#[cfg(test)]
+/// Everything the pattern rules would redact, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
-    find_with(text, &Overrides::default())
+    detect(text)
 }
 
-/// As `find`, with the technician's overrides: their picks are added,
-/// whatever they allowed is left out.
+/// What the technician asked for: hand picks, secret blocks and the loaded
+/// configs' secrets, minus whatever they chose to keep. No pattern rules.
 pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
     let allowed = |span: &Range<usize>| ov.allow.iter().any(|a| a == text[span.clone()].trim());
-    let mut hits: Vec<Hit> = detect(text)
-        .into_iter()
-        .filter(|h| !allowed(&h.span))
-        .collect();
+    let mut hits: Vec<Hit> = Vec::new();
     let done: Vec<Range<usize>> = MARKER.find_iter(text).map(|m| m.range()).collect();
     let fresh = |span: &Range<usize>| {
         !done
@@ -681,18 +681,6 @@ pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
                 hits.push(Hit {
                     span,
                     kind: Kind::Known,
-                });
-            }
-        }
-    }
-    // ICD-10 codes on a line that says it's a diagnosis.
-    for line in DX_LINE.find_iter(text) {
-        for m in ICD10.find_iter(line.as_str()) {
-            let span = line.start() + m.start()..line.start() + m.end();
-            if fresh(&span) {
-                hits.push(Hit {
-                    span,
-                    kind: Kind::Patient,
                 });
             }
         }
@@ -769,6 +757,18 @@ fn detect(text: &str) -> Vec<Hit> {
             }
         }
     }
+    // ICD-10 codes on a line that says it's a diagnosis.
+    for line in DX_LINE.find_iter(text) {
+        for m in ICD10.find_iter(line.as_str()) {
+            let span = line.start() + m.start()..line.start() + m.end();
+            if fresh(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Patient,
+                });
+            }
+        }
+    }
     merge(hits)
 }
 
@@ -790,12 +790,15 @@ fn merge(mut hits: Vec<Hit>) -> Vec<Hit> {
 /// The text with every hit replaced by `[REDACTED: kind]`. Line breaks
 /// inside a hit are kept, so line N of the result is line N of the input.
 pub fn sanitize(text: &str) -> (String, Vec<Hit>) {
-    sanitize_with(text, &Overrides::default())
+    replace(text, find(text))
 }
 
-/// As `sanitize`, with the technician's overrides.
+/// The technician's text with what they asked for replaced (`find_with`).
 pub fn sanitize_with(text: &str, ov: &Overrides) -> (String, Vec<Hit>) {
-    let hits = find_with(text, ov);
+    replace(text, find_with(text, ov))
+}
+
+fn replace(text: &str, hits: Vec<Hit>) -> (String, Vec<Hit>) {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
     for h in &hits {
@@ -1010,16 +1013,20 @@ give it a password when prompt comes up. Import it the same - Enter password you
         );
         assert_eq!(summary(&hits), "2 redacted: 2 picked by hand");
 
+        // Notes aren't pattern-checked: only what the technician asked for.
         let t = "Office365\npassword: hunter2";
-        assert_eq!(find(t).len(), 2);
-        let mut ov = Overrides::default();
+        assert!(sanitize_with(t, &Overrides::default()).1.is_empty());
+        let mut ov = Overrides {
+            known: vec!["Office365".into()],
+            ..Default::default()
+        };
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
         ov.add_allow("Office365");
-        let (clean, _) = sanitize_with(t, &ov);
-        assert_eq!(clean, "Office365\npassword: [REDACTED: password]");
+        assert!(sanitize_with(t, &ov).1.is_empty());
         // Redacting it again takes it off the allow list.
         ov.add_redact("Office365");
         assert!(ov.allow.is_empty());
-        assert_eq!(sanitize_with(t, &ov).1.len(), 2);
+        assert_eq!(sanitize_with(t, &ov).1.len(), 1);
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
@@ -1059,12 +1066,13 @@ give it a password when prompt comes up. Import it the same - Enter password you
     #[test]
     fn field_test_regressions() {
         // Text on the closing fence's line is part of the secret.
+        let notes = |t: &str| sanitize_with(t, &Overrides::default()).0;
         let t = "staff\n```secret\n```Bruh this is the secret!!!\n\nnext section";
-        let r = red(t);
+        let r = notes(t);
         assert!(!r.contains("Bruh"), "{r}");
         assert!(r.contains("next section"), "{r}");
         // Text on the opening line too.
-        assert!(!red("```secret alarm 9090\n```").contains("9090"));
+        assert!(!notes("```secret alarm 9090\n```").contains("9090"));
         for kept in [
             "git commit 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
             "Version 1.21.1, build 20261030      (not a date of birth or card)",

@@ -23,6 +23,12 @@ enum View {
     Preview,
 }
 
+/// The emoji picker: status marks and the things site notes are about.
+const EMOJI: &[&str] = &[
+    "✅", "❌", "⚠", "❗", "❓", "⭐", "👍", "👎", "🔥", "💡", "📌", "📝", "🔒", "🔓", "🔑", "🔧",
+    "🖥", "💻", "📱", "📠", "📞", "🌐", "📶", "🔌", "🔋", "📦", "📅", "⏰", "🐛", "🚧", "✨", "😀",
+];
+
 /// Seconds after the last keystroke before the autosave.
 const SAVE_AFTER: f64 = 1.5;
 const EDITOR_ID: &str = "tech_notes_editor";
@@ -420,6 +426,28 @@ redacted, whatever it looks like. For door codes, PINs and anything detection wo
                     (format!("```secret\n{body}```\n"), at)
                 });
             }
+            let mut emoji = None;
+            ui.menu_button("😀", |ui| {
+                egui::Grid::new("notes_emoji")
+                    .spacing([2.0, 2.0])
+                    .show(ui, |ui| {
+                        for (i, e) in EMOJI.iter().enumerate() {
+                            if ui.button(RichText::new(*e).size(16.0)).clicked() {
+                                emoji = Some(*e);
+                                ui.close();
+                            }
+                            if i % 8 == 7 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            })
+            .response
+            .on_hover_text("Insert an emoji (any typed or pasted one works too)");
+            if let Some(e) = emoji {
+                let n = e.chars().count();
+                self.edit_at_cursor(&ctx, |_| (e.to_string(), n));
+            }
             ui.separator();
             if ui
                 .button("Time")
@@ -567,11 +595,11 @@ pasting somewhere you trust. Autosave, Save and the Site Bundle stay redacted",
             ));
             ui.separator();
             if hits.is_empty() {
-                ui.label(
-                    RichText::new("✔ nothing to redact")
-                        .color(widgets::ok())
-                        .small(),
-                );
+                ui.label(RichText::new("nothing marked to redact").weak().small())
+                    .on_hover_text(
+                        "Notes aren't scanned: only what you redact by hand, secret blocks and the \
+secrets of a loaded backup or export are replaced.",
+                    );
             } else {
                 let age = (now - self.flash) as f32;
                 let warn = widgets::warn();
@@ -602,12 +630,12 @@ autosave, Copy, Save and Site Bundle."
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = match (&self.dirty, &self.saved) {
                     (Some(_), _) => "Saving…".to_string(),
-                    (None, Some(t)) => format!("Autosaved {t} (sanitized)"),
-                    (None, None) => "Autosave keeps a sanitized copy".to_string(),
+                    (None, Some(t)) => format!("Autosaved {t}"),
+                    (None, None) => "Autosaved as you type".to_string(),
                 };
                 ui.weak(label).on_hover_text(format!(
-                    "Saved to {} with sensitive values replaced, so nothing redactable is ever \
-written to disk. After a restart the notes come back sanitized.",
+                    "Saved to {} with your redactions, secret blocks and loaded-config secrets \
+replaced; everything else is saved as written.",
                     path().map_or("(no profile folder)".into(), |p| p.display().to_string())
                 ));
             });
@@ -663,8 +691,8 @@ written to disk. After a restart the notes come back sanitized.",
                     .lock_focus(true)
                     .hint_text(
                         "Site notes in Markdown: # headings, - lists, - [ ] tasks, **bold**, `code`.\n\
-Passwords, keys, tokens and patient details are highlighted here and replaced before anything is \
-saved, copied or bundled.",
+Select text and Redact (Ctrl+R) to keep it out of saves, copies and bundles, or put it in a \
+Secret block.",
                     )
                     .layouter(&mut layouter)
                     .show(ui)
@@ -880,21 +908,24 @@ mod tests {
         let ctx = egui::Context::default();
         let mut n = notes("Lockbox 4471, again 4471\nOffice365\npassword: hunter2");
         let hits = |n: &NotesTool| hits_for(&n.cache, &n.text, &n.ov);
-        assert_eq!(hits(&n).len(), 2);
+        // Nothing is guessed: only the loaded config's secret is redacted.
+        assert!(hits(&n).is_empty());
+        n.set_known(&["Office365".into()], 0.0);
+        assert_eq!(hits(&n).len(), 1);
 
-        // Select a value nothing detects: Redact, everywhere.
+        // Select a value: Redact, everywhere.
         select(&ctx, &n, "4471");
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         assert!(matches!(p, Pick::Redact(_)));
         n.apply(&ctx, p);
-        assert_eq!(hits(&n).len(), 4);
+        assert_eq!(hits(&n).len(), 3);
         assert!(
             n.sanitized()
                 .0
                 .starts_with("Lockbox [REDACTED: by hand], again [REDACTED: by hand]")
         );
 
-        // Cursor on a false positive: Unredact keeps it.
+        // Cursor on a config value that's fine to show: Unredact keeps it.
         select(&ctx, &n, "fice");
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         assert!(matches!(p, Pick::Unredact(_)));
@@ -907,7 +938,7 @@ mod tests {
         let p = n.pick(&ctx, &hits(&n)).unwrap();
         n.apply(&ctx, p);
         assert!(n.ov.redact.is_empty());
-        assert!(n.sanitized().0.ends_with("password: [REDACTED: password]"));
+        assert!(n.sanitized().0.ends_with("password: hunter2"));
         // Nothing selected and no hit under the cursor: nothing to do.
         select(&ctx, &n, "");
         assert!(n.pick(&ctx, &hits(&n)).is_none());

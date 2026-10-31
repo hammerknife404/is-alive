@@ -93,8 +93,8 @@ where the data has them, and findings. Drag to pan, scroll to zoom, click a devi
     (
         Tab::Notes,
         "Notes",
-        "Tech notes in Markdown, autosaved. Passwords, keys and patient details are highlighted \
-and replaced before anything is saved, copied or bundled.",
+        "Tech notes in Markdown, autosaved. Redact by hand or with a secret block; a loaded \
+backup's or export's secrets are redacted wherever they appear.",
     ),
     (
         Tab::Speed,

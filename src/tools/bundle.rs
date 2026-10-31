@@ -292,7 +292,7 @@ client lists). Applies to clients from the sweep as well as UniFi.",
                     &mut self.use_notes,
                     "Tech notes",
                     (!src.notes.is_empty()).then(|| match hits.len() {
-                        0 => "notes.md · nothing to redact".to_string(),
+                        0 => "notes.md · nothing redacted".to_string(),
                         _ => format!("notes.md · {}", crate::redact::summary(&hits)),
                     }),
                     "Nothing in Notes yet",
