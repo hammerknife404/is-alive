@@ -30,6 +30,16 @@ pub enum Action {
     HideNote,
 }
 
+/// What the detail panel asked for.
+enum PanelEv {
+    /// × on a card: take it out of the selection.
+    Drop(usize),
+    /// The pin: keep it selected, or not.
+    Keep(usize),
+    /// A card dragged from one place in the stack to another.
+    Move(usize, usize),
+}
+
 pub struct Sources<'a> {
     pub sweep: &'a SweepTool,
     pub export: &'a ExportTool,
@@ -53,6 +63,12 @@ pub struct MapView {
     selected: Option<String>,
     /// More cards picked with Ctrl+click, lit with it.
     also: Vec<String>,
+    /// Cards pinned in the selection: a plain click elsewhere keeps them.
+    kept: Vec<String>,
+    /// The detail panel's order, top first; dragged by hand.
+    order: Vec<String>,
+    /// The card a right-click opened the menu for.
+    menu_for: Option<usize>,
     /// What the detail panel shows while it slides shut.
     shown: Option<String>,
     hidden: HashSet<Zone>,
@@ -156,6 +172,7 @@ impl MapView {
         self.pos.retain(|k, _| ids.contains(k.as_str()));
         self.born.retain(|k, _| ids.contains(k.as_str()));
         self.also.retain(|s| ids.contains(s.as_str()));
+        self.kept.retain(|s| ids.contains(s.as_str()));
         if self
             .selected
             .as_ref()
@@ -165,13 +182,50 @@ impl MapView {
         }
     }
 
-    /// Every selected card, the detail panel's last.
+    /// Every selected card: pinned ones, Ctrl+clicked ones, the one clicked last.
     fn selection(&self) -> Vec<usize> {
-        self.also
+        let mut v: Vec<usize> = Vec::new();
+        for i in self
+            .kept
             .iter()
+            .chain(&self.also)
             .chain(&self.selected)
             .filter_map(|s| self.index(s))
-            .collect()
+        {
+            if !v.contains(&i) {
+                v.push(i);
+            }
+        }
+        v
+    }
+
+    /// Pin a card in the selection, or let it go.
+    fn keep(&mut self, i: usize) {
+        let id = self.map.nodes[i].id.clone();
+        match self.kept.iter().position(|s| *s == id) {
+            Some(k) => {
+                self.kept.remove(k);
+            }
+            None => self.kept.push(id),
+        }
+    }
+
+    fn is_kept(&self, i: usize) -> bool {
+        self.kept.contains(&self.map.nodes[i].id)
+    }
+
+    /// The panel's cards in their order: new ones on top, then as dragged.
+    fn ordered(&mut self) -> Vec<usize> {
+        let sel = self.selection();
+        let ids: Vec<String> = sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
+        self.order.retain(|s| ids.contains(s));
+        // Selection runs oldest to newest, so the newest lands on top.
+        for id in &ids {
+            if !self.order.contains(id) {
+                self.order.insert(0, id.clone());
+            }
+        }
+        self.order.iter().filter_map(|s| self.index(s)).collect()
     }
 
     /// One card selected, the rest let go.
@@ -180,10 +234,16 @@ impl MapView {
         self.also.clear();
     }
 
-    /// Ctrl+click: add the card to the selection, or take it out.
+    /// Ctrl+click: add the card to the selection, or take it out (pinned too).
     fn toggle(&mut self, i: usize) {
         let id = self.map.nodes[i].id.clone();
-        if self.selected.as_deref() == Some(id.as_str()) {
+        if let Some(k) = self.kept.iter().position(|s| *s == id) {
+            self.kept.remove(k);
+            if self.selected.as_deref() == Some(id.as_str()) {
+                self.selected = self.also.pop();
+            }
+            self.also.retain(|s| *s != id);
+        } else if self.selected.as_deref() == Some(id.as_str()) {
             self.selected = self.also.pop();
         } else if let Some(k) = self.also.iter().position(|s| *s == id) {
             self.also.remove(k);
@@ -367,9 +427,10 @@ impl MapView {
         if self.selected.is_some() {
             self.shown.clone_from(&self.selected);
         }
-        let mut open = self.selected.is_some();
+        let mut open = !self.selection().is_empty();
         let mut pick: Option<usize> = None;
-        let mut drop: Option<usize> = None;
+        let mut ev: Option<PanelEv> = None;
+        let stack = self.ordered();
         egui::Panel::right("map_detail")
             .resizable(true)
             .default_size(320.0)
@@ -377,13 +438,19 @@ impl MapView {
             .show_collapsible(ui, &mut open, |ui| {
                 act = act
                     .take()
-                    .or(self.detail(ui, src.busy, &mut pick, &mut drop));
+                    .or(self.detail(ui, stack, src.busy, &mut pick, &mut ev));
             });
         if !open {
             self.select(None);
         }
-        if let Some(i) = drop {
-            self.toggle(i);
+        match ev {
+            Some(PanelEv::Drop(i)) => self.toggle(i),
+            Some(PanelEv::Keep(i)) => self.keep(i),
+            Some(PanelEv::Move(from, to)) if from < self.order.len() && to < self.order.len() => {
+                let id = self.order.remove(from);
+                self.order.insert(to, id);
+            }
+            _ => {}
         }
 
         // Left: roles and action items, as /mapnetwork's sidebar has them.
@@ -529,16 +596,15 @@ impl MapView {
     fn detail(
         &self,
         ui: &mut Ui,
+        mut sel: Vec<usize>,
         busy: bool,
         pick: &mut Option<usize>,
-        drop: &mut Option<usize>,
+        ev: &mut Option<PanelEv>,
     ) -> Option<Action> {
         let mut act = None;
-        let mut sel = self.selection();
         if sel.is_empty() {
             sel.extend(self.shown.as_deref().and_then(|s| self.index(s)));
         }
-        sel.reverse();
         egui::ScrollArea::vertical()
             .id_salt("map_detail_scroll")
             .auto_shrink(false)
@@ -567,24 +633,35 @@ impl MapView {
                     if k > 0 {
                         ui.add_space(6.0);
                     }
-                    act = act
-                        .take()
-                        .or(self.card_panel(ui, i, busy, sel.len() > 1, pick, drop));
+                    let (a, frame) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev);
+                    act = act.take().or(a);
+                    // Drop another card's grip here to put it in this place.
+                    if let Some(from) = frame.dnd_release_payload::<usize>() {
+                        *ev = Some(PanelEv::Move(*from, k));
+                    } else if frame.dnd_hover_payload::<usize>().is_some_and(|f| *f != k) {
+                        ui.painter().hline(
+                            frame.rect.x_range(),
+                            frame.rect.top() - 3.0,
+                            Stroke::new(2.0, crate::theme::accent()),
+                        );
+                    }
                 }
             });
         act
     }
 
-    /// One card's section in the detail panel.
+    /// One card's section in the detail panel, `at` from the top.
+    #[allow(clippy::too_many_arguments)]
     fn card_panel(
         &self,
         ui: &mut Ui,
+        at: usize,
         i: usize,
         busy: bool,
         stacked: bool,
         pick: &mut Option<usize>,
-        drop: &mut Option<usize>,
-    ) -> Option<Action> {
+        ev: &mut Option<PanelEv>,
+    ) -> (Option<Action>, egui::Response) {
         let mut act = None;
         let n = &self.map.nodes[i];
         let dark = ui.visuals().dark_mode;
@@ -598,13 +675,36 @@ impl MapView {
                     .color(ui.visuals().weak_text_color()),
             );
         };
-        egui::Frame::group(ui.style())
+        let kept = self.is_kept(i);
+        let frame = egui::Frame::group(ui.style())
             .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.5)))
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                // Header: kind, name, address; × takes it out of the selection.
+                // Header: a grip to drag it up or down, the kind, then pin and ×.
                 ui.horizontal(|ui| {
+                    if stacked {
+                        ui.dnd_drag_source(ui.id().with(("map_grip", i)), at, |ui| {
+                            // Hover only: the drag belongs to the source around it.
+                            let (r, resp) =
+                                ui.allocate_exact_size(vec2(10.0, 16.0), Sense::hover());
+                            let c = ui.visuals().weak_text_color();
+                            for row in 0..3 {
+                                for col in 0..2 {
+                                    ui.painter().circle_filled(
+                                        r.min
+                                            + vec2(2.5 + col as f32 * 5.0, 3.0 + row as f32 * 5.0),
+                                        1.3,
+                                        c,
+                                    );
+                                }
+                            }
+                            resp.on_hover_text("Drag to move it up or down");
+                            if ui.response().hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                            }
+                        });
+                    }
                     ui.label(RichText::new(&n.kind).monospace().small().color(accent));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if stacked
@@ -613,7 +713,20 @@ impl MapView {
                                 .on_hover_text("Take it out of the selection")
                                 .clicked()
                         {
-                            *drop = Some(i);
+                            *ev = Some(PanelEv::Drop(i));
+                        }
+                        let pin = RichText::new("📌")
+                            .color(crate::theme::emoji_colour('📌', ui.visuals().text_color()));
+                        if ui
+                            .add(egui::Button::new(pin).small().selected(kept))
+                            .on_hover_text(if kept {
+                                "Pinned: stays selected when you click other cards. Click to unpin"
+                            } else {
+                                "Pin: keep it selected when you click other cards"
+                            })
+                            .clicked()
+                        {
+                            *ev = Some(PanelEv::Keep(i));
                         }
                     });
                 });
@@ -812,7 +925,7 @@ impl MapView {
                     }
                 });
             });
-        act
+        (act, frame.response)
     }
 
     fn to_screen(&self, rect: Rect, w: Pos2) -> Pos2 {
@@ -876,6 +989,44 @@ impl MapView {
                 None if ctrl => {}
                 _ => self.select(over),
             }
+        }
+        // Right-click a card: pin it, select it, copy it.
+        if resp.secondary_clicked() {
+            self.menu_for = over;
+        }
+        if self.menu_for.is_some() {
+            resp.context_menu(|ui| {
+                let Some(i) = self.menu_for.filter(|&i| i < self.map.nodes.len()) else {
+                    ui.close();
+                    return;
+                };
+                ui.label(RichText::new(&self.map.nodes[i].label).strong());
+                ui.separator();
+                let pin = if self.is_kept(i) {
+                    "📌 Unpin"
+                } else {
+                    "📌 Pin (keep selected)"
+                };
+                if ui.button(pin).clicked() {
+                    self.keep(i);
+                    ui.close();
+                }
+                if ui.button("Select only this").clicked() {
+                    self.select(Some(i));
+                    ui.close();
+                }
+                if ui.button("Add to selection (Ctrl+click)").clicked() {
+                    if !self.selection().contains(&i) {
+                        self.toggle(i);
+                    }
+                    ui.close();
+                }
+                if ui.button("Copy details").clicked() {
+                    widgets::copy(ui.ctx(), card_text(&self.map.nodes[i]));
+                    widgets::toast("Card details copied", true);
+                    ui.close();
+                }
+            });
         }
         if resp.double_clicked() {
             match over {
@@ -1207,6 +1358,17 @@ impl MapView {
         };
         let weak = vis.weak_text_color().gamma_multiply(a);
         let strong = vis.strong_text_color().gamma_multiply(a);
+        // Pinned in the selection: the thumbtack, left of any warning badge.
+        if self.is_kept(i) {
+            let shift = if n.flags.is_empty() { 0.0 } else { 20.0 * z };
+            p.text(
+                pos2(r.max.x - 12.0 * z - shift, r.min.y + 12.0 * z),
+                egui::Align2::CENTER_CENTER,
+                "📌",
+                FontId::proportional((13.0 * z).max(9.0)),
+                crate::theme::emoji_colour('📌', vis.strong_text_color()).gamma_multiply(a),
+            );
+        }
         // Zoomed out: just the name, at a size that can still be read.
         if z < 0.6 {
             if r.width() > 30.0 {
@@ -1228,7 +1390,8 @@ impl MapView {
             return;
         }
         let mut y = r.min.y + 7.0 * z;
-        let badge = if n.flags.is_empty() { 0.0 } else { 20.0 * z };
+        let badge = if n.flags.is_empty() { 0.0 } else { 20.0 * z }
+            + if self.is_kept(i) { 20.0 * z } else { 0.0 };
         let g = text(&n.kind, FontId::monospace(9.5 * z), weak, 1, inner - badge);
         p.galley(pos2(r.min.x + pad, y), g.clone(), weak);
         y += g.size().y + 2.0 * z;
@@ -1672,5 +1835,38 @@ mod tests {
         assert_eq!(v.selection(), [3]);
         v.select(None);
         assert!(v.selection().is_empty());
+    }
+
+    #[test]
+    fn pinned_cards_stay_selected() {
+        let mut v = view(4);
+        v.select(Some(1));
+        v.keep(1);
+        // A plain click elsewhere and Esc keep the pinned one.
+        v.select(Some(2));
+        assert_eq!(v.selection(), [1, 2]);
+        v.select(None);
+        assert_eq!(v.selection(), [1]);
+        // Ctrl+click on it lets it go.
+        v.toggle(1);
+        assert!(v.selection().is_empty());
+        assert!(v.kept.is_empty());
+    }
+
+    #[test]
+    fn the_panel_puts_new_cards_on_top_and_keeps_moves() {
+        let mut v = view(4);
+        v.select(Some(0));
+        assert_eq!(v.ordered(), [0]);
+        v.toggle(1);
+        v.toggle(2);
+        assert_eq!(v.ordered(), [2, 1, 0]);
+        // Dragged to the top, it stays there as others come and go.
+        let id = v.order.remove(2);
+        v.order.insert(0, id);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [3, 0, 2, 1]);
+        v.toggle(2);
+        assert_eq!(v.ordered(), [3, 0, 1]);
     }
 }

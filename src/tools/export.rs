@@ -113,22 +113,36 @@ impl Export {
             Export::Map(_) => "Save the map's devices, links and findings as JSON",
         }
     }
-
-    /// Which slot it fills: one result per kind, so opening a SonicWall
-    /// export never discards an unsaved UniFi one, and vice versa.
-    fn slot(&self) -> usize {
-        match self {
-            Export::Unifi(_) => 0,
-            Export::SonicWall(_) => 1,
-            Export::Map(_) => 2,
-            Export::Meraki(_) => 3,
-        }
-    }
 }
 
 struct Slot {
     path: PathBuf,
     export: Export,
+}
+
+/// Sub-tabs shown side by side; older files fold into a menu.
+const TABS: usize = 6;
+
+impl Slot {
+    /// "SonicWall · fw-main", short enough for a sub-tab.
+    fn label(&self) -> String {
+        // "fw-main.dc.html" → "fw-main".
+        let name = file_name(&self.path);
+        let stem = match name.split_once('.') {
+            Some((s, _)) if !s.is_empty() => s.to_string(),
+            _ => name,
+        };
+        let stem: String = if stem.chars().count() > 22 {
+            stem.chars().take(21).collect::<String>() + "…"
+        } else {
+            stem
+        };
+        let kind = match self.export {
+            Export::Map(_) => "Map",
+            _ => self.export.tab(),
+        };
+        format!("{kind} · {stem}")
+    }
 }
 
 enum Ev {
@@ -143,8 +157,9 @@ pub struct ExportTool {
     job: Option<Job<Ev>>,
     /// File being read while the job runs.
     pending: Option<PathBuf>,
-    /// UniFi, SonicWall, /mapnetwork map, Meraki.
-    slots: [Option<Slot>; 4],
+    /// Every file converted, in the order opened; each has its own sub-tab.
+    /// Opening a file again replaces its result.
+    slots: Vec<Slot>,
     /// Every loaded file's stripped secret values, for Notes to redact.
     secrets: Vec<String>,
     /// The slot whose sub-tab is showing: the one opened last, until
@@ -246,15 +261,12 @@ impl ExportTool {
         self.job.is_some()
     }
 
-    /// The UniFi backup currently loaded, and its conversion.
+    /// The UniFi backup opened last, and its conversion.
     pub fn unifi(&self) -> Option<(&PathBuf, &unifi::Report)> {
-        match &self.slots[0] {
-            Some(Slot {
-                path,
-                export: Export::Unifi(r),
-            }) => Some((path, r)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Unifi(r) => Some((&s.path, r)),
             _ => None,
-        }
+        })
     }
 
     /// Secret values from every loaded backup and export (memory only).
@@ -266,7 +278,6 @@ impl ExportTool {
         let mut all: Vec<String> = self
             .slots
             .iter()
-            .flatten()
             .flat_map(|s| s.export.secrets().iter().cloned())
             .collect();
         all.sort();
@@ -274,37 +285,28 @@ impl ExportTool {
         self.secrets = all;
     }
 
-    /// The /mapnetwork map currently loaded.
+    /// The /mapnetwork map opened last.
     pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
-        match &self.slots[2] {
-            Some(Slot {
-                path,
-                export: Export::Map(d),
-            }) => Some((path, &**d)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Map(d) => Some((&s.path, &**d)),
             _ => None,
-        }
+        })
     }
 
-    /// The Meraki export currently loaded, and its conversion.
+    /// The Meraki export opened last, and its conversion.
     pub fn meraki(&self) -> Option<(&PathBuf, &meraki::Report)> {
-        match &self.slots[3] {
-            Some(Slot {
-                path,
-                export: Export::Meraki(r),
-            }) => Some((path, r)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::Meraki(r) => Some((&s.path, r)),
             _ => None,
-        }
+        })
     }
 
-    /// The SonicWall export currently loaded, and its conversion.
+    /// The SonicWall export opened last, and its conversion.
     pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
-        match &self.slots[1] {
-            Some(Slot {
-                path,
-                export: Export::SonicWall(r),
-            }) => Some((path, r)),
+        self.slots.iter().rev().find_map(|s| match &s.export {
+            Export::SonicWall(r) => Some((&s.path, r)),
             _ => None,
-        }
+        })
     }
 
     pub fn poll(&mut self) -> bool {
@@ -313,9 +315,17 @@ impl ExportTool {
             Ev::Picked(p) => self.pending = Some(p),
             Ev::Done(path, r) => match *r {
                 Ok(export) => {
-                    let i = export.slot();
-                    self.slots[i] = Some(Slot { path, export });
-                    self.shown = i;
+                    let slot = Slot { path, export };
+                    self.shown = match self.slots.iter().position(|s| s.path == slot.path) {
+                        Some(i) => {
+                            self.slots[i] = slot;
+                            i
+                        }
+                        None => {
+                            self.slots.push(slot);
+                            self.slots.len() - 1
+                        }
+                    };
                     loaded = true;
                 }
                 Err(e) => {
@@ -389,8 +399,8 @@ impl ExportTool {
                     clients_choice(ui, "export_clients", &mut self.clients)
                 })
                 .inner;
-            if toggled && let Some(s) = &self.slots[0] {
-                self.start(ui.ctx(), Some(vec![s.path.clone()]));
+            if toggled && let Some((p, _)) = self.unifi() {
+                self.start(ui.ctx(), Some(vec![p.clone()]));
             }
             if let Some(p) = &self.pending {
                 widgets::spinner(ui);
@@ -403,7 +413,7 @@ impl ExportTool {
         widgets::error(ui, &self.err);
         ui.separator();
 
-        if self.slots.iter().all(Option::is_none) {
+        if self.slots.is_empty() {
             if !running {
                 widgets::empty_hint(
                     ui,
@@ -412,32 +422,60 @@ impl ExportTool {
             }
             return;
         }
-        if self.slots[self.shown].is_none() {
-            self.shown = self.slots.iter().position(Option::is_some).unwrap_or(0);
-        }
-        // One sub-tab per decoded file.
-        ui.horizontal(|ui| {
-            for (i, slot) in self.slots.iter().enumerate() {
-                let Some(Slot { path, export: r }) = slot else {
-                    continue;
+        self.shown = self.shown.min(self.slots.len() - 1);
+        // One sub-tab per file; past TABS the oldest fold into a menu.
+        ui.horizontal_wrapped(|ui| {
+            let n = self.slots.len();
+            let folded = n.saturating_sub(TABS);
+            let mut pick = None;
+            if folded > 0 {
+                let shown_folded = self.shown < folded;
+                let label = if shown_folded {
+                    format!("{} ⏷", self.slots[self.shown].label())
+                } else {
+                    format!("{folded} more ⏷")
                 };
+                ui.menu_button(label, |ui| {
+                    for (i, s) in self.slots[..folded].iter().enumerate() {
+                        if ui
+                            .selectable_label(self.shown == i, s.label())
+                            .on_hover_text(format!(
+                                "{}\n{}",
+                                s.export.headline(),
+                                file_name(&s.path)
+                            ))
+                            .clicked()
+                        {
+                            pick = Some(i);
+                            ui.close();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Files opened earlier");
+                ui.separator();
+            }
+            for (i, s) in self.slots.iter().enumerate().skip(folded) {
                 let on = self.shown == i;
-                let mut text = egui::RichText::new(r.tab());
+                let mut text = egui::RichText::new(s.label());
                 if on {
                     text = text.color(crate::theme::accent()).strong();
                 }
                 if ui
                     .selectable_label(on, text)
-                    .on_hover_text(format!("{}\n{}", r.headline(), file_name(path)))
+                    .on_hover_text(format!("{}\n{}", s.export.headline(), file_name(&s.path)))
                     .clicked()
                 {
-                    self.shown = i;
+                    pick = Some(i);
                 }
+            }
+            if let Some(i) = pick {
+                self.shown = i;
             }
         });
         ui.separator();
         let mut clear = None;
-        if let Some(Slot { path, export: r }) = &self.slots[self.shown] {
+        if let Some(Slot { path, export: r }) = self.slots.get(self.shown) {
             ui.label(egui::RichText::new(r.headline()).strong());
             ui.horizontal(|ui| {
                 if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
@@ -481,7 +519,8 @@ impl ExportTool {
                 });
         }
         if let Some(i) = clear {
-            self.slots[i] = None;
+            self.slots.remove(i);
+            self.shown = self.shown.min(self.slots.len().saturating_sub(1));
             self.gather_secrets();
         }
     }

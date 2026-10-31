@@ -24,12 +24,6 @@ enum View {
     Preview,
 }
 
-/// The emoji picker: status marks and the things site notes are about.
-const EMOJI: &[&str] = &[
-    "✅", "❌", "⚠", "❗", "❓", "⭐", "👍", "👎", "🔥", "💡", "📌", "📝", "🔒", "🔓", "🔑", "🔧",
-    "🖥", "💻", "📱", "📠", "📞", "🌐", "📶", "🔌", "🔋", "📦", "📅", "⏰", "🐛", "🚧", "✨", "☺",
-];
-
 /// Seconds after the last keystroke before the autosave.
 const SAVE_AFTER: f64 = 1.5;
 const EDITOR_ID: &str = "tech_notes_editor";
@@ -538,39 +532,53 @@ impl NotesTool {
                 self.line_prefix(&ctx, "- [ ] ");
             }
             let mut emoji = None;
-            ui.menu_button(RichText::new("☺").size(16.0), |ui| {
-                // Every style is on offer in every theme.
-                ui.horizontal(|ui| {
-                    ui.weak("Style");
-                    for s in crate::theme::EmojiStyle::ALL {
-                        if ui.selectable_label(look.emoji == s, s.name()).clicked() {
-                            look.emoji = s;
-                            crate::theme::set_emoji_style(s);
-                            crate::theme::save(look);
-                        }
-                    }
-                });
-                ui.separator();
-                egui::Grid::new("notes_emoji")
-                    .spacing([2.0, 2.0])
-                    .show(ui, |ui| {
-                        for (i, e) in EMOJI.iter().enumerate() {
-                            let c = e.chars().next().unwrap_or(' ');
-                            let glyph = RichText::new(*e)
-                                .size(font.size * crate::theme::EMOJI_SCALE)
-                                .color(crate::theme::emoji_colour(c, ui.visuals().text_color()));
-                            if ui.button(glyph).clicked() {
-                                emoji = Some(*e);
-                                ui.close();
-                            }
-                            if i % 8 == 7 {
-                                ui.end_row();
+            // Picking a style keeps the menu open; picking an emoji closes it.
+            let stay = egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+            egui::containers::menu::MenuButton::new(RichText::new("☺").size(16.0))
+                .config(stay)
+                .ui(ui, |ui| {
+                    // Every style is on offer in every theme.
+                    ui.horizontal(|ui| {
+                        ui.weak("Style");
+                        for s in crate::theme::EmojiStyle::ALL {
+                            if ui.selectable_label(look.emoji == s, s.name()).clicked() {
+                                look.emoji = s;
+                                crate::theme::set_emoji_style(s);
+                                crate::theme::save(look);
                             }
                         }
                     });
-            })
-            .response
-            .on_hover_text("Emoji");
+                    ui.separator();
+                    egui::Grid::new("notes_emoji")
+                        .spacing([2.0, 2.0])
+                        .show(ui, |ui| {
+                            for (i, (e, code, what)) in markdown::SHORTCODES.iter().enumerate() {
+                                let c = e.chars().next().unwrap_or(' ');
+                                let glyph = RichText::new(*e)
+                                    .size(font.size * crate::theme::EMOJI_SCALE)
+                                    .color(crate::theme::emoji_colour(
+                                        c,
+                                        ui.visuals().text_color(),
+                                    ));
+                                if ui
+                                    .button(glyph)
+                                    .on_hover_text(format!(
+                                        "{what}\n:{code}:  (Preview draws the code as the emoji)"
+                                    ))
+                                    .clicked()
+                                {
+                                    emoji = Some(*e);
+                                    ui.close();
+                                }
+                                if i % 8 == 7 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                })
+                .0
+                .on_hover_text("Emoji");
             if let Some(e) = emoji {
                 let n = e.chars().count();
                 self.edit_at_cursor(&ctx, |_| (e.to_string(), n));

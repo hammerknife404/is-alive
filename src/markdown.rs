@@ -5,6 +5,53 @@
 
 use eframe::egui::{self, FontFamily, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
 
+/// The emoji picker's emoji with their Markdown shortcodes (GitHub's names)
+/// and what they're for. Preview draws `:fire:` as the emoji.
+pub const SHORTCODES: &[(&str, &str, &str)] = &[
+    ("✅", "white_check_mark", "Done / OK"),
+    ("❌", "x", "Failed / no"),
+    ("⚠", "warning", "Warning"),
+    ("❗", "exclamation", "Important"),
+    ("❓", "question", "Question / unknown"),
+    ("⭐", "star", "Star"),
+    ("👍", "+1", "Thumbs up"),
+    ("👎", "-1", "Thumbs down"),
+    ("🔥", "fire", "Fire / urgent"),
+    ("💡", "bulb", "Idea"),
+    ("📌", "pushpin", "Pinned"),
+    ("📝", "memo", "Note"),
+    ("🔒", "lock", "Locked"),
+    ("🔓", "unlock", "Unlocked"),
+    ("🔑", "key", "Key / credential"),
+    ("🔧", "wrench", "Fix / config"),
+    ("🖥", "desktop_computer", "Desktop"),
+    ("💻", "computer", "Laptop"),
+    ("📱", "iphone", "Phone"),
+    ("📠", "fax", "Fax / printer"),
+    ("📞", "telephone_receiver", "Call"),
+    ("🌐", "globe_with_meridians", "Internet / web"),
+    ("📶", "signal_strength", "Signal / Wi-Fi"),
+    ("🔌", "electric_plug", "Power / cable"),
+    ("🔋", "battery", "Battery / UPS"),
+    ("📦", "package", "Package / install"),
+    ("📅", "date", "Date"),
+    ("⏰", "alarm_clock", "Time / reminder"),
+    ("🐛", "bug", "Bug"),
+    ("🚧", "construction", "Work in progress"),
+    ("✨", "sparkles", "New"),
+    ("☺", "relaxed", "Smile"),
+];
+
+/// The emoji for the shortcode `rest` starts with, and the code's length.
+fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
+    let end = rest[1..].find(':')? + 2;
+    let code = &rest[1..end - 1];
+    SHORTCODES
+        .iter()
+        .find(|(_, c, _)| *c == code)
+        .map(|(e, ..)| (*e, end))
+}
+
 /// Inline spans of one line, styled.
 fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> LayoutJob {
     let vis = ui.visuals();
@@ -32,7 +79,7 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> 
     while !rest.is_empty() {
         let next = rest
             .char_indices()
-            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '['))
+            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '[' | ':'))
             .map(|(i, _)| i);
         let Some(i) = next else {
             push(&mut job, rest, bold, italic);
@@ -43,6 +90,11 @@ fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> 
         if let Some(r) = rest.strip_prefix("**") {
             bold = !bold;
             rest = r;
+        } else if rest.starts_with(':')
+            && let Some((emoji, len)) = shortcode(rest)
+        {
+            push(&mut job, emoji, bold, italic);
+            rest = &rest[len..];
         } else if let Some(r) = rest.strip_prefix('`')
             && let Some(end) = r.find('`')
         {
@@ -264,6 +316,20 @@ mod tests {
             assert_eq!(render(ui, text, &FontId::proportional(13.0)), None);
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn shortcodes_become_emoji() {
+        assert_eq!(shortcode(":fire: hot"), Some(("🔥", 6)));
+        assert_eq!(shortcode(":+1:"), Some(("👍", 4)));
+        assert_eq!(shortcode(":nope:"), None);
+        assert_eq!(shortcode("10:30"), None);
+        assert_eq!(shortcode(":"), None);
+        // Every picker emoji has one code, and no code is used twice.
+        let mut codes: Vec<_> = SHORTCODES.iter().map(|s| s.1).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), SHORTCODES.len());
     }
 
     #[test]
