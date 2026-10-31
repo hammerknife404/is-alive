@@ -4,6 +4,7 @@
 //! watched filling in the map.
 
 use super::layout::{self, CARD, Layout};
+use super::runs::{CardRuns, Out, Run, State, Tool};
 use super::{Input, Link, Map, Node, Sev, Zone};
 use crate::net::hostinfo::HostInfo;
 use crate::tools::{export::ExportTool, sweep::SweepTool};
@@ -36,6 +37,12 @@ enum PanelEv {
     Drop(usize),
     /// The pin: keep it selected, or not.
     Keep(usize),
+    /// Run a spot check from the card.
+    Run(usize, Tool),
+    /// Stop a card's run, keeping what it found.
+    Stop(usize, Tool),
+    /// × on a run: take its result out of the card.
+    Clear(usize, Tool),
     /// A card dragged from one place in the stack to another.
     Move(usize, usize),
 }
@@ -44,7 +51,8 @@ pub struct Sources<'a> {
     pub sweep: &'a SweepTool,
     pub export: &'a ExportTool,
     pub info: &'a HostInfo,
-    /// Ping or Port Check is running: their buttons wait.
+    /// Ping, Port Check or Traceroute is running in its own tab: a card's
+    /// "Open in tab" waits for it. The card's own runs don't.
     pub busy: bool,
     /// Show the accuracy note (until the user closes it).
     pub note: bool,
@@ -65,6 +73,9 @@ pub struct MapView {
     also: Vec<String>,
     /// Cards pinned in the selection: a plain click elsewhere keeps them.
     kept: Vec<String>,
+    /// Where each pinned card sits in the detail panel. New cards fill
+    /// around them; only dragging moves them.
+    slots: HashMap<String, usize>,
     /// The detail panel's order, top first; dragged by hand.
     order: Vec<String>,
     /// The card a right-click opened the menu for.
@@ -76,8 +87,8 @@ pub struct MapView {
     /// Where each card is drawn now, easing toward the layout.
     pos: HashMap<String, Pos2>,
     born: HashMap<String, f64>,
-    /// Cards the user dragged somewhere.
-    pinned: HashMap<String, Pos2>,
+    /// Cards the user dragged somewhere on the canvas.
+    placed: HashMap<String, Pos2>,
     pan: Vec2,
     zoom: f32,
     /// (pan, zoom) the view is easing to.
@@ -89,6 +100,8 @@ pub struct MapView {
     built_at: f64,
     /// The left sidebar is open (closed: a › button on the canvas).
     side: bool,
+    /// Spot checks run from cards, with their results.
+    runs: CardRuns,
 }
 
 impl MapView {
@@ -98,6 +111,11 @@ impl MapView {
             side: true,
             ..Default::default()
         }
+    }
+
+    /// Keep cards' runs going while another tab is shown.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.runs.poll(ctx);
     }
 
     fn input<'a>(&self, src: &'a Sources) -> Input<'a> {
@@ -173,6 +191,7 @@ impl MapView {
         self.born.retain(|k, _| ids.contains(k.as_str()));
         self.also.retain(|s| ids.contains(s.as_str()));
         self.kept.retain(|s| ids.contains(s.as_str()));
+        self.slots.retain(|s, _| ids.contains(s.as_str()));
         if self
             .selected
             .as_ref()
@@ -199,14 +218,21 @@ impl MapView {
         v
     }
 
-    /// Pin a card in the selection, or let it go.
+    /// Pin a card in the selection, or let it go. A pinned card holds the
+    /// panel slot it's in (the top, if it isn't in the panel yet); let go,
+    /// it stays put and moves with the rest from then on.
     fn keep(&mut self, i: usize) {
         let id = self.map.nodes[i].id.clone();
         match self.kept.iter().position(|s| *s == id) {
             Some(k) => {
                 self.kept.remove(k);
+                self.slots.remove(&id);
             }
-            None => self.kept.push(id),
+            None => {
+                let at = self.order.iter().position(|s| *s == id).unwrap_or(0);
+                self.slots.insert(id.clone(), at);
+                self.kept.push(id);
+            }
         }
     }
 
@@ -214,18 +240,52 @@ impl MapView {
         self.kept.contains(&self.map.nodes[i].id)
     }
 
-    /// The panel's cards in their order: new ones on top, then as dragged.
+    /// The panel's cards in their order: pinned ones in their slots, the
+    /// rest around them, new ones on top, then as dragged.
     fn ordered(&mut self) -> Vec<usize> {
         let sel = self.selection();
         let ids: Vec<String> = sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
-        self.order.retain(|s| ids.contains(s));
+        self.slots.retain(|s, _| self.kept.contains(s));
+        let mut free: Vec<String> = self
+            .order
+            .iter()
+            .filter(|s| ids.contains(s) && !self.slots.contains_key(*s))
+            .cloned()
+            .collect();
         // Selection runs oldest to newest, so the newest lands on top.
         for id in &ids {
-            if !self.order.contains(id) {
-                self.order.insert(0, id.clone());
+            if !self.slots.contains_key(id) && !free.contains(id) {
+                free.insert(0, id.clone());
             }
         }
+        // Pinned cards go back in their slots, lowest first so each insert
+        // leaves the ones above it alone. A slot past the end shows last but
+        // is kept, so the card returns to it as the panel fills up again.
+        let mut fixed: Vec<(usize, &String)> = ids
+            .iter()
+            .filter_map(|s| self.slots.get(s).map(|&k| (k, s)))
+            .collect();
+        fixed.sort();
+        for (k, id) in fixed {
+            free.insert(k.min(free.len()), id.clone());
+        }
+        self.order = free;
         self.order.iter().filter_map(|s| self.index(s)).collect()
+    }
+
+    /// A card dragged from one panel slot to another. Pinned cards take the
+    /// slots they're now shown in.
+    fn move_card(&mut self, from: usize, to: usize) {
+        if from >= self.order.len() || to >= self.order.len() {
+            return;
+        }
+        let id = self.order.remove(from);
+        self.order.insert(to, id);
+        for (k, id) in self.order.iter().enumerate() {
+            if let Some(slot) = self.slots.get_mut(id) {
+                *slot = k;
+            }
+        }
     }
 
     /// One card selected, the rest let go.
@@ -239,6 +299,7 @@ impl MapView {
         let id = self.map.nodes[i].id.clone();
         if let Some(k) = self.kept.iter().position(|s| *s == id) {
             self.kept.remove(k);
+            self.slots.remove(&id);
             if self.selected.as_deref() == Some(id.as_str()) {
                 self.selected = self.also.pop();
             }
@@ -255,7 +316,7 @@ impl MapView {
 
     fn target(&self, i: usize) -> Option<Pos2> {
         let n = &self.map.nodes[i];
-        self.pinned.get(&n.id).copied().or(self.lay.pos[i])
+        self.placed.get(&n.id).copied().or(self.lay.pos[i])
     }
 
     fn index(&self, id: &str) -> Option<usize> {
@@ -271,7 +332,7 @@ impl MapView {
             || n.details.iter().any(|d| d.to_lowercase().contains(&q))
     }
 
-    /// Bounds of the laid-out map, with pinned cards.
+    /// Bounds of the laid-out map, with cards dragged elsewhere.
     fn bounds(&self) -> Rect {
         let mut r = Rect::NOTHING;
         for i in 0..self.map.nodes.len() {
@@ -365,11 +426,11 @@ impl MapView {
                     fit = true;
                 }
                 if ui
-                    .add_enabled(!self.pinned.is_empty(), egui::Button::new("Re-layout"))
+                    .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
                     .on_hover_text("Undo card moves")
                     .clicked()
                 {
-                    self.pinned.clear();
+                    self.placed.clear();
                     fit = true;
                 }
             });
@@ -446,10 +507,16 @@ impl MapView {
         match ev {
             Some(PanelEv::Drop(i)) => self.toggle(i),
             Some(PanelEv::Keep(i)) => self.keep(i),
-            Some(PanelEv::Move(from, to)) if from < self.order.len() && to < self.order.len() => {
-                let id = self.order.remove(from);
-                self.order.insert(to, id);
+            Some(PanelEv::Move(from, to)) => self.move_card(from, to),
+            Some(PanelEv::Run(i, tool)) => {
+                let n = &self.map.nodes[i];
+                if let Some(ip) = n.ip {
+                    self.runs.start(&n.id, tool, ip.into());
+                    self.runs.poll(ui.ctx());
+                }
             }
+            Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
+            Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
             _ => {}
         }
 
@@ -720,9 +787,9 @@ impl MapView {
                         if ui
                             .add(egui::Button::new(pin).small().selected(kept))
                             .on_hover_text(if kept {
-                                "Pinned: stays selected when you click other cards. Click to unpin"
+                                "Pinned: stays selected and keeps its place here. Click to unpin"
                             } else {
-                                "Pin: keep it selected when you click other cards"
+                                "Pin: keep it selected and in this place in the panel"
                             })
                             .clicked()
                         {
@@ -864,40 +931,39 @@ impl MapView {
 
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(ip) = n.ip {
-                        let tip = if busy {
-                            "Wait for the running test to finish"
-                        } else {
-                            ""
-                        };
-                        let mut run = |ui: &mut Ui, label: &str, hover: &str, a: Action| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if n.ip.is_some() {
+                        for (tool, label, hover) in [
+                            (
+                                Tool::Ping,
+                                "Ping",
+                                "Ping it 4 times; the result shows below",
+                            ),
+                            (
+                                Tool::Ports,
+                                "Ports",
+                                "Check its common ports; the result shows below",
+                            ),
+                            (
+                                Tool::Trace,
+                                "Trace",
+                                "Trace the route to it; the result shows below",
+                            ),
+                        ] {
                             if ui
-                                .add_enabled(!busy, egui::Button::new(label))
+                                .add_enabled(
+                                    !self.runs.active(&n.id, tool),
+                                    egui::Button::new(label).small(),
+                                )
                                 .on_hover_text(hover)
-                                .on_disabled_hover_text(tip)
+                                .on_disabled_hover_text("Running: see below")
                                 .clicked()
                             {
-                                act = Some(a);
+                                *ev = Some(PanelEv::Run(i, tool));
                             }
-                        };
-                        run(
-                            ui,
-                            "Ping",
-                            "Ping it 4 times (opens Ping)",
-                            Action::Ping(ip.to_string()),
-                        );
-                        run(
-                            ui,
-                            "Port Check",
-                            "Check its common ports (opens Port Check)",
-                            Action::Ports(ip.to_string()),
-                        );
-                        run(
-                            ui,
-                            "Traceroute",
-                            "Trace the route to it (opens Traceroute)",
-                            Action::Trace(ip.to_string()),
-                        );
+                        }
+                    }
+                    if let Some(ip) = n.ip {
                         let web = [
                             (443, "https", ""),
                             (8443, "https", ":8443"),
@@ -907,8 +973,10 @@ impl MapView {
                         .find(|(p, ..)| n.open.contains(p));
                         if let Some((_, scheme, port)) = web
                             && ui
-                                .button("Open web page")
-                                .on_hover_text(format!("{scheme}://{ip}{port} in your browser"))
+                                .small_button("Web")
+                                .on_hover_text(format!(
+                                    "Open {scheme}://{ip}{port} in your browser"
+                                ))
                                 .clicked()
                         {
                             ui.ctx()
@@ -916,7 +984,7 @@ impl MapView {
                         }
                     }
                     if ui
-                        .button("Copy")
+                        .small_button("Copy")
                         .on_hover_text("Copy this card's details as text")
                         .clicked()
                     {
@@ -924,6 +992,33 @@ impl MapView {
                         widgets::toast("Card details copied", true);
                     }
                 });
+
+                let runs = self.runs.runs(&n.id);
+                if !runs.is_empty() {
+                    ui.add_space(4.0);
+                    egui::CollapsingHeader::new(RichText::new("RESULTS").small().strong())
+                        .id_salt(("map_runs", &n.id))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for r in runs {
+                                if let Some(e) = run_section(ui, &n.id, r, busy) {
+                                    match e {
+                                        RunEv::Again => *ev = Some(PanelEv::Run(i, r.tool)),
+                                        RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
+                                        RunEv::Clear => *ev = Some(PanelEv::Clear(i, r.tool)),
+                                        RunEv::Tab => {
+                                            let ip = r.ip.to_string();
+                                            act = Some(match r.tool {
+                                                Tool::Ping => Action::Ping(ip),
+                                                Tool::Ports => Action::Ports(ip),
+                                                Tool::Trace => Action::Trace(ip),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                }
             });
         (act, frame.response)
     }
@@ -966,7 +1061,7 @@ impl MapView {
                     };
                     for id in group {
                         let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
-                        self.pinned.insert(id.clone(), at);
+                        self.placed.insert(id.clone(), at);
                         self.pos.insert(id, at);
                     }
                     self.follow = false;
@@ -1691,6 +1786,126 @@ impl MapView {
     }
 }
 
+/// What a run's section in a card asked for.
+enum RunEv {
+    Again,
+    Stop,
+    Clear,
+    Tab,
+}
+
+/// One run in a card's Results: the tool, its condensed line and buttons;
+/// opened, every reply, port or hop.
+fn run_section(ui: &mut Ui, card: &str, r: &Run, busy: bool) -> Option<RunEv> {
+    let mut out = None;
+    let id = ui.make_persistent_id(("map_run", card, r.tool));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        .show_header(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(r.tool.name()).small().strong());
+            if r.active() {
+                widgets::spinner(ui);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("×")
+                    .on_hover_text("Clear this result")
+                    .clicked()
+                {
+                    out = Some(RunEv::Clear);
+                }
+                if r.active() {
+                    if ui.small_button("■").on_hover_text("Stop").clicked() {
+                        out = Some(RunEv::Stop);
+                    }
+                } else if ui.small_button("⟲").on_hover_text("Run it again").clicked() {
+                    out = Some(RunEv::Again);
+                }
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Open in tab").small())
+                    .on_hover_text(format!("Run it in full in the {} tab", r.tool.name()))
+                    .on_disabled_hover_text("Wait for the test running in its tab to finish")
+                    .clicked()
+                {
+                    out = Some(RunEv::Tab);
+                }
+            });
+        })
+        .body(|ui| run_detail(ui, r));
+    let colour = match &r.state {
+        State::Failed(_) => widgets::bad(),
+        _ => ui.visuals().text_color(),
+    };
+    ui.add(
+        egui::Label::new(RichText::new(r.summary()).monospace().small().color(colour))
+            .wrap()
+            .selectable(true),
+    );
+    ui.add_space(2.0);
+    out
+}
+
+/// Everything a run found, one row each.
+fn run_detail(ui: &mut Ui, r: &Run) {
+    let weak = ui.visuals().weak_text_color();
+    let cell = |ui: &mut Ui, s: String| {
+        ui.label(RichText::new(s).monospace().small());
+    };
+    egui::Grid::new(("map_run_rows", r.ip, r.tool))
+        .num_columns(3)
+        .spacing([10.0, 1.0])
+        .show(ui, |ui| match &r.out {
+            Out::Ping(replies) => {
+                for p in replies {
+                    cell(ui, format!("#{}", p.seq));
+                    match p.rtt {
+                        Some(ms) => {
+                            cell(ui, widgets::fmt_ms(ms));
+                            cell(ui, p.ttl.map(|t| format!("ttl {t}")).unwrap_or_default());
+                        }
+                        None => {
+                            ui.label(RichText::new(&p.note).small().color(widgets::bad()));
+                            ui.label("");
+                        }
+                    }
+                    ui.end_row();
+                }
+            }
+            Out::Ports { found, .. } => {
+                for (port, state, ms) in found {
+                    cell(
+                        ui,
+                        format!("{port} {}", crate::net::ports::service_name(*port)),
+                    );
+                    let (label, c) = match state {
+                        crate::net::TcpState::Open => ("open".to_string(), widgets::ok()),
+                        crate::net::TcpState::Closed => ("closed".into(), weak),
+                        crate::net::TcpState::Filtered => ("filtered".into(), widgets::warn()),
+                        crate::net::TcpState::Error(e) => (format!("error: {e}"), widgets::bad()),
+                    };
+                    ui.label(RichText::new(label).monospace().small().color(c));
+                    cell(ui, widgets::fmt_ms(*ms));
+                    ui.end_row();
+                }
+            }
+            Out::Trace { hops, .. } => {
+                for h in hops {
+                    cell(ui, h.ttl.to_string());
+                    let at = match (h.addr, &h.name) {
+                        (Some(a), Some(n)) => format!("{a} {n}"),
+                        (Some(a), None) => a.to_string(),
+                        (None, _) => "*".into(),
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(at).monospace().small()).selectable(true),
+                    );
+                    cell(ui, h.best.map(widgets::fmt_ms).unwrap_or_default());
+                    ui.end_row();
+                }
+            }
+        });
+}
+
 /// A card's details as text, for Copy.
 fn card_text(n: &crate::map::Node) -> String {
     let mut s = format!("{} ({})\n", n.label, n.kind);
@@ -1868,5 +2083,108 @@ mod tests {
         assert_eq!(v.ordered(), [3, 0, 2, 1]);
         v.toggle(2);
         assert_eq!(v.ordered(), [3, 0, 1]);
+    }
+
+    /// Cards 0, 1, 2 selected in that order: the panel shows 2, 1, 0.
+    fn three_in_panel(n: usize) -> MapView {
+        let mut v = view(n);
+        v.select(Some(0));
+        v.toggle(1);
+        v.toggle(2);
+        assert_eq!(v.ordered(), [2, 1, 0]);
+        v
+    }
+
+    #[test]
+    fn a_pinned_card_holds_its_slot_as_others_are_selected() {
+        let mut v = three_in_panel(6);
+        v.keep(0);
+        for i in 3..6 {
+            v.toggle(i);
+            assert_eq!(v.ordered()[2], 0);
+        }
+        assert_eq!(v.ordered(), [5, 4, 0, 3, 2, 1]);
+        // A plain click elsewhere doesn't move it either.
+        v.select(Some(3));
+        assert_eq!(v.ordered(), [3, 0]);
+        v.toggle(4);
+        v.toggle(5);
+        assert_eq!(v.ordered(), [5, 4, 0, 3]);
+    }
+
+    #[test]
+    fn dragging_a_pinned_card_gives_it_a_new_slot() {
+        let mut v = three_in_panel(6);
+        v.keep(0);
+        v.ordered();
+        v.move_card(2, 0);
+        assert_eq!(v.ordered(), [0, 2, 1]);
+        v.toggle(3);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [0, 4, 3, 2, 1]);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [0, 4, 2, 1]);
+    }
+
+    #[test]
+    fn dragging_another_card_past_a_pinned_one_updates_its_slot() {
+        let mut v = three_in_panel(4);
+        v.keep(1);
+        v.ordered();
+        // 2 dragged below 1 and 0: 1 now shows at the top and stays there.
+        v.move_card(0, 2);
+        assert_eq!(v.ordered(), [1, 0, 2]);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [1, 3, 0, 2]);
+    }
+
+    #[test]
+    fn an_unpinned_card_stays_put_then_moves_with_the_rest() {
+        let mut v = three_in_panel(5);
+        v.keep(0);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [3, 2, 0, 1]);
+        v.keep(0);
+        assert_eq!(v.ordered(), [3, 2, 0, 1]);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [4, 3, 2, 0, 1]);
+    }
+
+    #[test]
+    fn a_slot_past_the_end_shows_last_and_comes_back() {
+        let mut v = three_in_panel(7);
+        v.toggle(3);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [4, 3, 2, 1, 0]);
+        v.keep(0);
+        // Down to two cards: it shows last.
+        v.select(Some(5));
+        assert_eq!(v.ordered(), [5, 0]);
+        // Filled up again: back in slot 4.
+        for i in [1, 2, 3, 6] {
+            v.toggle(i);
+        }
+        assert_eq!(v.ordered()[4], 0);
+        assert_eq!(v.ordered().len(), 6);
+    }
+
+    #[test]
+    fn pinning_from_the_menu_puts_an_unselected_card_on_top() {
+        let mut v = three_in_panel(4);
+        v.keep(3);
+        assert_eq!(v.ordered(), [3, 2, 1, 0]);
+        v.select(Some(1));
+        assert_eq!(v.ordered(), [3, 1]);
+    }
+
+    #[test]
+    fn letting_go_of_a_pinned_card_forgets_its_slot() {
+        let mut v = three_in_panel(4);
+        v.keep(0);
+        v.toggle(0);
+        assert!(v.slots.is_empty());
+        assert_eq!(v.ordered(), [2, 1]);
+        v.toggle(0);
+        assert_eq!(v.ordered(), [0, 2, 1]);
     }
 }
