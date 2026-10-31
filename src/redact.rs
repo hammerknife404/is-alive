@@ -82,9 +82,12 @@ fn rule(kind: Kind, group: usize, re: &str) -> Rule {
     }
 }
 
-/// A fenced block opened with ```secret: everything inside goes.
+/// A fenced block opened with ```secret: everything inside goes, and so
+/// does text written on the fence lines themselves (```secret alarm 9090,
+/// or a closing ```door 4471), since that's where people type it.
 static SECRET_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ms)^[ \t]*```secret[^\n]*\n(.*?)(?:^[ \t]*```|\z)").expect("valid pattern")
+    Regex::new(r"(?ms)^[ \t]*```secret([^\n]*)\n?(.*?)(?:^[ \t]*```([^\n]*)$|\z)")
+        .expect("valid pattern")
 });
 
 /// What `sanitize` leaves behind; never redacted again.
@@ -129,7 +132,14 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         rule(
             Kind::Patient,
             2,
-            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b\s*[:#=-]?\s*([^\n]+)",
+            // With a separator any value; without one, only a number or
+            // date, so prose ("not a date of birth or card") stays.
+            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b(?:\s*[:#=]\s*|\s+-\s+)([^\n]+)",
+        ),
+        rule(
+            Kind::Patient,
+            2,
+            r"(?im)\b(mrn|medical\s+record(?:\s+(?:no\.?|number|#))?|dob|d\.o\.b\.|date\s+of\s+birth|birth\s*date|ssn|social\s+security(?:\s+(?:no\.?|number|#))?)\b\s+(\d[^\n]*)",
         ),
         rule(
             Kind::Email,
@@ -347,7 +357,12 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
                 continue;
             }
             let len = if matches!(first, '"' | '\'') {
-                rest[1..].find(first).map_or(rest.len(), |j| j + 2)
+                // Unclosed, or right against the word ("password"): the
+                // word's own quote, not a quoted value.
+                match rest[1..].find(first) {
+                    Some(j) if i != m.end() => j + 2,
+                    _ => 1,
+                }
             } else {
                 rest.find(char::is_whitespace).unwrap_or(rest.len())
             };
@@ -366,16 +381,28 @@ fn password_values(text: &str) -> Vec<Range<usize>> {
         }
         let word = |r: &Range<usize>| {
             text[r.clone()]
-                .trim_matches(|c: char| ".,;:)(!?".contains(c))
+                .trim_matches(|c: char| ".,;:)(!?\"'".contains(c))
                 .to_lowercase()
         };
         let pick = match toks.iter().position(|t| t.1) {
-            Some(link) => toks[link + 1..]
-                .iter()
-                .find(|t| !t.1 && !FILLER.contains(&word(&t.0).as_str())),
+            // After "is"/"was" the sentence may just go on ("password is in
+            // the vault"); after ":" or "=" whatever follows is the value.
+            Some(link) => {
+                let spoken = text[toks[link].0.clone()].chars().all(char::is_alphabetic);
+                toks[link + 1..]
+                    .iter()
+                    .find(|t| {
+                        !t.1 && !FILLER.contains(&word(&t.0).as_str()) && !word(&t.0).is_empty()
+                    })
+                    .filter(|t| {
+                        let w = word(&t.0);
+                        !spoken
+                            || (!PLAIN.contains(&w.as_str()) && !NOT_VALUE.contains(&w.as_str()))
+                    })
+            }
             None => toks
                 .iter()
-                .find(|t| !FILLER.contains(&word(&t.0).as_str()))
+                .find(|t| !FILLER.contains(&word(&t.0).as_str()) && !word(&t.0).is_empty())
                 .filter(|t| {
                     let w = word(&t.0);
                     !NOT_VALUE.contains(&w.as_str()) && !PLAIN.contains(&w.as_str())
@@ -413,6 +440,26 @@ fn luhn(s: &str) -> bool {
         })
         .sum();
     sum.is_multiple_of(10)
+}
+
+/// A SHA-1 or SHA-256 the text calls a commit, hash or checksum: an
+/// identifier, not a secret. Hex with no such word stays redacted, since
+/// plenty of API keys are hex too.
+fn named_hash(text: &str, at: usize, s: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "commit", "sha", "sha1", "sha-1", "sha256", "sha-256", "hash", "checksum", "digest",
+        "revision", "rev",
+    ];
+    if !matches!(s.len(), 40 | 64) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    let before = text[..at].trim_end_matches([' ', ':', '=', '\t']);
+    let word = before
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    WORDS.contains(&word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
 }
 
 /// A long run that has letters and digits: a key, not a word or a number.
@@ -593,13 +640,16 @@ pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
         }
     }
     for c in SECRET_BLOCK.captures_iter(text) {
-        if let Some(m) = c.get(1).filter(|m| !m.as_str().trim().is_empty())
-            && fresh(&m.range())
-        {
-            hits.push(Hit {
-                span: m.range(),
-                kind: Kind::Block,
-            });
+        for m in [c.get(1), c.get(2), c.get(3)].into_iter().flatten() {
+            let v = m.as_str();
+            let lead = v.len() - v.trim_start().len();
+            let span = m.start() + lead..m.start() + v.trim_end().len();
+            if !span.is_empty() && fresh(&span) {
+                hits.push(Hit {
+                    span,
+                    kind: Kind::Block,
+                });
+            }
         }
     }
     for v in ov.redact.iter().filter(|v| !v.is_empty()) {
@@ -644,7 +694,9 @@ fn detect(text: &str) -> Vec<Hit> {
                 .map_or(0, |i| i + 1);
             let keep = match r.kind {
                 Kind::Card => luhn(s),
-                Kind::Token if s.len() >= 32 && !s.starts_with("AKIA") => random_looking(s),
+                Kind::Token if s.len() >= 32 && !s.starts_with("AKIA") => {
+                    random_looking(s) && !named_hash(text, m.start(), s)
+                }
                 Kind::Password | Kind::Patient => !s.trim().is_empty(),
                 // user:password@host is a URL login, handled above.
                 Kind::Email => !text[token_start..m.start()].contains("://"),
@@ -912,6 +964,34 @@ give it a password when prompt comes up. Import it the same - Enter password you
         // Twice is still a no-op.
         let once = sanitize_with(t, &ov).0;
         assert_eq!(sanitize_with(&once, &ov).0, once);
+    }
+
+    /// From a technician's redaction test file.
+    #[test]
+    fn field_test_regressions() {
+        // Text on the closing fence's line is part of the secret.
+        let t = "staff\n```secret\n```Bruh this is the secret!!!\n\nnext section";
+        let r = red(t);
+        assert!(!r.contains("Bruh"), "{r}");
+        assert!(r.contains("next section"), "{r}");
+        // Text on the opening line too.
+        assert!(!red("```secret alarm 9090\n```").contains("9090"));
+        for kept in [
+            "git commit 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a",
+            "Version 1.21.1, build 20261030      (not a date of birth or card)",
+            "Reset password policy: minimum 14 characters.  (word \"password\" with no value)",
+            "Password is in the vault, not here.",
+        ] {
+            assert_eq!(red(kept), kept);
+        }
+        // Still caught: a hash-shaped key with no commit/sha word, a DOB.
+        assert!(red("api 3f9a2c1b8e7d6f5a4b3c2d1e0f9a8b7c6d5e4f3a").contains("REDACTED"));
+        assert!(red("DOB 04/12/1961").contains("REDACTED"));
+        assert!(red("date of birth: 1961-04-12").contains("REDACTED"));
+        assert_eq!(
+            red("password is hunter2"),
+            "password is [REDACTED: password]"
+        );
     }
 
     #[test]
