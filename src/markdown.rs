@@ -256,6 +256,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn draws_the_format_test_file() {
+        // assets/notes-format-test.md: every element, drawn without a panic.
+        let text = include_str!("../assets/notes-format-test.md");
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(render(ui, text, &FontId::proportional(13.0)), None);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
     fn underscores_inside_words_are_literal() {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(Default::default(), |ui| {

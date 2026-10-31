@@ -34,6 +34,7 @@ pub struct BundleTool {
     map_clients: bool,
     use_unifi: bool,
     use_sonicwall: bool,
+    use_meraki: bool,
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
@@ -56,6 +57,7 @@ impl Default for BundleTool {
             map_clients: false,
             use_unifi: true,
             use_sonicwall: true,
+            use_meraki: true,
             use_inventory: true,
             use_results: false,
             use_notes: false,
@@ -72,6 +74,9 @@ const UNIFI_WHAT: &str = "UniFi controller export: sites, devices, networks, swi
 WLANs (plus clients as the manifest says), secrets removed. mongoexport-style array for /unifidump's extract.py.";
 const SONICWALL_WHAT: &str = "SonicWall config: interfaces (zone, VLAN, IP, MAC, management), zones, \
 address and service objects, access and NAT rules. Enforced config, not observation.";
+const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs, \
+appliance ports, firewall, port forwarding and NAT rules, static routes, VPN and uplinks. Enforced config, \
+not observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name, TTL \
 and open management ports. Observed state.";
 const RESULTS_WHAT: &str =
@@ -143,6 +148,7 @@ impl BundleTool {
                 ui.label("Site name");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.site)
+                        .char_limit(widgets::FIELD_MAX)
                         .desired_width(380.0)
                         .hint_text("Client or site name"),
                 );
@@ -168,6 +174,7 @@ impl BundleTool {
                     };
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
+                        .char_limit(widgets::PROBLEMS_MAX)
                         .desired_rows(2)
                         .desired_width(380.0)
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")
@@ -221,6 +228,7 @@ impl BundleTool {
 
         let unifi = src.export.unifi();
         let sonicwall = src.export.sonicwall();
+        let meraki = src.export.meraki();
         let map = src.export.mapnetwork();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
@@ -251,6 +259,20 @@ impl BundleTool {
                         )
                     }),
                     "Open a SonicWall .exp or .wri in Config Export",
+                );
+                part_row(
+                    ui,
+                    &mut self.use_meraki,
+                    "Meraki export",
+                    meraki.map(|(p, r)| {
+                        format!(
+                            "{} network(s) · {} VLAN(s) · {}",
+                            r.count("networks"),
+                            r.count("VLANs"),
+                            export::file_name(p)
+                        )
+                    }),
+                    "Open a Meraki API export (.json) in Config Export",
                 );
                 part_row(
                     ui,
@@ -298,6 +320,7 @@ impl BundleTool {
             });
         let chosen = (self.use_unifi && unifi.is_some())
             || (self.use_sonicwall && sonicwall.is_some())
+            || (self.use_meraki && meraki.is_some())
             || (self.use_inventory && sweep.is_some())
             || (self.use_results && runs > 0)
             || (self.use_notes && !src.notes.is_empty());
@@ -365,6 +388,25 @@ impl BundleTool {
                     "address_objects": r.count("address objects"),
                     "access_rules": r.count("access rules"),
                     "nat_rules": r.count("NAT rules"),
+                }),
+                data: r.json.clone(),
+            });
+        }
+        if self.use_meraki
+            && let Some((p, r)) = src.export.meraki()
+        {
+            parts.push(Part {
+                file: bundle::MERAKI,
+                source: export::file_name(p),
+                skill: "/mapnetwork",
+                what: MERAKI_WHAT,
+                summary: json!({
+                    "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
+                        .collect::<serde_json::Map<_, _>>(),
+                    "networks": r.count("networks"),
+                    "vlans": r.count("VLANs"),
+                    "firewall_rules": r.count("firewall rules"),
+                    "port_forwards": r.count("port forwards"),
                 }),
                 data: r.json.clone(),
             });
@@ -481,6 +523,7 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
     else {
         return Ok(None);
     };
+    let path = widgets::safe_path(path, &["zip"]);
     let name = export::file_name(&path);
     let zip = b.zip(&name).map_err(|e| e.to_string())?;
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;

@@ -15,7 +15,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Sites, devices, networks, switch port profiles, WLANs.
 /// Largest file Config Export will read.
 pub const MAX_INPUT: usize = container::MAX_UNPACKED;
-pub use container::zip_find;
+pub use container::{zip_all, zip_find};
+
+/// A stored zip of `files`, for other modules' tests.
+#[cfg(test)]
+pub fn container_test_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    container::tests::zip(files, false)
+}
 
 pub const CONFIG: &[&str] = &["site", "device", "networkconf", "portconf", "wlanconf"];
 /// Client (station) table: hostnames, MACs, last IPs.

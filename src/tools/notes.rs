@@ -135,7 +135,7 @@ impl Default for NotesTool {
         let mut notes = Self {
             text,
             ov,
-            view: View::Split,
+            view: View::Edit,
             show_hits: true,
             dirty: None,
             saved: None,
@@ -194,7 +194,7 @@ impl NotesTool {
         let r = p
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|_| std::fs::write(&tmp, clean))
+            .and_then(|_| crate::theme::write_private(&tmp, clean))
             .and_then(|_| std::fs::rename(&tmp, &p));
         match r {
             Ok(()) => {
@@ -217,7 +217,7 @@ impl NotesTool {
                 _ => Ok(()),
             }
         } else {
-            std::fs::write(
+            crate::theme::write_private(
                 &p,
                 serde_json::to_string(&self.ov.allow).unwrap_or_default(),
             )
@@ -905,6 +905,7 @@ impl NotesTool {
                 let fill = ui.available_size();
                 egui::TextEdit::multiline(&mut self.text)
                     .id(id)
+                    .char_limit(widgets::NOTES_MAX)
                     .desired_width(f32::INFINITY)
                     .min_size(fill)
                     .lock_focus(true)

@@ -1,6 +1,6 @@
 use crate::job::{Job, pump};
 use crate::widgets;
-use crate::{mapnetwork, sonicwall, unifi};
+use crate::{mapnetwork, meraki, sonicwall, unifi};
 use eframe::egui::{self, Ui};
 use std::path::PathBuf;
 
@@ -9,6 +9,7 @@ enum Export {
     Unifi(unifi::Report),
     SonicWall(sonicwall::Report),
     Map(Box<mapnetwork::Doc>),
+    Meraki(meraki::Report),
 }
 
 impl Export {
@@ -32,6 +33,14 @@ impl Export {
                 r.count("access rules"),
                 r.count("NAT rules"),
             ),
+            Export::Meraki(r) => format!(
+                "Meraki: {} network(s), {} device(s), {} VLAN(s), {} firewall rule(s), {} port forward(s)",
+                r.count("networks"),
+                r.count("devices"),
+                r.count("VLANs"),
+                r.count("firewall rules"),
+                r.count("port forwards"),
+            ),
             Export::Map(d) => format!(
                 "/mapnetwork map: {}: {} device(s), {} link(s), {} finding(s)",
                 if d.title.is_empty() {
@@ -50,6 +59,7 @@ impl Export {
         match self {
             Export::Unifi(r) => r.summary(),
             Export::SonicWall(r) => r.summary(),
+            Export::Meraki(r) => r.summary(),
             Export::Map(d) => d.summary(),
         }
     }
@@ -59,6 +69,7 @@ impl Export {
         match self {
             Export::Unifi(r) => &r.secrets,
             Export::SonicWall(r) => &r.secrets,
+            Export::Meraki(r) => &r.secrets,
             Export::Map(_) => &[],
         }
     }
@@ -67,6 +78,7 @@ impl Export {
         match self {
             Export::Unifi(r) => &r.json,
             Export::SonicWall(r) => &r.json,
+            Export::Meraki(r) => &r.json,
             Export::Map(d) => &d.json,
         }
     }
@@ -77,6 +89,7 @@ impl Export {
             Export::Unifi(_) => "UniFi",
             Export::SonicWall(r) if r.format.contains(".wri") => "SonicWall report",
             Export::SonicWall(_) => "SonicWall",
+            Export::Meraki(_) => "Meraki",
             Export::Map(_) => "/mapnetwork map",
         }
     }
@@ -86,6 +99,7 @@ impl Export {
         match self {
             Export::Unifi(_) => "unifidump",
             Export::SonicWall(_) => "sonicwall",
+            Export::Meraki(_) => "meraki",
             Export::Map(_) => "mapnetwork",
         }
     }
@@ -93,7 +107,9 @@ impl Export {
     fn hint(&self) -> &'static str {
         match self {
             Export::Unifi(_) => "Save the sanitized export to hand to /unifidump",
-            Export::SonicWall(_) => "Save the sanitized config to hand to /mapnetwork",
+            Export::SonicWall(_) | Export::Meraki(_) => {
+                "Save the sanitized config to hand to /mapnetwork"
+            }
             Export::Map(_) => "Save the map's devices, links and findings as JSON",
         }
     }
@@ -105,6 +121,7 @@ impl Export {
             Export::Unifi(_) => 0,
             Export::SonicWall(_) => 1,
             Export::Map(_) => 2,
+            Export::Meraki(_) => 3,
         }
     }
 }
@@ -126,8 +143,8 @@ pub struct ExportTool {
     job: Option<Job<Ev>>,
     /// File being read while the job runs.
     pending: Option<PathBuf>,
-    /// UniFi, SonicWall, /mapnetwork map.
-    slots: [Option<Slot>; 3],
+    /// UniFi, SonicWall, /mapnetwork map, Meraki.
+    slots: [Option<Slot>; 4],
     /// Every loaded file's stripped secret values, for Notes to redact.
     secrets: Vec<String>,
     /// The slot whose sub-tab is showing: the one opened last, until
@@ -165,13 +182,15 @@ Claude made from it, or a zip you saved it into"
     }
     if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
+    } else if meraki::sniff(&data) {
+        meraki::convert(&data).map(Export::Meraki)
     } else {
         unifi::convert(data, clients)
             .map(Export::Unifi)
             .map_err(|e| {
                 if e.starts_with("not a UniFi backup") {
                     "not a UniFi backup (.unf, .unifi, db.gz), SonicWall settings export (.exp) or \
-tech support report (.wri), or /mapnetwork map (.dc.html)"
+tech support report (.wri), Meraki API export (.json), or /mapnetwork map (.dc.html)"
                         .into()
                 } else {
                     e
@@ -266,6 +285,17 @@ impl ExportTool {
         }
     }
 
+    /// The Meraki export currently loaded, and its conversion.
+    pub fn meraki(&self) -> Option<(&PathBuf, &meraki::Report)> {
+        match &self.slots[3] {
+            Some(Slot {
+                path,
+                export: Export::Meraki(r),
+            }) => Some((path, r)),
+            _ => None,
+        }
+    }
+
     /// The SonicWall export currently loaded, and its conversion.
     pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
         match &self.slots[1] {
@@ -324,9 +354,9 @@ impl ExportTool {
                 rfd::FileDialog::new()
                     .set_title("Open config export")
                     .add_filter(
-                        "UniFi backup, SonicWall settings or /mapnetwork map",
+                        "UniFi backup, SonicWall or Meraki config, or /mapnetwork map",
                         &[
-                            "unf", "unifi", "exp", "wri", "html", "htm", "zip", "gz", "txt",
+                            "unf", "unifi", "exp", "wri", "json", "html", "htm", "zip", "gz", "txt",
                         ],
                     )
                     .pick_files()
@@ -348,7 +378,7 @@ impl ExportTool {
             if ui
                 .add_enabled(!running, egui::Button::new("Open file…"))
                 .on_hover_text(
-                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, or a /mapnetwork .dc.html (or a zip of one). Several at once, or drop them on the window",
+                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, Meraki API .json (or a zip of them), or a /mapnetwork .dc.html. Several at once, or drop them on the window",
                 )
                 .clicked()
             {
@@ -377,7 +407,7 @@ impl ExportTool {
             if !running {
                 widgets::empty_hint(
                     ui,
-                    "Open or drop a UniFi backup, SonicWall .exp / .wri, or /mapnetwork map.",
+                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, or /mapnetwork map.",
                 );
             }
             return;

@@ -48,7 +48,10 @@ pub struct MapView {
     key: u64,
     clients: bool,
     search: String,
+    /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
+    /// More cards picked with Ctrl+click, lit with it.
+    also: Vec<String>,
     /// What the detail panel shows while it slides shut.
     shown: Option<String>,
     hidden: HashSet<Zone>,
@@ -148,12 +151,41 @@ impl MapView {
         let ids: HashSet<&str> = self.map.nodes.iter().map(|n| n.id.as_str()).collect();
         self.pos.retain(|k, _| ids.contains(k.as_str()));
         self.born.retain(|k, _| ids.contains(k.as_str()));
+        self.also.retain(|s| ids.contains(s.as_str()));
         if self
             .selected
             .as_ref()
             .is_some_and(|s| !ids.contains(s.as_str()))
         {
-            self.selected = None;
+            self.selected = self.also.pop();
+        }
+    }
+
+    /// Every selected card, the detail panel's last.
+    fn selection(&self) -> Vec<usize> {
+        self.also
+            .iter()
+            .chain(&self.selected)
+            .filter_map(|s| self.index(s))
+            .collect()
+    }
+
+    /// One card selected, the rest let go.
+    fn select(&mut self, i: Option<usize>) {
+        self.selected = i.map(|i| self.map.nodes[i].id.clone());
+        self.also.clear();
+    }
+
+    /// Ctrl+click: add the card to the selection, or take it out.
+    fn toggle(&mut self, i: usize) {
+        let id = self.map.nodes[i].id.clone();
+        if self.selected.as_deref() == Some(id.as_str()) {
+            self.selected = self.also.pop();
+        } else if let Some(k) = self.also.iter().position(|s| *s == id) {
+            self.also.remove(k);
+        } else {
+            self.also.extend(self.selected.take());
+            self.selected = Some(id);
         }
     }
 
@@ -219,6 +251,7 @@ impl MapView {
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
+                    .char_limit(widgets::FIELD_MAX)
                     .desired_width(220.0)
                     .hint_text("Search name, IP, MAC, vendor"),
             );
@@ -329,7 +362,7 @@ impl MapView {
                 }
             });
         if !open {
-            self.selected = None;
+            self.select(None);
         }
 
         // Canvas.
@@ -348,15 +381,15 @@ impl MapView {
             self.fit(rect);
         }
         if let Some(&first) = focus_on.as_ref().and_then(|ids| ids.first()) {
-            self.selected = Some(self.map.nodes[first].id.clone());
+            self.select(Some(first));
             self.focus(rect, first);
         }
         if let Some(i) = pick {
-            self.selected = Some(self.map.nodes[i].id.clone());
+            self.select(Some(i));
             self.focus(rect, i);
         }
         if search_enter && let Some(i) = self.map.nodes.iter().position(|n| self.matches(n)) {
-            self.selected = Some(self.map.nodes[i].id.clone());
+            self.select(Some(i));
             self.focus(rect, i);
         }
         self.interact(ui, rect, &resp);
@@ -467,6 +500,24 @@ impl MapView {
             .id_salt("map_detail_scroll")
             .show(ui, |ui| {
                 ui.add_space(4.0);
+                let sel = self.selection();
+                if sel.len() > 1 {
+                    ui.horizontal(|ui| {
+                        ui.weak(format!("{} selected", sel.len()))
+                            .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
+                        if ui
+                            .small_button("Copy all")
+                            .on_hover_text("Copy every selected card's details as text")
+                            .clicked()
+                        {
+                            let s: Vec<String> =
+                                sel.iter().map(|&k| card_text(&self.map.nodes[k])).collect();
+                            widgets::copy(ui.ctx(), s.join("\n"));
+                            widgets::toast(format!("{} cards copied", sel.len()), true);
+                        }
+                    });
+                    ui.separator();
+                }
                 ui.label(RichText::new(&n.kind).monospace().small().weak());
                 ui.label(RichText::new(&n.label).heading());
                 if !n.sub.is_empty() {
@@ -578,19 +629,7 @@ impl MapView {
                         .on_hover_text("Copy this card's details as text")
                         .clicked()
                     {
-                        let mut s = format!("{} ({})\n", n.label, n.kind);
-                        if !n.sub.is_empty() {
-                            s += &format!("{}\n", n.sub);
-                        }
-                        for d in n
-                            .flags
-                            .iter()
-                            .map(|f| format!("Flag: {f}"))
-                            .chain(n.details.iter().cloned())
-                        {
-                            s += &format!("{d}\n");
-                        }
-                        widgets::copy(ui.ctx(), s);
+                        widgets::copy(ui.ctx(), card_text(n));
                         widgets::toast("Card details copied", true);
                     }
                 });
@@ -627,9 +666,18 @@ impl MapView {
             let d = resp.drag_delta();
             match self.drag.clone() {
                 Some(id) => {
-                    let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
-                    self.pinned.insert(id.clone(), at);
-                    self.pos.insert(id, at);
+                    // A selected card brings the rest of the selection along.
+                    let sel = self.selection();
+                    let group: Vec<String> = if sel.iter().any(|&i| self.map.nodes[i].id == id) {
+                        sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect()
+                    } else {
+                        vec![id]
+                    };
+                    for id in group {
+                        let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
+                        self.pinned.insert(id.clone(), at);
+                        self.pos.insert(id, at);
+                    }
                     self.follow = false;
                 }
                 None => {
@@ -643,7 +691,13 @@ impl MapView {
             self.drag = None;
         }
         if resp.clicked() {
-            self.selected = over.map(|i| self.map.nodes[i].id.clone());
+            let ctrl = ui.input(|i| i.modifiers.command);
+            match over {
+                Some(i) if ctrl => self.toggle(i),
+                // Ctrl+click on the canvas leaves the selection be.
+                None if ctrl => {}
+                _ => self.select(over),
+            }
         }
         if resp.double_clicked() {
             match over {
@@ -668,7 +722,7 @@ impl MapView {
             }
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.selected = None;
+            self.select(None);
         }
         let icon = if self.drag.is_some() || (resp.dragged() && over.is_none()) {
             egui::CursorIcon::Grabbing
@@ -768,9 +822,9 @@ impl MapView {
             p.extend(dots);
         }
 
-        let sel = self.selected.as_deref().and_then(|s| self.index(s));
+        let sel = self.selection();
         let mut lit: HashSet<usize> = HashSet::new();
-        if let Some(s) = sel {
+        for &s in &sel {
             lit.extend(self.map.path(s));
             lit.extend(
                 (0..self.map.nodes.len()).filter(|&k| self.map.nodes[k].parent() == Some(s)),
@@ -781,7 +835,7 @@ impl MapView {
             let mut a: f32 = 1.0;
             if self.hidden.contains(&n.zone) || !self.matches(n) {
                 a = 0.15;
-            } else if sel.is_some() && !lit.contains(&i) {
+            } else if !sel.is_empty() && !lit.contains(&i) {
                 a = 0.45;
             }
             let age = (now - self.born.get(&n.id).copied().unwrap_or(0.0)) as f32;
@@ -808,7 +862,7 @@ impl MapView {
                 .map(|w| self.to_screen(rect, w))
                 .collect();
             let alpha = fade(i).min(fade(*up));
-            let on = sel.is_some() && lit.contains(&i) && lit.contains(up);
+            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
             let base = match link {
                 Link::Backbone => zone_colour(Zone::Gateway, dark),
                 Link::Assumed => vis.weak_text_color(),
@@ -887,7 +941,7 @@ impl MapView {
                 i,
                 r,
                 fade(i),
-                sel == Some(i),
+                sel.contains(&i),
                 hover == Some(i),
                 now,
             );
@@ -1163,6 +1217,23 @@ impl MapView {
     }
 }
 
+/// A card's details as text, for Copy.
+fn card_text(n: &crate::map::Node) -> String {
+    let mut s = format!("{} ({})\n", n.label, n.kind);
+    if !n.sub.is_empty() {
+        s += &format!("{}\n", n.sub);
+    }
+    for d in n
+        .flags
+        .iter()
+        .map(|f| format!("Flag: {f}"))
+        .chain(n.details.iter().cloned())
+    {
+        s += &format!("{d}\n");
+    }
+    s
+}
+
 /// The map is a quick picture, not a survey: say so, and point to the
 /// reviewed path. Site Bundle opens it; × closes the note for good.
 fn accuracy_note(ui: &mut Ui) -> Option<Action> {
@@ -1252,4 +1323,43 @@ can only place devices under the gateway.",
         });
     });
     act
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::map::Node;
+
+    fn view(n: usize) -> MapView {
+        let mut v = MapView::new();
+        v.map.nodes = (0..n)
+            .map(|i| Node {
+                id: format!("n{i}"),
+                ..Default::default()
+            })
+            .collect();
+        v
+    }
+
+    #[test]
+    fn ctrl_click_adds_and_removes() {
+        let mut v = view(4);
+        v.select(Some(1));
+        v.toggle(2);
+        v.toggle(3);
+        assert_eq!(v.selection(), [1, 2, 3]);
+        assert_eq!(v.selected.as_deref(), Some("n3"));
+        // Taking out the shown card shows the one picked before it.
+        v.toggle(3);
+        assert_eq!(v.selection(), [1, 2]);
+        assert_eq!(v.selected.as_deref(), Some("n2"));
+        v.toggle(1);
+        assert_eq!(v.selection(), [2]);
+        // A plain click starts over.
+        v.toggle(0);
+        v.select(Some(3));
+        assert_eq!(v.selection(), [3]);
+        v.select(None);
+        assert!(v.selection().is_empty());
+    }
 }

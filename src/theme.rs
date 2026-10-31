@@ -520,6 +520,24 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
     act
 }
 
+/// Write a file in the profile only this user can read (notes can hold
+/// site details); on Windows the profile folder already is.
+pub fn write_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        o.mode(0o600);
+        // An older file keeps its mode on open: narrow it too.
+        if path.exists() {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    o.open(path)?.write_all(data.as_ref())
+}
+
 /// This app's folder in the user's profile (settings, autosaved notes).
 pub fn data_dir() -> Option<std::path::PathBuf> {
     let base = if cfg!(windows) {

@@ -8,6 +8,7 @@ mod log;
 mod map;
 mod mapnetwork;
 mod markdown;
+mod meraki;
 mod net;
 mod redact;
 mod sonicwall;
@@ -662,6 +663,7 @@ impl App {
             ui.label("Filter");
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
+                    .char_limit(widgets::FIELD_MAX)
                     .desired_width(240.0)
                     .hint_text("tool or text, e.g. FAIL, 443, timeout"),
             )

@@ -239,6 +239,7 @@ impl SpeedTool {
                 if self.use_file {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.file_url)
+                            .char_limit(widgets::URL_MAX)
                             .desired_width(240.0)
                             .hint_text("https://host/100MB.bin"),
                     )

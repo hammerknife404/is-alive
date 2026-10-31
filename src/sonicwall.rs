@@ -233,7 +233,7 @@ const CREDENTIAL: &[&str] = &[
 /// A free-text comment, withheld if it looks like it holds a credential,
 /// and otherwise put through the same redaction as tech notes; `withheld`
 /// counts either.
-fn clean_comment(v: &str, withheld: &Cell<usize>) -> Value {
+pub(crate) fn clean_comment(v: &str, withheld: &Cell<usize>) -> Value {
     if credential_like(v) {
         withheld.set(withheld.get() + 1);
         return json!("[withheld: may contain a credential]");
