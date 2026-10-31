@@ -241,7 +241,7 @@ impl eframe::App for App {
                     + 2.0 * ui.spacing().button_padding.x
                     + ui.spacing().item_spacing.x
                     + 8.0;
-                let button = if ui.available_width() > need {
+                let button = if ui.available_size_before_wrap().x > need {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
                         .inner
                 } else {
@@ -389,7 +389,8 @@ impl App {
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => self.export.ui(ui),
             Tab::Map => {
-                let busy = self.ping.is_running() || self.ports.is_running();
+                let busy =
+                    self.ping.is_running() || self.ports.is_running() || self.trace.is_running();
                 let act = self.map.ui(
                     ui,
                     map::view::Sources {
@@ -464,6 +465,10 @@ impl App {
             Some(Action::Ports(ip)) => {
                 self.ports.run(ctx, &ip);
                 self.tab = Tab::Ports;
+            }
+            Some(Action::Trace(ip)) => {
+                self.trace.run(ctx, &ip);
+                self.tab = Tab::Trace;
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::HideNote) => {
@@ -668,7 +673,7 @@ impl App {
                     .hint_text("tool or text, e.g. FAIL, 443, timeout"),
             )
             .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
-            if filtered && ui.small_button("✕").on_hover_text("Clear filter").clicked() {
+            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
                 self.filter.clear();
             }
         });
@@ -835,9 +840,10 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let look = theme::load();
+    theme::set_emoji_style(look.emoji);
     let size = look
         .size
-        .map_or([980.0, 660.0], |(w, h)| [w as f32, h as f32]);
+        .map_or([1120.0, 720.0], |(w, h)| [w as f32, h as f32]);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("is-alive {VERSION} — network tester"))

@@ -81,15 +81,113 @@ pub fn is_emoji(c: char) -> bool {
 /// How much bigger an emoji is than the text around it.
 pub const EMOJI_SCALE: f32 = 1.3;
 
-/// Monochrome in Dark and Light, in the text's own colour. In Miami each
-/// emoji takes one of the scene's neons, the same one every time.
+/// How emoji are coloured. egui draws every glyph in one colour, so
+/// "colour" means each emoji in its own natural colour, not full-colour art.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EmojiStyle {
+    /// Monochrome, or Miami's neons in Miami.
+    #[default]
+    Theme,
+    Mono,
+    Color,
+    Neon,
+}
+
+impl EmojiStyle {
+    pub const ALL: [EmojiStyle; 4] = [Self::Theme, Self::Mono, Self::Color, Self::Neon];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Theme => "Match theme",
+            Self::Mono => "Monochrome",
+            Self::Color => "Colour",
+            Self::Neon => "Miami neon",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::Mono => "mono",
+            Self::Color => "color",
+            Self::Neon => "neon",
+        }
+    }
+}
+
+static EMOJI: AtomicU8 = AtomicU8::new(0);
+
+/// The emoji style every text drawn from now on uses.
+pub fn set_emoji_style(s: EmojiStyle) {
+    let i = EmojiStyle::ALL.iter().position(|x| *x == s).unwrap_or(0);
+    EMOJI.store(i as u8, Ordering::Relaxed);
+}
+
+fn emoji_style() -> EmojiStyle {
+    EmojiStyle::ALL[EMOJI.load(Ordering::Relaxed) as usize % EmojiStyle::ALL.len()]
+}
+
+/// An emoji's colour in the current style: the text's own (monochrome),
+/// one of Miami's neons (the same one every time), or its natural colour.
 pub fn emoji_colour(c: char, text: Color32) -> Color32 {
-    match current() {
-        Theme::Miami => {
+    let style = match emoji_style() {
+        EmojiStyle::Theme if current() == Theme::Miami => EmojiStyle::Neon,
+        EmojiStyle::Theme => EmojiStyle::Mono,
+        s => s,
+    };
+    match style {
+        EmojiStyle::Neon => {
             const NEON: [Color32; 4] = [PINK, TEAL, SUNSET, Color32::from_rgb(178, 120, 255)];
             NEON[c as usize % NEON.len()]
         }
+        EmojiStyle::Color => match natural(c) {
+            // A shade darker on a light background, so yellow still reads.
+            Some(n) if current() == Theme::Light => n.lerp_to_gamma(Color32::BLACK, 0.3),
+            Some(n) => n,
+            None => text,
+        },
         _ => text,
+    }
+}
+
+/// What colour the emoji is, drawn in colour: faces and hands yellow, stop
+/// signs red, a tick green, and so on. None for those with no one colour.
+fn natural(c: char) -> Option<Color32> {
+    let rgb = |r, g, b| Some(Color32::from_rgb(r, g, b));
+    const YELLOW: (u8, u8, u8) = (250, 200, 50);
+    match c {
+        '✅' | '✔' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
+        '❌' | '✖' | '❗' | '⛔' | '🚫' | '🔴' | '📌' | '📍' | '❤' | '💔' | '📅' | '📆' | '⏰'
+        | '🚨' | '💯' | '🍎' => rgb(230, 70, 70),
+        '❓' | '❔' | '❕' | '➖' => rgb(230, 90, 90),
+        '⚠' | '⭐' | '🌟' | '✨' | '💡' | '⚡' | '🔑' | '🔒' | '🔓' | '🏆' | '🔔' | '☀' | '🌞' => {
+            rgb(YELLOW.0, YELLOW.1, YELLOW.2)
+        }
+        '🔥' | '🚧' | '🎃' => rgb(250, 130, 40),
+        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' => rgb(70, 150, 240),
+        '💜' | '🔮' => rgb(170, 110, 240),
+        '📦' | '🗄' => rgb(190, 130, 70),
+        '📝' | '📄' | '📃' | '📋' | '☁' | '⚪' => rgb(225, 225, 225),
+        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' => rgb(150, 165, 185),
+        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' => {
+            rgb(120, 175, 230)
+        }
+        '⏳' | '⌛' => rgb(210, 170, 100),
+        _ => match c as u32 {
+            // Faces and hands.
+            0x1F600..=0x1F64F
+            | 0x1F910..=0x1F92F
+            | 0x1F970..=0x1F97F
+            | 0x1F44A..=0x1F450
+            | 0x1F590..=0x1F596
+            | 0x270A..=0x270D
+            | 0x261D
+            | 0x263A
+            | 0x263B => rgb(YELLOW.0, YELLOW.1, YELLOW.2),
+            // Green plants.
+            0x1F331..=0x1F343 => rgb(80, 180, 90),
+            _ => None,
+        },
     }
 }
 
@@ -143,7 +241,9 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         // Untouched: egui's own dark style, as the app always looked.
         Theme::Dark => {
             ctx.set_theme(egui::Theme::Dark);
-            ctx.set_style_of(egui::Theme::Dark, Style::default());
+            let mut style = Style::default();
+            text_sizes(&mut style);
+            ctx.set_style_of(egui::Theme::Dark, style);
             return;
         }
         Theme::Light => (egui::Theme::Light, light()),
@@ -158,8 +258,23 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
     s.button_padding = egui::vec2(6.0, 2.0);
     s.window_margin = egui::Margin::same(12);
     s.menu_margin = egui::Margin::same(6);
+    text_sizes(&mut style);
     ctx.set_theme(slot);
     ctx.set_style_of(slot, style);
+}
+
+/// A size up from egui's defaults (12.5 body) for every theme: easier to
+/// read at arm's length on a laptop in a server closet.
+fn text_sizes(style: &mut Style) {
+    use egui::{FontFamily::*, FontId, TextStyle};
+    style.text_styles = [
+        (TextStyle::Small, FontId::new(11.0, Proportional)),
+        (TextStyle::Body, FontId::new(14.0, Proportional)),
+        (TextStyle::Button, FontId::new(14.0, Proportional)),
+        (TextStyle::Monospace, FontId::new(13.5, Monospace)),
+        (TextStyle::Heading, FontId::new(20.0, Proportional)),
+    ]
+    .into();
 }
 
 fn rounded(v: &mut Visuals, r: u8) {
@@ -324,6 +439,7 @@ pub struct Settings {
     pub notes_size: u8,
     /// Share of the width the Notes editor takes in Split view.
     pub notes_split: f32,
+    pub emoji: EmojiStyle,
 }
 
 /// Font sizes the Notes tab offers.
@@ -340,6 +456,7 @@ impl Default for Settings {
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
             notes_split: 0.5,
+            emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
         }
     }
@@ -369,6 +486,12 @@ impl Settings {
                     if let Ok(f) = v.trim().parse::<f32>() {
                         s.notes_split = f.clamp(0.2, 0.8);
                     }
+                }
+                "emoji" => {
+                    s.emoji = EmojiStyle::ALL
+                        .into_iter()
+                        .find(|e| e.key() == v.trim())
+                        .unwrap_or_default()
                 }
                 "notes_size" => {
                     if let Ok(n) = v.trim().parse::<u8>() {
@@ -421,6 +544,9 @@ impl Settings {
         }
         if self.notes_size != 13 {
             s += &format!("notes_size={}\n", self.notes_size);
+        }
+        if self.emoji != EmojiStyle::Theme {
+            s += &format!("emoji={}\n", self.emoji.key());
         }
         s
     }
@@ -615,6 +741,7 @@ mod tests {
             notes_font: "DejaVu Sans Mono".into(),
             notes_size: 16,
             notes_split: 0.625,
+            emoji: EmojiStyle::Color,
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(

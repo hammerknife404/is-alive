@@ -402,6 +402,13 @@ impl SweepTool {
         self.job.is_some()
     }
 
+    /// While running: hosts probed, how many in all, since when, and the range.
+    pub fn progress(&self) -> Option<(usize, usize, Instant, &str)> {
+        self.job
+            .is_some()
+            .then(|| (self.probed, self.total, self.started_at, self.range.trim()))
+    }
+
     /// Range and live-host count of a finished run, if there is one.
     pub fn finished(&self) -> Option<(String, usize)> {
         (self.total > 0 && self.job.is_none())

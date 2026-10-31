@@ -27,7 +27,7 @@ enum View {
 /// The emoji picker: status marks and the things site notes are about.
 const EMOJI: &[&str] = &[
     "✅", "❌", "⚠", "❗", "❓", "⭐", "👍", "👎", "🔥", "💡", "📌", "📝", "🔒", "🔓", "🔑", "🔧",
-    "🖥", "💻", "📱", "📠", "📞", "🌐", "📶", "🔌", "🔋", "📦", "📅", "⏰", "🐛", "🚧", "✨", "😀",
+    "🖥", "💻", "📱", "📠", "📞", "🌐", "📶", "🔌", "🔋", "📦", "📅", "⏰", "🐛", "🚧", "✨", "☺",
 ];
 
 /// Seconds after the last keystroke before the autosave.
@@ -538,7 +538,19 @@ impl NotesTool {
                 self.line_prefix(&ctx, "- [ ] ");
             }
             let mut emoji = None;
-            ui.menu_button("😀", |ui| {
+            ui.menu_button(RichText::new("☺").size(16.0), |ui| {
+                // Every style is on offer in every theme.
+                ui.horizontal(|ui| {
+                    ui.weak("Style");
+                    for s in crate::theme::EmojiStyle::ALL {
+                        if ui.selectable_label(look.emoji == s, s.name()).clicked() {
+                            look.emoji = s;
+                            crate::theme::set_emoji_style(s);
+                            crate::theme::save(look);
+                        }
+                    }
+                });
+                ui.separator();
                 egui::Grid::new("notes_emoji")
                     .spacing([2.0, 2.0])
                     .show(ui, |ui| {
@@ -635,7 +647,7 @@ impl NotesTool {
                 self.on_file = true;
             }
             if ui
-                .small_button("✕")
+                .small_button("×")
                 .on_hover_text("Close the file")
                 .clicked()
             {
@@ -815,7 +827,7 @@ impl NotesTool {
                 for (i, v) in self.ov.redact.iter().enumerate() {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("✕")
+                            .small_button("×")
                             .on_hover_text("Stop redacting it")
                             .clicked()
                         {
@@ -837,7 +849,7 @@ impl NotesTool {
                 for (i, v) in self.ov.allow.iter().enumerate() {
                     ui.horizontal(|ui| {
                         if ui
-                            .small_button("✕")
+                            .small_button("×")
                             .on_hover_text("Redact it again")
                             .clicked()
                         {

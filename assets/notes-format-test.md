@@ -1,4 +1,4 @@
-# Notes format test 🧪
+# Notes format test 📝
 
 Open this with **Open…** in the Notes tab to read it as plain text, or paste it into the editor and switch to **Split** or **Preview** to see every element drawn. Every line says what it should look like.
 

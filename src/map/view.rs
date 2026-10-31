@@ -23,6 +23,7 @@ pub enum Action {
     Export,
     Ping(String),
     Ports(String),
+    Trace(String),
     /// Open the Site Bundle window.
     Bundle,
     /// The accuracy note was closed: don't show it again.
@@ -70,12 +71,15 @@ pub struct MapView {
     drag: Option<String>,
     /// When the map was last rebuilt, to pace rebuilds during a sweep.
     built_at: f64,
+    /// The left sidebar is open (closed: a › button on the canvas).
+    side: bool,
 }
 
 impl MapView {
     pub fn new() -> Self {
         Self {
             follow: true,
+            side: true,
             ..Default::default()
         }
     }
@@ -259,7 +263,7 @@ impl MapView {
             if !self.search.is_empty() {
                 let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
                 ui.weak(format!("{n} match{}", if n == 1 { "" } else { "es" }));
-                if ui.small_button("✕").on_hover_text("Clear search").clicked() {
+                if ui.small_button("×").on_hover_text("Clear search").clicked() {
                     self.search.clear();
                 }
             }
@@ -339,6 +343,18 @@ impl MapView {
         if !empty && src.note && src.export.mapnetwork().is_none() {
             act = accuracy_note(ui);
         }
+        // A sweep fills the map in as it runs: show how far along it is.
+        if let Some((done, total, since, range)) = src.sweep.progress() {
+            ui.horizontal(|ui| {
+                widgets::spinner(ui);
+                ui.label(format!("Scanning {range}"));
+                if total > 0 {
+                    widgets::progress(ui, done, total, since);
+                } else {
+                    ui.weak("starting…");
+                }
+            });
+        }
         if empty {
             ui.separator();
             act = empty_state(ui, src.info);
@@ -353,17 +369,25 @@ impl MapView {
         }
         let mut open = self.selected.is_some();
         let mut pick: Option<usize> = None;
+        let mut drop: Option<usize> = None;
         egui::Panel::right("map_detail")
-            .resizable(false)
-            .exact_size(280.0)
+            .resizable(true)
+            .default_size(320.0)
+            .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
-                if let Some(i) = self.shown.as_deref().and_then(|s| self.index(s)) {
-                    act = self.detail(ui, i, src.busy, &mut pick);
-                }
+                act = act
+                    .take()
+                    .or(self.detail(ui, src.busy, &mut pick, &mut drop));
             });
         if !open {
             self.select(None);
         }
+        if let Some(i) = drop {
+            self.toggle(i);
+        }
+
+        // Left: roles and action items, as /mapnetwork's sidebar has them.
+        self.sidebar(ui, &mut focus_on);
 
         // Canvas.
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -395,7 +419,21 @@ impl MapView {
         self.interact(ui, rect, &resp);
         self.animate(&ctx);
         self.paint(ui, rect);
-        self.legend(ui, rect);
+        // With the sidebar shut, the roles go back on the canvas, beside a
+        // button that opens it again.
+        if !self.side {
+            if ui
+                .put(
+                    Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(24.0, 24.0)),
+                    egui::Button::new("›").corner_radius(6),
+                )
+                .on_hover_text("Show the roles and action items")
+                .clicked()
+            {
+                self.side = true;
+            }
+            self.legend(ui, rect);
+        }
         self.zoom_controls(ui, rect);
         act
     }
@@ -485,128 +523,268 @@ impl MapView {
         ui.separator();
     }
 
+    /// The detail panel: every selected card, stacked, the one clicked last
+    /// on top. Each has /mapnetwork's sections: action items, details and
+    /// connections, then what can be run against it.
     fn detail(
+        &self,
+        ui: &mut Ui,
+        busy: bool,
+        pick: &mut Option<usize>,
+        drop: &mut Option<usize>,
+    ) -> Option<Action> {
+        let mut act = None;
+        let mut sel = self.selection();
+        if sel.is_empty() {
+            sel.extend(self.shown.as_deref().and_then(|s| self.index(s)));
+        }
+        sel.reverse();
+        egui::ScrollArea::vertical()
+            .id_salt("map_detail_scroll")
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                if sel.len() > 1 {
+                    ui.horizontal(|ui| {
+                        ui.strong(format!("{} selected", sel.len()))
+                            .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("Copy all")
+                                .on_hover_text("Copy every selected card's details as text")
+                                .clicked()
+                            {
+                                let s: Vec<String> =
+                                    sel.iter().map(|&k| card_text(&self.map.nodes[k])).collect();
+                                widgets::copy(ui.ctx(), s.join("\n"));
+                                widgets::toast(format!("{} cards copied", sel.len()), true);
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+                for (k, &i) in sel.iter().enumerate() {
+                    if k > 0 {
+                        ui.add_space(6.0);
+                    }
+                    act = act
+                        .take()
+                        .or(self.card_panel(ui, i, busy, sel.len() > 1, pick, drop));
+                }
+            });
+        act
+    }
+
+    /// One card's section in the detail panel.
+    fn card_panel(
         &self,
         ui: &mut Ui,
         i: usize,
         busy: bool,
+        stacked: bool,
         pick: &mut Option<usize>,
+        drop: &mut Option<usize>,
     ) -> Option<Action> {
         let mut act = None;
         let n = &self.map.nodes[i];
         let dark = ui.visuals().dark_mode;
         let accent = zone_colour(n.zone, dark);
-        egui::ScrollArea::vertical()
-            .id_salt("map_detail_scroll")
+        let section = |ui: &mut Ui, title: &str| {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(title.to_uppercase())
+                    .small()
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        };
+        egui::Frame::group(ui.style())
+            .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.5)))
+            .inner_margin(8)
             .show(ui, |ui| {
-                ui.add_space(4.0);
-                let sel = self.selection();
-                if sel.len() > 1 {
-                    ui.horizontal(|ui| {
-                        ui.weak(format!("{} selected", sel.len()))
-                            .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
-                        if ui
-                            .small_button("Copy all")
-                            .on_hover_text("Copy every selected card's details as text")
-                            .clicked()
+                ui.set_width(ui.available_width());
+                // Header: kind, name, address; × takes it out of the selection.
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&n.kind).monospace().small().color(accent));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if stacked
+                            && ui
+                                .small_button("×")
+                                .on_hover_text("Take it out of the selection")
+                                .clicked()
                         {
-                            let s: Vec<String> =
-                                sel.iter().map(|&k| card_text(&self.map.nodes[k])).collect();
-                            widgets::copy(ui.ctx(), s.join("\n"));
-                            widgets::toast(format!("{} cards copied", sel.len()), true);
+                            *drop = Some(i);
                         }
                     });
-                    ui.separator();
-                }
-                ui.label(RichText::new(&n.kind).monospace().small().weak());
+                });
                 ui.label(RichText::new(&n.label).heading());
                 if !n.sub.is_empty() {
                     ui.label(RichText::new(&n.sub).monospace().color(accent));
                 }
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(n.zone.name()).small().color(accent));
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                    ui.painter().circle_filled(r.center(), 4.5, accent);
+                    ui.label(RichText::new(n.zone.name()).color(accent));
                     for c in &n.chips {
                         ui.label(RichText::new(c).small().weak());
                     }
                 });
-                for f in &n.flags {
-                    widgets::warning(ui, f);
-                }
-                ui.separator();
-                if let Some((p, link, port)) = &n.up {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.weak("Uplink");
-                        if ui.link(&self.map.nodes[*p].label).clicked() {
-                            *pick = Some(*p);
-                        }
-                        let how = match link {
-                            Link::Backbone => "WAN".to_string(),
-                            Link::Wired => port.clone().unwrap_or_else(|| "wired".into()),
-                            Link::Wireless => "wireless".into(),
-                            Link::Assumed => "assumed".into(),
-                        };
-                        ui.weak(format!("· {how}"));
-                    })
-                    .response
-                    .on_hover_text(match link {
-                        Link::Assumed => {
-                            "Assumed: it answered here, but its switch port isn't known"
-                        }
-                        _ => "From the data",
-                    });
-                }
-                let kids: Vec<usize> = (0..self.map.nodes.len())
-                    .filter(|&k| self.map.nodes[k].parent() == Some(i))
+
+                // Action items: its own flags and the findings that name it.
+                let findings: Vec<&crate::map::Finding> = self
+                    .map
+                    .findings
+                    .iter()
+                    .filter(|f| f.nodes.contains(&i))
                     .collect();
-                if !kids.is_empty() {
-                    ui.weak(format!("Below it ({})", kids.len()));
-                    for &k in kids.iter().take(14) {
-                        if ui.link(&self.map.nodes[k].label).clicked() {
-                            *pick = Some(k);
-                        }
+                if !n.flags.is_empty() || !findings.is_empty() {
+                    section(ui, "Action items");
+                    for f in &n.flags {
+                        widgets::warning(ui, f);
                     }
-                    if kids.len() > 14 {
-                        ui.weak(format!("…{} more", kids.len() - 14));
+                    for f in findings {
+                        let c = match f.sev {
+                            Sev::High => widgets::bad(),
+                            Sev::Med => widgets::warn(),
+                            Sev::Low => ui.visuals().weak_text_color(),
+                        };
+                        ui.horizontal_top(|ui| {
+                            ui.label(RichText::new(f.sev.label()).monospace().small().color(c));
+                            ui.add(egui::Label::new(&f.text).wrap());
+                        });
                     }
                 }
-                if !n.details.is_empty() {
-                    ui.separator();
-                    for d in &n.details {
+
+                // Details: what's known about it, then the source's notes.
+                section(ui, "Details");
+                let mut facts: Vec<(&str, String)> = Vec::new();
+                if let Some(ip) = n.ip {
+                    facts.push(("IP", ip.to_string()));
+                }
+                // A detail line already says more about the MAC (vendor, private).
+                if let Some(mac) = n.mac
+                    && !n.details.iter().any(|d| d.starts_with("MAC "))
+                {
+                    facts.push(("MAC", crate::net::mac::fmt(&mac)));
+                }
+                if !n.open.is_empty() {
+                    let ports: Vec<String> = n.open.iter().map(u16::to_string).collect();
+                    facts.push(("Open ports", ports.join(", ")));
+                }
+                if !n.seen_by.is_empty() {
+                    facts.push(("Seen by", n.seen_by.join(", ")));
+                }
+                egui::Grid::new(("map_facts", i))
+                    .num_columns(2)
+                    .spacing([8.0, 2.0])
+                    .show(ui, |ui| {
+                        for (k, v) in &facts {
+                            ui.weak(*k);
+                            ui.add(egui::Label::new(RichText::new(v).monospace()).selectable(true));
+                            ui.end_row();
+                        }
+                    });
+                for d in &n.details {
+                    ui.horizontal_top(|ui| {
+                        ui.weak("·");
                         ui.add(
                             egui::Label::new(RichText::new(d).small())
                                 .wrap()
                                 .selectable(true),
                         );
+                    });
+                }
+                if facts.is_empty() && n.details.is_empty() {
+                    ui.weak("Nothing more is known about it.");
+                }
+
+                // Connections: up to its parent, down to what hangs off it.
+                let kids: Vec<usize> = (0..self.map.nodes.len())
+                    .filter(|&k| self.map.nodes[k].parent() == Some(i))
+                    .collect();
+                if n.up.is_some() || !kids.is_empty() {
+                    section(ui, "Connections");
+                }
+                let row = |ui: &mut Ui, k: usize, via: String, tip: &str| -> bool {
+                    let m = &self.map.nodes[k];
+                    let c = zone_colour(m.zone, dark);
+                    let mut go = false;
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                        ui.painter().circle_filled(r.center(), 4.0, c);
+                        go = ui.link(&m.label).on_hover_text(tip).clicked();
+                        ui.weak(via);
+                    });
+                    go
+                };
+                if let Some((p, link, port)) = &n.up {
+                    let how = match link {
+                        Link::Backbone => "uplink · WAN".to_string(),
+                        Link::Wired => format!("uplink · {}", port.as_deref().unwrap_or("wired")),
+                        Link::Wireless => "uplink · wireless".into(),
+                        Link::Assumed => "uplink · assumed".into(),
+                    };
+                    let tip = match link {
+                        Link::Assumed => {
+                            "Assumed: it answered here, but its switch port isn't known"
+                        }
+                        _ => "Show it",
+                    };
+                    if row(ui, *p, how, tip) {
+                        *pick = Some(*p);
                     }
                 }
-                if !n.seen_by.is_empty() {
-                    ui.add_space(4.0);
-                    ui.weak(format!("Seen by: {}", n.seen_by.join(", ")));
+                for &k in kids.iter().take(14) {
+                    let via = match &self.map.nodes[k].up {
+                        Some((_, Link::Wireless, _)) => "wireless".to_string(),
+                        Some((_, Link::Assumed, _)) => "assumed".to_string(),
+                        Some((_, _, Some(port))) => port.clone(),
+                        _ => "below it".to_string(),
+                    };
+                    if row(ui, k, via, "Show it") {
+                        *pick = Some(k);
+                    }
                 }
-                ui.separator();
+                if kids.len() > 14 {
+                    ui.weak(format!("…{} more below it", kids.len() - 14));
+                }
+
+                ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
                     if let Some(ip) = n.ip {
                         let tip = if busy {
-                            "Wait for Ping and Port Check to finish"
+                            "Wait for the running test to finish"
                         } else {
                             ""
                         };
-                        if ui
-                            .add_enabled(!busy, egui::Button::new("Ping"))
-                            .on_hover_text("Ping it 4 times (opens Ping)")
-                            .on_disabled_hover_text(tip)
-                            .clicked()
-                        {
-                            act = Some(Action::Ping(ip.to_string()));
-                        }
-                        if ui
-                            .add_enabled(!busy, egui::Button::new("Port Check"))
-                            .on_hover_text("Check its common ports (opens Port Check)")
-                            .on_disabled_hover_text(tip)
-                            .clicked()
-                        {
-                            act = Some(Action::Ports(ip.to_string()));
-                        }
+                        let mut run = |ui: &mut Ui, label: &str, hover: &str, a: Action| {
+                            if ui
+                                .add_enabled(!busy, egui::Button::new(label))
+                                .on_hover_text(hover)
+                                .on_disabled_hover_text(tip)
+                                .clicked()
+                            {
+                                act = Some(a);
+                            }
+                        };
+                        run(
+                            ui,
+                            "Ping",
+                            "Ping it 4 times (opens Ping)",
+                            Action::Ping(ip.to_string()),
+                        );
+                        run(
+                            ui,
+                            "Port Check",
+                            "Check its common ports (opens Port Check)",
+                            Action::Ports(ip.to_string()),
+                        );
+                        run(
+                            ui,
+                            "Traceroute",
+                            "Trace the route to it (opens Traceroute)",
+                            Action::Trace(ip.to_string()),
+                        );
                         let web = [
                             (443, "https", ""),
                             (8443, "https", ":8443"),
@@ -1150,6 +1328,139 @@ impl MapView {
             let mid = self.to_world(rect, rect.center());
             self.aim = Some((rect.size() / 2.0 - mid.to_vec2() * z, z));
             self.follow = false;
+        }
+    }
+
+    /// Roles to fade in and out, and the action items, worst first: the
+    /// sidebar /mapnetwork's maps have.
+    fn sidebar(&mut self, ui: &mut Ui, focus: &mut Option<Vec<usize>>) {
+        let dark = ui.visuals().dark_mode;
+        let counts: Vec<(Zone, usize)> = Zone::ALL
+            .iter()
+            .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
+            .filter(|c| c.1 > 0 && c.0 != Zone::Internet)
+            .collect();
+        let mut findings: Vec<(Sev, String, Vec<usize>)> = self
+            .map
+            .findings
+            .iter()
+            .map(|f| (f.sev, f.text.clone(), f.nodes.clone()))
+            .collect();
+        findings.sort_by_key(|f| f.0);
+        let (mut hide, mut flip) = (false, None);
+        egui::Panel::left("map_side")
+            .resizable(true)
+            .default_size(230.0)
+            .size_range(180.0..=380.0)
+            .show_collapsible(ui, &mut self.side, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(format!("{} cards", self.map.nodes.len()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        hide = ui
+                            .small_button("‹")
+                            .on_hover_text("Hide this panel")
+                            .clicked();
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("map_side_scroll")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        egui::CollapsingHeader::new(RichText::new("ROLES").small().strong())
+                            .id_salt("map_side_roles")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                for (zone, n) in &counts {
+                                    let off = self.hidden.contains(zone);
+                                    let c = zone_colour(*zone, dark);
+                                    let r = ui
+                                        .horizontal(|ui| {
+                                            let (d, _) = ui.allocate_exact_size(
+                                                vec2(12.0, 12.0),
+                                                Sense::hover(),
+                                            );
+                                            if off {
+                                                ui.painter().circle_stroke(
+                                                    d.center(),
+                                                    4.5,
+                                                    Stroke::new(1.5, c),
+                                                );
+                                            } else {
+                                                ui.painter().circle_filled(d.center(), 5.0, c);
+                                            }
+                                            let text = RichText::new(zone.name());
+                                            ui.label(if off { text.weak() } else { text });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| ui.weak(n.to_string()),
+                                            );
+                                        })
+                                        .response
+                                        .interact(Sense::click())
+                                        .on_hover_text("Click to fade this role out or back in");
+                                    if r.clicked() {
+                                        flip = Some(*zone);
+                                    }
+                                    if r.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                }
+                            });
+                        if !findings.is_empty() {
+                            egui::CollapsingHeader::new(
+                                RichText::new(format!("ACTION ITEMS ({})", findings.len()))
+                                    .small()
+                                    .strong(),
+                            )
+                            .id_salt("map_side_actions")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                for (sev, text, nodes) in &findings {
+                                    let c = match sev {
+                                        Sev::High => widgets::bad(),
+                                        Sev::Med => widgets::warn(),
+                                        Sev::Low => ui.visuals().weak_text_color(),
+                                    };
+                                    let r = ui
+                                        .horizontal_top(|ui| {
+                                            let (d, _) = ui.allocate_exact_size(
+                                                vec2(10.0, 16.0),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().circle_filled(
+                                                d.center() - vec2(0.0, 2.0),
+                                                4.0,
+                                                c,
+                                            );
+                                            ui.add(egui::Label::new(text).wrap());
+                                        })
+                                        .response;
+                                    if !nodes.is_empty() {
+                                        let r = r
+                                            .interact(Sense::click())
+                                            .on_hover_text("Show on the map");
+                                        if r.clicked() {
+                                            *focus = Some(nodes.clone());
+                                        }
+                                        if r.hovered() {
+                                            ui.ctx()
+                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                    }
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        }
+                    });
+            });
+        if hide {
+            self.side = false;
+        }
+        if let Some(z) = flip
+            && !self.hidden.remove(&z)
+        {
+            self.hidden.insert(z);
         }
     }
 
