@@ -3,7 +3,8 @@
 //! findings band. It rebuilds as the sweep finds hosts, so a scan can be
 //! watched filling in the map.
 
-use super::layout::{self, CARD, Layout};
+use super::layout::{self, CARD, Layout, Mode};
+use super::runs::{CardRuns, Out, Run, State, Tool};
 use super::{Input, Link, Map, Node, Sev, Zone};
 use crate::net::hostinfo::HostInfo;
 use crate::tools::{export::ExportTool, sweep::SweepTool};
@@ -28,14 +29,64 @@ pub enum Action {
     Bundle,
     /// The accuracy note was closed: don't show it again.
     HideNote,
+    /// Read the map's files again and rebuild it.
+    Reload,
+    /// A layout mode was picked: remember it.
+    Layout(Mode),
+}
+
+/// Which end devices get cards.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Clients {
+    #[default]
+    Off,
+    /// Up to 10 per switch or AP, the rest in a +N more card, fewer per
+    /// uplink on a big map.
+    Some,
+    /// A card for every one.
+    All,
+}
+
+impl Clients {
+    const ALL: [Clients; 3] = [Clients::Off, Clients::Some, Clients::All];
+
+    fn name(self) -> &'static str {
+        match self {
+            Clients::Off => "Off",
+            Clients::Some => "Some",
+            Clients::All => "All",
+        }
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            Clients::Off => "No end devices: a count on each switch or AP instead",
+            Clients::Some => {
+                "Up to 10 per switch or AP, the rest in a +N more card (Show all on it opens \
+                 that one up)"
+            }
+            Clients::All => {
+                "A card for every end device. A big site can mean hundreds of cards; Zones \
+                 keeps them tidy"
+            }
+        }
+    }
 }
 
 /// What the detail panel asked for.
 enum PanelEv {
+    /// Show every client under this uplink, or fold them back.
+    Open(usize, bool),
     /// × on a card: take it out of the selection.
     Drop(usize),
     /// The pin: keep it selected, or not.
     Keep(usize),
+    /// Run a spot check from the card.
+    Run(usize, Tool),
+    /// Stop a card's run, keeping what it found.
+    Stop(usize, Tool),
+    /// × on a run: take its result out of the card.
+    Clear(usize, Tool),
     /// A card dragged from one place in the stack to another.
     Move(usize, usize),
 }
@@ -44,7 +95,8 @@ pub struct Sources<'a> {
     pub sweep: &'a SweepTool,
     pub export: &'a ExportTool,
     pub info: &'a HostInfo,
-    /// Ping or Port Check is running: their buttons wait.
+    /// Ping, Port Check or Traceroute is running in its own tab: a card's
+    /// "Open in tab" waits for it. The card's own runs don't.
     pub busy: bool,
     /// Show the accuracy note (until the user closes it).
     pub note: bool,
@@ -57,7 +109,9 @@ const MAX_ZOOM: f32 = 2.5;
 pub struct MapView {
     map: Map,
     key: u64,
-    clients: bool,
+    clients: Clients,
+    /// Uplinks whose clients are all shown (Show all on a +N more card).
+    open: HashSet<String>,
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
@@ -65,6 +119,9 @@ pub struct MapView {
     also: Vec<String>,
     /// Cards pinned in the selection: a plain click elsewhere keeps them.
     kept: Vec<String>,
+    /// Where each pinned card sits in the detail panel. New cards fill
+    /// around them; only dragging moves them.
+    slots: HashMap<String, usize>,
     /// The detail panel's order, top first; dragged by hand.
     order: Vec<String>,
     /// The card a right-click opened the menu for.
@@ -76,8 +133,8 @@ pub struct MapView {
     /// Where each card is drawn now, easing toward the layout.
     pos: HashMap<String, Pos2>,
     born: HashMap<String, f64>,
-    /// Cards the user dragged somewhere.
-    pinned: HashMap<String, Pos2>,
+    /// Cards the user dragged somewhere on the canvas.
+    placed: HashMap<String, Pos2>,
     pan: Vec2,
     zoom: f32,
     /// (pan, zoom) the view is easing to.
@@ -89,18 +146,151 @@ pub struct MapView {
     built_at: f64,
     /// The left sidebar is open (closed: a › button on the canvas).
     side: bool,
+    /// Spot checks run from cards, with their results.
+    runs: CardRuns,
+    /// The layout mode picked; None until one is (then Sites when the map
+    /// has sites, else Cluster).
+    mode: Option<Mode>,
+    /// Rebuild on the next frame even if nothing seems to have changed.
+    stale: bool,
+    /// The map has two or more sites (Sites mode is offered).
+    multi_site: bool,
 }
 
+/// Flag on a pinned card that's missing from the latest data.
+pub const GONE_FLAG: &str =
+    "Not in the latest data. Kept because it's pinned: check it, then unpin it or × to let it go.";
+
 impl MapView {
-    pub fn new() -> Self {
+    pub fn new(mode: Option<Mode>) -> Self {
         Self {
             follow: true,
             side: true,
+            mode,
             ..Default::default()
         }
     }
 
-    fn input<'a>(&self, src: &'a Sources) -> Input<'a> {
+    /// The layout in use: the one picked, if this map can do it.
+    fn mode(&self) -> Mode {
+        match self.mode {
+            Some(Mode::Sites) | None if self.multi_site => Mode::Sites,
+            Some(Mode::Sites) | None => Mode::Cluster,
+            Some(m) => m,
+        }
+    }
+
+    /// A card's colour: its role's, or the gone red.
+    fn accent(&self, n: &Node) -> Color32 {
+        if n.gone {
+            gone_colour()
+        } else {
+            zone_colour(n.zone)
+        }
+    }
+
+    /// Rebuild from the data on the next frame (Reload map).
+    pub fn reload(&mut self) {
+        self.stale = true;
+    }
+
+    /// Pinned cards missing from `new`, carried over from `old` and marked
+    /// gone, under their nearest ancestor that's still there. A card only
+    /// folded away (clients off, or past the cap) isn't gone: its pin just
+    /// lapses, as before. One whose id changed (a sweep host a backup now
+    /// knows by MAC) is found by MAC or IP, and its pin moves to the new
+    /// card: returned as (old id, new id).
+    fn carry_gone(&self, old: &Map, new: &mut Map) -> Vec<(String, String)> {
+        let mut moved = Vec::new();
+        if new.nodes.is_empty() {
+            return moved;
+        }
+        // Only cards from the data count as parents or matches, never the
+        // gone ones pushed below.
+        let base = new.nodes.len();
+        for id in &self.kept {
+            if new.nodes[..base].iter().any(|n| n.id == *id) || new.folded.contains(id) {
+                continue;
+            }
+            let Some(o) = old.nodes.iter().find(|n| n.id == *id) else {
+                continue;
+            };
+            if !o.gone
+                && let Some(n) = new.nodes[..base].iter().find(|n| {
+                    !self.kept.contains(&n.id)
+                        && ((o.mac.is_some() && n.mac == o.mac) || (o.ip.is_some() && n.ip == o.ip))
+                })
+            {
+                moved.push((id.clone(), n.id.clone()));
+                continue;
+            }
+            // Its parent, or the nearest card above it still in the data.
+            let parent = old
+                .path(old.nodes.iter().position(|n| n.id == *id).unwrap_or(0))
+                .into_iter()
+                .rev()
+                .skip(1)
+                .find_map(|a| {
+                    new.nodes[..base]
+                        .iter()
+                        .position(|n| n.id == old.nodes[a].id)
+                })
+                .unwrap_or(0);
+            let mut g = o.clone();
+            g.up = Some((parent, Link::Assumed, None));
+            if !g.gone {
+                g.gone = true;
+                g.kind = "NOT IN LATEST DATA".into();
+                g.flags.insert(0, GONE_FLAG.into());
+            }
+            new.nodes.push(g);
+        }
+        moved
+    }
+
+    /// A pinned card's id changed: the pin, its panel slot, the selection
+    /// and its card results move to the new id.
+    fn rename(&mut self, from: &str, to: &str) {
+        for v in [&mut self.kept, &mut self.also, &mut self.order] {
+            for s in v.iter_mut().filter(|s| *s == from) {
+                *s = to.to_string();
+            }
+        }
+        if self.selected.as_deref() == Some(from) {
+            self.selected = Some(to.to_string());
+        }
+        if let Some(k) = self.slots.remove(from) {
+            self.slots.insert(to.to_string(), k);
+        }
+        if let Some(p) = self.pos.remove(from) {
+            self.pos.insert(to.to_string(), p);
+        }
+        self.runs.rename(from, to);
+    }
+
+    /// Take out gone cards that were let go (unpinned or ×).
+    fn drop_released(&mut self, ctx: &egui::Context) {
+        if !self
+            .map
+            .nodes
+            .iter()
+            .any(|n| n.gone && !self.kept.contains(&n.id))
+        {
+            return;
+        }
+        // Gone cards sit at the end and hang only off cards from the data
+        // (never off each other), so taking them out moves no parent.
+        let kept = &self.kept;
+        self.map.nodes.retain(|n| !n.gone || kept.contains(&n.id));
+        self.relayout(ctx);
+    }
+
+    /// Keep cards' runs going while another tab is shown.
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        self.runs.poll(ctx);
+    }
+
+    fn input<'a>(&'a self, src: &'a Sources) -> Input<'a> {
         let sw = src.sweep;
         Input {
             sweep: sw.seen(),
@@ -112,15 +302,22 @@ impl MapView {
             unifi: src.export.unifi().map(|u| u.1.json.as_str()),
             sonicwall: src.export.sonicwall().map(|s| s.1.json.as_str()),
             mapnetwork: src.export.mapnetwork().map(|m| m.1),
-            clients: self.clients,
+            clients: self.clients != Clients::Off,
+            all_clients: self.clients == Clients::All,
+            open: Some(&self.open),
         }
     }
 
     /// Rebuild when anything feeding the map changed.
     fn refresh(&mut self, ctx: &egui::Context, src: &Sources) {
+        self.drop_released(ctx);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         src.sweep.generation().hash(&mut h);
+        src.export.generation().hash(&mut h);
         self.clients.hash(&mut h);
+        let mut open: Vec<&String> = self.open.iter().collect();
+        open.sort();
+        open.hash(&mut h);
         if let Some((p, r)) = src.export.unifi() {
             (p, r.json.len()).hash(&mut h);
         }
@@ -132,7 +329,7 @@ impl MapView {
         }
         (src.info.gateway, src.info.lan, src.info.wan).hash(&mut h);
         let key = h.finish();
-        if key == self.key {
+        if key == self.key && !self.stale {
             return;
         }
         // A sweep adds hosts every frame: rebuild a few times a second.
@@ -143,17 +340,23 @@ impl MapView {
         }
         self.built_at = now;
         self.key = key;
+        self.stale = false;
         let input = self.input(src);
-        self.map = if input.is_empty() {
+        let mut map = if input.is_empty() {
             Map::default()
         } else {
             super::build(&input)
         };
+        for (from, to) in self.carry_gone(&self.map, &mut map) {
+            self.rename(&from, &to);
+        }
+        self.map = map;
         self.relayout(ctx);
     }
 
     fn relayout(&mut self, ctx: &egui::Context) {
-        self.lay = layout::layout(&self.map, &|_| true);
+        self.multi_site = self.map.sites().len() > 1;
+        self.lay = layout::layout_in(&self.map, &|_| true, self.mode());
         let now = ctx.input(|i| i.time);
         // New cards grow out of their parent.
         for (i, n) in self.map.nodes.iter().enumerate() {
@@ -173,6 +376,8 @@ impl MapView {
         self.born.retain(|k, _| ids.contains(k.as_str()));
         self.also.retain(|s| ids.contains(s.as_str()));
         self.kept.retain(|s| ids.contains(s.as_str()));
+        self.slots.retain(|s, _| ids.contains(s.as_str()));
+        self.runs.keep_only(&ids);
         if self
             .selected
             .as_ref()
@@ -199,14 +404,21 @@ impl MapView {
         v
     }
 
-    /// Pin a card in the selection, or let it go.
+    /// Pin a card in the selection, or let it go. A pinned card holds the
+    /// panel slot it's in (the top, if it isn't in the panel yet); let go,
+    /// it stays put and moves with the rest from then on.
     fn keep(&mut self, i: usize) {
         let id = self.map.nodes[i].id.clone();
         match self.kept.iter().position(|s| *s == id) {
             Some(k) => {
                 self.kept.remove(k);
+                self.slots.remove(&id);
             }
-            None => self.kept.push(id),
+            None => {
+                let at = self.order.iter().position(|s| *s == id).unwrap_or(0);
+                self.slots.insert(id.clone(), at);
+                self.kept.push(id);
+            }
         }
     }
 
@@ -214,18 +426,52 @@ impl MapView {
         self.kept.contains(&self.map.nodes[i].id)
     }
 
-    /// The panel's cards in their order: new ones on top, then as dragged.
+    /// The panel's cards in their order: pinned ones in their slots, the
+    /// rest around them, new ones on top, then as dragged.
     fn ordered(&mut self) -> Vec<usize> {
         let sel = self.selection();
         let ids: Vec<String> = sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
-        self.order.retain(|s| ids.contains(s));
+        self.slots.retain(|s, _| self.kept.contains(s));
+        let mut free: Vec<String> = self
+            .order
+            .iter()
+            .filter(|s| ids.contains(s) && !self.slots.contains_key(*s))
+            .cloned()
+            .collect();
         // Selection runs oldest to newest, so the newest lands on top.
         for id in &ids {
-            if !self.order.contains(id) {
-                self.order.insert(0, id.clone());
+            if !self.slots.contains_key(id) && !free.contains(id) {
+                free.insert(0, id.clone());
             }
         }
+        // Pinned cards go back in their slots, lowest first so each insert
+        // leaves the ones above it alone. A slot past the end shows last but
+        // is kept, so the card returns to it as the panel fills up again.
+        let mut fixed: Vec<(usize, &String)> = ids
+            .iter()
+            .filter_map(|s| self.slots.get(s).map(|&k| (k, s)))
+            .collect();
+        fixed.sort();
+        for (k, id) in fixed {
+            free.insert(k.min(free.len()), id.clone());
+        }
+        self.order = free;
         self.order.iter().filter_map(|s| self.index(s)).collect()
+    }
+
+    /// A card dragged from one panel slot to another. Pinned cards take the
+    /// slots they're now shown in.
+    fn move_card(&mut self, from: usize, to: usize) {
+        if from >= self.order.len() || to >= self.order.len() {
+            return;
+        }
+        let id = self.order.remove(from);
+        self.order.insert(to, id);
+        for (k, id) in self.order.iter().enumerate() {
+            if let Some(slot) = self.slots.get_mut(id) {
+                *slot = k;
+            }
+        }
     }
 
     /// One card selected, the rest let go.
@@ -239,6 +485,7 @@ impl MapView {
         let id = self.map.nodes[i].id.clone();
         if let Some(k) = self.kept.iter().position(|s| *s == id) {
             self.kept.remove(k);
+            self.slots.remove(&id);
             if self.selected.as_deref() == Some(id.as_str()) {
                 self.selected = self.also.pop();
             }
@@ -255,7 +502,7 @@ impl MapView {
 
     fn target(&self, i: usize) -> Option<Pos2> {
         let n = &self.map.nodes[i];
-        self.pinned.get(&n.id).copied().or(self.lay.pos[i])
+        self.placed.get(&n.id).copied().or(self.lay.pos[i])
     }
 
     fn index(&self, id: &str) -> Option<usize> {
@@ -271,13 +518,16 @@ impl MapView {
             || n.details.iter().any(|d| d.to_lowercase().contains(&q))
     }
 
-    /// Bounds of the laid-out map, with pinned cards.
+    /// Bounds of the laid-out map, with cards dragged elsewhere.
     fn bounds(&self) -> Rect {
         let mut r = Rect::NOTHING;
         for i in 0..self.map.nodes.len() {
             if let Some(p) = self.target(i) {
                 r = r.union(Rect::from_min_size(p, CARD));
             }
+        }
+        for b in &self.lay.boxes {
+            r = r.union(b.rect);
         }
         r
     }
@@ -328,8 +578,16 @@ impl MapView {
                 }
             }
             ui.separator();
-            ui.checkbox(&mut self.clients, "Clients")
-                .on_hover_text("Show end devices (up to 10 per switch or AP)");
+            ui.label("Clients");
+            for c in Clients::ALL {
+                if ui
+                    .selectable_label(self.clients == c, c.name())
+                    .on_hover_text(c.tip())
+                    .clicked()
+                {
+                    self.clients = c;
+                }
+            }
             ui.separator();
             let subnet = src
                 .info
@@ -365,12 +623,42 @@ impl MapView {
                     fit = true;
                 }
                 if ui
-                    .add_enabled(!self.pinned.is_empty(), egui::Button::new("Re-layout"))
+                    .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
                     .on_hover_text("Undo card moves")
                     .clicked()
                 {
-                    self.pinned.clear();
+                    self.placed.clear();
                     fit = true;
+                }
+                if ui
+                    .button("⟲ Reload")
+                    .on_hover_text(
+                        "Read the map's files again and rebuild it, keeping pins and the \
+                         selection. (It already updates by itself as a sweep finds hosts or a \
+                         file is loaded.)",
+                    )
+                    .clicked()
+                {
+                    act = Some(Action::Reload);
+                }
+                ui.separator();
+                let now = self.mode();
+                for m in Mode::ALL {
+                    if m == Mode::Sites && !self.multi_site {
+                        continue;
+                    }
+                    if ui
+                        .selectable_label(now == m, m.name())
+                        .on_hover_text(m.tip())
+                        .clicked()
+                        && now != m
+                    {
+                        self.mode = Some(m);
+                        self.placed.clear();
+                        self.relayout(&ctx);
+                        fit = true;
+                        act = Some(Action::Layout(m));
+                    }
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -390,6 +678,7 @@ impl MapView {
                                 &self.map,
                                 &pos,
                                 &self.lay.stacked,
+                                &self.lay.boxes,
                                 ui.visuals().dark_mode,
                             ),
                         );
@@ -446,9 +735,23 @@ impl MapView {
         match ev {
             Some(PanelEv::Drop(i)) => self.toggle(i),
             Some(PanelEv::Keep(i)) => self.keep(i),
-            Some(PanelEv::Move(from, to)) if from < self.order.len() && to < self.order.len() => {
-                let id = self.order.remove(from);
-                self.order.insert(to, id);
+            Some(PanelEv::Move(from, to)) => self.move_card(from, to),
+            Some(PanelEv::Run(i, tool)) => {
+                let n = &self.map.nodes[i];
+                if let Some(ip) = n.ip {
+                    self.runs.start(&n.id, tool, ip.into());
+                    self.runs.poll(ui.ctx());
+                }
+            }
+            Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
+            Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
+            Some(PanelEv::Open(p, on)) => {
+                let id = self.map.nodes[p].id.clone();
+                if on {
+                    self.open.insert(id);
+                } else {
+                    self.open.remove(&id);
+                }
             }
             _ => {}
         }
@@ -664,8 +967,7 @@ impl MapView {
     ) -> (Option<Action>, egui::Response) {
         let mut act = None;
         let n = &self.map.nodes[i];
-        let dark = ui.visuals().dark_mode;
-        let accent = zone_colour(n.zone, dark);
+        let accent = self.accent(n);
         let section = |ui: &mut Ui, title: &str| {
             ui.add_space(6.0);
             ui.label(
@@ -720,9 +1022,9 @@ impl MapView {
                         if ui
                             .add(egui::Button::new(pin).small().selected(kept))
                             .on_hover_text(if kept {
-                                "Pinned: stays selected when you click other cards. Click to unpin"
+                                "Pinned: stays selected and keeps its place here. Click to unpin"
                             } else {
-                                "Pin: keep it selected when you click other cards"
+                                "Pin: keep it selected and in this place in the panel"
                             })
                             .clicked()
                         {
@@ -820,7 +1122,7 @@ impl MapView {
                 }
                 let row = |ui: &mut Ui, k: usize, via: String, tip: &str| -> bool {
                     let m = &self.map.nodes[k];
-                    let c = zone_colour(m.zone, dark);
+                    let c = zone_colour(m.zone);
                     let mut go = false;
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
@@ -864,40 +1166,39 @@ impl MapView {
 
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(ip) = n.ip {
-                        let tip = if busy {
-                            "Wait for the running test to finish"
-                        } else {
-                            ""
-                        };
-                        let mut run = |ui: &mut Ui, label: &str, hover: &str, a: Action| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if n.ip.is_some() {
+                        for (tool, label, hover) in [
+                            (
+                                Tool::Ping,
+                                "Ping",
+                                "Ping it 4 times; the result shows below",
+                            ),
+                            (
+                                Tool::Ports,
+                                "Ports",
+                                "Check its common ports; the result shows below",
+                            ),
+                            (
+                                Tool::Trace,
+                                "Trace",
+                                "Trace the route to it; the result shows below",
+                            ),
+                        ] {
                             if ui
-                                .add_enabled(!busy, egui::Button::new(label))
+                                .add_enabled(
+                                    !self.runs.active(&n.id, tool),
+                                    egui::Button::new(label).small(),
+                                )
                                 .on_hover_text(hover)
-                                .on_disabled_hover_text(tip)
+                                .on_disabled_hover_text("Running: see below")
                                 .clicked()
                             {
-                                act = Some(a);
+                                *ev = Some(PanelEv::Run(i, tool));
                             }
-                        };
-                        run(
-                            ui,
-                            "Ping",
-                            "Ping it 4 times (opens Ping)",
-                            Action::Ping(ip.to_string()),
-                        );
-                        run(
-                            ui,
-                            "Port Check",
-                            "Check its common ports (opens Port Check)",
-                            Action::Ports(ip.to_string()),
-                        );
-                        run(
-                            ui,
-                            "Traceroute",
-                            "Trace the route to it (opens Traceroute)",
-                            Action::Trace(ip.to_string()),
-                        );
+                        }
+                    }
+                    if let Some(ip) = n.ip {
                         let web = [
                             (443, "https", ""),
                             (8443, "https", ":8443"),
@@ -907,16 +1208,36 @@ impl MapView {
                         .find(|(p, ..)| n.open.contains(p));
                         if let Some((_, scheme, port)) = web
                             && ui
-                                .button("Open web page")
-                                .on_hover_text(format!("{scheme}://{ip}{port} in your browser"))
+                                .small_button("Web")
+                                .on_hover_text(format!(
+                                    "Open {scheme}://{ip}{port} in your browser"
+                                ))
                                 .clicked()
                         {
                             ui.ctx()
                                 .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
                         }
                     }
+                    // A +N more card opens its uplink up; an opened uplink folds back.
+                    if n.id.starts_with("more:")
+                        && let Some(p) = n.parent()
+                        && ui
+                            .small_button(format!("Show all {}", n.label.trim_start_matches('+')))
+                            .on_hover_text("A card for each of them")
+                            .clicked()
+                    {
+                        *ev = Some(PanelEv::Open(p, true));
+                    }
+                    if self.open.contains(&n.id)
+                        && ui
+                            .small_button("Fold clients")
+                            .on_hover_text("Back to 10 cards and a +N more")
+                            .clicked()
+                    {
+                        *ev = Some(PanelEv::Open(i, false));
+                    }
                     if ui
-                        .button("Copy")
+                        .small_button("Copy")
                         .on_hover_text("Copy this card's details as text")
                         .clicked()
                     {
@@ -924,6 +1245,33 @@ impl MapView {
                         widgets::toast("Card details copied", true);
                     }
                 });
+
+                let runs = self.runs.runs(&n.id);
+                if !runs.is_empty() {
+                    ui.add_space(4.0);
+                    egui::CollapsingHeader::new(RichText::new("RESULTS").small().strong())
+                        .id_salt(("map_runs", &n.id))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            for r in runs {
+                                if let Some(e) = run_section(ui, &n.id, r, busy) {
+                                    match e {
+                                        RunEv::Again => *ev = Some(PanelEv::Run(i, r.tool)),
+                                        RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
+                                        RunEv::Clear => *ev = Some(PanelEv::Clear(i, r.tool)),
+                                        RunEv::Tab => {
+                                            let ip = r.ip.to_string();
+                                            act = Some(match r.tool {
+                                                Tool::Ping => Action::Ping(ip),
+                                                Tool::Ports => Action::Ports(ip),
+                                                Tool::Trace => Action::Trace(ip),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                }
             });
         (act, frame.response)
     }
@@ -966,7 +1314,7 @@ impl MapView {
                     };
                     for id in group {
                         let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
-                        self.pinned.insert(id.clone(), at);
+                        self.placed.insert(id.clone(), at);
                         self.pos.insert(id, at);
                     }
                     self.follow = false;
@@ -1124,7 +1472,6 @@ impl MapView {
     fn paint(&self, ui: &Ui, rect: Rect) {
         let p = ui.painter_at(rect);
         let vis = ui.visuals();
-        let dark = vis.dark_mode;
         let z = self.zoom;
         let now = ui.input(|i| i.time);
         let focused = ui.input(|i| i.viewport().focused != Some(false));
@@ -1176,71 +1523,97 @@ impl MapView {
                 .map(|w| self.to_screen(rect, *w))
         };
 
+        // Boxes (Zones and Sites modes), under everything else.
+        for b in &self.lay.boxes {
+            let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
+            if !r.intersects(rect) {
+                continue;
+            }
+            let c = b.zone.map_or(vis.weak_text_color(), zone_colour);
+            let a = if b.zone.is_some_and(|zn| self.hidden.contains(&zn)) {
+                0.2
+            } else {
+                1.0
+            };
+            p.rect(
+                r,
+                (10.0 * z) as u8,
+                c.gamma_multiply(0.07 * a),
+                Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
+                StrokeKind::Inside,
+            );
+            if z >= 0.25 {
+                p.text(
+                    r.min + vec2(layout::BOX_PAD * z, layout::BOX_TITLE * z / 2.0),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{} · {}", b.title.to_uppercase(), b.count),
+                    FontId::proportional((11.0 * z).max(7.0)),
+                    c.gamma_multiply(a),
+                );
+            }
+        }
+
         // Links.
+        let glow = glow_strength(vis);
         let mut flows = false;
-        for (i, n) in self.map.nodes.iter().enumerate() {
-            let Some((up, link, label)) = &n.up else {
-                continue;
+        // One link's line: halo, stroke, the flow when lit, and a label at
+        // its end. True while it flows.
+        let draw = |pts: &[Pos2],
+                    base: Color32,
+                    lit_colour: Color32,
+                    link: Link,
+                    w: f32,
+                    alpha: f32,
+                    on: bool,
+                    label: Option<(Pos2, egui::Align2, &str)>|
+         -> bool {
+            // Lit, an assumed link takes its card's colour rather than grey,
+            // so the whole path reads as one.
+            let base = if on && link == Link::Assumed {
+                lit_colour
+            } else {
+                base
             };
-            let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
-            else {
-                continue;
-            };
-            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i])
-                .into_iter()
-                .map(|w| self.to_screen(rect, w))
-                .collect();
-            let alpha = fade(i).min(fade(*up));
-            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
-            let base = match link {
-                Link::Backbone => zone_colour(Zone::Gateway, dark),
-                Link::Assumed => vis.weak_text_color(),
-                _ => zone_colour(n.zone, dark),
-            };
-            let w = match link {
-                Link::Backbone => 3.0,
-                _ => 1.6,
-            } * z.clamp(0.6, 1.4)
-                + if on { 0.8 } else { 0.0 };
-            let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.6 });
+            let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
+            // A soft halo in the link's colour under it (not under the
+            // grey assumed ones, which should stay quiet unless lit).
+            if (glow > 0.0 || on) && (link != Link::Assumed || on) {
+                let halo = Stroke::new(
+                    w + 5.0 * z.clamp(0.6, 1.4),
+                    base.gamma_multiply(glow.max(0.12) * alpha * if on { 1.6 } else { 1.0 }),
+                );
+                if link == Link::Wireless {
+                    p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
+                } else {
+                    p.add(Shape::line(pts.to_vec(), halo));
+                }
+            }
             let stroke = Stroke::new(w, c);
             match link {
-                Link::Wireless => p.extend(Shape::dashed_line(&pts, stroke, 7.0 * z, 5.0 * z)),
-                Link::Assumed => p.extend(Shape::dashed_line(&pts, stroke, 2.5 * z, 4.0 * z)),
+                Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
+                Link::Assumed => p.extend(Shape::dashed_line(pts, stroke, 2.5 * z, 4.0 * z)),
                 _ => {
-                    p.add(Shape::line(pts.clone(), stroke));
+                    p.add(Shape::line(pts.to_vec(), stroke));
                 }
             }
             if on {
-                // Packets flowing away from the internet.
-                // A growing offset moves the dashes downstream; kept within
-                // one period (a negative one draws past the line's start).
-                let off = (now as f32 * 40.0 * z).rem_euclid(18.0 * z);
-                let glow = Stroke::new(w + 1.0, Color32::WHITE.gamma_multiply(0.55 * alpha));
-                p.extend(Shape::dashed_line_with_offset(
-                    &pts,
-                    glow,
-                    &[4.0 * z],
-                    &[14.0 * z],
-                    off,
-                ));
-                flows = true;
+                // Packets flowing away from the internet: glowing dots in a
+                // light tint of the link's colour, moving downstream.
+                let gap = 36.0 * z.max(0.6);
+                let off = (now as f32 * 60.0 * z.max(0.6)).rem_euclid(gap);
+                let core = base
+                    .lerp_to_gamma(Color32::WHITE, 0.6)
+                    .gamma_multiply(alpha);
+                let r = (w * 0.75).max(1.6);
+                for at in along(pts, off, gap) {
+                    p.circle_filled(at, r * 2.4, base.gamma_multiply(0.22 * alpha));
+                    p.circle_filled(at, r, core);
+                }
             }
-            if let Some(l) = label
+            if let Some((pos, align, l)) = label
                 && z >= 0.7
                 && alpha > 0.3
             {
-                let end = *pts.last().expect("route has points");
-                // A stacked card's stub is short: just the number over it.
-                let (pos, align, l) = if self.lay.stacked[i] {
-                    (
-                        end - vec2(layout::INDENT / 4.0 * z, 2.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        l.trim_start_matches("port "),
-                    )
-                } else {
-                    (end + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, l.as_str())
-                };
                 p.text(
                     pos,
                     align,
@@ -1249,6 +1622,123 @@ impl MapView {
                     vis.weak_text_color().gamma_multiply(alpha),
                 );
             }
+            on
+        };
+        let width = |link: Link, on: bool| {
+            let base = if link == Link::Backbone { 3.2 } else { 2.0 };
+            base * z.clamp(0.6, 1.4) + if on { 0.8 } else { 0.0 }
+        };
+        let colour = |n: &Node, link: Link| match link {
+            Link::Backbone => zone_colour(Zone::Gateway),
+            Link::Assumed => vis.weak_text_color(),
+            _ => self.accent(n),
+        };
+        let group = |i: usize| self.lay.group.get(i).copied().flatten();
+        // Links from one card into another box fold into one trunk:
+        // (parent, box) → (children, any lit, brightest).
+        let mut trunks: std::collections::BTreeMap<(usize, usize), (Vec<usize>, bool, f32)> =
+            Default::default();
+        for (i, n) in self.map.nodes.iter().enumerate() {
+            let Some((up, link, label)) = &n.up else {
+                continue;
+            };
+            let alpha = fade(i).min(fade(*up));
+            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
+            if let Some(g) = group(i)
+                && group(*up) != Some(g)
+            {
+                let t = trunks.entry((*up, g)).or_default();
+                t.0.push(i);
+                t.1 |= on;
+                t.2 = t.2.max(alpha);
+                continue;
+            }
+            // Inside one box, links would cut across its grid: shown only
+            // while one end is selected.
+            if group(i).is_some() && group(i) == group(*up) && !on {
+                continue;
+            }
+            let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
+            else {
+                continue;
+            };
+            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i])
+                .into_iter()
+                .map(|w| self.to_screen(rect, w))
+                .collect();
+            let end = *pts.last().expect("route has points");
+            // A stacked card's stub is short: just the number over it.
+            let label = label.as_deref().map(|l| {
+                if self.lay.stacked[i] {
+                    (
+                        end - vec2(layout::INDENT / 4.0 * z, 2.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        l.trim_start_matches("port "),
+                    )
+                } else {
+                    (end + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, l)
+                }
+            });
+            flows |= draw(
+                &pts,
+                colour(n, *link),
+                self.accent(n),
+                *link,
+                width(*link, on),
+                alpha,
+                on,
+                label,
+            );
+        }
+        for ((up, g), (kids, on, alpha)) in &trunks {
+            let (Some(a), Some(b)) = (
+                self.pos.get(&self.map.nodes[*up].id),
+                self.lay.boxes.get(*g),
+            ) else {
+                continue;
+            };
+            let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
+            let world: Vec<Pos2> = if b.rect.top() > from.y + 8.0 {
+                // Below: into the middle of the box's top edge.
+                let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
+                layout::route(*a, into, false)
+            } else {
+                // Beside it (same row): under both boxes and up into its
+                // bottom, rather than along the cards' edges.
+                let own = group(*up).and_then(|g| self.lay.boxes.get(g));
+                let floor =
+                    own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom()) + layout::BOX_PAD;
+                let x = b.rect.center().x;
+                vec![
+                    from,
+                    pos2(from.x, floor),
+                    pos2(x, floor),
+                    pos2(x, b.rect.bottom()),
+                ]
+            };
+            let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
+            let first = &self.map.nodes[kids[0]];
+            let link = first.link().unwrap_or(Link::Wired);
+            let count = format!("×{}", kids.len());
+            let end = *pts.last().expect("route has points");
+            let label = (kids.len() > 1).then(|| {
+                (
+                    end + vec2(5.0, -4.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    count.as_str(),
+                )
+            });
+            let base = b.zone.map_or_else(|| colour(first, link), zone_colour);
+            flows |= draw(
+                &pts,
+                base,
+                self.accent(first),
+                link,
+                width(link, *on) + 0.6,
+                *alpha,
+                *on,
+                label,
+            );
         }
 
         // Cards: infrastructure over clients.
@@ -1301,13 +1791,25 @@ impl MapView {
         let n = &self.map.nodes[i];
         let z = self.zoom;
         let dark = vis.dark_mode;
-        let accent = zone_colour(n.zone, dark);
+        let accent = self.accent(n);
         let round = (7.0 * z) as u8;
         let fill = if dark && vis.panel_fill.a() == 255 {
             vis.panel_fill.lerp_to_gamma(Color32::WHITE, 0.06)
         } else {
             vis.window_fill
-        };
+        }
+        // Tinted with its role's colour, so the map reads by colour at a glance.
+        .lerp_to_gamma(accent, if dark { 0.13 } else { 0.07 });
+        let glow = glow_strength(vis);
+        if glow > 0.0 && !selected && !hovered {
+            let halo = egui::Shadow {
+                offset: [0, 0],
+                blur: (12.0 * z) as u8,
+                spread: 0,
+                color: accent.gamma_multiply(glow * 0.8 * a),
+            };
+            p.add(halo.as_shape(r, round));
+        }
         if selected || hovered {
             let shadow = egui::Shadow {
                 offset: [0, (4.0 * z) as i8],
@@ -1326,12 +1828,28 @@ impl MapView {
         } else if hovered {
             Stroke::new(1.5, accent.gamma_multiply(0.8 * a))
         } else {
-            Stroke::new(
-                1.0,
-                vis.widgets.noninteractive.bg_stroke.color.gamma_multiply(a),
-            )
+            Stroke::new(1.0, accent.gamma_multiply(0.5 * a))
         };
-        p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
+        if n.gone {
+            // Dashed: it isn't in the data any more.
+            p.rect_filled(r, round, fill.gamma_multiply(a));
+            let q = r.shrink(1.0);
+            let outline = [
+                q.left_top(),
+                q.right_top(),
+                q.right_bottom(),
+                q.left_bottom(),
+                q.left_top(),
+            ];
+            p.extend(Shape::dashed_line(
+                &outline,
+                Stroke::new(border.width.max(1.5), accent.gamma_multiply(a)),
+                6.0 * z,
+                4.0 * z,
+            ));
+        } else {
+            p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
+        }
         let bar = Rect::from_min_max(r.min, pos2(r.min.x + 4.0 * z, r.max.y));
         p.rect_filled(
             bar,
@@ -1497,7 +2015,6 @@ impl MapView {
     /// Roles to fade in and out, and the action items, worst first: the
     /// sidebar /mapnetwork's maps have.
     fn sidebar(&mut self, ui: &mut Ui, focus: &mut Option<Vec<usize>>) {
-        let dark = ui.visuals().dark_mode;
         let counts: Vec<(Zone, usize)> = Zone::ALL
             .iter()
             .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
@@ -1536,7 +2053,7 @@ impl MapView {
                             .show(ui, |ui| {
                                 for (zone, n) in &counts {
                                     let off = self.hidden.contains(zone);
-                                    let c = zone_colour(*zone, dark);
+                                    let c = zone_colour(*zone);
                                     let r = ui
                                         .horizontal(|ui| {
                                             let (d, _) = ui.allocate_exact_size(
@@ -1629,7 +2146,6 @@ impl MapView {
 
     /// Role legend in the canvas corner; click a role to fade it out.
     fn legend(&mut self, ui: &mut Ui, rect: Rect) {
-        let dark = ui.visuals().dark_mode;
         let mut counts: Vec<(Zone, usize)> = Zone::ALL
             .iter()
             .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
@@ -1670,7 +2186,7 @@ impl MapView {
                 Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
                 StrokeKind::Inside,
             );
-            let c = zone_colour(zone, dark);
+            let c = zone_colour(zone);
             let dot = pos2(r.min.x + 11.0, r.center().y);
             if off {
                 p.circle_stroke(dot, 4.0, Stroke::new(1.5, c));
@@ -1689,6 +2205,126 @@ impl MapView {
             x = r.max.x + 6.0;
         }
     }
+}
+
+/// What a run's section in a card asked for.
+enum RunEv {
+    Again,
+    Stop,
+    Clear,
+    Tab,
+}
+
+/// One run in a card's Results: the tool, its condensed line and buttons;
+/// opened, every reply, port or hop.
+fn run_section(ui: &mut Ui, card: &str, r: &Run, busy: bool) -> Option<RunEv> {
+    let mut out = None;
+    let id = ui.make_persistent_id(("map_run", card, r.tool));
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        .show_header(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.label(RichText::new(r.tool.name()).small().strong());
+            if r.active() {
+                widgets::spinner(ui);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("×")
+                    .on_hover_text("Clear this result")
+                    .clicked()
+                {
+                    out = Some(RunEv::Clear);
+                }
+                if r.active() {
+                    if ui.small_button("■").on_hover_text("Stop").clicked() {
+                        out = Some(RunEv::Stop);
+                    }
+                } else if ui.small_button("⟲").on_hover_text("Run it again").clicked() {
+                    out = Some(RunEv::Again);
+                }
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Open in tab").small())
+                    .on_hover_text(format!("Run it in full in the {} tab", r.tool.name()))
+                    .on_disabled_hover_text("Wait for the test running in its tab to finish")
+                    .clicked()
+                {
+                    out = Some(RunEv::Tab);
+                }
+            });
+        })
+        .body(|ui| run_detail(ui, r));
+    let colour = match &r.state {
+        State::Failed(_) => widgets::bad(),
+        _ => ui.visuals().text_color(),
+    };
+    ui.add(
+        egui::Label::new(RichText::new(r.summary()).monospace().small().color(colour))
+            .wrap()
+            .selectable(true),
+    );
+    ui.add_space(2.0);
+    out
+}
+
+/// Everything a run found, one row each.
+fn run_detail(ui: &mut Ui, r: &Run) {
+    let weak = ui.visuals().weak_text_color();
+    let cell = |ui: &mut Ui, s: String| {
+        ui.label(RichText::new(s).monospace().small());
+    };
+    egui::Grid::new(("map_run_rows", r.ip, r.tool))
+        .num_columns(3)
+        .spacing([10.0, 1.0])
+        .show(ui, |ui| match &r.out {
+            Out::Ping(replies) => {
+                for p in replies {
+                    cell(ui, format!("#{}", p.seq));
+                    match p.rtt {
+                        Some(ms) => {
+                            cell(ui, widgets::fmt_ms(ms));
+                            cell(ui, p.ttl.map(|t| format!("ttl {t}")).unwrap_or_default());
+                        }
+                        None => {
+                            ui.label(RichText::new(&p.note).small().color(widgets::bad()));
+                            ui.label("");
+                        }
+                    }
+                    ui.end_row();
+                }
+            }
+            Out::Ports { found, .. } => {
+                for (port, state, ms) in found {
+                    cell(
+                        ui,
+                        format!("{port} {}", crate::net::ports::service_name(*port)),
+                    );
+                    let (label, c) = match state {
+                        crate::net::TcpState::Open => ("open".to_string(), widgets::ok()),
+                        crate::net::TcpState::Closed => ("closed".into(), weak),
+                        crate::net::TcpState::Filtered => ("filtered".into(), widgets::warn()),
+                        crate::net::TcpState::Error(e) => (format!("error: {e}"), widgets::bad()),
+                    };
+                    ui.label(RichText::new(label).monospace().small().color(c));
+                    cell(ui, widgets::fmt_ms(*ms));
+                    ui.end_row();
+                }
+            }
+            Out::Trace { hops, .. } => {
+                for h in hops {
+                    cell(ui, h.ttl.to_string());
+                    let at = match (h.addr, &h.name) {
+                        (Some(a), Some(n)) => format!("{a} {n}"),
+                        (Some(a), None) => a.to_string(),
+                        (None, _) => "*".into(),
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(at).monospace().small()).selectable(true),
+                    );
+                    cell(ui, h.best.map(widgets::fmt_ms).unwrap_or_default());
+                    ui.end_row();
+                }
+            }
+        });
 }
 
 /// A card's details as text, for Copy.
@@ -1754,9 +2390,45 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
     act
 }
 
-pub fn zone_colour(z: Zone, dark: bool) -> Color32 {
-    let [r, g, b] = z.rgb(dark);
-    Color32::from_rgb(r, g, b)
+/// Points `gap` apart along a polyline, the first `off` from its start.
+fn along(pts: &[Pos2], off: f32, gap: f32) -> Vec<Pos2> {
+    let mut out = Vec::new();
+    let mut next = off;
+    let mut walked = 0.0;
+    for seg in pts.windows(2) {
+        let (a, b) = (seg[0], seg[1]);
+        let len = a.distance(b);
+        while len > 0.0 && next <= walked + len {
+            out.push(a + (b - a) * ((next - walked) / len));
+            next += gap;
+        }
+        walked += len;
+    }
+    out
+}
+
+/// Pinned cards missing from the latest data: a red no role uses.
+pub fn gone_colour() -> Color32 {
+    if crate::theme::current().is_light() {
+        Color32::from_rgb(200, 30, 30)
+    } else {
+        Color32::from_rgb(255, 64, 64)
+    }
+}
+
+/// A role's colour in the current theme.
+pub fn zone_colour(z: Zone) -> Color32 {
+    z.colour_in(crate::theme::current())
+}
+
+/// How strongly links and cards glow: none on light themes, most on RGB
+/// and Miami.
+fn glow_strength(vis: &egui::Visuals) -> f32 {
+    match crate::theme::current() {
+        _ if !vis.dark_mode => 0.0,
+        crate::theme::Theme::Rgb | crate::theme::Theme::Miami => 0.32,
+        _ => 0.16,
+    }
 }
 
 fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
@@ -1805,7 +2477,7 @@ mod tests {
     use crate::map::Node;
 
     fn view(n: usize) -> MapView {
-        let mut v = MapView::new();
+        let mut v = MapView::new(None);
         v.map.nodes = (0..n)
             .map(|i| Node {
                 id: format!("n{i}"),
@@ -1868,5 +2540,279 @@ mod tests {
         assert_eq!(v.ordered(), [3, 0, 2, 1]);
         v.toggle(2);
         assert_eq!(v.ordered(), [3, 0, 1]);
+    }
+
+    #[test]
+    fn a_pinned_card_missing_from_new_data_stays_marked_until_let_go() {
+        let mut v = view(4);
+        v.map.nodes[2].up = Some((1, Link::Wired, None));
+        v.select(Some(2));
+        v.keep(2);
+        v.select(Some(3));
+        let old = Map {
+            nodes: v.map.nodes.clone(),
+            ..Default::default()
+        };
+        // The new data has no n2, and n1 is now at index 0.
+        let mut new = Map {
+            nodes: old.nodes.iter().filter(|n| n.id != "n2").cloned().collect(),
+            ..Default::default()
+        };
+        new.nodes.swap(0, 1);
+        v.carry_gone(&old, &mut new);
+        let g = new.nodes.last().unwrap();
+        assert_eq!((g.id.as_str(), g.gone), ("n2", true));
+        assert_eq!(g.flags[0], GONE_FLAG);
+        // Under its old parent, by id, with an assumed link.
+        assert!(matches!(g.up, Some((0, Link::Assumed, _))));
+        assert_eq!(new.nodes[0].id, "n1");
+        // Rebuilt again, it isn't flagged twice.
+        let mut again = Map {
+            nodes: new.nodes[..3].to_vec(),
+            ..Default::default()
+        };
+        v.carry_gone(&new, &mut again);
+        assert_eq!(again.nodes[3].flags.len(), new.nodes[3].flags.len());
+        // Unpinned, it goes; the rest stay, still selected.
+        v.map = again;
+        v.relayout(&egui::Context::default());
+        assert_eq!(v.selection(), [3, 2]);
+        v.keep(3);
+        v.drop_released(&egui::Context::default());
+        assert_eq!(v.map.nodes.len(), 3);
+        assert!(v.map.nodes.iter().all(|n| !n.gone));
+        assert_eq!(v.selection(), [2]);
+    }
+
+    fn without(old: &Map, gone: &[&str]) -> Map {
+        Map {
+            nodes: old
+                .nodes
+                .iter()
+                .filter(|n| !gone.contains(&n.id.as_str()))
+                .cloned()
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn copy(m: &Map) -> Map {
+        Map {
+            nodes: m.nodes.clone(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_gone_card_never_hangs_off_another_gone_card() {
+        // n0 → n1 → n2 (pinned) → n3 (pinned).
+        let mut v = view(4);
+        for i in 1..4 {
+            v.map.nodes[i].up = Some((i - 1, Link::Wired, None));
+        }
+        v.keep(2);
+        v.keep(3);
+        let old = copy(&v.map);
+        let mut new = without(&old, &["n2", "n3"]);
+        v.carry_gone(&old, &mut new);
+        // Both under n1, the nearest card still in the data.
+        assert_eq!(new.nodes[2].id, "n2");
+        assert_eq!(new.nodes[3].id, "n3");
+        assert!(matches!(new.nodes[2].up, Some((1, Link::Assumed, _))));
+        assert!(matches!(new.nodes[3].up, Some((1, Link::Assumed, _))));
+        // Letting n2 go leaves n3 under n1, not under itself.
+        v.map = new;
+        v.relayout(&egui::Context::default());
+        v.keep(2);
+        v.drop_released(&egui::Context::default());
+        assert_eq!(v.map.nodes[2].id, "n3");
+        assert_eq!(v.map.nodes[2].parent(), Some(1));
+    }
+
+    #[test]
+    fn a_pinned_card_only_folded_away_isnt_called_gone() {
+        let mut v = view(3);
+        v.keep(2);
+        let old = copy(&v.map);
+        let mut new = without(&old, &["n2"]);
+        new.folded.insert("n2".into());
+        assert!(v.carry_gone(&old, &mut new).is_empty());
+        assert_eq!(new.nodes.len(), 2);
+    }
+
+    #[test]
+    fn a_pin_follows_a_card_whose_id_changed() {
+        let mut v = view(2);
+        v.map.nodes.push(Node {
+            id: "ip:10.0.0.5".into(),
+            ip: Some("10.0.0.5".parse().unwrap()),
+            up: Some((0, Link::Assumed, None)),
+            ..Default::default()
+        });
+        v.select(Some(2));
+        v.keep(2);
+        v.ordered();
+        let old = copy(&v.map);
+        let mut new = without(&old, &["ip:10.0.0.5"]);
+        new.nodes.push(Node {
+            id: "mac:aa:bb:cc:dd:ee:ff".into(),
+            ip: Some("10.0.0.5".parse().unwrap()),
+            up: Some((1, Link::Wired, None)),
+            ..Default::default()
+        });
+        let moved = v.carry_gone(&old, &mut new);
+        assert_eq!(
+            moved,
+            [(
+                "ip:10.0.0.5".to_string(),
+                "mac:aa:bb:cc:dd:ee:ff".to_string()
+            )]
+        );
+        // No red duplicate.
+        assert_eq!(new.nodes.len(), 3);
+        assert!(new.nodes.iter().all(|n| !n.gone));
+        for (from, to) in moved {
+            v.rename(&from, &to);
+        }
+        v.map = new;
+        v.relayout(&egui::Context::default());
+        assert!(v.is_kept(2));
+        assert_eq!(v.slots.get("mac:aa:bb:cc:dd:ee:ff"), Some(&0));
+        assert_eq!(v.selected.as_deref(), Some("mac:aa:bb:cc:dd:ee:ff"));
+    }
+
+    #[test]
+    fn flow_dots_are_spaced_along_the_whole_route() {
+        let pts = [pos2(0.0, 0.0), pos2(0.0, 30.0), pos2(40.0, 30.0)];
+        let d = along(&pts, 5.0, 20.0);
+        assert_eq!(
+            d,
+            [
+                pos2(0.0, 5.0),
+                pos2(0.0, 25.0),
+                pos2(15.0, 30.0),
+                pos2(35.0, 30.0)
+            ]
+        );
+        assert!(along(&[pos2(0.0, 0.0)], 0.0, 10.0).is_empty());
+    }
+
+    #[test]
+    fn a_card_that_wasnt_pinned_just_goes() {
+        let mut v = view(3);
+        v.select(Some(2));
+        let old = Map {
+            nodes: v.map.nodes.clone(),
+            ..Default::default()
+        };
+        let mut new = Map {
+            nodes: old.nodes[..2].to_vec(),
+            ..Default::default()
+        };
+        v.carry_gone(&old, &mut new);
+        assert_eq!(new.nodes.len(), 2);
+    }
+
+    /// Cards 0, 1, 2 selected in that order: the panel shows 2, 1, 0.
+    fn three_in_panel(n: usize) -> MapView {
+        let mut v = view(n);
+        v.select(Some(0));
+        v.toggle(1);
+        v.toggle(2);
+        assert_eq!(v.ordered(), [2, 1, 0]);
+        v
+    }
+
+    #[test]
+    fn a_pinned_card_holds_its_slot_as_others_are_selected() {
+        let mut v = three_in_panel(6);
+        v.keep(0);
+        for i in 3..6 {
+            v.toggle(i);
+            assert_eq!(v.ordered()[2], 0);
+        }
+        assert_eq!(v.ordered(), [5, 4, 0, 3, 2, 1]);
+        // A plain click elsewhere doesn't move it either.
+        v.select(Some(3));
+        assert_eq!(v.ordered(), [3, 0]);
+        v.toggle(4);
+        v.toggle(5);
+        assert_eq!(v.ordered(), [5, 4, 0, 3]);
+    }
+
+    #[test]
+    fn dragging_a_pinned_card_gives_it_a_new_slot() {
+        let mut v = three_in_panel(6);
+        v.keep(0);
+        v.ordered();
+        v.move_card(2, 0);
+        assert_eq!(v.ordered(), [0, 2, 1]);
+        v.toggle(3);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [0, 4, 3, 2, 1]);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [0, 4, 2, 1]);
+    }
+
+    #[test]
+    fn dragging_another_card_past_a_pinned_one_updates_its_slot() {
+        let mut v = three_in_panel(4);
+        v.keep(1);
+        v.ordered();
+        // 2 dragged below 1 and 0: 1 now shows at the top and stays there.
+        v.move_card(0, 2);
+        assert_eq!(v.ordered(), [1, 0, 2]);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [1, 3, 0, 2]);
+    }
+
+    #[test]
+    fn an_unpinned_card_stays_put_then_moves_with_the_rest() {
+        let mut v = three_in_panel(5);
+        v.keep(0);
+        v.toggle(3);
+        assert_eq!(v.ordered(), [3, 2, 0, 1]);
+        v.keep(0);
+        assert_eq!(v.ordered(), [3, 2, 0, 1]);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [4, 3, 2, 0, 1]);
+    }
+
+    #[test]
+    fn a_slot_past_the_end_shows_last_and_comes_back() {
+        let mut v = three_in_panel(7);
+        v.toggle(3);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [4, 3, 2, 1, 0]);
+        v.keep(0);
+        // Down to two cards: it shows last.
+        v.select(Some(5));
+        assert_eq!(v.ordered(), [5, 0]);
+        // Filled up again: back in slot 4.
+        for i in [1, 2, 3, 6] {
+            v.toggle(i);
+        }
+        assert_eq!(v.ordered()[4], 0);
+        assert_eq!(v.ordered().len(), 6);
+    }
+
+    #[test]
+    fn pinning_from_the_menu_puts_an_unselected_card_on_top() {
+        let mut v = three_in_panel(4);
+        v.keep(3);
+        assert_eq!(v.ordered(), [3, 2, 1, 0]);
+        v.select(Some(1));
+        assert_eq!(v.ordered(), [3, 1]);
+    }
+
+    #[test]
+    fn letting_go_of_a_pinned_card_forgets_its_slot() {
+        let mut v = three_in_panel(4);
+        v.keep(0);
+        v.toggle(0);
+        assert!(v.slots.is_empty());
+        assert_eq!(v.ordered(), [2, 1]);
+        v.toggle(0);
+        assert_eq!(v.ordered(), [0, 2, 1]);
     }
 }

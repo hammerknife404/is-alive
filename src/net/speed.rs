@@ -38,6 +38,9 @@ pub enum Server {
     /// Any file served over HTTP(S), downloaded again and again. Download
     /// only: plain file hosts don't take uploads.
     File(String),
+    /// Any URL that takes a POST and throws the body away (your own
+    /// server, a LibreSpeed backend's empty.php). Upload only.
+    Upload(String),
 }
 
 impl Server {
@@ -45,7 +48,7 @@ impl Server {
     pub fn host(&self) -> Result<String, String> {
         match self {
             Server::Cloudflare => Ok(HOST.into()),
-            Server::File(url) => file_host(url),
+            Server::File(url) | Server::Upload(url) => file_host(url),
         }
     }
 
@@ -53,12 +56,16 @@ impl Server {
     pub fn probe_host(&self) -> Result<String, String> {
         match self {
             Server::Cloudflare => Ok(HOST.into()),
-            Server::File(url) => file_host(url).map(|_| FILE_PROBE.into()),
+            Server::File(url) | Server::Upload(url) => file_host(url).map(|_| FILE_PROBE.into()),
         }
     }
 
     pub fn uploads(&self) -> bool {
-        matches!(self, Server::Cloudflare)
+        matches!(self, Server::Cloudflare | Server::Upload(_))
+    }
+
+    pub fn downloads(&self) -> bool {
+        !matches!(self, Server::Upload(_))
     }
 
     /// The URL each stream fetches or posts to.
@@ -66,7 +73,7 @@ impl Server {
         match (self, dir) {
             (Server::Cloudflare, Dir::Down) => format!("{BASE}/__down?bytes={DOWN_BYTES}"),
             (Server::Cloudflare, Dir::Up) => format!("{BASE}/__up"),
-            (Server::File(url), _) => url.trim().to_string(),
+            (Server::File(url) | Server::Upload(url), _) => url.trim().to_string(),
         }
     }
 }
@@ -635,6 +642,15 @@ pub(crate) mod tests {
             "ipv4.download.thinkbroadband.com"
         );
         assert!(!f.uploads());
+        let u = Server::Upload(" https://speed.example.net/backend/empty.php ".into());
+        assert!(u.uploads() && !u.downloads());
+        assert!(cf.downloads() && f.downloads());
+        assert_eq!(u.host().unwrap(), "speed.example.net");
+        assert_eq!(u.probe_host().unwrap(), FILE_PROBE);
+        assert_eq!(
+            u.url(Dir::Up),
+            "https://speed.example.net/backend/empty.php"
+        );
         assert_eq!(
             f.url(Dir::Down),
             "https://files.example.net:8443/1GB.bin?x=1"

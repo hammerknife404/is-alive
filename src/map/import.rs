@@ -248,6 +248,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         }
         n.rank = (u8::from(n.flags.is_empty()), rank as u64);
         let site = sites.get(s(v, "site")).copied();
+        n.site = site.map(str::to_string);
         if multi_site && let Some(site) = site {
             n.chip(site);
         }
@@ -406,7 +407,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     } else if !input.sweep.is_empty() {
         summary += " · sweep not merged (no device on the map shares a MAC with it)";
     }
-    let mut map = limit(b, input.clients);
+    let mut map = limit(b, input);
     if map.hidden > 0 && !input.clients && !summary.contains("clients not mapped") {
         summary += " · clients not mapped";
     }

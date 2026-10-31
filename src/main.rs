@@ -27,7 +27,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the title bar, the footer and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS and speed, sweep the LAN. Results opens to show them.";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN. Results opens to show them. (Speed Test runs from its own tab.)";
 
 #[derive(PartialEq, Clone, Copy)]
 enum Tab {
@@ -126,6 +126,8 @@ struct App {
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
+    /// The map's files are being read again (Reload): say how it went.
+    reloading: bool,
 }
 
 impl eframe::App for App {
@@ -149,11 +151,28 @@ impl eframe::App for App {
         self.ping.poll();
         self.ports.poll();
         self.trace.poll();
+        self.map.poll(ui.ctx());
         self.speed.poll();
         self.sweep.poll();
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        if self.reloading && !self.export.is_running() {
+            self.reloading = false;
+            let failed = self.export.failed();
+            if failed.is_empty() {
+                widgets::toast("Map reloaded", true);
+            } else {
+                widgets::toast(
+                    format!(
+                        "Couldn't read {} again: the map still shows what was loaded before \
+                         (Config Export says why)",
+                        failed.join(", ")
+                    ),
+                    false,
+                );
+            }
+        }
         self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ui.ctx());
         self.collect();
@@ -475,6 +494,26 @@ impl App {
                 self.look.map_note = false;
                 theme::save(&self.look);
             }
+            Some(Action::Layout(m)) => {
+                self.look.map_layout = Some(m);
+                theme::save(&self.look);
+            }
+            Some(Action::Reload) => {
+                let files = self.export.map_sources();
+                self.map.reload();
+                if files.is_empty() {
+                    widgets::toast("Map rebuilt", true);
+                } else if self.export.is_running() {
+                    widgets::toast(
+                        "Config Export is still loading a file: rebuilt from what's loaded. \
+                         Reload again when it's done to re-read the map's files.",
+                        false,
+                    );
+                } else {
+                    self.export.open(ctx, files);
+                    self.reloading = true;
+                }
+            }
             None => {}
         }
     }
@@ -532,7 +571,6 @@ impl App {
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
-        self.speed.run(ctx);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }
@@ -838,7 +876,34 @@ fn icon() -> egui::IconData {
         .expect("valid icon PNG")
 }
 
+/// Don't pass on file descriptors this process was started with. The AppImage
+/// runtime leaves one open on its mount (/tmp/.mount_…) without close-on-exec,
+/// so every tool we start (chronyc, ip, ping) would inherit it; SELinux then
+/// denies the confined ones (chronyc_t) access and raises an alert each time.
+#[cfg(target_os = "linux")]
+fn close_inherited_fds_on_exec() {
+    let Ok(dir) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    let fds: Vec<libc::c_int> = dir
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+        .filter(|&fd| fd > 2)
+        .collect();
+    for fd in fds {
+        // SAFETY: F_GETFD/F_SETFD only change the descriptor's flags; a stale
+        // number (such as read_dir's own, now closed) just fails with EBADF.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
 fn main() -> eframe::Result {
+    #[cfg(target_os = "linux")]
+    close_inherited_fds_on_exec();
     let look = theme::load();
     theme::set_emoji_style(look.emoji);
     let size = look
@@ -875,7 +940,7 @@ fn main() -> eframe::Result {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
-                map: map::view::MapView::new(),
+                map: map::view::MapView::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
@@ -887,6 +952,7 @@ fn main() -> eframe::Result {
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
+                reloading: false,
             };
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =

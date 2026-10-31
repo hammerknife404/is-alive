@@ -20,9 +20,11 @@ rm -rf "$appdir"
 install -Dm755 "$root/target/release/is-alive" "$appdir/usr/bin/is-alive"
 install -Dm644 "$here/is-alive.desktop" "$appdir/usr/share/applications/is-alive.desktop"
 install -Dm644 "$here/is-alive.svg" "$appdir/usr/share/icons/hicolor/scalable/apps/is-alive.svg"
+install -Dm644 "$root/assets/icon-256.png" "$appdir/usr/share/icons/hicolor/256x256/apps/is-alive.png"
 ln -s usr/share/applications/is-alive.desktop "$appdir/is-alive.desktop"
-ln -s usr/share/icons/hicolor/scalable/apps/is-alive.svg "$appdir/is-alive.svg"
-ln -s is-alive.svg "$appdir/.DirIcon"
+# appimagetool wants a PNG for the top-level icon and .DirIcon (it rejects SVG).
+ln -s usr/share/icons/hicolor/256x256/apps/is-alive.png "$appdir/is-alive.png"
+ln -s is-alive.png "$appdir/.DirIcon"
 
 for lib in libxkbcommon-x11.so.0 libxcb-xkb.so.1; do
     src=$(ldconfig -p | awk -v l="$lib" -v a="$arch" '$1 == l && $NF ~ a { print $NF; exit }')

@@ -17,6 +17,12 @@ fn hex(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+/// A role's colour in the theme in use, as on screen.
+fn role(z: Zone) -> String {
+    let c = z.colour_in(crate::theme::current());
+    hex([c.r(), c.g(), c.b()])
+}
+
 /// Split into at most `rows` lines of about `width` characters, with an
 /// ellipsis when it doesn't fit.
 fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
@@ -47,7 +53,13 @@ fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
     lines
 }
 
-pub fn render(map: &Map, pos: &[Option<Pos2>], stacked: &[bool], dark: bool) -> String {
+pub fn render(
+    map: &Map,
+    pos: &[Option<Pos2>],
+    stacked: &[bool],
+    boxes: &[layout::Group],
+    dark: bool,
+) -> String {
     let (bg, card, line, text, weak) = if dark {
         ("#16181c", "#202329", "#363b44", "#e8eaee", "#8b919c")
     } else {
@@ -56,6 +68,9 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], stacked: &[bool], dark: bool) -> 
     let mut b = Rect::NOTHING;
     for p in pos.iter().flatten() {
         b = b.union(Rect::from_min_size(*p, CARD));
+    }
+    for g in boxes {
+        b = b.union(g.rect);
     }
     if !b.is_positive() {
         b = Rect::from_min_size(Pos2::ZERO, CARD);
@@ -84,6 +99,29 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], stacked: &[bool], dark: bool) -> 
         crate::VERSION
     );
 
+    // Zones and Sites boxes, under the links and cards.
+    for g in boxes {
+        let r = g.rect;
+        let p = at(r.min);
+        let colour = g.zone.map_or_else(|| weak.to_string(), role);
+        let _ = writeln!(
+            s,
+            r#"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" rx="10" fill="{colour}" fill-opacity="0.07" stroke="{colour}" stroke-opacity="0.5"/>"#,
+            p.x,
+            p.y,
+            r.width(),
+            r.height()
+        );
+        let _ = writeln!(
+            s,
+            r#"<text x="{:.1}" y="{:.1}" font-size="11" font-weight="600" fill="{colour}">{} · {}</text>"#,
+            p.x + layout::BOX_PAD,
+            p.y + layout::BOX_TITLE / 2.0 + 4.0,
+            esc(&g.title.to_uppercase()),
+            g.count
+        );
+    }
+
     for (i, n) in map.nodes.iter().enumerate() {
         let (Some((up, link, label)), Some(c)) = (&n.up, pos[i]) else {
             continue;
@@ -99,9 +137,9 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], stacked: &[bool], dark: bool) -> 
             .map(|(k, p)| format!("{}{:.1} {:.1}", if k == 0 { "M" } else { " L" }, p.x, p.y))
             .collect();
         let (colour, width, dash) = match link {
-            Link::Backbone => (hex(Zone::Gateway.rgb(dark)), 3.0, ""),
-            Link::Wired => (hex(n.zone.rgb(dark)), 1.6, ""),
-            Link::Wireless => (hex(n.zone.rgb(dark)), 1.6, r#" stroke-dasharray="7 5""#),
+            Link::Backbone => (role(Zone::Gateway), 3.0, ""),
+            Link::Wired => (role(n.zone), 1.6, ""),
+            Link::Wireless => (role(n.zone), 1.6, r#" stroke-dasharray="7 5""#),
             Link::Assumed => (weak.to_string(), 1.4, r#" stroke-dasharray="2.5 4""#),
         };
         let _ = writeln!(
@@ -130,11 +168,21 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], stacked: &[bool], dark: bool) -> 
 
     for (i, n) in map.nodes.iter().enumerate() {
         let Some(p) = pos[i].map(at) else { continue };
-        let accent = hex(n.zone.rgb(dark));
+        let accent = if n.gone {
+            (if dark { "#ff4040" } else { "#c81e1e" }).to_string()
+        } else {
+            role(n.zone)
+        };
         let (x, y) = (p.x, p.y);
+        // A pinned card missing from the latest data: dashed, in red.
+        let (edge, dash) = if n.gone {
+            (accent.as_str(), r#" stroke-dasharray="6 4""#)
+        } else {
+            (line, "")
+        };
         let _ = writeln!(
             s,
-            r#"<g><rect x="{x:.1}" y="{y:.1}" width="{}" height="{}" rx="7" fill="{card}" stroke="{line}"/>"#,
+            r#"<g><rect x="{x:.1}" y="{y:.1}" width="{}" height="{}" rx="7" fill="{card}" stroke="{edge}"{dash}/>"#,
             CARD.x, CARD.y
         );
         let _ = writeln!(
@@ -241,8 +289,8 @@ mod tests {
             range: Some("10.0.0.0/24".into()),
             ..Default::default()
         });
-        let l = crate::map::layout::layout(&m, &|_| true);
-        let s = render(&m, &l.pos, &l.stacked, true);
+        let l = crate::map::layout::layout_in(&m, &|_| true, crate::map::layout::Mode::Cluster);
+        let s = render(&m, &l.pos, &l.stacked, &l.boxes, true);
         assert!(s.starts_with("<svg") && s.trim_end().ends_with("</svg>"));
         assert!(s.contains("a&lt;b&gt;&amp;c"));
         assert!(!s.contains("a<b>"));

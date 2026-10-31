@@ -1,5 +1,7 @@
-//! Look and feel: three themes (Dark, egui's stock look, is the default), status colours that
-//! stay readable on each, and the choice remembered between launches.
+//! Look and feel: Dark (egui's stock look, the default), Light, Miami, and
+//! themes after /mapnetwork's (Slate, Phosphor, Blueprint, High contrast,
+//! RGB, Paper); status colours that stay readable on each, and the choice
+//! remembered between launches.
 
 use crate::backdrop::Source;
 use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke, Style, Visuals};
@@ -12,16 +14,41 @@ pub enum Theme {
     Light,
     /// Miami: midnight purple, hot pink and teal, a sunset rule.
     Miami,
+    // After /mapnetwork's themes.
+    Slate,
+    Phosphor,
+    Blueprint,
+    Contrast,
+    /// Neon on black, a rainbow rule.
+    Rgb,
+    Paper,
 }
 
 impl Theme {
-    pub const ALL: [Theme; 3] = [Theme::Dark, Theme::Light, Theme::Miami];
+    /// Menu order: the dark ones, then the light ones.
+    pub const ALL: [Theme; 9] = [
+        Theme::Dark,
+        Theme::Slate,
+        Theme::Phosphor,
+        Theme::Blueprint,
+        Theme::Contrast,
+        Theme::Rgb,
+        Theme::Miami,
+        Theme::Light,
+        Theme::Paper,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Theme::Dark => "Dark",
             Theme::Light => "Light",
             Theme::Miami => "Miami",
+            Theme::Slate => "Slate",
+            Theme::Phosphor => "Phosphor",
+            Theme::Blueprint => "Blueprint",
+            Theme::Contrast => "High contrast",
+            Theme::Rgb => "RGB",
+            Theme::Paper => "Paper",
         }
     }
 
@@ -30,7 +57,22 @@ impl Theme {
             Theme::Dark => "dark",
             Theme::Light => "light",
             Theme::Miami => "miami",
+            Theme::Slate => "slate",
+            Theme::Phosphor => "phosphor",
+            Theme::Blueprint => "blueprint",
+            Theme::Contrast => "contrast",
+            Theme::Rgb => "rgb",
+            Theme::Paper => "paper",
         }
+    }
+
+    pub fn is_light(self) -> bool {
+        matches!(self, Theme::Light | Theme::Paper)
+    }
+
+    /// A rule with moving colours along the tab bar.
+    fn has_rule(self) -> bool {
+        matches!(self, Theme::Miami | Theme::Rgb)
     }
 
     fn from_key(k: &str) -> Option<Self> {
@@ -42,7 +84,7 @@ impl Theme {
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
 pub fn current() -> Theme {
-    Theme::ALL[CURRENT.load(Ordering::Relaxed) as usize % 3]
+    Theme::ALL[CURRENT.load(Ordering::Relaxed) as usize % Theme::ALL.len()]
 }
 
 /// Status colours: (ok, warn, bad) per theme.
@@ -58,6 +100,36 @@ pub fn status() -> (Color32, Color32, Color32) {
             Color32::from_rgb(22, 132, 70),
             Color32::from_rgb(176, 108, 0),
             Color32::from_rgb(198, 40, 40),
+        ),
+        Theme::Paper => (
+            Color32::from_rgb(43, 125, 75),
+            Color32::from_rgb(160, 100, 10),
+            Color32::from_rgb(178, 58, 34),
+        ),
+        Theme::Slate => (
+            Color32::from_rgb(114, 212, 156),
+            Color32::from_rgb(230, 195, 106),
+            Color32::from_rgb(255, 154, 144),
+        ),
+        Theme::Phosphor => (
+            Color32::from_rgb(92, 242, 138),
+            Color32::from_rgb(255, 180, 84),
+            Color32::from_rgb(255, 138, 122),
+        ),
+        Theme::Blueprint => (
+            Color32::from_rgb(142, 230, 176),
+            Color32::from_rgb(255, 224, 138),
+            Color32::from_rgb(255, 176, 168),
+        ),
+        Theme::Contrast => (
+            Color32::from_rgb(86, 240, 138),
+            Color32::from_rgb(255, 224, 102),
+            Color32::from_rgb(255, 107, 107),
+        ),
+        Theme::Rgb => (
+            Color32::from_rgb(57, 255, 20),
+            Color32::from_rgb(255, 242, 0),
+            Color32::from_rgb(255, 45, 85),
         ),
         Theme::Miami => (
             Color32::from_rgb(64, 232, 200),
@@ -131,7 +203,7 @@ fn emoji_style() -> EmojiStyle {
 /// one of Miami's neons (the same one every time), or its natural colour.
 pub fn emoji_colour(c: char, text: Color32) -> Color32 {
     let style = match emoji_style() {
-        EmojiStyle::Theme if current() == Theme::Miami => EmojiStyle::Neon,
+        EmojiStyle::Theme if matches!(current(), Theme::Miami | Theme::Rgb) => EmojiStyle::Neon,
         EmojiStyle::Theme => EmojiStyle::Mono,
         s => s,
     };
@@ -142,7 +214,7 @@ pub fn emoji_colour(c: char, text: Color32) -> Color32 {
         }
         EmojiStyle::Color => match natural(c) {
             // A shade darker on a light background, so yellow still reads.
-            Some(n) if current() == Theme::Light => n.lerp_to_gamma(Color32::BLACK, 0.3),
+            Some(n) if current().is_light() => n.lerp_to_gamma(Color32::BLACK, 0.3),
             Some(n) => n,
             None => text,
         },
@@ -229,6 +301,7 @@ fn accent_for(t: Theme) -> Color32 {
         Theme::Dark => Visuals::dark().hyperlink_color,
         Theme::Light => Color32::from_rgb(28, 104, 176),
         Theme::Miami => PINK,
+        t => tokens(t).map_or(PINK, |k| k.accent),
     }
 }
 
@@ -248,6 +321,15 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         }
         Theme::Light => (egui::Theme::Light, light()),
         Theme::Miami => (egui::Theme::Dark, miami()),
+        t => {
+            let k = tokens(t).expect("every other theme has tokens");
+            let slot = if k.light {
+                egui::Theme::Light
+            } else {
+                egui::Theme::Dark
+            };
+            (slot, from_tokens(&k))
+        }
     };
     let mut style = Style {
         visuals,
@@ -318,6 +400,146 @@ fn light() -> Visuals {
     v
 }
 
+/// A theme's colours, after /mapnetwork's theme tokens.
+struct Tokens {
+    light: bool,
+    /// Panels and the map canvas.
+    panel: Color32,
+    /// Windows, menus and the detail panel's cards.
+    window: Color32,
+    /// Text fields, plots.
+    input: Color32,
+    /// Table stripes.
+    faint: Color32,
+    /// Buttons and code.
+    raised: Color32,
+    border: Color32,
+    text: Color32,
+    strong: Color32,
+    muted: Color32,
+    accent: Color32,
+    link: Color32,
+}
+
+const fn hex(h: u32) -> Color32 {
+    Color32::from_rgb((h >> 16) as u8, (h >> 8) as u8, h as u8)
+}
+
+fn tokens(t: Theme) -> Option<Tokens> {
+    let k = |light,
+             [
+        panel,
+        window,
+        input,
+        faint,
+        raised,
+        border,
+        text,
+        strong,
+        muted,
+        accent,
+        link,
+    ]: [u32; 11]| Tokens {
+        light,
+        panel: hex(panel),
+        window: hex(window),
+        input: hex(input),
+        faint: hex(faint),
+        raised: hex(raised),
+        border: hex(border),
+        text: hex(text),
+        strong: hex(strong),
+        muted: hex(muted),
+        accent: hex(accent),
+        link: hex(link),
+    };
+    Some(match t {
+        Theme::Slate => k(
+            false,
+            [
+                0x1f2533, 0x212838, 0x1c2230, 0x262d3d, 0x2c3446, 0x374055, 0xdde3ee, 0xeef2f8,
+                0x8a94a8, 0x7aa7ff, 0xa9c2ec,
+            ],
+        ),
+        Theme::Phosphor => k(
+            false,
+            [
+                0x09100b, 0x0a120d, 0x08120b, 0x0d1610, 0x102016, 0x1f3325, 0xbff0cc, 0xd4ffe0,
+                0x5f8c6c, 0x5cf28a, 0x4fd1ff,
+            ],
+        ),
+        Theme::Blueprint => k(
+            false,
+            [
+                0x0c2443, 0x0f2b50, 0x0b2342, 0x13355e, 0x173d6a, 0x2d5a8e, 0xdfeafa, 0xf2f8ff,
+                0x8fb0d6, 0x8cc4ff, 0xbfe0ff,
+            ],
+        ),
+        Theme::Contrast => k(
+            false,
+            [
+                0x000000, 0x000000, 0x000000, 0x141414, 0x1a1a1a, 0xe6e6e6, 0xffffff, 0xffffff,
+                0xd0d0d0, 0xffe066, 0x6cb6ff,
+            ],
+        ),
+        Theme::Rgb => k(
+            false,
+            [
+                0x0b0514, 0x0d0618, 0x07030d, 0x110822, 0x1a0b33, 0x3a1466, 0xefe6ff, 0xffffff,
+                0xa58cd6, 0xff00c8, 0x00e5ff,
+            ],
+        ),
+        Theme::Paper => k(
+            true,
+            [
+                0xf5f0e6, 0xfbf8f2, 0xfffdf8, 0xf1ebdf, 0xece4d4, 0xddd2bd, 0x3e362a, 0x2a241b,
+                0x8a7f6c, 0x2f5fb3, 0x2f5fb3,
+            ],
+        ),
+        Theme::Dark | Theme::Light | Theme::Miami => return None,
+    })
+}
+
+fn from_tokens(k: &Tokens) -> Visuals {
+    let mut v = if k.light {
+        Visuals::light()
+    } else {
+        Visuals::dark()
+    };
+    v.override_text_color = Some(k.text);
+    v.weak_text_color = Some(k.muted);
+    v.panel_fill = k.panel;
+    v.window_fill = k.window;
+    v.extreme_bg_color = k.input;
+    v.faint_bg_color = k.faint;
+    v.code_bg_color = k.raised;
+    v.window_stroke = Stroke::new(1.0, k.border);
+    if !k.light {
+        v.window_shadow.color = Color32::from_black_alpha(110);
+    }
+    v.selection.bg_fill = k
+        .accent
+        .lerp_to_gamma(k.panel, if k.light { 0.75 } else { 0.6 });
+    v.selection.stroke = Stroke::new(1.0, k.strong);
+    v.hyperlink_color = k.link;
+    let w = &mut v.widgets;
+    w.noninteractive.bg_stroke = Stroke::new(1.0, k.border.lerp_to_gamma(k.panel, 0.3));
+    w.noninteractive.fg_stroke = Stroke::new(1.0, k.text);
+    for (s, mix, stroke) in [
+        (&mut w.inactive, 0.0, k.border),
+        (&mut w.hovered, 0.18, k.accent),
+        (&mut w.active, 0.32, k.accent),
+        (&mut w.open, 0.18, k.accent),
+    ] {
+        s.bg_fill = k.raised.lerp_to_gamma(k.accent, mix);
+        s.weak_bg_fill = s.bg_fill;
+        s.bg_stroke = Stroke::new(1.0, stroke);
+        s.fg_stroke = Stroke::new(1.0, if mix > 0.0 { k.strong } else { k.text });
+    }
+    rounded(&mut v, 6);
+    v
+}
+
 const PINK: Color32 = Color32::from_rgb(255, 72, 170);
 const TEAL: Color32 = Color32::from_rgb(40, 226, 220);
 const SUNSET: Color32 = Color32::from_rgb(255, 150, 70);
@@ -369,7 +591,8 @@ fn miami() -> Visuals {
 /// and teal, drifting slowly from side to side and back when animating.
 /// `smooth`: animate at the display's refresh rate (there's a GPU).
 pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool, smooth: bool) {
-    if current() != Theme::Miami {
+    let theme = current();
+    if !theme.has_rule() {
         return;
     }
     let shift = if animate {
@@ -388,8 +611,22 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool, smooth: bool) {
     };
     let r = ctx.content_rect();
     let (top, bottom) = (y - 1.0, y + 1.0);
-    // Pink → orange → teal → pink, so the cycle has no seam.
-    let stops = [PINK, SUNSET, TEAL, PINK];
+    // Pink → orange → teal → pink (RGB: the rainbow), so the cycle has no seam.
+    const RAINBOW: [Color32; 8] = [
+        hex(0xff0040),
+        hex(0xff8a00),
+        hex(0xfff200),
+        hex(0x39ff14),
+        hex(0x00e5ff),
+        hex(0xb14dff),
+        hex(0xff00c8),
+        hex(0xff0040),
+    ];
+    let stops: &[Color32] = if theme == Theme::Rgb {
+        &RAINBOW
+    } else {
+        &[PINK, SUNSET, TEAL, PINK]
+    };
     let colour = |u: f32| {
         let u = u.rem_euclid(1.0) * (stops.len() - 1) as f32;
         let (i, f) = (u as usize, u.fract());
@@ -414,10 +651,10 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool, smooth: bool) {
     ctx.layer_painter(egui::LayerId::background()).add(mesh);
 }
 
-/// Extra glow under the selected tab's underline, Miami only.
+/// Extra glow under the selected tab's underline, Miami and RGB only.
 pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
-    if current() == Theme::Miami {
-        painter.hline(x, y, Stroke::new(6.0, PINK.gamma_multiply(0.25)));
+    if current().has_rule() {
+        painter.hline(x, y, Stroke::new(6.0, accent().gamma_multiply(0.25)));
     }
 }
 
@@ -440,6 +677,8 @@ pub struct Settings {
     /// Share of the width the Notes editor takes in Split view.
     pub notes_split: f32,
     pub emoji: EmojiStyle,
+    /// Map layout picked (Cluster, Tree, Zones, Sites); None until one is.
+    pub map_layout: Option<crate::map::layout::Mode>,
 }
 
 /// Font sizes the Notes tab offers.
@@ -458,6 +697,7 @@ impl Default for Settings {
             notes_split: 0.5,
             emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
+            map_layout: None,
         }
     }
 }
@@ -474,6 +714,7 @@ impl Settings {
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
                     s.notes_font = match v.trim() {
@@ -548,6 +789,9 @@ impl Settings {
         if self.emoji != EmojiStyle::Theme {
             s += &format!("emoji={}\n", self.emoji.key());
         }
+        if let Some(m) = self.map_layout {
+            s += &format!("map_layout={}\n", m.key());
+        }
         s
     }
 }
@@ -566,6 +810,7 @@ pub enum MenuAction {
 pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> Option<MenuAction> {
     let mut act = None;
     ui.menu_button(format!("Theme: {} ⏷", s.theme.name()), |ui| {
+        ui.set_min_width(240.0);
         ui.label(egui::RichText::new("Theme").strong());
         for t in Theme::ALL {
             let (label, tip) = match t {
@@ -575,8 +820,32 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
                     "Miami",
                     "Midnight purple, hot pink and teal, with a 16-bit sunset",
                 ),
+                Theme::Slate => ("Slate", "Soft blue-grey, easy on the eyes"),
+                Theme::Phosphor => ("Phosphor", "Green-screen terminal"),
+                Theme::Blueprint => ("Blueprint", "White lines on drafting blue"),
+                Theme::Contrast => ("High contrast", "Black and white, bright colours"),
+                Theme::Rgb => ("RGB", "Neon on black, with a rainbow rule"),
+                Theme::Paper => ("Paper", "Warm light, like a printed site map"),
             };
-            if ui.radio(s.theme == t, label).on_hover_text(tip).clicked() && s.theme != t {
+            if t == Theme::Light {
+                ui.separator();
+            }
+            // Its map colours, as /mapnetwork's Themes menu shows them.
+            let r = ui
+                .horizontal(|ui| {
+                    let r = ui.radio(s.theme == t, label).on_hover_text(tip);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for z in crate::map::Zone::SWATCH.iter().rev() {
+                            let (dot, _) =
+                                ui.allocate_exact_size(egui::vec2(9.0, 9.0), egui::Sense::hover());
+                            ui.painter()
+                                .circle_filled(dot.center(), 4.0, z.colour_in(t));
+                        }
+                    });
+                    r
+                })
+                .inner;
+            if r.clicked() && s.theme != t {
                 s.theme = t;
                 act = Some(MenuAction::Changed);
             }
@@ -742,6 +1011,7 @@ mod tests {
             notes_size: 16,
             notes_split: 0.625,
             emoji: EmojiStyle::Color,
+            map_layout: Some(crate::map::layout::Mode::Zones),
         };
         assert_eq!(Settings::parse(&s.text()), s);
         assert_eq!(
@@ -758,6 +1028,19 @@ mod tests {
     }
 
     #[test]
+    fn every_theme_tells_the_map_roles_apart() {
+        use crate::map::Zone;
+        for t in Theme::ALL {
+            let c: Vec<Color32> = Zone::ALL.iter().map(|z| z.colour_in(t)).collect();
+            for (i, a) in c.iter().enumerate() {
+                for b in &c[i + 1..] {
+                    assert!(a != b, "{t:?} repeats a role colour");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn status_colours_differ_per_theme() {
         let ctx = egui::Context::default();
         let mut seen = Vec::new();
@@ -766,7 +1049,11 @@ mod tests {
             assert_eq!(current(), t);
             seen.push(status());
         }
-        assert!(seen[0] != seen[1] && seen[1] != seen[2]);
+        for (i, a) in seen.iter().enumerate() {
+            for b in &seen[i + 1..] {
+                assert!(a != b);
+            }
+        }
         apply(&ctx, Theme::Dark);
     }
 }
