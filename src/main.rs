@@ -149,6 +149,7 @@ impl eframe::App for App {
         self.ping.poll();
         self.ports.poll();
         self.trace.poll();
+        self.map.poll(ui.ctx());
         self.speed.poll();
         self.sweep.poll();
         self.dns.poll();

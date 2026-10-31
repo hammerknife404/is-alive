@@ -7,6 +7,7 @@
 
 pub mod import;
 pub mod layout;
+pub mod runs;
 pub mod svg;
 pub mod view;
 
