@@ -3,7 +3,7 @@ name = "is-alive"
 version = "0.23.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, speed test with jitter, subnet sweep, DNS, domain/mail health, network map"
-license = "MIT"
+license-file = "LICENSE.md"
 
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
