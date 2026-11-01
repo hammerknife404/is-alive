@@ -412,8 +412,8 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         summary += " · sweep not merged (no device on the map shares a MAC with it)";
     }
     let mut map = limit(b, input);
-    if map.hidden > 0 && !input.clients && !summary.contains("clients not mapped") {
-        summary += " · clients not mapped";
+    if map.hidden > 0 && !input.clients {
+        summary += &format!(" · {} clients hidden", map.hidden);
     }
     map.summary = summary;
     // A map without SITES is one place: the map's own title names it. With
@@ -523,7 +523,7 @@ mod tests {
         // Clients off: the workstation folds into a count, as everywhere else.
         let off = build(&doc, &Input::default());
         assert!(off.nodes.iter().all(|n| n.id != "ws"));
-        assert!(off.summary.ends_with("clients not mapped"));
+        assert!(off.summary.ends_with("clients hidden"), "{}", off.summary);
     }
 
     #[test]
@@ -593,5 +593,38 @@ mod tests {
         assert_eq!(pc.up.as_ref().unwrap().2.as_deref(), Some("inferred"));
         assert_eq!(by(&m, "ap").link(), Some(Link::Wired));
         assert_eq!(by(&m, "ph").link(), Some(Link::Wireless));
+    }
+}
+
+#[cfg(test)]
+mod examples {
+    use super::*;
+    use crate::map::layout::{Mode, layout_in};
+
+    /// The built-in examples redraw in every Clients setting and layout,
+    /// with every card's uplink pointing at a card that is there.
+    #[test]
+    fn examples_build_in_every_client_mode_and_layout() {
+        for (name, f) in crate::skills::EXAMPLES {
+            let doc = crate::mapnetwork::parse(crate::skills::file(f).unwrap()).unwrap();
+            for (clients, all_clients) in [(false, false), (true, false), (true, true)] {
+                let input = Input {
+                    clients,
+                    all_clients,
+                    ..Default::default()
+                };
+                let m = build(&doc, &input);
+                assert!(m.nodes.len() > 30, "{name}");
+                for n in &m.nodes {
+                    if let Some(up) = &n.up {
+                        assert!(up.0 < m.nodes.len(), "{name}: {} hangs off nothing", n.id);
+                    }
+                }
+                for mode in Mode::ALL {
+                    let l = layout_in(&m, &|_| true, mode);
+                    assert!(l.pos.iter().all(|p| p.is_some()), "{name} {mode:?}");
+                }
+            }
+        }
     }
 }

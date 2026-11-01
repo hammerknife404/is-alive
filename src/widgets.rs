@@ -627,6 +627,24 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
     }
 }
 
+/// Draw a floating window with a short title bar: egui sizes the bar (and
+/// its close button) from the Heading style, which is sized for page
+/// titles, so it is smaller while `show` runs.
+pub fn compact_title(ctx: &egui::Context, show: impl FnOnce()) {
+    let heading = egui::TextStyle::Heading;
+    let before = ctx.global_style().text_styles.get(&heading).cloned();
+    ctx.global_style_mut(|s| {
+        s.text_styles
+            .insert(heading.clone(), egui::FontId::proportional(14.5));
+    });
+    show();
+    if let Some(f) = before {
+        ctx.global_style_mut(|s| {
+            s.text_styles.insert(heading, f);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

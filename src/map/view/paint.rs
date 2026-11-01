@@ -76,7 +76,28 @@ impl MapView {
                 Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
                 StrokeKind::Inside,
             );
-            if z >= 0.25 {
+            if z < 0.25 {
+                // Too short a title strip to write in: the name sits just
+                // above the box, small, in the gap between boxes.
+                let title = if b.tree && self.map.closed.contains_key(&b.title) {
+                    format!("{} · FOLDED", b.title.to_uppercase())
+                } else {
+                    b.title.to_uppercase()
+                };
+                let mut job = LayoutJob::single_section(
+                    title,
+                    egui::TextFormat::simple(FontId::proportional(8.0), c.gamma_multiply(a)),
+                );
+                job.wrap = egui::text::TextWrapping {
+                    max_width: r.width().max(20.0),
+                    max_rows: 1,
+                    break_anywhere: true,
+                    overflow_character: Some('…'),
+                };
+                let g = p.layout_job(job);
+                let at = pos2(r.min.x + 2.0, r.min.y - g.size().y - 1.0);
+                p.with_clip_rect(rect).galley(at, g, c);
+            } else {
                 let mid = r.min.y + layout::BOX_TITLE * z / 2.0;
                 let mut x = r.min.x + layout::BOX_PAD * z;
                 let mut title = format!("{} · {}", b.title.to_uppercase(), b.count);
@@ -459,9 +480,19 @@ impl MapView {
         let vpad = (7.0 * z).clamp(3.0, 9.0);
         let inner = r.width() - pad * 2.0;
         let room = r.height() - 2.0 * vpad;
-        // Too narrow for about 8 characters of name: a colour tile, no
-        // text. "Harl…" on every card says nothing; hovering names it.
+        // Zoomed out past the readable size (a big site fitted to the
+        // window): the name alone, smaller, so the overview still reads.
+        // Too narrow even for that: a colour tile, no text ("Ha…" on every
+        // card says nothing); hovering names it.
         if inner < label_f.size * 0.55 * 8.0 {
+            let small = FontId::proportional((13.0 * z).clamp(8.0, 11.0));
+            let pad = (12.0 * z).clamp(3.0, 5.0);
+            let inner = r.width() - pad * 2.0 - 2.0 * z;
+            if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size * 1.3 {
+                let g = text(&n.label, small, strong, 1, inner);
+                let y = r.center().y - g.size().y / 2.0;
+                p.galley(pos2(r.min.x + pad + 2.0 * z, y), g, strong);
+            }
             if !n.flags.is_empty() {
                 p.circle_filled(
                     pos2(r.max.x - 4.0, r.min.y + 4.0),
