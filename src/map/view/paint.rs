@@ -252,7 +252,7 @@ impl MapView {
             else {
                 continue;
             };
-            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i])
+            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i], self.lay.trunk[i])
                 .into_iter()
                 .map(|w| self.to_screen(rect, w))
                 .collect();
@@ -279,7 +279,7 @@ impl MapView {
             let world: Vec<Pos2> = if b.rect.top() > from.y + 8.0 {
                 // Below: into the middle of the box's top edge.
                 let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
-                layout::route(*a, into, false)
+                layout::route(*a, into, false, None)
             } else {
                 // Beside it (same row): under both boxes and up into its
                 // bottom, rather than along the cards' edges.
