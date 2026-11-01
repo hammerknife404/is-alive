@@ -144,7 +144,14 @@ impl MapView {
             let stroke = Stroke::new(w, c);
             match link {
                 Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
-                Link::Assumed => p.extend(Shape::dashed_line(pts, stroke, 2.5 * z, 4.0 * z)),
+                // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
+                // dots beat against the pixel grid and the line seems to break.
+                Link::Assumed => p.extend(Shape::dashed_line(
+                    pts,
+                    Stroke::new(stroke.width.max(1.5), stroke.color),
+                    (2.5 * z).max(2.0).round(),
+                    (4.0 * z).max(3.0).round(),
+                )),
                 _ => {
                     p.add(Shape::line(pts.to_vec(), stroke));
                 }

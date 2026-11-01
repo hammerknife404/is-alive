@@ -176,10 +176,18 @@ pub const GONE_FLAG: &str =
 
 impl MapView {
     pub fn new(mode: Option<Mode>) -> Self {
+        // The screenshot tour can start with clients shown
+        // (IS_ALIVE_SHOTS_CLIENTS=some or all).
+        let clients = match std::env::var("IS_ALIVE_SHOTS_CLIENTS").as_deref() {
+            Ok("some") => Clients::Some,
+            Ok("all") => Clients::All,
+            _ => Clients::Off,
+        };
         Self {
             follow: true,
             side: true,
             mode,
+            clients,
             ..Default::default()
         }
     }
@@ -531,15 +539,21 @@ impl MapView {
     /// One card selected, the rest let go.
     /// For the screenshot tour: select the card most findings name, so the
     /// panel has something in every section.
+    /// `IS_ALIVE_SHOTS_SELECT=<card id>` picks the card instead.
     pub fn select_for_shots(&mut self) {
-        let best = (0..self.map.nodes.len()).max_by_key(|&i| {
-            let named = self
-                .map
-                .findings
-                .iter()
-                .filter(|f| f.nodes.contains(&i))
-                .count();
-            (named + self.map.nodes[i].flags.len(), usize::MAX - i)
+        let named = std::env::var("IS_ALIVE_SHOTS_SELECT")
+            .ok()
+            .and_then(|id| self.index(&id));
+        let best = named.or_else(|| {
+            (0..self.map.nodes.len()).max_by_key(|&i| {
+                let named = self
+                    .map
+                    .findings
+                    .iter()
+                    .filter(|f| f.nodes.contains(&i))
+                    .count();
+                (named + self.map.nodes[i].flags.len(), usize::MAX - i)
+            })
         });
         if best.is_some() && self.selection().is_empty() {
             self.select(best);
