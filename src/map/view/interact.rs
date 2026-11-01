@@ -122,6 +122,51 @@ impl MapView {
                     }
                     ui.close();
                 }
+                ui.separator();
+                let up = self.map.nodes[i].parent();
+                let path = self.map.path(i);
+                let kids: Vec<usize> = self.map.children()[i].clone();
+                let below = self.below(i);
+                if let Some(u) = up
+                    && ui
+                        .button(format!(
+                            "Select with its uplink ({})",
+                            self.map.nodes[u].label
+                        ))
+                        .on_hover_text("This card and the one it hangs off")
+                        .clicked()
+                {
+                    self.select_with(i, &[u]);
+                    ui.close();
+                }
+                if path.len() > 2
+                    && ui
+                        .button(format!("Select the path to the WAN ({} cards)", path.len()))
+                        .on_hover_text("This card and every uplink up to the internet")
+                        .clicked()
+                {
+                    self.select_with(i, &path);
+                    ui.close();
+                }
+                if !kids.is_empty()
+                    && ui
+                        .button(format!("Select with its direct children ({})", kids.len()))
+                        .on_hover_text("This card and the cards hanging straight off it")
+                        .clicked()
+                {
+                    self.select_with(i, &kids);
+                    ui.close();
+                }
+                if below.len() > kids.len()
+                    && ui
+                        .button(format!("Select with everything below ({})", below.len()))
+                        .on_hover_text("This card and every card under it, all the way down")
+                        .clicked()
+                {
+                    self.select_with(i, &below);
+                    ui.close();
+                }
+                ui.separator();
                 if let Some(site) = self.map.nodes[i].site.clone()
                     && self.mode() == Mode::Sites
                 {

@@ -120,8 +120,10 @@ impl App {
                     (None, false, true) => na(),
                     (None, false, false) => "not looked up".into(),
                 };
-                ui.label(format!("WAN {wan}"))
-                    .on_hover_text("Public IP, looked up via OpenDNS on Refresh or a full scan");
+                ui.label(format!("WAN {wan}")).on_hover_text(
+                    "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
+                         on Refresh or a full scan",
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add_enabled(
@@ -190,6 +192,22 @@ impl App {
                 }));
             }
             _ => {}
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("Network").strong());
+        if ui
+            .checkbox(
+                &mut self.look.wan_on_start,
+                "Look up the public IP on start",
+            )
+            .on_hover_text(
+                "One DNS query to OpenDNS when the app opens, for the WAN address in the \
+                 footer. Off, nothing leaves this machine until you run something (Refresh \
+                 or a full scan look it up).",
+            )
+            .changed()
+        {
+            theme::save(&self.look);
         }
         ui.separator();
         ui.label(egui::RichText::new("Map").strong());

@@ -122,9 +122,11 @@ struct App {
     log: log::Log,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
-    /// The public address has been asked for. Nothing leaves the machine
-    /// until the user does something: launching the app sends nothing.
+    /// The public address has been asked for: on start (unless Settings
+    /// turns that off), on Refresh or by a full scan.
     wan_asked: bool,
+    /// The sweep was running last frame (to see one start).
+    was_sweeping: bool,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
     /// ((filter, log stamp), matching entries) for the last frame.
@@ -227,6 +229,13 @@ impl App {
         self.map.poll(ctx);
         self.speed.poll();
         self.sweep.poll();
+        // A sweep of a real network starting (from the Map, Subnet Sweep or
+        // a full scan): an example map would hide what it finds.
+        let sweeping = self.sweep.is_running();
+        if sweeping && !self.was_sweeping && self.export.close_examples() {
+            widgets::toast("Example map closed: the map shows this network now", true);
+        }
+        self.was_sweeping = sweeping;
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
@@ -395,6 +404,9 @@ impl App {
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::Example(i)) => self.export.open_example(ctx, i),
+            Some(Action::CloseExample) => {
+                self.export.close_examples();
+            }
             Some(Action::HideNote) => {
                 self.look.map_note = false;
                 theme::save(&self.look);
@@ -779,6 +791,7 @@ fn main() -> eframe::Result {
                 info: HostInfo::local(),
                 info_job: None,
                 wan_asked: false,
+                was_sweeping: false,
                 filter: String::new(),
                 filter_cache: None,
                 jump_to_new: false,
@@ -789,6 +802,9 @@ fn main() -> eframe::Result {
                 shots: shots::Shots::from_env(),
                 shots_settings: false,
             };
+            if app.look.wan_on_start && app.shots.is_none() {
+                app.refresh_info(&cc.egui_ctx);
+            }
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =
                 std::env::args_os().skip(1).map(Into::into).collect();

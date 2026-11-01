@@ -371,6 +371,28 @@ impl ExportTool {
         running
     }
 
+    /// Take the example maps out (a scan of a real network is starting, or
+    /// the Examples menu's Close). True if one was open.
+    pub fn close_examples(&mut self) -> bool {
+        let before = self.slots.len();
+        self.slots
+            .retain(|s| crate::skills::example(&s.path).is_none());
+        if self.slots.len() == before {
+            return false;
+        }
+        self.shown = self.shown.min(self.slots.len().saturating_sub(1));
+        self.gather_secrets();
+        self.generation += 1;
+        true
+    }
+
+    /// An example map is open.
+    pub fn example_open(&self) -> bool {
+        self.slots
+            .iter()
+            .any(|s| crate::skills::example(&s.path).is_some())
+    }
+
     /// Open one of the example maps (see `skills::EXAMPLES`).
     pub fn open_example(&mut self, ctx: &egui::Context, i: usize) {
         self.open(ctx, vec![crate::skills::example_path(i)]);
@@ -657,6 +679,21 @@ mod tests {
         assert_eq!(t.mapnetwork().unwrap().0, &PathBuf::from("/x/a.dc.html"));
         assert_eq!(t.slots.len(), 2);
         assert_eq!(t.shown, 1);
+    }
+
+    #[test]
+    fn a_scan_closes_the_examples_only() {
+        let mut t = ExportTool::default();
+        let map = || convert(MAP.as_bytes().to_vec(), unifi::Clients::None).unwrap();
+        t.shown = land(&mut t.slots, PathBuf::from("/x/mine.dc.html"), map());
+        t.shown = land(&mut t.slots, crate::skills::example_path(1), map());
+        assert!(t.example_open());
+        let g = t.generation;
+        assert!(t.close_examples());
+        assert!(t.generation > g, "the map rebuilds");
+        assert!(!t.example_open());
+        assert_eq!(t.mapnetwork().unwrap().0, &PathBuf::from("/x/mine.dc.html"));
+        assert!(!t.close_examples());
     }
 
     #[test]
