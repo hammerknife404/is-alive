@@ -412,6 +412,16 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         summary += " · clients not mapped";
     }
     map.summary = summary;
+    // A map without SITES is one place: the map's own title names it. With
+    // SITES, a card the map put at no site stays outside every site's box.
+    if doc.sites.is_empty() {
+        let title = doc.title.trim();
+        map.fill_sites(if title.is_empty() {
+            "This network"
+        } else {
+            title
+        });
+    }
     map
 }
 

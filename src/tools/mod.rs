@@ -1,5 +1,6 @@
 pub mod advanced;
 pub mod bundle;
+pub mod calc;
 pub mod dns;
 pub mod export;
 pub mod notes;
