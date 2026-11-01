@@ -1,0 +1,2 @@
+# Viewer test files: keep their exact bytes (CRLF, BOMs, UTF-16).
+assets/notes-debug/viewer-* -text -diff

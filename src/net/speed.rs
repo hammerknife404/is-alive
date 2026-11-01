@@ -11,9 +11,11 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = "speed.cloudflare.com";
 pub const BASE: &str = "https://speed.cloudflare.com";
-/// The file "Download a file" starts with: ThinkBroadband's public test
-/// file (London), large enough that a stream never runs out.
-pub const DEFAULT_FILE: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
+/// The file "Download a file" starts with (and the Speed Test's default):
+/// Cloudflare's own download, served from the nearest data centre. Each
+/// stream fetches it again as soon as it ends, so 25 MB never runs out, and
+/// it stays under the size Cloudflare refuses (see DOWN_BYTES).
+pub const DEFAULT_FILE: &str = "https://speed.cloudflare.com/__down?bytes=25000000";
 /// Latency target when downloading a file: Cloudflare's resolver, nearby
 /// on any line, so idle latency, jitter and bufferbloat read the local
 /// line rather than the path to wherever the file lives.
@@ -637,9 +639,11 @@ pub(crate) mod tests {
         assert_eq!(f.probe_host().unwrap(), FILE_PROBE);
         assert_eq!(cf.probe_host().unwrap(), HOST);
         assert!(Server::File("ftp://x".into()).probe_host().is_err());
+        assert_eq!(file_host(DEFAULT_FILE).unwrap(), HOST);
         assert_eq!(
-            file_host(DEFAULT_FILE).unwrap(),
-            "ipv4.download.thinkbroadband.com"
+            DEFAULT_FILE,
+            Server::Cloudflare.url(Dir::Down),
+            "the same download the Cloudflare server uses"
         );
         assert!(!f.uploads());
         let u = Server::Upload(" https://speed.example.net/backend/empty.php ".into());

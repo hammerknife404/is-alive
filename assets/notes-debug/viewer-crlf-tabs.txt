@@ -1,0 +1,17 @@
+# viewer-crlf-tabs.txt: Windows line endings (CRLF), tabs, a long line
+# Every line should show on its own numbered row with no stray symbols at the end.
+
+Interface	VLAN	IP		Status
+X0	1	10.20.0.1	Up
+X1	-	203.0.113.42	Up
+X2	30	10.30.0.1	Down
+
+LONG LINE: field000=value field001=value field002=value field003=value field004=value field005=value field006=value field007=value field008=value field009=value field010=value field011=value field012=value field013=value field014=value field015=value field016=value field017=value field018=value field019=value field020=value field021=value field022=value field023=value field024=value field025=value field026=value field027=value field028=value field029=value field030=value field031=value field032=value field033=value field034=value field035=value field036=value field037=value field038=value field039=value field040=value field041=value field042=value field043=value field044=value field045=value field046=value field047=value field048=value field049=value field050=value field051=value field052=value field053=value field054=value field055=value field056=value field057=value field058=value field059=value field060=value field061=value field062=value field063=value field064=value field065=value field066=value field067=value field068=value field069=value field070=value field071=value field072=value field073=value field074=value field075=value field076=value field077=value field078=value field079=value field080=value field081=value field082=value field083=value field084=value field085=value field086=value field087=value field088=value field089=value field090=value field091=value field092=value field093=value field094=value field095=value field096=value field097=value field098=value field099=value field100=value field101=value field102=value field103=value field104=value field105=value field106=value field107=value field108=value field109=value field110=value field111=value field112=value field113=value field114=value field115=value field116=value field117=value field118=value field119=value field120=value field121=value field122=value field123=value field124=value field125=value field126=value field127=value field128=value field129=value field130=value field131=value field132=value field133=value field134=value field135=value field136=value field137=value field138=value field139=value field140=value field141=value field142=value field143=value field144=value field145=value field146=value field147=value field148=value field149=value field150=value field151=value field152=value field153=value field154=value field155=value field156=value field157=value field158=value field159=value field160=value field161=value field162=value field163=value field164=value field165=value field166=value field167=value field168=value field169=value field170=value field171=value field172=value field173=value field174=value field175=value field176=value field177=value field178=value field179=value field180=value field181=value field182=value field183=value field184=value field185=value field186=value field187=value field188=value field189=value field190=value field191=value field192=value field193=value field194=value field195=value field196=value field197=value field198=value field199=value
+
+Unicode: café, naïve, 日本語, emoji 🔥 ✅
+Trailing spaces after this text:     
+	Line starting with a tab
+    Line starting with four spaces
+
+
+Two blank lines above. Last line has no line ending.

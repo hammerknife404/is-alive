@@ -138,9 +138,9 @@ impl Level {
 /// What the test runs against.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 enum Pick {
-    #[default]
     Cloudflare,
-    /// Download the file at `file_url`.
+    /// Download the file at `file_url` (the default: Cloudflare's download).
+    #[default]
     File,
     /// Upload to `upload_url`.
     Upload,
@@ -177,7 +177,7 @@ pub struct SpeedTool {
 impl Default for SpeedTool {
     fn default() -> Self {
         Self {
-            pick: Pick::Cloudflare,
+            pick: Pick::File,
             file_url: speed::DEFAULT_FILE.into(),
             upload_url: String::new(),
             secs: 10,
