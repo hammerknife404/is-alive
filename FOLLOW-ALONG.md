@@ -15,9 +15,10 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
-4. Check the version: the title bar at the top of the window says `is-alive 0.7.2` (or newer).
+4. Check the version: the bottom right corner of the window says `v0.24.0` (or newer), and so does the title bar.
+5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
 
-You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export**, **Map**, **Notes**, **Speed Test**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Full scan** and **Refresh** on the right. Clicking **is-alive** at the top left opens Settings (theme and the like).
+You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export**, **Map**, **Notes**, **Speed Test**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** (or the **F1** key) opens the is-alive wiki, a page per tab, in your browser. Clicking **is-alive** at the top left opens Settings (theme and the like).
 
 > **Please watch, don't run, the Port Check and Subnet Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -97,7 +98,23 @@ Then try these, one at a time:
 
 ---
 
-## 6. Results and sharing
+## 6. Try it yourself: the network map
+
+The **Map** tab draws a network as a picture: the internet at the top, then the firewall, switches, wireless access points and servers below, each a coloured card. It's safe to try: the built-in examples are made-up companies, so nothing on the real network is touched.
+
+1. Click the **Map** tab.
+2. Click **Examples** at the top right and pick **Contoso Health: 23 clinics, 81 devices**.
+3. Each grey box is one clinic. Scroll to zoom in, and drag the background to move around.
+4. Click any card. A panel opens on the right with what's known about it (its address, its model, any problems found), and the line to the box it plugs into lights up.
+5. Right-click a card and choose **Select the path to the WAN**. Every box between that card and the internet lights up: that's the route its traffic takes.
+6. Try the layout buttons along the top (**Sites**, **Cluster**, **Tree**, **Zones**): the same network, arranged four ways.
+7. To leave the example, open **Examples** again and click **Close the example**.
+
+**What it means:** when something breaks, the map shows what it depends on. If a switch fails, everything drawn below it loses its connection.
+
+---
+
+## 7. Results and sharing
 
 1. Click the **Results** tab. Every check you ran is listed with its start and end time.
 2. **Copy** puts everything on the clipboard, ready to paste into an email or support ticket. **Save** writes it to a text file.
@@ -121,9 +138,13 @@ Then try these, one at a time:
 | **DMARC** | Tells receivers what to do with email that fails SPF/DKIM: nothing, spam folder, or reject |
 | **Blacklist** | A shared list of senders known for spam; being on one sends your email to junk |
 | **Port** | A numbered door on a device for one kind of service (443 = secure websites, 25 = email) |
+| **Firewall** | The device at the edge of the network that decides what traffic is allowed in and out |
+| **Switch** | A box with many network sockets that connects the wired devices in a building |
+| **Access point (AP)** | The box on the ceiling or wall that provides Wi-Fi |
+| **Uplink** | The connection from a device to the one above it, towards the internet |
 
 ---
 
 ## Questions after the demo?
 
-Ask the presenter, or open the app again later: everything in this guide works the same on your own.
+Ask the presenter, or open the app again later: everything in this guide works the same on your own. **Help** at the bottom right opens the wiki, which explains every tab.

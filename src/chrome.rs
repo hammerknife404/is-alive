@@ -6,6 +6,9 @@ use crate::job::Job;
 use crate::{App, FULL_SCAN_TIP, TABS, VERSION, tab_key, theme, widgets};
 use eframe::egui;
 
+/// The wiki's front page: Help and F1 open it.
+pub const WIKI: &str = "https://github.com/hammerknife404/is-alive/wiki";
+
 impl App {
     /// The tab bar.
     pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
@@ -165,6 +168,14 @@ impl App {
                     }
                     ui.separator();
                     ui.weak(format!("v{VERSION}"));
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Help").small())
+                        .on_hover_text("Open the is-alive wiki in the browser (F1)")
+                        .clicked()
+                    {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(WIKI));
+                    }
                     if self.look.theme == theme::Theme::Miami
                         && let Some(e) = &self.backdrop.err
                     {
@@ -307,6 +318,7 @@ fn shortcuts(ui: &mut egui::Ui) {
                     "Next item in Notes (twice ends the list)",
                 ),
                 ("Esc", "Clear the selection on the Map"),
+                ("F1", "Open the is-alive wiki (Help)"),
             ] {
                 ui.label(egui::RichText::new(k).monospace());
                 ui.label(what);

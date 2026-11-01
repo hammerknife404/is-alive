@@ -194,9 +194,13 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results.
+    /// Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results; F1
+    /// opens the wiki.
     fn tab_keys(&mut self, ui: &mut egui::Ui) {
         use egui::Key::*;
+        if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, F1)) {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(chrome::WIKI));
+        }
         let keys = [Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9];
         for (n, (tab, ..)) in TABS.iter().enumerate() {
             if let Some(d) = tab_key(n)
