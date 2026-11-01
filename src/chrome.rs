@@ -125,6 +125,20 @@ impl App {
                          on Refresh or a full scan",
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(crate::update::Found::Newer(r)) = &self.update {
+                        ui.hyperlink_to(
+                            egui::RichText::new(format!("Update: v{}", r.version))
+                                .color(widgets::ok())
+                                .small(),
+                            &r.url,
+                        )
+                        .on_hover_text(format!(
+                            "Version {} is out (this is v{VERSION}). Opens its release page; \
+                             nothing is downloaded.",
+                            r.version
+                        ));
+                        ui.separator();
+                    }
                     if ui
                         .add_enabled(
                             self.info_job.is_none(),
@@ -208,6 +222,49 @@ impl App {
             .changed()
         {
             theme::save(&self.look);
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(
+                    &mut self.look.updates_on_start,
+                    "Check for updates on start",
+                )
+                .on_hover_text(
+                    "Asks GitHub for the latest release when the app opens (one HTTPS \
+                     request). A newer one shows in the footer with a link; nothing is \
+                     downloaded.",
+                )
+                .changed()
+            {
+                theme::save(&self.look);
+            }
+            if ui
+                .add_enabled(
+                    self.update_job.is_none(),
+                    egui::Button::new("Check now").small(),
+                )
+                .clicked()
+            {
+                self.check_updates(ui.ctx(), true);
+            }
+        });
+        match (&self.update, self.update_job.is_some()) {
+            (_, true) => {
+                ui.weak("Checking…");
+            }
+            (Some(crate::update::Found::Newer(r)), _) => {
+                ui.hyperlink_to(
+                    format!("Version {} is out: open the release page", r.version),
+                    &r.url,
+                );
+            }
+            (Some(crate::update::Found::UpToDate), _) => {
+                ui.weak(format!("Up to date (v{VERSION})"));
+            }
+            (Some(crate::update::Found::Failed(e)), _) => {
+                ui.weak(format!("Couldn't check: {e}"));
+            }
+            (None, false) => {}
         }
         ui.separator();
         ui.label(egui::RichText::new("Map").strong());

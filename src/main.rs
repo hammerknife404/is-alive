@@ -18,6 +18,7 @@ mod sonicwall;
 mod theme;
 mod tools;
 mod unifi;
+mod update;
 mod widgets;
 
 use eframe::egui;
@@ -125,6 +126,11 @@ struct App {
     /// The public address has been asked for: on start (unless Settings
     /// turns that off), on Refresh or by a full scan.
     wan_asked: bool,
+    /// An update check under way, and what the last one found.
+    update_job: Option<Job<update::Found>>,
+    update: Option<update::Found>,
+    /// The running check came from Check now.
+    update_asked: bool,
     /// The sweep was running last frame (to see one start).
     was_sweeping: bool,
     /// Results tab filter; matches tool name or output, case-insensitive.
@@ -260,6 +266,24 @@ impl App {
         self.collect();
         self.dropped_files(ctx);
         pump(&mut self.info_job, |i| self.info = i);
+        let mut found = None;
+        pump(&mut self.update_job, |f| found = Some(f));
+        if let Some(f) = found {
+            match &f {
+                update::Found::Newer(r) => widgets::toast(
+                    format!("Version {} is out: see the footer", r.version),
+                    true,
+                ),
+                update::Found::UpToDate if self.update_asked => {
+                    widgets::toast("is-alive is up to date", true)
+                }
+                update::Found::Failed(_) if self.update_asked => {
+                    widgets::toast("Couldn't check for updates (Settings says why)", false)
+                }
+                _ => {}
+            }
+            self.update = Some(f);
+        }
         let mut picked = None;
         pump(&mut self.pick_image, |p| picked = p);
         if let Some(p) = picked {
@@ -433,6 +457,13 @@ impl App {
             }
             None => {}
         }
+    }
+
+    /// Ask GitHub for the latest release. `asked`: from Check now, so say
+    /// how it went; on start, only a newer release is worth a word.
+    fn check_updates(&mut self, ctx: &egui::Context, asked: bool) {
+        self.update_asked = asked;
+        self.update_job = Some(Job::spawn(ctx, |tx| tx.send(update::check(VERSION))));
     }
 
     fn refresh_info(&mut self, ctx: &egui::Context) {
@@ -792,6 +823,9 @@ fn main() -> eframe::Result {
                 info_job: None,
                 wan_asked: false,
                 was_sweeping: false,
+                update_job: None,
+                update: None,
+                update_asked: false,
                 filter: String::new(),
                 filter_cache: None,
                 jump_to_new: false,
@@ -804,6 +838,9 @@ fn main() -> eframe::Result {
             };
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
+            }
+            if app.look.updates_on_start && app.shots.is_none() {
+                app.check_updates(&cc.egui_ctx, false);
             }
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =

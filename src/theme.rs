@@ -672,6 +672,8 @@ pub struct Settings {
     /// OpenDNS). Off: nothing leaves the machine until the user runs
     /// something.
     pub wan_on_start: bool,
+    /// Ask GitHub for a newer release when the app starts.
+    pub updates_on_start: bool,
     pub backdrop: Source,
     /// Notes and text-viewer font (see `fonts`) and size in points.
     pub notes_font: String,
@@ -686,6 +688,9 @@ pub struct Settings {
 /// Whether the public IP is looked up at start unless the user says.
 pub const WAN_ON_START: bool = true;
 
+/// Whether a newer release is looked for at start unless the user says.
+pub const UPDATES_ON_START: bool = true;
+
 /// Font sizes the Notes tab offers.
 pub const NOTES_SIZES: &[u8] = &[8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32];
 
@@ -699,6 +704,7 @@ impl Default for Settings {
             size: None,
             map_note: true,
             wan_on_start: WAN_ON_START,
+            updates_on_start: UPDATES_ON_START,
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
             notes_split: 0.5,
@@ -723,6 +729,7 @@ impl Settings {
                 "vhs" => s.vhs = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
+                "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
@@ -788,6 +795,9 @@ impl Settings {
         }
         if self.wan_on_start != WAN_ON_START {
             s += &format!("wan_on_start={}\n", self.wan_on_start as u8);
+        }
+        if self.updates_on_start != UPDATES_ON_START {
+            s += &format!("updates_on_start={}\n", self.updates_on_start as u8);
         }
         if !self.vhs {
             s += "vhs=0\n";
@@ -1038,6 +1048,7 @@ mod tests {
             size: Some((1280, 800)),
             map_note: false,
             wan_on_start: !WAN_ON_START,
+            updates_on_start: !UPDATES_ON_START,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_font: "DejaVu Sans Mono".into(),
             notes_size: 16,

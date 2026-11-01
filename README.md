@@ -29,7 +29,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 
 ## Privacy
 
-Built for sites with regulated data. Nothing is sent unless you run something, apart from one DNS query to OpenDNS on start for the public IP (off in Settings); there's no telemetry, update check or account. Configs are sanitized on this machine before they're saved or shared, notes are redacted, and copies stay out of Windows clipboard history. See [Privacy and security](https://github.com/hammerknife404/is-alive/wiki/Privacy-and-security).
+Built for sites with regulated data. Nothing is sent unless you run something, apart from one DNS query to OpenDNS for the public IP and one request to GitHub for the latest release when it starts (both off in Settings; an update is only linked, never downloaded); there's no telemetry, update check or account. Configs are sanitized on this machine before they're saved or shared, notes are redacted, and copies stay out of Windows clipboard history. See [Privacy and security](https://github.com/hammerknife404/is-alive/wiki/Privacy-and-security).
 
 ## Build
 
