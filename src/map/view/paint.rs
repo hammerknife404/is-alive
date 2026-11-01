@@ -33,13 +33,7 @@ impl MapView {
         }
 
         let sel = self.selection();
-        let mut lit: HashSet<usize> = HashSet::new();
-        for &s in &sel {
-            lit.extend(self.map.path(s));
-            lit.extend(
-                (0..self.map.nodes.len()).filter(|&k| self.map.nodes[k].parent() == Some(s)),
-            );
-        }
+        let (lit, lit_links) = self.lit(&sel);
         let fade = |i: usize| -> f32 {
             let n = &self.map.nodes[i];
             let mut a: f32 = 1.0;
@@ -229,7 +223,7 @@ impl MapView {
                 continue;
             };
             let alpha = fade(i).min(fade(*up));
-            let on = !sel.is_empty() && lit.contains(&i) && lit.contains(up);
+            let on = lit_links.contains(&i);
             if let Some(g) = group(i)
                 && group(*up) != Some(g)
             {
@@ -252,10 +246,16 @@ impl MapView {
             else {
                 continue;
             };
-            let pts: Vec<Pos2> = layout::route(*a, *b, self.lay.stacked[i], self.lay.trunk[i])
-                .into_iter()
-                .map(|w| self.to_screen(rect, w))
-                .collect();
+            // Dragged by hand (either end): joined on the sides facing each
+            // other, as they sit now, rather than the layout's route.
+            let moved = self.placed.contains_key(&n.id)
+                || self.placed.contains_key(&self.map.nodes[*up].id);
+            let world = if moved {
+                layout::route_free(*a, *b)
+            } else {
+                layout::route(*a, *b, self.lay.stacked[i], self.lay.trunk[i])
+            };
+            let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
             // The link's port or note is a chip on its card (see `card`).
             flows |= draw(
                 &pts,

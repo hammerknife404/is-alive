@@ -613,6 +613,44 @@ pub fn route(parent: Pos2, child: Pos2, stacked: bool, trunk: Option<Trunk>) -> 
     }
 }
 
+/// Route between two cards placed by hand, out of the side that faces the
+/// other card: bottom to top when one is clearly below the other, top to
+/// bottom when above, else side to side with the bend halfway across.
+/// Cards on top of each other get a straight line between their middles.
+pub fn route_free(parent: Pos2, child: Pos2) -> Vec<Pos2> {
+    const CLEAR: f32 = 12.0;
+    let p = Rect::from_min_size(parent, CARD);
+    let c = Rect::from_min_size(child, CARD);
+    let vertical = |from: Pos2, to: Pos2| {
+        let mid = (from.y + to.y) / 2.0;
+        if (to.x - from.x).abs() < 0.5 {
+            vec![from, to]
+        } else {
+            vec![from, pos2(from.x, mid), pos2(to.x, mid), to]
+        }
+    };
+    if c.top() >= p.bottom() + CLEAR {
+        vertical(p.center_bottom(), c.center_top())
+    } else if c.bottom() + CLEAR <= p.top() {
+        vertical(p.center_top(), c.center_bottom())
+    } else if c.left() >= p.right() + CLEAR || c.right() + CLEAR <= p.left() {
+        let right = c.left() >= p.right();
+        let (from, to) = if right {
+            (p.right_center(), c.left_center())
+        } else {
+            (p.left_center(), c.right_center())
+        };
+        let mid = (from.x + to.x) / 2.0;
+        if (to.y - from.y).abs() < 0.5 {
+            vec![from, to]
+        } else {
+            vec![from, pos2(mid, from.y), pos2(mid, to.y), to]
+        }
+    } else {
+        vec![p.center(), c.center()]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,6 +838,37 @@ mod tests {
     fn mode_keys_round_trip() {
         for m in Mode::ALL {
             assert_eq!(Mode::from_key(m.key()), Some(m));
+        }
+    }
+
+    #[test]
+    fn a_moved_card_is_joined_on_the_side_facing_it() {
+        let p = pos2(0.0, 0.0);
+        // Below: out of the bottom, into the top.
+        let r = route_free(p, pos2(300.0, 300.0));
+        assert_eq!(r[0], pos2(CARD.x / 2.0, CARD.y));
+        assert_eq!(*r.last().unwrap(), pos2(300.0 + CARD.x / 2.0, 300.0));
+        // Above: out of the top, into the bottom.
+        let r = route_free(p, pos2(-50.0, -300.0));
+        assert_eq!(r[0], pos2(CARD.x / 2.0, 0.0));
+        assert_eq!(
+            *r.last().unwrap(),
+            pos2(-50.0 + CARD.x / 2.0, -300.0 + CARD.y)
+        );
+        // Beside, on the right: out of the right side, into the left.
+        let r = route_free(p, pos2(CARD.x + 80.0, 20.0));
+        assert_eq!(r[0], pos2(CARD.x, CARD.y / 2.0));
+        assert_eq!(*r.last().unwrap(), pos2(CARD.x + 80.0, 20.0 + CARD.y / 2.0));
+        // Beside, on the left.
+        let r = route_free(p, pos2(-CARD.x - 80.0, 0.0));
+        assert_eq!(r, [pos2(0.0, CARD.y / 2.0), pos2(-80.0, CARD.y / 2.0)]);
+        for r in [
+            route_free(p, pos2(300.0, 300.0)),
+            route_free(p, pos2(260.0, 30.0)),
+        ] {
+            for s in r.windows(2) {
+                assert!(s[0].x == s[1].x || s[0].y == s[1].y);
+            }
         }
     }
 

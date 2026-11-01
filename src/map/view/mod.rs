@@ -99,6 +99,8 @@ enum PanelEv {
     Clear(usize, Tool),
     /// A card dragged from one place in the stack to another.
     Move(usize, usize),
+    /// Trace to WAN ticked or not.
+    TraceWan(bool),
 }
 
 pub struct Sources<'a> {
@@ -125,6 +127,9 @@ pub struct MapView {
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
+    /// Light each selected card's whole path to the internet, not only
+    /// the links between the selected cards.
+    trace_wan: bool,
     /// More cards picked with Ctrl+click, lit with it.
     also: Vec<String>,
     /// Cards pinned in the selection: a plain click elsewhere keeps them.
@@ -606,6 +611,65 @@ impl MapView {
         }
     }
 
+    /// What a selection lights: (cards, links by their lower card). One
+    /// card: its uplink and its children's links. More: only the part of
+    /// the tree that joins them, so nothing past the topmost selected card
+    /// lights up. With Trace to WAN, each card's path to the internet too.
+    fn lit(&self, sel: &[usize]) -> (HashSet<usize>, HashSet<usize>) {
+        let n = self.map.nodes.len();
+        let mut cards: HashSet<usize> = sel.iter().copied().filter(|&i| i < n).collect();
+        let mut links = HashSet::new();
+        if cards.is_empty() {
+            return (cards, links);
+        }
+        let parent = |i: usize| self.map.nodes[i].parent();
+        if self.trace_wan {
+            for &s in sel {
+                let path = self.map.path(s);
+                links.extend(path.iter().skip(1).copied());
+                cards.extend(path);
+            }
+        }
+        if sel.len() == 1 {
+            let s = sel[0];
+            if let Some(u) = parent(s) {
+                cards.insert(u);
+                links.insert(s);
+            }
+            for (k, node) in self.map.nodes.iter().enumerate() {
+                if node.parent() == Some(s) {
+                    cards.insert(k);
+                    links.insert(k);
+                }
+            }
+            return (cards, links);
+        }
+        // How many selected cards each card's branch holds, and how many
+        // its whole tree does: a link joins selected cards when the branch
+        // under it holds some of its tree's selection, but not all.
+        let mut under = vec![0usize; n];
+        let mut root = vec![0usize; n];
+        for &s in sel {
+            let path = self.map.path(s);
+            for &k in &path {
+                under[k] += 1;
+            }
+            root[path[0]] += 1;
+        }
+        for (k, &held) in under.iter().enumerate() {
+            if held == 0 || parent(k).is_none() {
+                continue;
+            }
+            let top = self.map.path(k)[0];
+            if held < root[top] {
+                links.insert(k);
+                cards.insert(k);
+                cards.extend(parent(k));
+            }
+        }
+        (cards, links)
+    }
+
     /// Every card below `i`, nearest first.
     fn below(&self, i: usize) -> Vec<usize> {
         let kids = self.map.children();
@@ -749,6 +813,13 @@ impl MapView {
         let mut act = None;
         let mut search_enter = false;
         let mut fit = false;
+        // Roughly what one row needs (Re-layout adds a button).
+        let need = if self.placed.is_empty() {
+            990.0
+        } else {
+            1070.0
+        };
+        let narrow = ui.available_width() < need;
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search)
@@ -839,7 +910,6 @@ impl MapView {
                     act = Some(Action::Reload);
                 }
                 ui.separator();
-                ui.label("Layout");
                 let now = self.mode();
                 for m in Mode::ALL {
                     if ui
@@ -856,40 +926,54 @@ impl MapView {
                     }
                 }
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_enabled_ui(!empty, |ui| {
-                    if ui
-                        .button("Export SVG…")
-                        .on_hover_text("Save the map as SVG")
-                        .clicked()
-                    {
-                        let pos: Vec<Option<Pos2>> =
-                            (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
-                        widgets::save_file(
-                            "is-alive-map.svg".into(),
-                            "SVG",
-                            vec!["svg"],
-                            super::svg::render(
-                                &self.map,
-                                &pos,
-                                &self.lay.stacked,
-                                &self.lay.trunk,
-                                &self.lay.boxes,
-                                ui.visuals().dark_mode,
-                            ),
-                        );
-                    }
+            if !narrow {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    act = act.take().or(self.toolbar_end(ui, src, empty));
                 });
-                if let Some(a) = examples_menu(ui, src) {
-                    act = Some(a);
-                }
-            });
+            }
         });
+        // A narrow window: Examples and Export SVG on a row of their own
+        // rather than over the layout buttons.
+        if narrow {
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    act = act.take().or(self.toolbar_end(ui, src, empty));
+                });
+            });
+        }
         Toolbar {
             act,
             search_enter,
             fit,
         }
+    }
+
+    /// The toolbar's right end, drawn right to left: Export SVG, Examples.
+    fn toolbar_end(&self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
+        ui.add_enabled_ui(!empty, |ui| {
+            if ui
+                .button("Export SVG…")
+                .on_hover_text("Save the map as SVG")
+                .clicked()
+            {
+                let pos: Vec<Option<Pos2>> =
+                    (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
+                widgets::save_file(
+                    "is-alive-map.svg".into(),
+                    "SVG",
+                    vec!["svg"],
+                    super::svg::render(
+                        &self.map,
+                        &pos,
+                        &self.lay.stacked,
+                        &self.lay.trunk,
+                        &self.lay.boxes,
+                        ui.visuals().dark_mode,
+                    ),
+                );
+            }
+        });
+        examples_menu(ui, src)
     }
 
     /// Under the toolbar: the map's summary, the accuracy note, and how far
@@ -944,6 +1028,7 @@ impl MapView {
         }
         match ev {
             Some(PanelEv::Drop(i)) => self.toggle(i),
+            Some(PanelEv::TraceWan(on)) => self.trace_wan = on,
             Some(PanelEv::Keep(i)) => self.keep(i),
             Some(PanelEv::Move(from, to)) => self.move_card(from, to),
             Some(PanelEv::Run(i, tool)) => {
@@ -1257,6 +1342,32 @@ mod tests {
             })
             .collect();
         v
+    }
+
+    #[test]
+    fn a_selection_lights_only_what_joins_it() {
+        // 0 internet - 1 gateway - 2 core - {3 access - {5 ap - 7, 6 ap}, 4 server}
+        let mut v = view(8);
+        for (c, p) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3), (6, 3), (7, 5)] {
+            v.map.nodes[c].up = Some((p, crate::map::Link::Wired, None));
+        }
+        let set = |v: &[usize]| v.iter().copied().collect::<HashSet<usize>>();
+        // An AP and its switch: that one link, nothing above the switch.
+        let (cards, links) = v.lit(&[5, 3]);
+        assert_eq!(links, set(&[5]));
+        assert_eq!(cards, set(&[5, 3]));
+        // Two APs: the links through their switch, still nothing above it.
+        let (cards, links) = v.lit(&[7, 6]);
+        assert_eq!(links, set(&[7, 5, 6]));
+        assert_eq!(cards, set(&[7, 5, 6, 3]));
+        // One card: its uplink and its children.
+        let (_, links) = v.lit(&[3]);
+        assert_eq!(links, set(&[3, 5, 6]));
+        // Trace to WAN adds each card's path to the internet.
+        v.trace_wan = true;
+        let (cards, links) = v.lit(&[5, 3]);
+        assert_eq!(links, set(&[1, 2, 3, 5]));
+        assert!(cards.contains(&0));
     }
 
     #[test]
