@@ -45,8 +45,11 @@ impl MapView {
             None
         };
         if resp.drag_started() {
-            self.drag = resp
-                .interact_pointer_pos()
+            // Where the button went down, not where the pointer is once it
+            // counts as a drag: a quick flick off a card still moves it.
+            self.drag = ui
+                .input(|i| i.pointer.press_origin())
+                .or(resp.interact_pointer_pos())
                 .and_then(|p| self.hit(self.to_world(rect, p)))
                 .map(|i| self.map.nodes[i].id.clone());
         }

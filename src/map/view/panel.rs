@@ -109,10 +109,24 @@ impl MapView {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                if sel.len() > 1 {
-                    ui.horizontal(|ui| {
+                ui.horizontal(|ui| {
+                    if sel.len() > 1 {
                         ui.strong(format!("{} selected", sel.len()))
                             .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
+                    }
+                    let mut trace = self.trace_wan;
+                    if ui
+                        .checkbox(&mut trace, "Trace to WAN")
+                        .on_hover_text(
+                            "Light each selected card's whole path to the internet. Off, only \
+                             the links between the selected cards light (one card: its own \
+                             links)",
+                        )
+                        .changed()
+                    {
+                        *ev = Some(PanelEv::TraceWan(trace));
+                    }
+                    if sel.len() > 1 {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .small_button("Copy all")
@@ -125,9 +139,9 @@ impl MapView {
                                 widgets::toast(format!("{} cards copied", sel.len()), true);
                             }
                         });
-                    });
-                    ui.add_space(4.0);
-                }
+                    }
+                });
+                ui.add_space(4.0);
                 // Where the stack starts, so a card's place in it doesn't
                 // change as the panel scrolls.
                 let origin = ui.min_rect().top();
