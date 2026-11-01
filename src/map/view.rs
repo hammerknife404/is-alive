@@ -584,6 +584,18 @@ impl MapView {
         self.fit_to(view, self.bounds());
     }
 
+    /// Ease the view so the middle of the map sits in the middle of `view`,
+    /// keeping the zoom.
+    fn center(&mut self, view: Rect) {
+        let b = self.bounds();
+        if !b.is_positive() {
+            return;
+        }
+        let zoom = self.aim.map_or(self.zoom, |a| a.1);
+        self.aim = Some((view.size() / 2.0 - b.center().to_vec2() * zoom, zoom));
+        self.follow = false;
+    }
+
     /// Ease the view to show the world rect `b`.
     fn fit_to(&mut self, view: Rect, b: Rect) {
         if !b.is_positive() {
@@ -1886,11 +1898,11 @@ impl MapView {
         if focused && (flows || pulse) {
             // Flowing links at the display's rate; the warning pulse is slow
             // enough for 20 fps, and it's on screen as long as the tab is.
-            ui.ctx().request_repaint_after(if flows {
-                crate::backdrop::SMOOTH
+            if flows {
+                ui.ctx().request_repaint_after(crate::backdrop::SMOOTH);
             } else {
-                std::time::Duration::from_millis(50)
-            });
+                crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
+            }
         }
     }
 
@@ -2105,6 +2117,12 @@ impl MapView {
                 .clicked()
         };
         let fit = button(ui, 36.0, "Fit", "Show the whole map");
+        let center = button(
+            ui,
+            56.0,
+            "Center",
+            "Move the middle of the map to the middle of the view, at this zoom",
+        );
         let zoom_in = button(ui, 24.0, "+", "Zoom in");
         let pct = format!("{:.0}%", self.zoom * 100.0);
         let reset = button(ui, 48.0, &pct, "Back to 100%");
@@ -2121,6 +2139,8 @@ impl MapView {
         if fit {
             self.follow = true;
             self.fit(rect);
+        } else if center {
+            self.center(rect);
         } else if let Some(z) = target {
             // Zoom about the middle of the canvas.
             let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -2130,8 +2150,6 @@ impl MapView {
         }
     }
 
-    /// Roles to fade in and out, and the action items, worst first: the
-    /// sidebar /mapnetwork's maps have.
     /// Select every card at `site` (its card, when collapsed), lighting
     /// the whole group's connections, and bring its box into view.
     fn show_site(&mut self, view: Rect, site: &str) {
@@ -2157,6 +2175,8 @@ impl MapView {
         self.follow = false;
     }
 
+    /// Sites, roles to fade in and out, and the action items, worst first:
+    /// the sidebar /mapnetwork's maps have.
     fn sidebar(
         &mut self,
         ui: &mut Ui,
@@ -2760,6 +2780,23 @@ mod tests {
             })
             .collect();
         v
+    }
+
+    #[test]
+    fn center_puts_the_map_middle_mid_view_at_the_same_zoom() {
+        let mut v = view(3);
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
+        v.zoom = 0.5;
+        v.follow = true;
+        let view = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
+        v.center(view);
+        let (pan, zoom) = v.aim.expect("eases there");
+        assert_eq!(zoom, 0.5);
+        assert!(!v.follow, "the user moved the view");
+        // Once eased there, the map's middle lands on the view's middle.
+        (v.pan, v.zoom) = (pan, zoom);
+        let mid = v.to_screen(view, v.bounds().center());
+        assert!((mid - view.center()).length() < 0.01, "{mid:?}");
     }
 
     #[test]

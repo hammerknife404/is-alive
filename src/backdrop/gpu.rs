@@ -27,11 +27,17 @@ pub struct Frame {
     /// Sun centre x, y, radius and the horizon row.
     pub sun: [f32; 4],
     pub k: f32,
-    /// Palm triangles, x y pairs in art pixels.
-    pub palms: Vec<f32>,
+    /// Palm triangles, x y pairs in art pixels (shared: the same phase
+    /// reuses them).
+    pub palms: std::sync::Arc<Vec<f32>>,
     pub upload: Option<std::sync::Arc<Layers>>,
     /// Soft glow and haze on the bright parts.
     pub glow: bool,
+    /// Scanlines, colour bleed, grain and a tracking band now and then.
+    pub vhs: bool,
+    /// Seconds (snapped to the frame rate, wrapped hourly) for the VHS
+    /// grain and tracking band.
+    pub time: f32,
 }
 
 pub struct Gpu {
@@ -51,6 +57,28 @@ pub struct Gpu {
     across: (glow::Framebuffer, glow::Texture),
     down: (glow::Framebuffer, glow::Texture),
     size: [usize; 2],
+    u: Uniforms,
+    /// What the offscreen scene (and glow) last drew: (size, phase bits,
+    /// glow). A repaint with the same only scales it onto the window again.
+    drawn: Option<([usize; 2], u32, bool)>,
+}
+
+type Loc = Option<glow::UniformLocation>;
+
+/// Uniform locations, looked up once.
+struct Uniforms {
+    scene_size: Loc,
+    scene_ph: Loc,
+    scene_sun: Loc,
+    scene_k: Loc,
+    palm_size: Loc,
+    blur_size: Loc,
+    blur_dir: Loc,
+    blit_glow_on: Loc,
+    blit_vhs: Loc,
+    blit_time: Loc,
+    blit_size: Loc,
+    blit_view: Loc,
 }
 
 const FULLSCREEN_VS: &str = r#"
@@ -157,26 +185,62 @@ void main() {
 
 /// The scene with hard edges; with glow, the blurred copy's highlights
 /// screened on top and a little of it laid over everything (the haze).
+/// With VHS, as if played off a worn tape: every line jitters a hair
+/// sideways, red bleeds right and blue left, the screen's rows show as
+/// scanlines, grain flickers, and every 9 seconds a tracking band rolls
+/// down, tearing its lines sideways and fizzing with noise.
 const BLIT_FS: &str = r#"
 uniform sampler2D u_img;
 uniform sampler2D u_glow;
 uniform float u_glow_on;
+uniform float u_vhs;
+uniform float u_time;
 uniform vec2 u_size;
 uniform vec2 u_view;
 in vec2 v_uv;
 out vec4 o_color;
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+vec3 art(float x, float y) {
+    float ax = clamp(floor(x), 0.0, u_size.x - 1.0);
+    float ay = clamp(floor(y), 0.0, u_size.y - 1.0);
+    return texelFetch(u_img, ivec2(int(ax), int(u_size.y - 1.0 - ay)), 0).rgb;
+}
 void main() {
     float x = v_uv.x * u_view.x;
     float y = (1.0 - v_uv.y) * u_view.y;
-    float ax = min(floor(x), u_size.x - 1.0);
-    float ay = min(floor(y), u_size.y - 1.0);
-    vec3 c = texelFetch(u_img, ivec2(int(ax), int(u_size.y - 1.0 - ay)), 0).rgb;
+    bool vhs = u_vhs > 0.5;
+    float frame = floor(u_time * 10.0);
+    float band = 0.0;
+    if (vhs) {
+        // The tracking band: a third of every 9 seconds, rolling top to bottom.
+        float cycle = u_time / 9.0;
+        float roll = fract(cycle) * 3.0;
+        if (roll < 1.0) {
+            float by = roll * (u_view.y + 24.0) - 12.0;
+            band = 1.0 - smoothstep(0.0, 6.0, abs(y - by));
+        }
+        float row = floor(y);
+        x += (hash(vec2(row, frame)) - 0.5) * (0.5 + band * 6.0);
+    }
+    vec3 c = art(x, y);
+    if (vhs) {
+        c.r = art(x + 0.6, y).r;
+        c.b = art(x - 0.6, y).b;
+    }
     if (u_glow_on > 0.5) {
         vec3 b = texture(u_glow, vec2(x / u_size.x, 1.0 - y / u_size.y)).rgb;
         float l = dot(b, vec3(0.299, 0.587, 0.114));
         vec3 g = b * clamp((l - 0.38) / 0.62, 0.0, 1.0);
         c = 1.0 - (1.0 - c) * (1.0 - g * 0.75);
         c = mix(c, max(c, b), 0.16);
+    }
+    if (vhs) {
+        // Every third row of the screen's own pixels a little darker.
+        if (mod(floor(gl_FragCoord.y), 3.0) < 1.0) c *= 0.82;
+        float n = hash(floor(gl_FragCoord.xy) + frame * 1.37);
+        c = clamp(c + (n - 0.5) * (0.035 + band * 0.3), 0.0, 1.0);
     }
     o_color = vec4(c, 1.0);
 }
@@ -294,11 +358,40 @@ impl Gpu {
             for f in [glow::TEXTURE_MIN_FILTER, glow::TEXTURE_MAG_FILTER] {
                 gl.tex_parameter_i32(glow::TEXTURE_2D, f, glow::LINEAR as i32);
             }
+            let u = |p, n: &str| gl.get_uniform_location(p, n);
+            // Samplers never change unit: set them once.
+            for (p, names) in [
+                (scene, &["u_back", "u_mid"][..]),
+                (blur, &["u_img"][..]),
+                (blit, &["u_img", "u_glow"][..]),
+            ] {
+                gl.use_program(Some(p));
+                for (unit, n) in names.iter().enumerate() {
+                    gl.uniform_1_i32(u(p, n).as_ref(), unit as i32);
+                }
+            }
+            gl.use_program(None);
+            let uniforms = Uniforms {
+                scene_size: u(scene, "u_size"),
+                scene_ph: u(scene, "u_ph"),
+                scene_sun: u(scene, "u_sun"),
+                scene_k: u(scene, "u_k"),
+                palm_size: u(palm, "u_size"),
+                blur_size: u(blur, "u_size"),
+                blur_dir: u(blur, "u_dir"),
+                blit_glow_on: u(blit, "u_glow_on"),
+                blit_vhs: u(blit, "u_vhs"),
+                blit_time: u(blit, "u_time"),
+                blit_size: u(blit, "u_size"),
+                blit_view: u(blit, "u_view"),
+            };
             Ok(Self {
                 name,
                 scene,
                 palm,
                 blit,
+                u: uniforms,
+                drawn: None,
                 vao: gl.create_vertex_array()?,
                 vbo: gl.create_buffer()?,
                 back: texture(gl)?,
@@ -318,6 +411,7 @@ impl Gpu {
             if let Some(l) = &f.upload {
                 store(gl, self.back, l.size, Some(&l.back));
                 store(gl, self.mid, l.size, Some(&l.mid));
+                self.drawn = None;
             }
             let [w, h] = f.art;
             let outer = gl.get_parameter_framebuffer(glow::FRAMEBUFFER_BINDING);
@@ -334,55 +428,15 @@ impl Gpu {
                     );
                 }
                 self.size = f.art;
+                self.drawn = None;
             }
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
-            gl.viewport(0, 0, w as i32, h as i32);
             gl.disable(glow::SCISSOR_TEST);
             gl.disable(glow::BLEND);
             gl.bind_vertex_array(Some(self.vao));
-
-            gl.use_program(Some(self.scene));
-            let u = |p, n: &str| gl.get_uniform_location(p, n);
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.back));
-            gl.active_texture(glow::TEXTURE1);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.mid));
-            gl.uniform_1_i32(u(self.scene, "u_back").as_ref(), 0);
-            gl.uniform_1_i32(u(self.scene, "u_mid").as_ref(), 1);
-            gl.uniform_2_f32(u(self.scene, "u_size").as_ref(), w as f32, h as f32);
-            gl.uniform_1_f32(u(self.scene, "u_ph").as_ref(), f.phase);
-            let [a, b, c, d] = f.sun;
-            gl.uniform_4_f32(u(self.scene, "u_sun").as_ref(), a, b, c, d);
-            gl.uniform_1_f32(u(self.scene, "u_k").as_ref(), f.k);
-            gl.draw_arrays(glow::TRIANGLES, 0, 3);
-
-            if !f.palms.is_empty() {
-                gl.use_program(Some(self.palm));
-                gl.uniform_2_f32(u(self.palm, "u_size").as_ref(), w as f32, h as f32);
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
-                let bytes: Vec<u8> = f.palms.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, &bytes, glow::STREAM_DRAW);
-                gl.enable_vertex_attrib_array(0);
-                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
-                gl.draw_arrays(glow::TRIANGLES, 0, (f.palms.len() / 2) as i32);
-                gl.disable_vertex_attrib_array(0);
-                gl.bind_buffer(glow::ARRAY_BUFFER, None);
-            }
-
-            if f.glow {
-                gl.use_program(Some(self.blur));
-                gl.active_texture(glow::TEXTURE0);
-                gl.uniform_1_i32(u(self.blur, "u_img").as_ref(), 0);
-                gl.uniform_2_f32(u(self.blur, "u_size").as_ref(), w as f32, h as f32);
-                for ((fbo, _), src, dir) in [
-                    (self.across, self.target, (1.0, 0.0)),
-                    (self.down, self.across.1, (0.0, 1.0)),
-                ] {
-                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-                    gl.bind_texture(glow::TEXTURE_2D, Some(src));
-                    gl.uniform_2_f32(u(self.blur, "u_dir").as_ref(), dir.0, dir.1);
-                    gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                }
+            let key = (f.art, f.phase.to_bits(), f.glow);
+            if self.drawn != Some(key) {
+                self.draw_scene(gl, f);
+                self.drawn = Some(key);
             }
 
             // Onto the window, cropped to it, hard edges.
@@ -402,16 +456,72 @@ impl Gpu {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.down.1));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.target));
-            gl.uniform_1_i32(u(self.blit, "u_img").as_ref(), 0);
-            gl.uniform_1_i32(u(self.blit, "u_glow").as_ref(), 1);
+            let u = &self.u;
             let on = if f.glow { 1.0 } else { 0.0 };
-            gl.uniform_1_f32(u(self.blit, "u_glow_on").as_ref(), on);
-            gl.uniform_2_f32(u(self.blit, "u_size").as_ref(), w as f32, h as f32);
-            gl.uniform_2_f32(u(self.blit, "u_view").as_ref(), f.view[0], f.view[1]);
+            gl.uniform_1_f32(u.blit_glow_on.as_ref(), on);
+            let vhs = if f.vhs { 1.0 } else { 0.0 };
+            gl.uniform_1_f32(u.blit_vhs.as_ref(), vhs);
+            gl.uniform_1_f32(u.blit_time.as_ref(), f.time);
+            gl.uniform_2_f32(u.blit_size.as_ref(), w as f32, h as f32);
+            gl.uniform_2_f32(u.blit_view.as_ref(), f.view[0], f.view[1]);
             gl.draw_arrays(glow::TRIANGLES, 0, 3);
             gl.bind_vertex_array(None);
             gl.active_texture(glow::TEXTURE0);
             // egui restores the rest of its own state after a callback.
+        }
+    }
+
+    /// The scene, its palms and (with glow) the blur, offscreen at art
+    /// resolution.
+    unsafe fn draw_scene(&self, gl: &glow::Context, f: &Frame) {
+        let ([w, h], u) = (f.art, &self.u);
+        unsafe {
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+            gl.viewport(0, 0, w as i32, h as i32);
+
+            gl.use_program(Some(self.scene));
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.back));
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.mid));
+            gl.uniform_2_f32(u.scene_size.as_ref(), w as f32, h as f32);
+            gl.uniform_1_f32(u.scene_ph.as_ref(), f.phase);
+            let [a, b, c, d] = f.sun;
+            gl.uniform_4_f32(u.scene_sun.as_ref(), a, b, c, d);
+            gl.uniform_1_f32(u.scene_k.as_ref(), f.k);
+            gl.draw_arrays(glow::TRIANGLES, 0, 3);
+            gl.active_texture(glow::TEXTURE0);
+
+            if !f.palms.is_empty() {
+                gl.use_program(Some(self.palm));
+                gl.uniform_2_f32(u.palm_size.as_ref(), w as f32, h as f32);
+                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+                // f32s as bytes, without a copy (u8 has no alignment to keep).
+                let bytes = std::slice::from_raw_parts(
+                    f.palms.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(f.palms.as_slice()),
+                );
+                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
+                gl.enable_vertex_attrib_array(0);
+                gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
+                gl.draw_arrays(glow::TRIANGLES, 0, (f.palms.len() / 2) as i32);
+                gl.disable_vertex_attrib_array(0);
+                gl.bind_buffer(glow::ARRAY_BUFFER, None);
+            }
+
+            if f.glow {
+                gl.use_program(Some(self.blur));
+                gl.uniform_2_f32(u.blur_size.as_ref(), w as f32, h as f32);
+                for ((fbo, _), src, dir) in [
+                    (self.across, self.target, (1.0, 0.0)),
+                    (self.down, self.across.1, (0.0, 1.0)),
+                ] {
+                    gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                    gl.bind_texture(glow::TEXTURE_2D, Some(src));
+                    gl.uniform_2_f32(u.blur_dir.as_ref(), dir.0, dir.1);
+                    gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                }
+            }
         }
     }
 }

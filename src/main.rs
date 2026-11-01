@@ -198,6 +198,7 @@ impl eframe::App for App {
                 &self.look.backdrop,
                 self.look.animate,
                 self.look.glow,
+                self.look.vhs,
             );
         }
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
@@ -283,12 +284,7 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        theme::top_rule(
-            ui.ctx(),
-            tabs.response.rect.bottom(),
-            self.look.animate,
-            self.backdrop.on_gpu(),
-        );
+        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
