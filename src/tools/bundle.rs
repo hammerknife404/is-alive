@@ -39,6 +39,11 @@ pub struct BundleTool {
     use_results: bool,
     use_notes: bool,
     use_map: bool,
+    /// Carry the /unifidump and /mapnetwork skills (`skills/` in the zip).
+    use_skills: bool,
+    /// The save in progress came from Claude Review: open Claude and show
+    /// the zip when it's done.
+    review: bool,
     /// Redact and keep calls made in Known problems, on top of the Notes
     /// tab's. In memory only.
     ov: crate::redact::Overrides,
@@ -62,6 +67,8 @@ impl Default for BundleTool {
             use_results: false,
             use_notes: false,
             use_map: true,
+            use_skills: true,
+            review: false,
             ov: Default::default(),
             job: None,
             saved: None,
@@ -95,16 +102,23 @@ impl BundleTool {
     }
 
     fn poll(&mut self, ctx: &egui::Context) -> bool {
-        pump(&mut self.job, |r| match r {
+        let review = self.review;
+        let running = pump(&mut self.job, |r| match r {
             Ok(Some(saved)) => {
                 widgets::copy(ctx, saved.kickoff.clone());
-                widgets::toast(
-                    format!(
-                        "Saved {}; kickoff prompt copied",
-                        export::file_name(&saved.path)
-                    ),
-                    true,
-                );
+                let name = export::file_name(&saved.path);
+                if review {
+                    // Nothing can attach a file to a claude.ai chat for
+                    // the user: open a new chat and show the zip to drop in.
+                    ctx.open_url(egui::OpenUrl::new_tab(CLAUDE_NEW));
+                    reveal(&saved.path);
+                    widgets::toast(
+                        format!("Drop {name} into the new Claude chat, then paste the prompt"),
+                        true,
+                    );
+                } else {
+                    widgets::toast(format!("Saved {name}; kickoff prompt copied"), true);
+                }
                 self.saved = Some(saved);
             }
             Ok(None) => {}
@@ -112,7 +126,11 @@ impl BundleTool {
                 widgets::toast("Bundle not saved", false);
                 self.err = Some(e);
             }
-        })
+        });
+        if !running {
+            self.review = false;
+        }
+        running
     }
 
     /// The Site Bundle window; call every frame, open or not, so a save
@@ -317,6 +335,16 @@ impl BundleTool {
                     }),
                     "Nothing in Notes yet",
                 );
+                part_row(
+                    ui,
+                    &mut self.use_skills,
+                    "Skills",
+                    Some(format!(
+                        "/unifidump and /mapnetwork · {} KB, for a Claude without them",
+                        crate::skills::bytes() / 1024
+                    )),
+                    "",
+                );
             });
         let chosen = (self.use_unifi && unifi.is_some())
             || (self.use_sonicwall && sonicwall.is_some())
@@ -334,6 +362,18 @@ impl BundleTool {
                 .on_disabled_hover_text("Nothing to bundle yet");
             if save.clicked() {
                 self.save(ui.ctx(), src);
+            }
+            let review = ui
+                .add_enabled(chosen && !running, egui::Button::new("Claude Review"))
+                .on_hover_text(
+                    "Save the bundle, copy the prompt, open a new Claude chat and show the zip: \
+                     drop it into the chat and paste. With Skills ticked it works even where \
+                     /unifidump and /mapnetwork aren't installed.",
+                )
+                .on_disabled_hover_text("Nothing to bundle yet");
+            if review.clicked() {
+                self.save(ui.ctx(), src);
+                self.review = self.job.is_some();
             }
             if running {
                 widgets::spinner(ui);
@@ -360,7 +400,7 @@ impl BundleTool {
                 .on_hover_text(s.path.display().to_string());
             }
         });
-        ui.weak("Attach the zip in Claude and paste the prompt.");
+        ui.weak("Attach the zip in Claude and paste the prompt. Claude Review does the opening for you.");
     }
 
     /// Gather the parts and save off the UI thread. The UniFi backup is
@@ -480,6 +520,7 @@ impl BundleTool {
             map_clients: self.map_clients,
             scanner: src.info.clone(),
             parts,
+            skills: self.use_skills,
         };
         self.job = Some(Job::spawn(ctx, move |tx| {
             tx.send(build_and_save(unifi, b));
@@ -529,6 +570,74 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
     let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
+}
+
+/// Where Claude Review sends the user: a new claude.ai chat.
+const CLAUDE_NEW: &str = "https://claude.ai/new";
+
+/// Show `path` selected in the file manager, best effort and off the UI
+/// thread. Only the system's own file manager, by absolute path.
+fn reveal(path: &std::path::Path) {
+    let path = path.to_path_buf();
+    std::thread::spawn(move || {
+        #[cfg(windows)]
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            let _ = std::process::Command::new(PathBuf::from(root).join("explorer.exe"))
+                .arg(format!("/select,{}", path.display()))
+                .status();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("/usr/bin/open")
+                .arg("-R")
+                .arg(&path)
+                .status();
+        }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            use crate::net::system_tool;
+            // The freedesktop file manager interface selects the file;
+            // without it, open the folder.
+            let shown = system_tool("gdbus").is_some_and(|gdbus| {
+                std::process::Command::new(gdbus)
+                    .args([
+                        "call",
+                        "--session",
+                        "--dest",
+                        "org.freedesktop.FileManager1",
+                        "--object-path",
+                        "/org/freedesktop/FileManager1",
+                        "--method",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        &format!("['{}']", file_uri(&path)),
+                        "",
+                    ])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            });
+            if !shown && let (Some(open), Some(dir)) = (system_tool("xdg-open"), path.parent()) {
+                let _ = std::process::Command::new(open).arg(dir).status();
+            }
+        }
+    });
+}
+
+/// `file://` URI of an absolute path, every byte but unreserved ones and
+/// `/` percent-encoded (so a quote can't end the gdbus string).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn file_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut s = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+            s.push(b as char);
+        } else {
+            s += &format!("%{b:02X}");
+        }
+    }
+    s
 }
 
 /// Distinct targets in the Results log, in run order, so it's plain whether
@@ -598,5 +707,12 @@ mod tests {
             log_targets(&log),
             ["10.0.0.1", "10.0.0.0/24", "192.168.1.1"]
         );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn file_uris_can_not_break_out_of_the_gdbus_string() {
+        let u = file_uri(std::path::Path::new("/home/a b/it's #1.bundle.zip"));
+        assert_eq!(u, "file:///home/a%20b/it%27s%20%231.bundle.zip");
     }
 }

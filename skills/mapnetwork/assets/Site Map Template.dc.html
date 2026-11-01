@@ -1,0 +1,3379 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+// GENERATED from dc-runtime/src/*.ts — do not edit. Rebuild with `cd dc-runtime && bun run build`.
+"use strict";
+(() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+  // src/react.ts
+  function getReact() {
+    const R = window.React;
+    if (!R) throw new Error("dc-runtime: window.React is not available yet");
+    return R;
+  }
+  function getReactDOM() {
+    const RD = window.ReactDOM;
+    if (!RD) throw new Error("dc-runtime: window.ReactDOM is not available yet");
+    return RD;
+  }
+  var h = ((...args) => getReact().createElement(
+    ...args
+  ));
+
+  // src/parse.ts
+  function parseDcDocument(doc) {
+    const dc = doc.querySelector("x-dc");
+    if (!dc) return null;
+    const scriptEl = doc.querySelector("script[data-dc-script]");
+    const { props, preview } = parseDataProps(
+      scriptEl?.getAttribute("data-props") ?? null
+    );
+    return {
+      template: dc.innerHTML,
+      js: scriptEl ? scriptEl.textContent || "" : "",
+      props,
+      preview
+    };
+  }
+  function parseDcText(src) {
+    // Parse via the DOM, not a regex: the runtime source above contains the
+    // literal "<x-dc>" inside an error message, so a regex scan of a
+    // self-contained (inlined-runtime) file matched THAT first and handed the
+    // whole engine source back as the template — a map rendered as raw text on
+    // every reload. The DOM only ever sees the real element.
+    const doc = new DOMParser().parseFromString(src, "text/html");
+    const dcEl = doc.querySelector("x-dc");
+    if (!dcEl) return null;
+    const template = dcEl.innerHTML;
+    const scriptEl = doc.querySelector("script[data-dc-script]");
+    const { props, preview } = parseDataProps(
+      scriptEl?.getAttribute("data-props") ?? null
+    );
+    return {
+      template,
+      js: scriptEl ? scriptEl.textContent || "" : "",
+      props,
+      preview
+    };
+  }
+  function parseDataProps(raw) {
+    if (!raw) return { props: null, preview: null };
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { props: null, preview: null };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { props: null, preview: null };
+    }
+    const obj = parsed;
+    const preview = obj.$preview && typeof obj.$preview === "object" ? obj.$preview : null;
+    const rest = {};
+    for (const k of Object.keys(obj)) {
+      if (k[0] !== "$") rest[k] = obj[k];
+    }
+    return { props: Object.keys(rest).length ? rest : null, preview };
+  }
+  function dcNameFromPath(pathname) {
+    let p = pathname || "";
+    try {
+      p = decodeURIComponent(p);
+    } catch {
+    }
+    const base = p.split("/").pop() || "Root";
+    return base.replace(/\.dc\.html$/, "").replace(/\.html?$/, "") || "Root";
+  }
+
+  // src/boot.ts
+  var BASE_CSS = `
+    .sc-placeholder{background:rgba(255,255,255,.3);border:1px solid rgba(0,0,0,.5);
+      border-radius:2px;box-sizing:border-box;overflow:hidden}
+    @keyframes sc-shine{0%{background-position:100% 50%}100%{background-position:0% 50%}}
+    html.sc-dc-streaming .sc-placeholder,
+    html.sc-dc-streaming .sc-interp.sc-missing{position:relative;
+      background:color-mix(in srgb,currentColor 5%,transparent);
+      border-color:transparent}
+    html.sc-dc-streaming .sc-placeholder::before,
+    html.sc-dc-streaming .sc-interp.sc-missing::before{content:'';
+      position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(90deg,rgba(217,119,87,0) 25%,rgba(247,225,211,.95) 37%,rgba(217,119,87,0) 63%);
+      background-size:400% 100%;animation:sc-shine 1.4s ease infinite}
+    html.sc-dc-streaming .sc-placeholder:nth-child(n+9 of .sc-placeholder)::before,
+    html.sc-dc-streaming .sc-interp.sc-missing:nth-child(n+9 of .sc-interp.sc-missing)::before{animation:none;
+      background:color-mix(in srgb,currentColor 8%,transparent)}
+    .sc-placeholder-error{padding:4px 8px;font:11px/1.4 ui-monospace,monospace;
+      color:rgba(0,0,0,.7);word-break:break-word}
+    .sc-interp.sc-missing{display:inline-block;width:2em;height:1em;overflow:hidden;
+      vertical-align:text-bottom;background:rgba(255,255,255,.3);border:1px solid rgba(0,0,0,.5);
+      border-radius:2px;box-sizing:border-box;color:transparent;
+      user-select:none}
+    .sc-interp.sc-unresolved{font-family:ui-monospace,monospace;font-size:.85em;
+      color:rgba(0,0,0,.5);background:rgba(0,0,0,.05);border-radius:3px;
+      padding:0 3px}
+    .sc-host.sc-has-error{position:relative}
+    .sc-logic-error{position:absolute;top:8px;left:8px;z-index:2147483647;max-width:60ch;
+      padding:6px 10px;background:#b00020;color:#fff;font:12px/1.4 ui-monospace,monospace;
+      border-radius:4px;white-space:pre-wrap;pointer-events:none}
+    /* Mirrors PRINT_BASELINE_CSS in apps/web deck-stage-export.ts \u2014 keep both
+       in sync until dc-runtime regains a build step. */
+    @media print {
+      @page { margin: 0.5cm; }
+      figure, table { break-inside: avoid; }
+      #dc-root, #dc-root > .sc-host { height: auto; }
+      *, *::before, *::after {
+        print-color-adjust: exact; -webkit-print-color-adjust: exact;
+        backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+        animation-delay: -99s !important; animation-duration: .001s !important;
+        animation-iteration-count: 1 !important; animation-fill-mode: both !important;
+        animation-play-state: running !important; transition-duration: 0s !important;
+      }
+    }
+  `;
+  var FULL_PAGE_CSS = "html,body{height:100%;margin:0}#dc-root,#dc-root>.sc-host{height:100%}";
+  function rootNameForDocument(doc, loc) {
+    let bootPath = loc.pathname || "";
+    if (!/\.dc\.html?$/i.test(safeDecode(bootPath))) {
+      try {
+        bootPath = new URL(doc.baseURI || "/").pathname;
+      } catch {
+      }
+    }
+    return dcNameFromPath(bootPath);
+  }
+  function safeDecode(s) {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  }
+  function boot(runtime, doc = document) {
+    const parsed = parseDcDocument(doc);
+    if (!parsed) return null;
+    const React = getReact();
+    const rootName = rootNameForDocument(doc, location);
+    runtime.markFetched(rootName);
+    runtime.setRootName(rootName);
+    runtime.adoptParsed(rootName, parsed);
+    fetch(location.href).then((res) => res.ok ? res.text() : "").then((t) => {
+      const raw = t ? parseDcText(t) : null;
+      if (raw?.template) runtime.updateHtml(rootName, raw.template);
+    }).catch(() => {
+    });
+    const dc = doc.querySelector("x-dc");
+    const hostEl = doc.createElement("div");
+    hostEl.id = "dc-root";
+    dc.replaceWith(hostEl);
+    if (!parsed.preview) {
+      const s = doc.createElement("style");
+      s.textContent = FULL_PAGE_CSS;
+      doc.head.appendChild(s);
+    }
+    const Root = runtime.getDC(rootName);
+    const entry = runtime.registry.get(rootName);
+    function StandaloneRoot() {
+      const [, setTick] = React.useState(0);
+      React.useEffect(() => {
+        const sub = () => setTick((n) => n + 1);
+        entry.subs.add(sub);
+        return () => {
+          entry.subs.delete(sub);
+        };
+      }, []);
+      const defaults = React.useMemo(() => {
+        const d = {};
+        for (const k in entry.propsMeta || {}) {
+          const v = entry.propsMeta?.[k]?.default;
+          if (v !== void 0) d[k] = v;
+        }
+        return d;
+      }, [entry.propsMeta]);
+      return h(Root, { ...defaults, ...entry.propOverrides || {} });
+    }
+    const ReactDOM = getReactDOM();
+    if (ReactDOM.createRoot)
+      ReactDOM.createRoot(hostEl).render(h(StandaloneRoot));
+    else ReactDOM.render(h(StandaloneRoot), hostEl);
+    return rootName;
+  }
+
+  // src/expr.ts
+  var IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*/;
+  var NUMBER_RE = /^-?\d+(\.\d+)?$/;
+  function resolve(vals, src) {
+    const expr = String(src).trim();
+    if (!expr) return void 0;
+    if (expr[0] === "(" && expr[expr.length - 1] === ")" && parensWrapWhole(expr)) {
+      return resolve(vals, expr.slice(1, -1));
+    }
+    const eq = findTopLevelEquality(expr);
+    if (eq) {
+      const lv = resolve(vals, expr.slice(0, eq.index));
+      const rv = resolve(vals, expr.slice(eq.index + eq.op.length));
+      switch (eq.op) {
+        case "===":
+          return lv === rv;
+        case "!==":
+          return lv !== rv;
+        case "==":
+          return lv == rv;
+        default:
+          return lv != rv;
+      }
+    }
+    if (expr[0] === "!") return !resolve(vals, expr.slice(1));
+    if (expr === "true") return true;
+    if (expr === "false") return false;
+    if (expr === "null") return null;
+    if (expr === "undefined") return void 0;
+    if (NUMBER_RE.test(expr)) return Number(expr);
+    if (expr.length >= 2 && (expr[0] === '"' || expr[0] === "'") && expr[expr.length - 1] === expr[0]) {
+      return expr.slice(1, -1);
+    }
+    return resolvePath(vals, expr);
+  }
+  function parensWrapWhole(expr) {
+    let depth = 0;
+    for (let i = 0; i < expr.length - 1; i++) {
+      if (expr[i] === "(") depth++;
+      else if (expr[i] === ")") {
+        depth--;
+        if (depth === 0) return false;
+      }
+    }
+    return true;
+  }
+  function findTopLevelEquality(expr) {
+    let depth = 0;
+    for (let i = 0; i < expr.length; i++) {
+      const c = expr[i];
+      if (c === "[" || c === "(") depth++;
+      else if (c === "]" || c === ")") depth--;
+      else if (depth === 0 && (c === "=" || c === "!") && expr[i + 1] === "=") {
+        if (i > 0 && (expr[i - 1] === "=" || expr[i - 1] === "!")) continue;
+        if (!expr.slice(0, i).trim()) continue;
+        const op = expr[i + 2] === "=" ? c + "==" : c + "=";
+        return { index: i, op };
+      }
+    }
+    return null;
+  }
+  function resolvePath(vals, expr) {
+    const head = expr.match(IDENT_RE);
+    if (!head) return void 0;
+    let cur = vals == null ? void 0 : vals[head[0]];
+    let i = head[0].length;
+    while (i < expr.length) {
+      if (expr[i] === ".") {
+        const m = expr.slice(i + 1).match(IDENT_RE) || expr.slice(i + 1).match(/^\d+/);
+        if (!m) return void 0;
+        cur = cur == null ? void 0 : cur[m[0]];
+        i += 1 + m[0].length;
+      } else if (expr[i] === "[") {
+        let depth = 1;
+        let j = i + 1;
+        while (j < expr.length && depth > 0) {
+          if (expr[j] === "[") depth++;
+          else if (expr[j] === "]") {
+            depth--;
+            if (depth === 0) break;
+          }
+          j++;
+        }
+        if (depth !== 0) return void 0;
+        const key = resolve(vals, expr.slice(i + 1, j));
+        cur = cur == null ? void 0 : cur[key];
+        i = j + 1;
+      } else {
+        return void 0;
+      }
+    }
+    return cur;
+  }
+
+  // src/encode.ts
+  var CAMEL_ATTR = "sc-camel-";
+  var RAW_WRAP = {
+    select: "sc-raw-select",
+    table: "sc-raw-table",
+    tbody: "sc-raw-tbody",
+    thead: "sc-raw-thead",
+    tfoot: "sc-raw-tfoot",
+    tr: "sc-raw-tr",
+    td: "sc-raw-td",
+    th: "sc-raw-th",
+    caption: "sc-raw-caption"
+  };
+  var RAW_UNWRAP = Object.fromEntries(
+    Object.entries(RAW_WRAP).map(([k, v]) => [v, k])
+  );
+  var EVENT_MAP = {
+    onclick: "onClick",
+    onchange: "onChange",
+    oninput: "onInput",
+    onsubmit: "onSubmit",
+    onkeydown: "onKeyDown",
+    onkeyup: "onKeyUp",
+    onkeypress: "onKeyPress",
+    onmousedown: "onMouseDown",
+    onmouseup: "onMouseUp",
+    onmouseenter: "onMouseEnter",
+    onmouseleave: "onMouseLeave",
+    onfocus: "onFocus",
+    onblur: "onBlur",
+    ondoubleclick: "onDoubleClick",
+    oncontextmenu: "onContextMenu"
+  };
+  var ATTRS = `(?:[^>"']|"[^"]*"|'[^']*')*`;
+  var IMPORT_SELF_CLOSE_RE = new RegExp(
+    "<(x-import|dc-import)(" + ATTRS + ")/>",
+    "gi"
+  );
+  var CAMEL_ATTR_RE = /(\s)([a-z]+[A-Z][A-Za-z0-9]*)(\s*=)/g;
+  function encodeCase(html) {
+    html = html.replace(
+      IMPORT_SELF_CLOSE_RE,
+      (_, t, a) => "<" + t + a + "></" + t + ">"
+    );
+    html = html.replace(/<helmet(\s|>)/gi, "<sc-helmet$1");
+    html = html.replace(/<\/helmet\s*>/gi, "</sc-helmet>");
+    html = html.replace(
+      CAMEL_ATTR_RE,
+      (_, sp, name, eq) => sp + CAMEL_ATTR + name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()) + eq
+    );
+    for (const [real, alias] of Object.entries(RAW_WRAP)) {
+      html = html.replace(
+        new RegExp("(</?)" + real + "(?=[\\s>])", "gi"),
+        "$1" + alias
+      );
+    }
+    return html;
+  }
+  function kebabToCamel(s) {
+    return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  }
+  function cssToObj(css) {
+    const o = {};
+    for (const decl of css.split(";")) {
+      const i = decl.indexOf(":");
+      if (i < 0) continue;
+      const prop = decl.slice(0, i).trim();
+      o[prop.startsWith("--") ? prop : kebabToCamel(prop)] = decl.slice(i + 1).trim();
+    }
+    return o;
+  }
+  function compileAttr(raw) {
+    const whole = raw.match(/^\s*\{\{([\s\S]+?)\}\}\s*$/);
+    if (whole) {
+      const path = whole[1];
+      return (vals) => resolve(vals, path);
+    }
+    if (raw.includes("{{")) {
+      const parts = raw.split(/\{\{([\s\S]+?)\}\}/g);
+      return (vals) => parts.map((s, i) => i & 1 ? resolve(vals, s) ?? "" : s).join("");
+    }
+    return () => raw;
+  }
+
+  // src/compile.ts
+  function collectProps(node, kind, host) {
+    const propGetters = [];
+    const pseudoClasses = [];
+    let hintSize = null;
+    for (const { name, value } of [...node.attributes]) {
+      if (name === "sc-name" || name === "data-dc-tpl") continue;
+      let key = name;
+      if (key.startsWith(CAMEL_ATTR))
+        key = kebabToCamel(key.slice(CAMEL_ATTR.length));
+      if (key === "hint-size") {
+        hintSize = value;
+        continue;
+      }
+      if (key.startsWith("style-")) {
+        pseudoClasses.push(host.pseudoClass(key.slice(6), value));
+        continue;
+      }
+      if (kind !== "dom") {
+        if (key.includes("-") && !(kind === "x-import" && (key.startsWith("aria-") || key.startsWith("data-"))))
+          key = kebabToCamel(key);
+      } else {
+        if (key === "class") key = "className";
+        else if (key === "for") key = "htmlFor";
+        else if (key.startsWith("on"))
+          key = EVENT_MAP[key] || "on" + key[2].toUpperCase() + key.slice(3);
+      }
+      propGetters.push([key, compileAttr(value)]);
+    }
+    return { propGetters, pseudoClasses, hintSize };
+  }
+  var HOST_STYLE_PROPS = /* @__PURE__ */ new Set([
+    "position",
+    "left",
+    "right",
+    "top",
+    "bottom",
+    "inset",
+    "width",
+    "height",
+    "z-index",
+    "transform"
+  ]);
+  function hostPositionStyle(style) {
+    const all = typeof style === "string" ? cssToObj(style) : style != null && typeof style === "object" ? style : null;
+    if (!all) return void 0;
+    const out = {};
+    for (const [k, v] of Object.entries(all)) {
+      const kebab = k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+      if (HOST_STYLE_PROPS.has(kebab)) out[k] = v;
+    }
+    return Object.keys(out).length ? out : void 0;
+  }
+  function compileTemplate(html, host) {
+    const tpl = document.createElement("template");
+    //! nosemgrep: direct-inner-html-assignment
+    tpl.innerHTML = encodeCase(html);
+    let tplN = 0;
+    (function stamp(node) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        node.setAttribute("data-dc-tpl", String(tplN++));
+      }
+      for (const c of node.childNodes) stamp(c);
+    })(tpl.content);
+    const builders = walkChildren(tpl.content, host);
+    const render = ((vals, ctx) => builders.map((b, i) => b(vals || {}, ctx, i)));
+    render.__annotated = tpl.innerHTML;
+    return render;
+  }
+  function walkChildren(node, host) {
+    return [...node.childNodes].map((c) => walk(c, host)).filter((b) => b != null);
+  }
+  function walk(node, host) {
+    if (node.nodeType === Node.TEXT_NODE) return walkText(node);
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    const el = node;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "sc-for") return walkFor(el, host);
+    if (tag === "sc-if") return walkIf(el, host);
+    if (tag === "x-import") return walkXImport(el, host);
+    if (tag === "sc-helmet") return host.helmet(el);
+    if (tag === "dc-import") return walkComponent(el, host);
+    return walkElement(el, host);
+  }
+  var warnedHoles = /* @__PURE__ */ new Set();
+  function warnUnresolved(ctx, what) {
+    const key = (ctx?.__name || "?") + "\0" + what;
+    if (warnedHoles.has(key)) return;
+    warnedHoles.add(key);
+    console.warn("[dc-runtime] " + (ctx?.__name || "template") + ": " + what);
+  }
+  function walkText(node) {
+    const txt = node.nodeValue ?? "";
+    if (!txt.includes("{{")) {
+      if (!txt.trim() && !txt.includes(" ")) return null;
+      return () => txt;
+    }
+    const parts = txt.split(/\{\{([\s\S]+?)\}\}/g);
+    return (vals, ctx, key) => h(
+      getReact().Fragment,
+      { key },
+      ...parts.map((p, i) => {
+        if (!(i & 1)) return p;
+        const v = resolve(vals, p);
+        if (v === void 0) {
+          if (!ctx?.__streamingNow) {
+            if (document.body?.hasAttribute("data-dc-editor-on")) {
+              return h(
+                "span",
+                { key: i, className: "sc-interp sc-unresolved" },
+                "{{ " + p.trim() + " }}"
+              );
+            }
+            warnUnresolved(
+              ctx,
+              "{{ " + p.trim() + " }} never resolved \u2014 rendered as empty"
+            );
+            return null;
+          }
+          return h(
+            "span",
+            { key: i, className: "sc-interp sc-missing" },
+            p.trim()
+          );
+        }
+        if (getReact().isValidElement(v) || Array.isArray(v)) {
+          return h(getReact().Fragment, { key: i }, v);
+        }
+        if (v === null || typeof v === "boolean") return null;
+        return h("span", { key: i, className: "sc-interp" }, String(v));
+      })
+    );
+  }
+  function walkFor(el, host) {
+    const listGet = compileAttr(el.getAttribute("list") || "");
+    const asName = el.getAttribute("as") || "item";
+    const hintN = parseInt(el.getAttribute("hint-placeholder-count") || "0", 10);
+    const kids = walkChildren(el, host);
+    const listSrc = el.getAttribute("list") || "";
+    return (vals, ctx, key) => {
+      let list = listGet(vals);
+      if (!Array.isArray(list)) {
+        if (!ctx?.__streamingNow) {
+          if (list !== void 0 && list !== null) {
+            warnUnresolved(
+              ctx,
+              'sc-for list="' + listSrc + '" is not an array (' + typeof list + ")"
+            );
+          }
+          list = [];
+        } else {
+          list = hintN > 0 ? Array(hintN).fill(void 0) : [];
+        }
+      }
+      return h(
+        getReact().Fragment,
+        { key },
+        list.map((item, i) => {
+          const sub = { ...vals, [asName]: item, $index: i };
+          return h(
+            getReact().Fragment,
+            { key: i },
+            kids.map((b, j) => b(sub, ctx, j))
+          );
+        })
+      );
+    };
+  }
+  function walkIf(el, host) {
+    const valGet = compileAttr(el.getAttribute("value") || "");
+    const hintRaw = el.getAttribute("hint-placeholder-val");
+    const hintGet = hintRaw != null ? compileAttr(hintRaw) : null;
+    const kids = walkChildren(el, host);
+    return (vals, ctx, key) => {
+      let v = valGet(vals);
+      if (v === void 0 && hintGet && ctx?.__streamingNow) v = hintGet(vals);
+      return v ? h(
+        getReact().Fragment,
+        { key },
+        kids.map((b, j) => b(vals, ctx, j))
+      ) : null;
+    };
+  }
+  function walkComponent(el, host) {
+    const name = el.getAttribute("name") || el.getAttribute("component") || "";
+    el.removeAttribute("name");
+    el.removeAttribute("component");
+    const tplId = el.getAttribute("data-dc-tpl");
+    const styleRaw = el.getAttribute("style");
+    el.removeAttribute("style");
+    const styleGet = styleRaw != null ? compileAttr(styleRaw) : null;
+    const { propGetters, hintSize } = collectProps(el, "dc-import", host);
+    const kids = walkChildren(el, host);
+    return (vals, ctx, key) => {
+      const props = {
+        key,
+        __hintSize: hintSize,
+        __tplId: tplId,
+        __hostStyle: styleGet ? hostPositionStyle(styleGet(vals)) : void 0
+      };
+      for (const [k, g] of propGetters) {
+        const v = g(vals);
+        if (k === "dcProps") {
+          if (v && typeof v === "object") Object.assign(props, v);
+          continue;
+        }
+        props[k] = v;
+      }
+      if (kids.length) props.children = kids.map((b, j) => b(vals, ctx, j));
+      return h(host.component(name), props);
+    };
+  }
+  function walkXImport(el, host) {
+    const globalNameGet = compileAttr(
+      el.getAttribute("component-from-global-scope") || ""
+    );
+    const exportNameGet = compileAttr(
+      el.getAttribute("component") || el.getAttribute("name") || ""
+    );
+    const fromRaw = el.getAttribute("from") || el.getAttribute("src") || el.getAttribute("import") || "";
+    const urls = fromRaw.trim() ? fromRaw.trim().split(/\s+/) : [];
+    const url = urls.length ? urls[urls.length - 1] : "";
+    const kindOf = (u) => /\.(jsx|tsx)(\?|#|$)/i.test(u) ? "jsx" : "js";
+    const tplId = el.getAttribute("data-dc-tpl");
+    const styleRaw = el.getAttribute("style");
+    el.removeAttribute("style");
+    const styleGet = styleRaw != null ? compileAttr(styleRaw) : null;
+    const wrap = tplId != null || styleGet != null;
+    const { propGetters, hintSize } = collectProps(el, "x-import", host);
+    const hasContent = el.children.length > 0 || !!(el.textContent || "").trim();
+    const kids = hasContent ? walkChildren(el, host) : [];
+    const urlBindable = fromRaw.includes("{{");
+    if (urls.length && !urlBindable) {
+      let prev;
+      for (const u of urls) prev = host.loadExternal(kindOf(u), u, prev);
+    }
+    const evalName = (g, vals) => {
+      const v = g(vals);
+      const s = v == null ? "" : String(v);
+      return s.includes("{{") ? "" : s;
+    };
+    return (vals, ctx, key) => {
+      const globalName = evalName(globalNameGet, vals);
+      const name = globalName || evalName(exportNameGet, vals);
+      const C = !name || urlBindable ? null : globalName ? host.resolveExternalGlobal(url, globalName) : host.resolveExternal(url, name);
+      const hostStyle = styleGet ? hostPositionStyle(styleGet(vals)) : void 0;
+      const wrapper = wrap ? {
+        key,
+        className: "sc-host-x",
+        "data-dc-tpl": tplId,
+        style: hostStyle || { display: "contents" }
+      } : null;
+      if (!C) {
+        const error = urlBindable ? "x-import `from` cannot contain {{ \u2026 }} \u2014 module URLs are resolved at parse time; use a literal URL" : host.resolveExternalError(url, name);
+        const ph = host.placeholder({
+          key: wrapper ? void 0 : key,
+          name,
+          hintSize,
+          error
+        });
+        return wrapper ? h("div", wrapper, ph) : ph;
+      }
+      const props = wrapper ? {} : { key };
+      let unresolvedHole = false;
+      for (const [k, g] of propGetters) {
+        if (k === "component" || k === "componentFromGlobalScope" || k === "from") {
+          continue;
+        }
+        const v = g(vals);
+        if (v === void 0) unresolvedHole = true;
+        if (k === "dcProps") {
+          if (v && typeof v === "object") Object.assign(props, v);
+          continue;
+        }
+        props[k] = v;
+      }
+      if (unresolvedHole && ctx?.__htmlStreamingNow) {
+        const ph = host.placeholder({
+          key: wrapper ? void 0 : key,
+          name,
+          hintSize,
+          error: null
+        });
+        return wrapper ? h("div", wrapper, ph) : ph;
+      }
+      if (kids.length) props.children = kids.map((b, j) => b(vals, ctx, j));
+      return wrapper ? h("div", wrapper, h(C, props)) : h(C, props);
+    };
+  }
+  function walkElement(el, host) {
+    const realTag = RAW_UNWRAP[el.localName] || el.localName;
+    const tplId = el.getAttribute("data-dc-tpl");
+    const { propGetters, pseudoClasses } = collectProps(el, "dom", host);
+    const kids = walkChildren(el, host);
+    return (vals, ctx, key) => {
+      const props = { key, "data-dc-tpl": tplId };
+      for (const [k, g] of propGetters) {
+        let v = g(vals);
+        if (k === "style" && typeof v === "string") v = cssToObj(v);
+        if ((k === "value" || k === "checked") && v === void 0) {
+          v = k === "checked" ? false : "";
+        }
+        props[k] = v;
+      }
+      if (pseudoClasses.length) {
+        props.className = [props.className, ...pseudoClasses].filter(Boolean).join(" ");
+      }
+      return h(realTag, props, ...kids.map((b, j) => b(vals, ctx, j)));
+    };
+  }
+
+  // src/logic.ts
+  var StreamableLogic = class {
+    constructor(props) {
+      __publicField(this, "props");
+      __publicField(this, "state", {});
+      /** Back-pointer to the wrapper component, installed after construction. */
+      __publicField(this, "__host");
+      this.props = props || {};
+    }
+    setState(update, cb) {
+      this.__host && this.__host.__setLogicState(update, cb);
+    }
+    forceUpdate() {
+      this.__host && this.__host.forceUpdate();
+    }
+    componentDidMount() {
+    }
+    componentDidUpdate(_prevProps) {
+    }
+    componentWillUnmount() {
+    }
+    /** The flat object the template renders against (merged over props). */
+    renderVals() {
+      return {};
+    }
+  };
+  function evalDcLogic(src) {
+    //! nosemgrep: eval-and-function-constructor
+    const fn = new Function(
+      "DCLogic",
+      "StreamableLogic",
+      "React",
+      src + '\n;return (typeof Component!=="undefined"&&Component)||undefined;'
+    );
+    return fn(StreamableLogic, StreamableLogic, getReact());
+  }
+
+  // src/component.ts
+  function shallowEqual(a, b) {
+    if (!b) return false;
+    const ak = Object.keys(a).filter((k) => k !== "children");
+    const bk = Object.keys(b).filter((k) => k !== "children");
+    if (ak.length !== bk.length) return false;
+    for (const k of ak) if (a[k] !== b[k]) return false;
+    return true;
+  }
+  function Placeholder({
+    name,
+    hintSize,
+    streaming,
+    error
+  }) {
+    const [w, hgt] = (hintSize || "100%,60px").split(",");
+    return h(
+      "div",
+      {
+        className: "sc-placeholder" + (streaming ? " sc-streaming" : ""),
+        style: { width: w.trim(), height: hgt && hgt.trim() },
+        title: name
+      },
+      error ? h(
+        "div",
+        { className: "sc-placeholder-error" },
+        (name ? name + ": " : "") + error
+      ) : null
+    );
+  }
+  function hintToMin(hint) {
+    if (!hint) return void 0;
+    const [w, hgt] = hint.split(",");
+    return { minWidth: w.trim(), minHeight: hgt && hgt.trim() };
+  }
+  function createComponentFactory(registry, ensureFetched) {
+    const React = getReact();
+    const AncestorContext = React.createContext([]);
+    class StreamableComponent extends React.Component {
+      constructor(props) {
+        super(props);
+        __publicField(this, "__name");
+        __publicField(this, "__sub");
+        __publicField(this, "__needsDidMount", false);
+        /** Snapshot of the registry's streaming flags taken at render time —
+         *  builders read it off the RenderCtx (this) to pick placeholder vs
+         *  render-nothing for unresolved values. */
+        __publicField(this, "__streamingNow", false);
+        __publicField(this, "__htmlStreamingNow", false);
+        /** When a construct throws, remember the (class, registry.ver, props)
+         *  triple so render-time reconcile doesn't re-attempt it on every parent
+         *  re-render. A registry bump (new class, template, external module
+         *  resolving via bumpAll) changes `ver` and breaks the memo so an
+         *  env-dependent constructor can self-heal. */
+        __publicField(this, "__failedLogic", null);
+        __publicField(this, "__failedUserProps", null);
+        __publicField(this, "__failedVer", -1);
+        /** Per-instance constructor error — kept here (not on the registry entry)
+         *  so one instance's successful construct can't hide a sibling's failure,
+         *  and a construct can never wipe an eval error `updateJs` recorded on
+         *  `r.logicError`. */
+        __publicField(this, "__ctorError", null);
+        __publicField(this, "logic");
+        this.__name = props.__name;
+        this.state = { __v: 0, __err: null };
+        this.__sub = () => {
+          if (this.state.__err) this.setState({ __err: null });
+          this.forceUpdate();
+        };
+        this.__makeLogic(registry.get(this.__name).Logic, null);
+        ensureFetched(this.__name);
+      }
+      /** Error-boundary hook: a render crash anywhere in this DC's subtree
+       *  (its own template, an x-import'd component, a child DC without its
+       *  own deeper boundary) lands here instead of unmounting the page. */
+      static getDerivedStateFromError(e) {
+        return { __err: e instanceof Error && e.message ? e.message : String(e) };
+      }
+      componentDidCatch(e, info) {
+        console.error(
+          "[dc-runtime] render error in <" + this.__name + ">:",
+          e,
+          info?.componentStack || ""
+        );
+      }
+      /** Instantiate the logic class (or the no-op base) and adopt `prevState`
+       *  over its initial state — used both at mount and on hot-swap. */
+      __makeLogic(Logic, prevState) {
+        const L = Logic || StreamableLogic;
+        try {
+          this.logic = new L(this.__userProps());
+          this.__failedLogic = null;
+          this.__failedUserProps = null;
+          this.__ctorError = null;
+        } catch (e) {
+          console.error(e);
+          this.__failedLogic = Logic;
+          this.__failedUserProps = this.__userProps();
+          this.__failedVer = registry.get(this.__name).ver;
+          this.__ctorError = this.__name + ": " + (e instanceof Error && e.message ? e.message : String(e));
+          this.logic = new StreamableLogic(
+            this.__userProps()
+          );
+        }
+        this.logic.__host = this;
+        if (prevState)
+          this.logic.state = { ...this.logic.state || {}, ...prevState };
+      }
+      /** The props the author's logic + template see — internal __-prefixed
+       *  wiring stripped. */
+      __userProps() {
+        const { __name, __hintSize, __tplId, __hostStyle, ...rest } = this.props;
+        return rest;
+      }
+      __setLogicState(update, cb) {
+        const prev = this.logic.state;
+        const patch = typeof update === "function" ? update(prev) : update;
+        this.logic.state = { ...prev, ...patch };
+        this.setState((s) => ({ __v: s.__v + 1 }), cb);
+      }
+      /** Swap the logic instance when the registry's Logic class changed
+       *  (streaming completion, hot reload). State carries over; didMount
+       *  re-fires after the swap commits so refs exist. */
+      __reconcileLogic() {
+        const r = registry.get(this.__name);
+        const Next = r.Logic;
+        const Cur = this.logic.constructor;
+        if (Next === Cur || !Next && Cur === StreamableLogic || Next === this.__failedLogic && r.ver === this.__failedVer && shallowEqual(this.__userProps(), this.__failedUserProps)) {
+          return;
+        }
+        if (!this.__needsDidMount) {
+          try {
+            this.logic.componentWillUnmount();
+          } catch (e) {
+            console.error(e);
+          }
+        }
+        this.__makeLogic(Next, this.logic.state);
+        this.__needsDidMount = true;
+      }
+      componentDidMount() {
+        registry.get(this.__name).subs.add(this.__sub);
+        try {
+          this.logic.componentDidMount();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      componentDidUpdate(prevProps) {
+        this.logic.props = this.__userProps();
+        if (this.__needsDidMount) {
+          if (this.state.__err || !registry.get(this.__name).tpl) return;
+          this.__needsDidMount = false;
+          try {
+            this.logic.componentDidMount();
+          } catch (e) {
+            console.error(e);
+          }
+        } else {
+          try {
+            this.logic.componentDidUpdate(prevProps);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }
+      componentWillUnmount() {
+        registry.get(this.__name).subs.delete(this.__sub);
+        if (!this.__needsDidMount) {
+          try {
+            this.logic.componentWillUnmount();
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      }
+      render() {
+        const r = registry.get(this.__name);
+        const cls = "sc-host" + (r.htmlStreaming ? " sc-streaming-html" : "") + (r.jsStreaming ? " sc-streaming-js" : "");
+        const hintStyle = r.htmlStreaming ? hintToMin(this.props.__hintSize) : void 0;
+        const hostStyle = this.props.__hostStyle || hintStyle ? { ...hintStyle || {}, ...this.props.__hostStyle || {} } : void 0;
+        const hostBase = {
+          className: cls,
+          style: hostStyle,
+          "data-sc-name": this.__name,
+          "data-dc-tpl": this.props.__tplId
+        };
+        const chain = Array.isArray(this.context) ? this.context : [];
+        if (chain.includes(this.__name)) {
+          const cycle = [
+            ...chain.slice(chain.indexOf(this.__name)),
+            this.__name
+          ].join(" \u2192 ");
+          return h(
+            "div",
+            { ...hostBase, className: cls + " sc-has-error" },
+            h(Placeholder, {
+              name: this.__name,
+              hintSize: this.props.__hintSize,
+              error: "circular import: " + cycle
+            })
+          );
+        }
+        if (this.state.__err) {
+          return h(
+            "div",
+            { ...hostBase, className: cls + " sc-has-error" },
+            h(
+              "div",
+              { className: "sc-logic-error", "data-omelette-chrome": "" },
+              this.__name + ": " + this.state.__err
+            ),
+            h(Placeholder, {
+              name: this.__name,
+              hintSize: this.props.__hintSize,
+              error: this.state.__err
+            })
+          );
+        }
+        this.__reconcileLogic();
+        if (!r.tpl) {
+          return h(
+            "div",
+            hostBase,
+            h(Placeholder, { name: this.__name, hintSize: this.props.__hintSize })
+          );
+        }
+        const userProps = this.__userProps();
+        this.logic.props = userProps;
+        let vals = userProps;
+        let renderErr = r.logicError || this.__ctorError;
+        try {
+          vals = { ...userProps, ...this.logic.renderVals() || {} };
+        } catch (e) {
+          console.error(e);
+          renderErr = this.__name + ".renderVals(): " + (e instanceof Error && e.message ? e.message : String(e));
+        }
+        this.__streamingNow = !!(r.htmlStreaming || r.jsStreaming);
+        this.__htmlStreamingNow = !!r.htmlStreaming;
+        return h(
+          "div",
+          { ...hostBase, className: cls + (renderErr ? " sc-has-error" : "") },
+          renderErr && h(
+            "div",
+            { className: "sc-logic-error", "data-omelette-chrome": "" },
+            renderErr
+          ),
+          h(
+            AncestorContext.Provider,
+            { value: [...chain, this.__name] },
+            r.tpl(vals, this)
+          )
+        );
+      }
+    }
+    __publicField(StreamableComponent, "contextType", AncestorContext);
+    const named = /* @__PURE__ */ new Map();
+    function getDC(name) {
+      const hit = named.get(name);
+      if (hit) return hit;
+      function Dispatcher(p) {
+        const [, setTick] = React.useState(0);
+        React.useEffect(() => {
+          const sub = () => setTick((n) => n + 1);
+          registry.get(name).subs.add(sub);
+          return () => {
+            registry.get(name).subs.delete(sub);
+          };
+        }, []);
+        ensureFetched(name);
+        return h(StreamableComponent, { ...p, __name: name });
+      }
+      Dispatcher.displayName = name;
+      named.set(name, Dispatcher);
+      return Dispatcher;
+    }
+    return {
+      getDC,
+      StreamableComponent
+    };
+  }
+
+  // src/external.ts
+  var isCustomElementName = (n) => !n.includes(".") && n.includes("-");
+  function isRenderableType(g) {
+    if (typeof g === "function") return !isElementClass(g);
+    return typeof g === "object" && g !== null && typeof g.$$typeof === "symbol";
+  }
+  function resolveDottedPath(root, name) {
+    let cur = root;
+    for (const seg of name.split(".")) {
+      if (cur == null) return void 0;
+      cur = cur[seg];
+    }
+    return cur;
+  }
+  var BABEL_URL = "https://unpkg.com/@babel/standalone@7.26.4/babel.min.js";
+  var GLOBAL_POLL_INTERVAL_MS = 50;
+  var GLOBAL_POLL_TIMEOUT_MS = 3e4;
+  function createExternalModules(onResolved) {
+    const cache = /* @__PURE__ */ new Map();
+    let babelLoading = null;
+    const reportedMissing = /* @__PURE__ */ new Map();
+    const polling = /* @__PURE__ */ new Set();
+    function ensureBabel() {
+      if (window.Babel) return Promise.resolve();
+      if (babelLoading) return babelLoading;
+      babelLoading = new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = BABEL_URL;
+        s.crossOrigin = "anonymous";
+        s.onload = () => res();
+        s.onerror = rej;
+        document.head.appendChild(s);
+      });
+      return babelLoading;
+    }
+    const pending = /* @__PURE__ */ new Map();
+    function load(kind, url, after) {
+      const existing = pending.get(url);
+      if (existing) return existing;
+      cache.set(url, null);
+      console.info("[dc-runtime] x-import: loading", url, "(" + kind + ")");
+      const ready = Promise.all([
+        kind === "jsx" ? ensureBabel() : Promise.resolve(),
+        after ?? Promise.resolve()
+      ]);
+      const p = ready.then(() => fetch(url)).then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.text();
+      }).then((src) => {
+        const code = kind === "jsx" ? window.Babel.transform(src, {
+          filename: url,
+          presets: ["react", "typescript"]
+        }).code : src;
+        const module = { exports: {} };
+        const before = new Set(Object.keys(window));
+        //! nosemgrep: eval-and-function-constructor
+        new Function("React", "module", "exports", "require", code)(
+          getReact(),
+          module,
+          module.exports,
+          () => ({})
+        );
+        const globals = {};
+        for (const k of Object.keys(window)) {
+          if (!before.has(k) && typeof window[k] === "function") {
+            globals[k] = window[k];
+          }
+        }
+        cache.set(url, { mod: module.exports, globals });
+        console.info(
+          "[dc-runtime] x-import: loaded",
+          url,
+          "\u2014 exports:",
+          Object.keys(module.exports),
+          "window globals:",
+          Object.keys(globals)
+        );
+        onResolved();
+      }).catch((e) => {
+        cache.set(url, {
+          mod: {},
+          globals: {},
+          error: "failed to load: " + (e instanceof Error && e.message ? e.message : String(e))
+        });
+        console.error(
+          "[dc-runtime] x-import: FAILED to load",
+          url,
+          "(" + kind + ")",
+          e
+        );
+        onResolved();
+      });
+      pending.set(url, p);
+      return p;
+    }
+    function resolve2(url, name) {
+      const entry = cache.get(url);
+      if (!entry) return null;
+      const { mod, globals } = entry;
+      const C = mod && mod[name] || globals && globals[name] || typeof window !== "undefined" && window[name] || mod && mod.default;
+      if (typeof C === "function") return C;
+      const key = url + "\0" + name;
+      if (!reportedMissing.has(key)) {
+        reportedMissing.set(
+          key,
+          entry.error || 'no export named "' + name + '" (has: ' + Object.keys(mod).join(", ") + ")"
+        );
+        console.error(
+          "[dc-runtime] x-import: module",
+          url,
+          "loaded but has no component named",
+          JSON.stringify(name),
+          "\u2014 available exports:",
+          Object.keys(mod),
+          "window globals:",
+          Object.keys(globals),
+          ". The module must `module.exports = {" + name + "}` or set `window." + name + "`."
+        );
+      }
+      return null;
+    }
+    function waitForGlobal(name) {
+      if (polling.has(name)) return;
+      polling.add(name);
+      const started = Date.now();
+      const isCE = isCustomElementName(name);
+      const tick = () => {
+        const found = isCE ? customElements.get(name) : isRenderableType(resolveDottedPath(window, name));
+        if (found) {
+          polling.delete(name);
+          onResolved();
+          return;
+        }
+        if (Date.now() - started >= GLOBAL_POLL_TIMEOUT_MS) {
+          console.warn(
+            "[dc-runtime] x-import: global",
+            JSON.stringify(name),
+            "never appeared on window after " + GLOBAL_POLL_TIMEOUT_MS + "ms"
+          );
+          return;
+        }
+        setTimeout(tick, GLOBAL_POLL_INTERVAL_MS);
+      };
+      setTimeout(tick, GLOBAL_POLL_INTERVAL_MS);
+    }
+    function resolveGlobal(url, name) {
+      const isCE = isCustomElementName(name);
+      if (!url) {
+        if (isCE) {
+          if (customElements.get(name)) return name;
+          waitForGlobal(name);
+          return null;
+        }
+        const g2 = resolveDottedPath(window, name);
+        if (isRenderableType(g2)) return g2;
+        waitForGlobal(name);
+        return null;
+      }
+      const entry = cache.get(url);
+      if (!entry) return null;
+      if (isCE && customElements.get(name)) return name;
+      const g = entry.globals[name] ?? resolveDottedPath(window, name);
+      if (isRenderableType(g)) return g;
+      if (name.includes(".")) return null;
+      const key = url + "\0global\0" + name;
+      if (!reportedMissing.has(key)) {
+        reportedMissing.set(key, null);
+        if (isCE && !customElements.get(name)) {
+          console.warn(
+            "[dc-runtime] x-import:",
+            url,
+            "loaded but no custom element",
+            JSON.stringify(name),
+            "is registered and window." + name + " is not a function \u2014 rendering <" + name + "> as an unknown element."
+          );
+        }
+      }
+      return name;
+    }
+    function getError(url, name) {
+      const entry = cache.get(url);
+      if (entry?.error) return entry.error;
+      return reportedMissing.get(url + "\0" + name) || null;
+    }
+    return { load, resolve: resolve2, resolveGlobal, getError };
+  }
+  function isElementClass(g) {
+    try {
+      return typeof g === "function" && typeof HTMLElement !== "undefined" && g.prototype instanceof HTMLElement;
+    } catch {
+      return false;
+    }
+  }
+
+  // src/atomics.ts
+  var ATOMIC_CSS = (
+    // layout
+    ".fx{display:flex}.col{display:flex;flex-direction:column}.grid{display:grid}.ac{align-items:center}.jc{justify-content:center}.jb{justify-content:space-between}.f1{flex:1}.noshrink{flex-shrink:0}.wrap{flex-wrap:wrap}.fw5{font-weight:500}.fw6{font-weight:600}.fw7{font-weight:700}.fw8{font-weight:800}.fs11{font-size:11px}.fs12{font-size:12px}.fs13{font-size:13px}.fs14{font-size:14px}.fs15{font-size:15px}.fs16{font-size:16px}.fs20{font-size:20px}.fs22{font-size:22px}.upper{text-transform:uppercase}.tc{text-align:center}.nowrap{white-space:nowrap}.gap8{gap:8px}.gap10{gap:10px}.gap12{gap:12px}.gap16{gap:16px}.gap24{gap:24px}.m0{margin:0}.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mb8{margin-bottom:8px}.mb12{margin-bottom:12px}.mb16{margin-bottom:16px}.posrel{position:relative}.posabs{position:absolute}.round{border-radius:50%}.ohide{overflow:hidden}.bbox{box-sizing:border-box}.pointer{cursor:pointer}.w100{width:100%}.b0{border:none}"
+  );
+
+  // src/helmet.ts
+  var DESIGN_DOC_MODE_RE = /<meta\b[^>]*\bname\s*=\s*["']design_doc_mode["'][^>]*\b(?:content|value)\s*=\s*["'](\w+)["']/i;
+  var CANVAS_BG = "#f0eee9";
+  function createHelmetManager(doc, isStreaming) {
+    const mounted = /* @__PURE__ */ new Set();
+    const live = /* @__PURE__ */ new Map();
+    let designDocMode = null;
+    let canvasStyleEl = null;
+    function postDesignMode(mode) {
+      if (window.parent === window) return;
+      try {
+        window.parent.postMessage({ type: "__dc_design_mode", mode }, "*");
+      } catch {
+      }
+    }
+    function setDesignDocMode(mode) {
+      if (mode === designDocMode) return;
+      designDocMode = mode;
+      postDesignMode(mode);
+      if (mode === "canvas") {
+        doc.documentElement.setAttribute("data-dc-canvas", "");
+        canvasStyleEl = doc.createElement("style");
+        canvasStyleEl.setAttribute("data-dc-canvas", "");
+        canvasStyleEl.textContent = `html,body{background:${CANVAS_BG}}#dc-root>.sc-host{position:relative}`;
+        doc.head.appendChild(canvasStyleEl);
+      } else {
+        doc.documentElement.removeAttribute("data-dc-canvas");
+        canvasStyleEl?.remove();
+        canvasStyleEl = null;
+      }
+    }
+    window.addEventListener("message", (e) => {
+      if (!designDocMode || (e.data && e.data.type) !== "__dc_probe") return;
+      postDesignMode(designDocMode);
+    });
+    function compile(node) {
+      const raw = [...node.children];
+      const helmetClosed = node.nextSibling != null || node.parentNode?.nextSibling != null;
+      if (node.hasAttribute("data-dc-atomics") && !mounted.has("__dc-atomics")) {
+        mounted.add("__dc-atomics");
+        const el = doc.createElement("style");
+        el.id = "__dc-atomics";
+        el.textContent = ATOMIC_CSS;
+        doc.head.appendChild(el);
+      }
+      return (_vals, ctx) => {
+        const name = ctx && ctx.__name || "";
+        const streaming = !!(name && isStreaming(name));
+        for (let i = 0; i < raw.length; i++) {
+          const child = raw[i];
+          const tag = child.tagName;
+          const mayBePartial = streaming && !helmetClosed && i === raw.length - 1;
+          if (tag === "SCRIPT") {
+            if (mayBePartial) continue;
+            const key = "SCRIPT|" + (child.getAttribute("src") || child.textContent || "");
+            if (mounted.has(key)) continue;
+            mounted.add(key);
+            const el = doc.createElement("script");
+            for (const { name: an, value } of [...child.attributes])
+              el.setAttribute(an, value);
+            if (child.textContent) el.textContent = child.textContent;
+            doc.head.appendChild(el);
+          } else if (tag === "LINK" || tag === "META") {
+            if (mayBePartial) continue;
+            const key = tag + "|" + (child.getAttribute("href") || child.getAttribute("src") || child.outerHTML);
+            if (mounted.has(key)) continue;
+            mounted.add(key);
+            doc.head.appendChild(child.cloneNode(true));
+          } else {
+            const key = name + "|" + i;
+            let el = live.get(key);
+            if (!el || el.tagName !== tag) {
+              if (el) el.remove();
+              el = doc.createElement(tag.toLowerCase());
+              live.set(key, el);
+              doc.head.appendChild(el);
+            }
+            for (const { name: an, value } of [...child.attributes]) {
+              if (el.getAttribute(an) !== value) el.setAttribute(an, value);
+            }
+            if (el.textContent !== child.textContent)
+              el.textContent = child.textContent;
+          }
+        }
+        return null;
+      };
+    }
+    return { compile, setDesignDocMode };
+  }
+
+  // src/pseudo.ts
+  function createPseudoSheet(doc) {
+    let el = null;
+    const cache = /* @__PURE__ */ new Map();
+    let n = 0;
+    return (pseudo, css) => {
+      const k = pseudo + "|" + css;
+      const hit = cache.get(k);
+      if (hit) return hit;
+      if (!el) {
+        el = doc.createElement("style");
+        doc.head.appendChild(el);
+      }
+      const cls = "scp" + (n++).toString(36);
+      const sel = pseudo === "before" || pseudo === "after" ? "." + cls + "::" + pseudo : "." + cls + ":" + pseudo;
+      el.sheet.insertRule(sel + "{" + css + "}", el.sheet.cssRules.length);
+      cache.set(k, cls);
+      return cls;
+    };
+  }
+
+  // src/registry.ts
+  function createRegistry() {
+    const entries = /* @__PURE__ */ Object.create(null);
+    function get(name) {
+      return entries[name] || (entries[name] = {
+        html: "",
+        tpl: null,
+        Logic: null,
+        jsStreaming: false,
+        htmlStreaming: false,
+        ver: 0,
+        subs: /* @__PURE__ */ new Set(),
+        fetched: false
+      });
+    }
+    function bump(name) {
+      const r = get(name);
+      r.ver++;
+      for (const fn of r.subs) fn();
+    }
+    return {
+      entries,
+      get,
+      bump,
+      bumpAll() {
+        for (const n in entries) bump(n);
+      }
+    };
+  }
+
+  // src/runtime.ts
+  var COMPONENT_DIR = ".";
+  function createRuntime(doc = document) {
+    const registry = createRegistry();
+    const pseudoClass = createPseudoSheet(doc);
+    const helmet = createHelmetManager(
+      doc,
+      (name) => registry.get(name).htmlStreaming
+    );
+    const external = createExternalModules(() => registry.bumpAll());
+    const factory = createComponentFactory(registry, ensureFetched);
+    const host = {
+      component: (name) => factory.getDC(name),
+      placeholder: (props) => h(Placeholder, props),
+      helmet: (node) => helmet.compile(node),
+      loadExternal: (kind, url, after) => external.load(kind, url, after),
+      resolveExternal: (url, name) => external.resolve(url, name),
+      resolveExternalGlobal: (url, name) => external.resolveGlobal(url, name),
+      resolveExternalError: (url, name) => external.getError(url, name),
+      pseudoClass
+    };
+    function ensureFetched(name) {
+      const r = registry.get(name);
+      if (r.fetched) return;
+      r.fetched = true;
+      const url = COMPONENT_DIR + "/" + encodeURIComponent(name) + ".dc.html";
+      fetch(url).then((res) => {
+        if (!res.ok) {
+          console.error(
+            "[dc-runtime] sibling fetch for <" + name + "/> failed:",
+            url,
+            "returned",
+            res.status,
+            "\u2014 the reference renders as an empty placeholder."
+          );
+          return "";
+        }
+        return res.text();
+      }).then((t) => {
+        if (!t) return;
+        const parsed = parseDcText(t);
+        if (!parsed) {
+          console.error(
+            "[dc-runtime] sibling fetch for <" + name + "/>:",
+            url,
+            "has no <x-dc> block \u2014 not a Design Component."
+          );
+          return;
+        }
+        if (parsed.props) r.propsMeta = parsed.props;
+        if (parsed.preview) r.preview = parsed.preview;
+        if (parsed.template && !r.html) updateHtml(name, parsed.template);
+        if (parsed.js && !r.Logic) updateJs(name, parsed.js);
+      }).catch(
+        (e) => console.error(
+          "[dc-runtime] sibling fetch for <" + name + "/> threw:",
+          url,
+          e
+        )
+      );
+    }
+    let rootName = null;
+    function updateHtml(name, html) {
+      const r = registry.get(name);
+      r.html = html;
+      if (name === rootName) {
+        const mode = DESIGN_DOC_MODE_RE.exec(html)?.[1] ?? null;
+        if (mode || !r.htmlStreaming) helmet.setDesignDocMode(mode);
+      }
+      try {
+        r.tpl = compileTemplate(html, host);
+      } catch (e) {
+        console.error("[dc-runtime] template compile FAILED for", name, e);
+      }
+      registry.bump(name);
+    }
+    function updateJs(name, src) {
+      const r = registry.get(name);
+      const seq = r.jsSeq = (r.jsSeq || 0) + 1;
+      try {
+        const Cls = evalDcLogic(src);
+        if (r.jsSeq !== seq) return;
+        if (typeof Cls !== "function") {
+          r.logicError = name + ".dc.html: <script data-dc-script> must define `class Component extends DCLogic`";
+        } else {
+          r.logicError = null;
+          r.Logic = Cls;
+        }
+      } catch (e) {
+        if (r.jsSeq !== seq) return;
+        console.error(
+          "[dc-runtime] logic class eval FAILED for",
+          name,
+          "\u2014 the template renders with props only.",
+          e
+        );
+        r.logicError = name + ": " + (e instanceof Error && e.message ? e.message : String(e));
+      }
+      registry.bump(name);
+    }
+    function setStreaming(name, kind, on) {
+      const r = registry.get(name);
+      if (kind === "html") r.htmlStreaming = !!on;
+      else r.jsStreaming = !!on;
+      let any = false;
+      for (const n in registry.entries) {
+        const e = registry.entries[n];
+        if (e && (e.htmlStreaming || e.jsStreaming)) {
+          any = true;
+          break;
+        }
+      }
+      doc.documentElement.classList.toggle("sc-dc-streaming", any);
+      registry.bump(name);
+    }
+    function dcUpdate(name, kind, content, streaming) {
+      if (streaming) registry.get(name).fetched = true;
+      if (kind === "html") {
+        setStreaming(name, "html", !!streaming);
+        updateHtml(name, content);
+      } else if (kind === "js") {
+        setStreaming(name, "js", !!streaming);
+        if (!streaming) updateJs(name, content);
+      } else if (kind === "props") {
+        const { props, preview } = parseDataProps(content);
+        const r = registry.get(name);
+        r.propsMeta = props ?? void 0;
+        r.preview = preview;
+        registry.bump(name);
+      }
+    }
+    function setProps(name, overrides) {
+      registry.get(name).propOverrides = overrides && typeof overrides === "object" ? { ...overrides } : null;
+      registry.bump(name);
+    }
+    function adoptParsed(name, parsed) {
+      if (!parsed) return;
+      const r = registry.get(name);
+      if (parsed.props) r.propsMeta = parsed.props;
+      if (parsed.preview) r.preview = parsed.preview;
+      if (parsed.template) updateHtml(name, parsed.template);
+      if (parsed.js) updateJs(name, parsed.js);
+    }
+    return {
+      registry,
+      getDC: factory.getDC,
+      updateHtml,
+      updateJs,
+      dcUpdate,
+      setProps,
+      adoptParsed,
+      setRootName: (name) => {
+        rootName = name;
+      },
+      markFetched: (name) => {
+        registry.get(name).fetched = true;
+      },
+      annotatedTemplate: (name) => {
+        const r = registry.get(name);
+        return r.tpl && r.tpl.__annotated || null;
+      },
+      templateSource: (name) => registry.get(name).html || null,
+      StreamableLogic
+    };
+  }
+
+  // src/index.ts
+  var REACT_URL = "https://unpkg.com/react@18.3.1/umd/react.production.min.js";
+  var REACT_SRI = "sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z";
+  var REACT_DOM_URL = "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js";
+  var REACT_DOM_SRI = "sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1";
+  function hideRawTemplate() {
+    const s = document.createElement("style");
+    s.textContent = "x-dc{display:none!important}";
+    document.head.appendChild(s);
+  }
+  function loadScript(src, integrity) {
+    return new Promise((resolve2, reject) => {
+      //! nosemgrep: create-script-element
+      const s = document.createElement("script");
+      s.src = src;
+      s.integrity = integrity;
+      s.crossOrigin = "anonymous";
+      s.async = false;
+      s.onload = () => resolve2();
+      s.onerror = () => reject(new Error(`failed to load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+  function loadReactUmd() {
+    const w = window;
+    if (w.React && w.ReactDOM) return Promise.resolve();
+    return Promise.all([
+      loadScript(REACT_URL, REACT_SRI),
+      loadScript(REACT_DOM_URL, REACT_DOM_SRI)
+    ]).then(() => void 0);
+  }
+  function init() {
+    const runtime = createRuntime(document);
+    let rootName = "Root";
+    const baseCss = document.createElement("style");
+    baseCss.textContent = BASE_CSS;
+    document.head.prepend(baseCss);
+    const notifyHost = () => {
+      if (window.parent === window) return;
+      const r = runtime.registry.entries[rootName];
+      try {
+        window.parent.postMessage(
+          {
+            type: "__dc_booted",
+            rootName,
+            propsMeta: r && r.propsMeta || null,
+            preview: r && r.preview || null
+          },
+          "*"
+        );
+      } catch {
+      }
+    };
+    const api = {
+      __dcUpdate: (name, kind, content, streaming) => {
+        runtime.dcUpdate(name, kind, content, streaming);
+        if (name === rootName && !streaming && kind === "props") notifyHost();
+      },
+      __dcSetProps: (name, overrides) => runtime.setProps(name, overrides),
+      /** Name of the component currently mounted as the page root — DC tools
+       *  push their template-stream here when targeting "the open page". */
+      __dcRootName: () => rootName,
+      /** Editor bridge — the encoded, `data-dc-tpl`-annotated template source.
+       *  The host editor parses this into its own template DOM so it can map a
+       *  rendered node (carrying the same `data-dc-tpl`) back to the source
+       *  node that emitted it. Returns the encoded form (`<sc-comp>`,
+       *  `sc-camel-*` attrs); the editor decodes on serialize. */
+      __dcAnnotatedTemplate: (name) => runtime.annotatedTemplate(name),
+      /** Editor bridge — the *original* (decoded) template source. */
+      __dcTemplateSource: (name) => runtime.templateSource(name),
+      __dcBoot: () => {
+        rootName = boot(runtime, document) ?? rootName;
+        notifyHost();
+      },
+      __dcRegistry: runtime.registry.entries,
+      getDC: (name) => runtime.getDC(name),
+      // `DCLogic` is the documented base class name; `StreamableLogic` is the
+      // implementation alias kept for any project that already references it.
+      DCLogic: runtime.StreamableLogic,
+      StreamableLogic: runtime.StreamableLogic
+    };
+    Object.assign(window, api);
+    if (document.readyState !== "loading") api.__dcBoot();
+    else document.addEventListener("DOMContentLoaded", () => api.__dcBoot());
+  }
+  hideRawTemplate();
+  loadReactUmd().then(init).catch((err) => {
+    console.error("[dc] failed to load React or boot:", err);
+    throw err;
+  });
+})();
+
+</script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;-webkit-tap-highlight-color:transparent;}
+    ::-webkit-scrollbar{width:9px;height:9px;}
+    ::-webkit-scrollbar-thumb{background:rgba(128,140,160,0.4);border-radius:6px;}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(128,140,160,0.6);}
+    ::-webkit-scrollbar-track{background:transparent;}
+    @keyframes riskpulse{0%,100%{box-shadow:0 6px 18px rgba(0,0,0,0.45),0 0 0 0 rgba(240,106,106,0);}50%{box-shadow:0 6px 18px rgba(0,0,0,0.45),0 0 0 4px rgba(240,106,106,0.18);}}
+    @keyframes riskpulseLight{0%,100%{box-shadow:0 4px 14px rgba(20,30,50,0.10),0 0 0 0 rgba(205,58,46,0);}50%{box-shadow:0 4px 14px rgba(20,30,50,0.10),0 0 0 4px rgba(205,58,46,0.20);}}
+    @keyframes flowDash{to{stroke-dashoffset:-18;}}
+    @keyframes rgbRail{to{background-position:-200% 0;}}
+    @media (prefers-reduced-motion: reduce){[data-rgb-rail]{animation:none !important;}}
+  </style>
+</helmet>
+<div ref="{{ rootRef }}" style="{{ appStyle }}">
+
+  <div style="{{ headerStyle }}">
+    <sc-if value="{{ rgbRail }}" hint-placeholder-val="{{ false }}">
+      <div data-rgb-rail="1" style="position:absolute;left:0;right:0;bottom:-1px;height:2px;background:linear-gradient(90deg,#ff0040,#ff8a00,#fff200,#39ff14,#00e5ff,#b14dff,#ff00c8,#ff0040);background-size:200% 100%;animation:rgbRail 6s linear infinite;pointer-events:none;"></div>
+    </sc-if>
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <button onClick="{{ toggleMenu }}" style="{{ menuBtnStyle }}">&#9776;</button>
+      </sc-if>
+      <div style="min-width:0;">
+        <div style="{{ headerTitleStyle }}">{{ metaTitle }}</div>
+        <sc-if value="{{ isDesktop }}" hint-placeholder-val="{{ true }}">
+          <span style="{{ headerSubStyle }}">{{ metaSubtitle }}</span>
+        </sc-if>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex:none;">
+      <sc-if value="{{ isDesktop }}" hint-placeholder-val="{{ true }}">
+        <span style="{{ hostChipStyle }}">{{ stats.hosts }} hosts</span>
+      </sc-if>
+      <span style="{{ riskChipStyle }}">{{ stats.risks }} {{ riskWord }}</span>
+      <sc-if value="{{ showLayoutToggle }}" hint-placeholder-val="{{ true }}">
+        <button onClick="{{ toggleLayout }}" title="{{ layoutTitle }}" style="{{ fitBtnStyle }}">{{ layoutLabel }}</button>
+      </sc-if>
+      <button onClick="{{ toggleTheme }}" title="{{ themeToggleTitle }}" style="{{ themeBtnStyle }}">{{ themeIcon }}</button>
+      <div style="position:relative;flex:none;">
+        <button onClick="{{ toggleThemeMenu }}" title="Themes" style="{{ themesBtnStyle }}">{{ themesBtnLabel }}<span style="{{ themesCaretStyle }}">&#9662;</span></button>
+        <sc-if value="{{ themeMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ closeThemeMenu }}" style="position:fixed;inset:0;z-index:60;"></div>
+          <div style="{{ themeMenuStyle }}">
+            <sc-for list="{{ themeGroups }}" as="g" hint-placeholder-count="2">
+              <div style="{{ g.headStyle }}">{{ g.title }}</div>
+              <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="4">
+                <button onClick="{{ it.pick }}" style="{{ it.rowStyle }}">
+                  <span style="display:flex;gap:3px;flex:none;"><sc-for list="{{ it.dots }}" as="d" hint-placeholder-count="5"><span style="{{ d }}"></span></sc-for></span>
+                  <span style="{{ it.nameStyle }}">{{ it.name }}</span>
+                  <span style="{{ it.checkStyle }}">{{ it.check }}</span>
+                </button>
+              </sc-for>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <sc-if value="{{ isDesktop }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ dividerStyle }}"></div>
+        <button onClick="{{ zoomOut }}" style="{{ iconBtnStyle }}">&minus;</button>
+        <span style="{{ scalePctStyle }}">{{ scalePct }}%</span>
+        <button onClick="{{ zoomIn }}" style="{{ iconBtnStyle }}">+</button>
+        <button onClick="{{ resetView }}" style="{{ fitBtnStyle }}">Fit</button>
+      </sc-if>
+    </div>
+  </div>
+
+  <sc-if value="{{ hasFindings }}" hint-placeholder-val="{{ true }}">
+    <div style="{{ findingsBarStyle }}">
+      <div onClick="{{ toggleFindings }}" style="{{ findingsHeadStyle }}">
+        <span style="{{ findingsTitleStyle }}">Findings</span>
+        <sc-for list="{{ sevChips }}" as="sc" hint-placeholder-count="3">
+          <span style="{{ sc.style }}">{{ sc.text }}</span>
+        </sc-for>
+        <span style="flex:1;"></span>
+        <span style="{{ findingsHintStyle }}">{{ findingsHint }}</span>
+      </div>
+      <sc-if value="{{ findingsOpen }}" hint-placeholder-val="{{ true }}">
+        <div style="{{ findingsListStyle }}">
+          <sc-for list="{{ findings }}" as="f" hint-placeholder-count="4">
+            <div onClick="{{ f.click }}" style="{{ f.rowStyle }}">
+              <span style="{{ f.sevStyle }}">{{ f.sev }}</span>
+              <span style="{{ f.textStyle }}">{{ f.text }}</span>
+              <span style="{{ f.whereStyle }}">{{ f.where }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <div style="display:flex;flex:1;min-height:0;position:relative;">
+
+    <sc-if value="{{ scrimOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeOverlays }}" style="{{ scrimStyle }}"></div>
+    </sc-if>
+
+    <div style="{{ sidebarStyle }}">
+      <sc-if value="{{ sideRail }}" hint-placeholder-val="{{ false }}">
+        <button onClick="{{ toggleSide }}" title="Show panel" style="{{ panelBtnStyle }}margin:10px auto;">&rsaquo;</button>
+      </sc-if>
+      <div style="padding:14px 16px 10px;flex:none;display:flex;align-items:center;gap:8px;{{ sbHide }}">
+        <input value="{{ query }}" onInput="{{ onSearch }}" placeholder="Search name, IP, MAC&hellip;" style="{{ inputStyle }}" />
+        <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ closeOverlays }}" style="{{ closeBtnStyle }}">&times;</button>
+        </sc-if>
+        <sc-if value="{{ isDesktop }}" hint-placeholder-val="{{ true }}">
+          <button onClick="{{ toggleSide }}" title="Hide panel" style="{{ panelBtnStyle }}">&lsaquo;</button>
+        </sc-if>
+      </div>
+
+      <div style="flex:1;overflow-y:auto;padding:6px 12px 18px;-webkit-overflow-scrolling:touch;{{ sbHide }}">
+        <sc-if value="{{ hasSites }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ sectionHeadStyle }}display:flex;align-items:center;justify-content:space-between;gap:8px;"><span>Sites &middot; tap to expand</span><button onClick="{{ hideSites }}" style="{{ secBtnStyle }}">{{ lblSites }}</button></div>
+          <sc-if value="{{ showSites }}" hint-placeholder-val="{{ true }}">
+          <sc-for list="{{ sites }}" as="st" hint-placeholder-count="6">
+            <div onClick="{{ st.toggle }}" style="{{ st.rowStyle }}">
+              <span style="{{ st.caretStyle }}">{{ st.caret }}</span>
+              <div style="flex:1;min-width:0;">
+                <div style="{{ st.nameStyle }}">{{ st.name }}</div>
+                <div style="{{ st.subStyle }}">{{ st.sub }}</div>
+              </div>
+              <span style="{{ st.countStyle }}">{{ st.count }}</span>
+            </div>
+          </sc-for>
+          <div style="display:flex;gap:6px;padding:8px 4px 2px;">
+            <button onClick="{{ expandAllSites }}" style="{{ miniBtnStyle }}">Expand all</button>
+            <button onClick="{{ collapseAllSites }}" style="{{ miniBtnStyle }}">Collapse all</button>
+          </div>
+          </sc-if>
+        </sc-if>
+
+        <div style="{{ sectionHeadStyle }}display:flex;align-items:center;justify-content:space-between;gap:8px;"><span>{{ zoneHeadLabel }}</span><button onClick="{{ hideZones }}" style="{{ secBtnStyle }}">{{ lblZones }}</button></div>
+        <sc-if value="{{ showZones }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ zones }}" as="z" hint-placeholder-count="7">
+          <div onClick="{{ z.toggle }}" style="{{ z.rowStyle }}">
+            <span style="{{ z.dotStyle }}"></span>
+            <div style="flex:1;min-width:0;">
+              <div style="{{ z.nameStyle }}">{{ z.name }}</div>
+              <div style="{{ z.vlanStyle }}">{{ z.vlan }}</div>
+            </div>
+            <span style="{{ z.countStyle }}">{{ z.count }}</span>
+          </div>
+        </sc-for>
+        </sc-if>
+
+        <sc-if value="{{ hasVlans }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ sectionHeadStyle }}display:flex;align-items:center;justify-content:space-between;gap:8px;"><span>{{ vlanHeadLabel }}</span><button onClick="{{ hideVlans }}" style="{{ secBtnStyle }}">{{ lblVlans }}</button></div>
+          <sc-if value="{{ showVlans }}" hint-placeholder-val="{{ true }}">
+          <sc-for list="{{ vlans }}" as="v" hint-placeholder-count="3">
+            <div onClick="{{ v.toggle }}" style="{{ v.rowStyle }}">
+              <span style="{{ v.dotStyle }}"></span>
+              <div style="{{ v.nameStyle }}">{{ v.label }}</div>
+              <span style="{{ v.countStyle }}">{{ v.count }}</span>
+            </div>
+          </sc-for>
+          </sc-if>
+        </sc-if>
+
+        <div style="{{ sectionHeadStyle }}display:flex;align-items:center;justify-content:space-between;gap:8px;"><span>Action items</span><button onClick="{{ hideActions }}" style="{{ secBtnStyle }}">{{ lblActions }}</button></div>
+        <sc-if value="{{ showActions }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ actions }}" as="a" hint-placeholder-count="10">
+          <div onClick="{{ a.click }}" style="{{ a.rowStyle }}">
+            <span style="{{ a.dotStyle }}"></span>
+            <span style="{{ a.textStyle }}">{{ a.text }}</span>
+          </div>
+        </sc-for>
+        </sc-if>
+      </div>
+    </div>
+
+    <div ref="{{ viewportRef }}" style="{{ viewportStyle }}">
+      <div ref="{{ transformRef }}" style="{{ transformStyle }}">
+        <svg width="{{ canvasW }}" height="{{ canvasH }}" style="position:absolute;top:0;left:0;overflow:visible;pointer-events:none;">
+          <sc-for list="{{ edges }}" as="edge" hint-placeholder-count="8">
+            <path d="{{ edge.d }}" fill="none" stroke="{{ edge.color }}" stroke-width="{{ edge.width }}" stroke-dasharray="{{ edge.dash }}" stroke-opacity="{{ edge.opacity }}" stroke-linecap="round" style="{{ edge.style }}"></path>
+          </sc-for>
+          <sc-for list="{{ edgeLabels }}" as="el" hint-placeholder-count="6">
+            <text x="{{ el.x }}" y="{{ el.y }}" fill="{{ el.color }}" font-family="IBM Plex Mono, monospace" font-size="12" font-weight="500" text-anchor="middle" dominant-baseline="middle" stroke="{{ el.halo }}" stroke-width="3.5" paint-order="stroke" opacity="{{ el.opacity }}">{{ el.text }}</text>
+          </sc-for>
+        </svg>
+
+        <sc-for list="{{ bandLabels }}" as="b" hint-placeholder-count="5">
+          <div style="{{ b.style }}">{{ b.text }}</div>
+        </sc-for>
+
+        <sc-for list="{{ groupBoxes }}" as="g" hint-placeholder-count="0">
+          <div style="{{ g.style }}">
+            <div data-group="{{ g.key }}" style="{{ g.titleStyle }}">{{ g.title }}</div>
+            <div data-group="{{ g.key }}" style="{{ g.vlanStyle }}">{{ g.vlan }}</div>
+          </div>
+        </sc-for>
+
+        <sc-for list="{{ nodes }}" as="node" hint-placeholder-count="20">
+          <div data-card="1" data-id="{{ node.id }}" onMouseEnter="{{ node.onEnter }}" onMouseLeave="{{ node.onLeave }}" style="{{ node.cardStyle }}">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <span style="{{ node.kindStyle }}">{{ node.kind }}</span>
+              <sc-if value="{{ node.hasRisk }}" hint-placeholder-val="{{ true }}">
+                <span style="{{ node.badgeStyle }}">&#9888; {{ node.riskCount }}</span>
+              </sc-if>
+            </div>
+            <div style="{{ node.titleStyle }}">{{ node.label }}</div>
+            <div style="{{ node.subStyle }}">{{ node.sub }}</div>
+            <div style="display:flex;flex-wrap:nowrap;gap:4px;margin-top:auto;padding-top:7px;overflow:hidden;">
+              <sc-for list="{{ node.chips }}" as="chip" hint-placeholder-count="3">
+                <span style="{{ chipStyle }}">{{ chip }}</span>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:8px;z-index:25;">
+          <button onClick="{{ zoomIn }}" style="{{ floatBtnStyle }}">+</button>
+          <button onClick="{{ zoomOut }}" style="{{ floatBtnStyle }}">&minus;</button>
+          <button onClick="{{ resetView }}" style="{{ floatFitStyle }}">FIT</button>
+        </div>
+      </sc-if>
+    </div>
+
+    <sc-if value="{{ panelOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ detailStyle }}">
+        <sc-if value="{{ isMobile }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ clearSel }}" style="display:flex;justify-content:center;padding:9px 0 3px;flex:none;cursor:pointer;">
+            <span style="{{ handleStyle }}"></span>
+          </div>
+        </sc-if>
+        <div style="{{ selDrawerHeadStyle }}">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+            <div style="min-width:0;">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;color:{{ selColor }};">{{ selKind }}</div>
+              <div style="{{ selLabelStyle }}">{{ selLabel }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ selColor }};margin-top:4px;">{{ selSub }}</div>
+            </div>
+            <div style="display:flex;gap:6px;flex:none;">
+              <sc-if value="{{ isDesktop }}" hint-placeholder-val="{{ true }}">
+                <button onClick="{{ toggleDetail }}" title="{{ detailBtnTitle }}" style="{{ closeBtnStyle }}">{{ detailBtnLabel }}</button>
+              </sc-if>
+              <button onClick="{{ clearSel }}" style="{{ closeBtnStyle }}">&times;</button>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div style="{{ selZonePillStyle }}">
+              <span style="width:9px;height:9px;border-radius:50%;background:{{ selColor }};"></span>
+              <span style="{{ selZoneNameStyle }}">{{ selZoneName }}</span>
+              <span style="{{ selZoneVlanStyle }}">{{ selZoneVlan }}</span>
+            </div>
+            <sc-if value="{{ selIsSiteGroup }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ selGroupToggle }}" style="{{ selGroupBtnStyle }}">{{ selGroupBtnLabel }}</button>
+            </sc-if>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow-y:auto;padding:16px 20px 24px;-webkit-overflow-scrolling:touch;{{ dtHide }}">
+          <sc-if value="{{ selHasFlags }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-bottom:18px;">
+              <div style="{{ flagHeadStyle }}">Action items</div>
+              <sc-for list="{{ selFlags }}" as="f" hint-placeholder-count="2">
+                <div style="{{ flagRowStyle }}">
+                  <span style="color:{{ flagIconColor }};font-size:12px;line-height:1.4;flex:none;">&#9888;</span>
+                  <span style="{{ flagTextStyle }}">{{ f }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <div style="{{ sectionHeadStyle }}">Details</div>
+          <div style="margin-bottom:18px;">
+            <sc-for list="{{ selDetails }}" as="d" hint-placeholder-count="4">
+              <div style="{{ detailRowStyle }}">
+                <span style="color:{{ selColor }};flex:none;line-height:1.5;">&middot;</span>
+                <span style="{{ detailTextStyle }}">{{ d }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="{{ sectionHeadStyle }}">Connections</div>
+          <sc-for list="{{ selConns }}" as="c" hint-placeholder-count="3">
+            <div onClick="{{ c.go }}" style="{{ connRowStyle }}">
+              <span style="width:8px;height:8px;border-radius:50%;background:{{ c.color }};flex:none;"></span>
+              <div style="flex:1;min-width:0;">
+                <div style="{{ connLabelStyle }}">{{ c.label }}</div>
+                <div style="{{ connViaStyle }}">{{ c.via }}</div>
+              </div>
+              <span style="color:{{ chevColor }};font-size:14px;">&rsaquo;</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+
+  <template id="__bundler_thumbnail" data-bg-color="#0b0e14">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="800" fill="#0b0e14"/>
+      <circle cx="600" cy="300" r="38" fill="none" stroke="#5b9dff" stroke-width="6"/>
+      <line x1="600" y1="338" x2="600" y2="430" stroke="#5b9dff" stroke-width="5"/>
+      <line x1="600" y1="430" x2="380" y2="540" stroke="#5fcf8a" stroke-width="4"/>
+      <line x1="600" y1="430" x2="600" y2="560" stroke="#a98bff" stroke-width="4"/>
+      <line x1="600" y1="430" x2="820" y2="540" stroke="#f0944a" stroke-width="4"/>
+      <line x1="600" y1="430" x2="940" y2="500" stroke="#e0b34d" stroke-width="4"/>
+      <rect x="335" y="540" width="90" height="60" rx="10" fill="#141a24" stroke="#5fcf8a" stroke-width="3"/>
+      <rect x="555" y="560" width="90" height="60" rx="10" fill="#141a24" stroke="#a98bff" stroke-width="3"/>
+      <rect x="775" y="540" width="90" height="60" rx="10" fill="#141a24" stroke="#f0944a" stroke-width="3"/>
+      <rect x="895" y="500" width="90" height="60" rx="10" fill="#141a24" stroke="#e0b34d" stroke-width="3"/>
+    </svg>
+  </template>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:800},&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;slate&quot;,&quot;phosphor&quot;,&quot;blueprint&quot;,&quot;contrast&quot;,&quot;rgb&quot;,&quot;light&quot;,&quot;paper&quot;],&quot;default&quot;:&quot;rgb&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;defaultLayout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;cluster&quot;,&quot;tree&quot;,&quot;group&quot;],&quot;default&quot;:&quot;cluster&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;showFan&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;highlightRisks&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;edgeStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;curved&quot;,&quot;straight&quot;],&quot;default&quot;:&quot;curved&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.state = {
+      tx: 30, ty: 24, scale: 0.62,
+      hoverId: null, focusId: null, selectedId: null, panelOpen: false,
+      actionHL: null, activeActionId: null,
+      query: '',
+      menuOpen: false,
+      theme: props.defaultTheme || 'rgb', themeMenuOpen: false,  // per-map saved theme applied below
+      vw: 1200, vh: 800,
+      activeZones: {},  // derived from ZONES after SITE DATA loads (see below)
+      collapsed: {},    // siteId -> true when that site is folded to one card
+      groupSel: null,   // selected SITES/ZONES container key (group-level trace)
+      findingsOpen: null, // null = collapsed by default
+      hiddenSecs: {}, sideCollapsed: false, detailCollapsed: false
+    };
+
+    /* ===================== SITE DATA ===================== */
+    // SAMPLE SITE — replace this whole block to map a new client.
+    // These nodes have NO x/y, so the engine auto-lays them out by
+    // connection depth (root at top). See the Authoring Guide for the schema.
+    this.META = {
+      title: 'Acme Field Office — Network',
+      subtitle: '10.100.10.0/24 · sample site · replace me'
+    };
+
+    // Geography — one entry per physical location, referenced by `site:` on a
+    // node. Optional: leave empty for a single-location map. Sites render as
+    // collapsible containers and open collapsed on multi-site maps.
+    this.SITES = {
+      // hq:     { name:'HQ — Main Street' },
+      // branch: { name:'Branch — Airport Rd' }
+    };
+
+    // Role / segmentation. Never geography — that is what SITES is for.
+    this.ZONES = {
+      core:    { name:'Core / gateway', vlan:'router · firewall', dark:'#5b9dff', light:'#2563c9' },
+      server:  { name:'Servers',        vlan:'LAN',                    dark:'#a98bff', light:'#6d44d9' },
+      trusted: { name:'Workstations',   vlan:'VLAN 10',                dark:'#5fcf8a', light:'#1c9b54' },
+      iot:     { name:'IoT / devices',  vlan:'VLAN 30 · isolate', dark:'#f0944a', light:'#cf5d18' },
+      guest:   { name:'Guest WiFi',     vlan:'VLAN 50',                dark:'#e0b34d', light:'#a9790c' }
+    };
+
+    // No x/y on any node => automatic layered layout.
+    this.NODES = [
+      { id:'internet', zone:'core', kind:'WAN', label:'Internet / WAN', sub:'upstream',
+        details:['ISP fibre handoff'], flags:[], chips:['WAN'] },
+      { id:'fw', zone:'core', kind:'FIREWALL · ROUTER', label:'Edge Firewall', sub:'10.100.10.1',
+        details:['NAT + stateful firewall','DHCP server','VPN endpoint'], flags:[], chips:['NAT','DHCP','VPN'] },
+      { id:'sw', zone:'core', kind:'MANAGED SWITCH', label:'Core Switch', sub:'24-port · VLAN-capable',
+        details:['802.1Q VLANs','LACP uplink to firewall'], flags:[], chips:['24-port','802.1Q'], vlans:[10,30,50] },
+      { id:'ap', zone:'core', kind:'WIFI AP', label:'Wireless AP', sub:'10.100.10.2',
+        details:['WiFi 6 · SSIDs: Staff, Guest','Guest SSID on VLAN 50'], flags:[], chips:['WiFi 6','2 SSIDs'] },
+
+      { id:'fileserver', zone:'server', kind:'FILE SERVER', label:'File Server', sub:'10.100.10.10',
+        details:['Windows Server','SMB shares','Nightly backup to NAS'], flags:['No off-site backup yet'], chips:['SMB','.10'] },
+      { id:'nas', zone:'server', kind:'NAS', label:'Backup NAS', sub:'10.100.10.11',
+        details:['4-bay · RAID 5','Backup target for file server'], flags:[], chips:['RAID5','.11'] },
+
+      { id:'pc1', zone:'trusted', kind:'WORKSTATION', label:'Reception PC', sub:'10.100.10.20',
+        details:['Windows 11','Wired'], flags:[], chips:['Win11','.20'], vlans:[10] },
+      { id:'pc2', zone:'trusted', kind:'WORKSTATION', label:'Manager PC', sub:'10.100.10.21',
+        details:['Windows 11','Wired'], flags:[], chips:['Win11','.21'], vlans:[10] },
+      { id:'printer', zone:'trusted', kind:'PRINTER', label:'Office Printer', sub:'10.100.10.30',
+        details:['Network MFP','HTTPS admin'], flags:[], chips:['MFP','.30'], vlans:[10] },
+
+      { id:'cam1', zone:'iot', kind:'CAMERA', label:'Door Camera', sub:'10.100.10.40 (WiFi)',
+        details:['PoE / WiFi camera','Cloud upload'], flags:['Isolate on IoT VLAN'], chips:['Camera','.40'], vlans:[30] },
+      { id:'thermostat', zone:'iot', kind:'IoT', label:'Smart Thermostat', sub:'10.100.10.41 (WiFi)',
+        details:['HVAC control'], flags:[], chips:['IoT','.41'], vlans:[30] },
+
+      { id:'guestphone', zone:'guest', kind:'GUEST', label:'Guest Device', sub:'10.100.10.60 (WiFi)',
+        details:['Visitor phone on Guest SSID'], flags:[], chips:['Guest','.60'], vlans:[50] }
+    ];
+
+    this.EDGES = [
+      { id:'e1', from:'internet', to:'fw', cls:'backbone' },
+      { id:'e2', from:'fw', to:'sw', cls:'backbone', label:'LAG' },
+      { id:'e3', from:'sw', to:'ap', cls:'wired', label:'PoE' },
+      { id:'e4', from:'sw', to:'fileserver', cls:'wired' },
+      { id:'e5', from:'sw', to:'nas', cls:'wired' },
+      { id:'e6', from:'sw', to:'pc1', cls:'wired' },
+      { id:'e7', from:'sw', to:'pc2', cls:'wired' },
+      { id:'e8', from:'sw', to:'printer', cls:'wired' },
+      { id:'w1', from:'ap', to:'cam1', cls:'wifi', dashed:true },
+      { id:'w2', from:'ap', to:'thermostat', cls:'wifi', dashed:true },
+      { id:'w3', from:'ap', to:'guestphone', cls:'wifi', dashed:true }
+    ];
+
+    this.ACTIONS = [
+      { id:'ai1', sev:'high', text:'File server has no off-site backup', nodes:['fileserver'] },
+      { id:'ai2', sev:'med',  text:'IoT camera should be isolated on its own VLAN', nodes:['cam1'] },
+      { id:'ai3', sev:'low',  text:'Confirm guest SSID cannot reach the LAN', nodes:['ap','guestphone'] }
+    ];
+
+    this.BANDS = []; // auto-layout: leave empty (bands are for manual layouts)
+    /* =================== END SITE DATA =================== */
+
+    this.ACTIONS = this.ACTIONS || [];
+    this.BANDS = this.BANDS || [];
+    // Per-map localStorage key — namespaced by META.title so one map's saved
+    // theme/layout choice never bleeds into other maps on the same origin.
+    this._lsKey = k => 'topo-' + k + ':' + ((this.META && this.META.title) || 'map');
+    let savedTheme = null;
+    try { savedTheme = localStorage.getItem(this._lsKey('theme')); } catch(_){}
+    if(savedTheme && this.themeDefs()[savedTheme]) this.state.theme = savedTheme;
+    if(!this.themeDefs()[this.state.theme]) this.state.theme = 'dark';
+    // Normalize hand-edited data: default the optional arrays and map any typo'd
+    // zone key to a grey "Unzoned" zone instead of crashing the render.
+    this.NODES.forEach(n => {
+      n.details = n.details || []; n.flags = n.flags || []; n.chips = n.chips || [];
+      n.sub = n.sub || ''; n.kind = n.kind || ''; n.vlans = n.vlans || [];
+      if(n.vlans.length){
+        const vlabel = n.vlans.length > 1
+          ? ('VLANs ' + n.vlans.slice(0,3).join('/') + (n.vlans.length > 3 ? '+' : ''))
+          : ('VLAN ' + n.vlans[0]);
+        n.chips = n.chips.concat([vlabel]);
+      }
+      if(!this.ZONES[n.zone]){
+        try { console.warn('[topo] node "'+n.id+'" references unknown zone "'+n.zone+'"'); } catch(_){}
+        this.ZONES[n.zone] = { name:'Unzoned ('+n.zone+')', vlan:'check zone key', dark:'#8a93a3', light:'#5d6878' };
+      }
+    });
+    // VLAN filter — a second, independent toggle dimension from ZONES (role).
+    // Only appears in the sidebar once at least one node declares `vlans`.
+    const vlanCounts0 = {};
+    this.NODES.forEach(n => n.vlans.forEach(v => { vlanCounts0[v] = (vlanCounts0[v]||0) + 1; }));
+    this._vlanKeys = Object.keys(vlanCounts0).sort((a,b)=> (Number(a)-Number(b)) || a.localeCompare(b));
+    this._hasVlans = this._vlanKeys.length > 0;
+    this.state.activeVlans = {};
+    this._vlanKeys.forEach(v => { this.state.activeVlans[v] = true; });
+    // Every zone starts visible — derived from ZONES so a new map never has to
+    // touch the filter state by hand (prevents zones silently disappearing).
+    this.state.activeZones = {};
+    Object.keys(this.ZONES).forEach(k => { this.state.activeZones[k] = true; });
+    // ---- SITES: the optional second grouping dimension. ZONES stay
+    // role/segmentation (what a device DOES); SITES carry geography (where it
+    // IS). A map that declares no SITES behaves exactly as it always did.
+    this.SITES = this.SITES || {};
+    this._hasSites = Object.keys(this.SITES).length > 0;
+    if(this._hasSites){
+      let stray = false;
+      this.NODES.forEach(n => {
+        if(!n.site || !this.SITES[n.site]){
+          if(n.site){ try { console.warn('[topo] node "'+n.id+'" references unknown site "'+n.site+'"'); } catch(_){} }
+          n.site = '_unsited'; stray = true;
+        }
+      });
+      if(stray) this.SITES._unsited = { name:'Unassigned' };
+      this._siteKeys = Object.keys(this.SITES);
+      // A 20-site map has to OPEN legible: fold every site past a handful.
+      const startCollapsed = this._siteKeys.length > 3;
+      this._siteKeys.forEach(k => { this.state.collapsed[k] = startCollapsed; });
+    } else {
+      this._siteKeys = [];
+    }
+
+    this._authoredMap = {};
+    this.NODES.forEach(n => { this._authoredMap[n.id] = n; });
+    // Drop edges whose endpoints don't exist (id typo / renamed node): warn and
+    // skip instead of crashing the whole render on an undefined node lookup.
+    this.EDGES = this.EDGES.filter(e => {
+      if(this._authoredMap[e.from] && this._authoredMap[e.to]) return true;
+      try { console.warn('[topo] edge "'+e.id+'" references unknown node "'+(this._authoredMap[e.from] ? e.to : e.from)+'" — edge skipped'); } catch(_){}
+      return false;
+    });
+
+    let savedLayout = null;
+    try { savedLayout = localStorage.getItem(this._lsKey('layout')); } catch(_){}
+    this._layoutOrder = this._hasSites ? ['site','cluster','tree','group'] : ['cluster','tree','group'];
+    const validLayout = {};
+    this._layoutOrder.forEach(k => { validLayout[k] = 1; });
+    this.layoutMode = validLayout[savedLayout] ? savedLayout
+                    : (validLayout[props.defaultLayout] ? props.defaultLayout
+                    : (this._hasSites ? 'site' : 'cluster'));
+    // auto-layout maps (no hand-placed coords) get the layout-mode toggle;
+    // hand-positioned maps (every node has x/y) keep their fixed layout.
+    this._isAuto = this.NODES.some(n => n.x === undefined || n.y === undefined);
+    this._rebuild();
+
+    this.pointers = new Map();
+    this.rootRef = el => { this.rootEl = el; };
+    this.viewportRef = el => { this.viewportEl = el; };
+    // Pan/zoom paints straight onto the transform node during a gesture and only
+    // commits to state when the gesture ends — a 100-card map re-rendering on
+    // every pointermove is what makes a big map feel (and act) frozen.
+    this.transformRef = el => { this.transformEl = el; };
+    this.onWheel = this.onWheel.bind(this);
+    this.onPointerDown = this.onPointerDown.bind(this);
+    this._onPointerMove = this._onPointerMove.bind(this);
+    this._onPointerUp = this._onPointerUp.bind(this);
+    this._onResize = this._onResize.bind(this);
+  }
+
+  // The VISUAL graph. this.NODES/this.EDGES are the authored truth; this.N/this.E
+  // are what actually renders — identical to the authored data unless a site is
+  // collapsed, in which case that site's devices fold into ONE proxy card and
+  // their links re-point at it. Rebuilt on load, on layout change, on collapse.
+  _rebuild(){
+    const siteMode = this._hasSites && this.layoutMode === 'site';
+    const col = this.state.collapsed || {};
+
+    this.siteStats = {};
+    this._siteKeys.forEach(k => { this.siteStats[k] = { devices:0, flags:0, kinds:{}, zones:{}, members:[] }; });
+    this.NODES.forEach(n => {
+      const st = this.siteStats[n.site]; if(!st) return;
+      st.devices++; st.flags += (n.flags || []).length;
+      st.kinds[n.kind || 'DEVICE'] = (st.kinds[n.kind || 'DEVICE'] || 0) + 1;
+      st.zones[n.zone] = (st.zones[n.zone] || 0) + 1;
+      st.members.push(n);
+    });
+
+    const folded = {};              // authored node id -> proxy node id
+    this.N = [];
+    if(siteMode){
+      this._siteKeys.forEach(k => {
+        const st = this.siteStats[k]; if(!st || !st.devices) return;
+        if(col[k]){
+          const flagLines = [];
+          st.members.forEach(n => (n.flags || []).forEach(f => { if(flagLines.length < 12) flagLines.push(n.label + ' — ' + f); }));
+          const kinds = Object.keys(st.kinds).sort((a,b)=> st.kinds[b]-st.kinds[a])
+            .map(x => st.kinds[x] + ' \u00d7 ' + x.toLowerCase());
+          const proxy = {
+            id:'@site:'+k, site:k, isSite:true, zone:this._dominantZone(st),
+            kind:'SITE', label:(this.SITES[k].name || k),
+            sub: st.devices + (st.devices === 1 ? ' device' : ' devices'),
+            // member labels ride along in details so search still finds a device
+            // that is currently folded inside its site.
+            details: kinds.concat(st.members.slice(0,40).map(n => n.label + (n.sub ? '  ' + n.sub : ''))),
+            flags: flagLines, chips:['site', st.devices + ' devices']
+          };
+          this.N.push(proxy);
+          st.members.forEach(n => { folded[n.id] = proxy.id; });
+        } else {
+          st.members.forEach(n => this.N.push(n));
+        }
+      });
+      // any node without a site (shouldn't happen — normalized above) still renders
+      this.NODES.forEach(n => { if(!this.siteStats[n.site]) this.N.push(n); });
+    } else {
+      this.N = this.NODES.slice();
+    }
+    this._folded = folded;
+
+    this.nodeMap = {};
+    this.N.forEach(n => { this.nodeMap[n.id] = n; });
+
+    // Re-point edges onto the visual graph: links that fall entirely inside one
+    // collapsed site disappear, and parallel links between the same two visual
+    // nodes fold into one carrying a count.
+    const seen = {};
+    this.E = [];
+    this.EDGES.forEach(e => {
+      const f = folded[e.from] || e.from, t = folded[e.to] || e.to;
+      if(f === t) return;
+      if(!this.nodeMap[f] || !this.nodeMap[t]) return;
+      const key = f + '>' + t;
+      if(seen[key]){ seen[key]._fold = (seen[key]._fold || 1) + 1; return; }
+      const proxied = (f !== e.from || t !== e.to);
+      const ne = proxied
+        ? { id:e.id, from:f, to:t, cls:e.cls, dashed:e.dashed, label:'', _proxy:true }
+        : e;
+      seen[key] = ne;
+      this.E.push(ne);
+    });
+
+    this.adj = {};
+    this.E.forEach(e => {
+      (this.adj[e.from] = this.adj[e.from] || []).push({ id:e.to, edge:e });
+      (this.adj[e.to] = this.adj[e.to] || []).push({ id:e.from, edge:e });
+    });
+    // BFS depth from the upstream root(s) → defines upstream/downstream for flow
+    // animation and the auto-layout row order. Roots = an explicit 'internet'/'wan'
+    // node if present, else every node that is never a downstream ('to') target.
+    const hasIncoming = {};
+    this.E.forEach(e => { hasIncoming[e.to] = true; });
+    let roots = this.N.filter(n => n.id === 'internet' || n.id === 'wan').map(n => n.id);
+    if(!roots.length) roots = this.N.filter(n => !hasIncoming[n.id]).map(n => n.id);
+    if(!roots.length && this.N.length) roots = [this.N[0].id];   // fully cyclic fallback
+    this.depth = {};
+    const dq = [];
+    roots.forEach(id => { this.depth[id] = 0; dq.push(id); });
+    while(dq.length){
+      const cur = dq.shift();
+      (this.adj[cur] || []).forEach(a => {
+        if(this.depth[a.id] === undefined){ this.depth[a.id] = this.depth[cur] + 1; dq.push(a.id); }
+      });
+    }
+
+    // a rebuild always re-flows: drop coords from the previous auto pass
+    this.NODES.forEach(n => { if(n._auto){ delete n.x; delete n.y; delete n._auto; } });
+    this._autoLaidOut = false;
+    this._applyLayout();
+  }
+
+  _dominantZone(st){
+    const keys = Object.keys(st.zones);
+    if(!keys.length) return Object.keys(this.ZONES)[0];
+    return keys.sort((a,b)=> st.zones[b] - st.zones[a])[0];
+  }
+
+  // group key a node belongs to in the current grouped layout
+  _gkey(n){ return this._groupKind === 'site' ? n.site : n.zone; }
+
+  toggleSite(k){
+    const col = Object.assign({}, this.state.collapsed || {});
+    col[k] = !col[k];
+    if(this.layoutMode !== 'site'){
+      this.layoutMode = 'site';
+      try { localStorage.setItem(this._lsKey('layout'), 'site'); } catch(_){}
+    }
+    this.setState({ collapsed:col, groupSel:null, focusId:null, selectedId:null, panelOpen:false, actionHL:null, activeActionId:null }, () => {
+      this._rebuild(); this.forceUpdate();
+      clearTimeout(this._fitT); this._fitT = setTimeout(() => this.fitView(), 30);
+    });
+  }
+  setAllSites(v){
+    const col = {};
+    this._siteKeys.forEach(k => { col[k] = v; });
+    if(this.layoutMode !== 'site'){
+      this.layoutMode = 'site';
+      try { localStorage.setItem(this._lsKey('layout'), 'site'); } catch(_){}
+    }
+    this.setState({ collapsed:col, groupSel:null, focusId:null, selectedId:null, panelOpen:false }, () => {
+      this._rebuild(); this.forceUpdate();
+      clearTimeout(this._fitT); this._fitT = setTimeout(() => this.fitView(), 30);
+    });
+  }
+
+  // Tapping a container (or a collapsed site card) selects the GROUP: every
+  // member lights up along with every link that crosses the boundary.
+  tapGroup(key){
+    if(this.state.groupSel === key){
+      this.setState({ groupSel:null, panelOpen:false, focusId:null, selectedId:null });
+      return;
+    }
+    this.setState({ groupSel:key, selectedId:null, focusId:null, panelOpen:true,
+      actionHL:null, activeActionId:null, menuOpen:false });
+  }
+
+  // authored node ids -> the visual ids that currently stand for them
+  _visIds(ids){
+    const out = [];
+    (ids || []).forEach(id => {
+      const v = (this._folded && this._folded[id]) || id;
+      if(this.nodeMap[v] && out.indexOf(v) === -1) out.push(v);
+    });
+    return out;
+  }
+
+  componentDidMount(){
+    // Native listeners (not React synthetic) so {passive:false} sticks on Android.
+    if(this.viewportEl){
+      this.viewportEl.addEventListener('pointerdown', this.onPointerDown, { passive:false });
+      this.viewportEl.addEventListener('wheel', this.onWheel, { passive:false });
+    }
+    window.addEventListener('pointermove', this._onPointerMove, { passive:false });
+    window.addEventListener('pointerup', this._onPointerUp);
+    window.addEventListener('pointercancel', this._onPointerUp);
+    window.addEventListener('resize', this._onResize);
+    window.addEventListener('orientationchange', this._onResize);
+    if(window.ResizeObserver && this.rootEl){
+      this._ro = new ResizeObserver(() => this._onResize());
+      this._ro.observe(this.rootEl);
+    }
+    this.applyBodyBg();
+    this.measure();
+    this._fitT = setTimeout(() => this.fitView(), 80);
+    this._fitT2 = setTimeout(() => this.fitView(), 420);
+  }
+  componentWillUnmount(){
+    if(this.viewportEl){
+      this.viewportEl.removeEventListener('pointerdown', this.onPointerDown);
+      this.viewportEl.removeEventListener('wheel', this.onWheel);
+    }
+    window.removeEventListener('pointermove', this._onPointerMove);
+    window.removeEventListener('pointerup', this._onPointerUp);
+    window.removeEventListener('pointercancel', this._onPointerUp);
+    window.removeEventListener('resize', this._onResize);
+    window.removeEventListener('orientationchange', this._onResize);
+    if(this._ro) this._ro.disconnect();
+    clearTimeout(this._fitT); clearTimeout(this._fitT2); clearTimeout(this._rzT); clearTimeout(this._wheelT);
+  }
+
+  applyBodyBg(){
+    const bg = this.pal().appBg;
+    try { document.documentElement.style.background = bg; document.body.style.background = bg; } catch(_){}
+  }
+
+  // ☾/☀ flips between the last-used dark and last-used light theme
+  toggleTheme(){
+    const defs = this.themeDefs(), cur = defs[this.state.theme] || defs.dark;
+    const want = cur.base === 'light' ? 'dark' : 'light';
+    let next = null; try { next = localStorage.getItem(this._lsKey('theme_' + want)); } catch(_){}
+    if(!defs[next] || defs[next].base !== want) next = want;
+    this.setTheme(next);
+  }
+  setTheme(id){
+    const defs = this.themeDefs(); if(!defs[id]) return;
+    try { localStorage.setItem(this._lsKey('theme'), id); localStorage.setItem(this._lsKey('theme_' + defs[id].base), id); } catch(_){}
+    this.setState({ theme:id, themeMenuOpen:false }, () => this.applyBodyBg());
+  }
+
+  toggleLayout(){
+    const order = this._layoutOrder;
+    const i = order.indexOf(this.layoutMode);
+    this.layoutMode = order[(i + 1) % order.length];
+    try { localStorage.setItem(this._lsKey('layout'), this.layoutMode); } catch(_){}
+    this.setState({ groupSel:null, selectedId:null, focusId:null, panelOpen:false }, () => {
+      this._rebuild(); this.forceUpdate();
+      clearTimeout(this._fitT); this._fitT = setTimeout(() => this.fitView(), 30);
+    });
+  }
+
+  // ----- theme palette -----
+  themeDefs(){
+    if(this._themeDefs) return this._themeDefs;
+    const Z = (a) => ({ core:a[0], server:a[1], trusted:a[2], iot:a[3], guest:a[4] });
+    const list = [
+      { id:'dark', name:'Dark', base:'dark' },
+      { id:'slate', name:'Slate', base:'dark', zones:Z(['#7aa7ff','#b8a2ff','#72d49c','#f2a566','#e6c36a']), tok:{
+        appBg:'#1a1f2b', gridDot:'rgba(255,255,255,0.06)', headerBg:'#1f2533', headerBorder:'#2c3445', sidebarBg:'#1f2533', detailBg:'#212838', panelBorder:'#2f3748',
+        cardBg:'#262d3d', cardBorder:'#374055', cardShadow:'0 6px 18px rgba(0,0,0,0.35)', textStrong:'#eef2f8', text:'#dde3ee', textMid:'#c3cad8', textMuted:'#8a94a8', heading:'#7a8499',
+        chipText:'#b2bbcc', chipBg:'#2c3446', chipBorder:'#3a4459', inputBg:'#1c2230', inputBorder:'#343d50', inputText:'#e6ebf3', btnBg:'#262d3d', btnBorder:'#374055', btnText:'#d6dce8',
+        divider:'#343d50', scrim:'rgba(10,13,20,0.5)', floatBg:'rgba(38,45,61,0.94)', floatBorder:'#3a4459', floatText:'#e6ebf3', floatFitText:'#a9c2ec', handle:'#46506a', halo:'#1a1f2b',
+        riskBadgeBg:'#ff9a90', riskBadgeText:'#1a1f2b', flagIcon:'#ff9a90', flagBg:'#33222a', flagBorder:'#553039', flagText:'#f0d2d2', riskChipBg:'#3a2429', riskChipBorder:'#5a3036', riskChipText:'#ff9a90',
+        detailRowBorder:'#2a3243', connBg:'#222939', connBorder:'#2f3748' } },
+      { id:'phosphor', name:'Phosphor', base:'dark', zones:Z(['#4fd1ff','#c792ff','#5cf28a','#ffb454','#f2e05c']), tok:{
+        appBg:'#060a07', gridDot:'rgba(120,255,160,0.06)', headerBg:'#09100b', headerBorder:'#16241a', sidebarBg:'#09100b', detailBg:'#0a120d', panelBorder:'#1a2a1f',
+        cardBg:'#0d1610', cardBorder:'#1f3325', cardShadow:'0 6px 18px rgba(0,0,0,0.6)', textStrong:'#d4ffe0', text:'#bff0cc', textMid:'#9fd6ad', textMuted:'#5f8c6c', heading:'#4d7359',
+        chipText:'#8fd4a2', chipBg:'#102016', chipBorder:'#1f3a28', inputBg:'#08120b', inputBorder:'#1d3023', inputText:'#d4ffe0', btnBg:'#0d1610', btnBorder:'#1f3325', btnText:'#b6f0c6',
+        divider:'#1d3023', scrim:'rgba(0,4,1,0.6)', floatBg:'rgba(13,22,16,0.94)', floatBorder:'#1f3a28', floatText:'#d4ffe0', floatFitText:'#5cf28a', handle:'#2a4533', halo:'#060a07',
+        riskBadgeBg:'#ff8a7a', riskBadgeText:'#060a07', flagIcon:'#ff8a7a', flagBg:'#1a0e0c', flagBorder:'#3d1f1a', flagText:'#ffd0c8', riskChipBg:'#241010', riskChipBorder:'#4a1f1f', riskChipText:'#ff8a7a',
+        detailRowBorder:'#14221a', connBg:'#0b140e', connBorder:'#1a2a1f' } },
+      { id:'blueprint', name:'Blueprint', base:'dark', zones:Z(['#8cc4ff','#c7b3ff','#8ee6b0','#ffbd7a','#ffe08a']), tok:{
+        appBg:'#0e2a4d', gridDot:'rgba(180,215,255,0.12)', headerBg:'#0c2443', headerBorder:'#1e4270', sidebarBg:'#0c2443', detailBg:'#0f2b50', panelBorder:'#1e4270',
+        cardBg:'#13355e', cardBorder:'#2d5a8e', cardShadow:'0 6px 18px rgba(3,12,28,0.5)', textStrong:'#f2f8ff', text:'#dfeafa', textMid:'#c9ddf2', textMuted:'#8fb0d6', heading:'#7c9dc4',
+        chipText:'#c3d8f0', chipBg:'#173d6a', chipBorder:'#2d5a8e', inputBg:'#0b2342', inputBorder:'#24507f', inputText:'#eef5ff', btnBg:'#13355e', btnBorder:'#2d5a8e', btnText:'#e4efff',
+        divider:'#24507f', scrim:'rgba(4,14,30,0.55)', floatBg:'rgba(19,53,94,0.94)', floatBorder:'#2d5a8e', floatText:'#eef5ff', floatFitText:'#bfe0ff', handle:'#3a6a9e', halo:'#0e2a4d',
+        riskBadgeBg:'#ffb0a8', riskBadgeText:'#0e2a4d', flagIcon:'#ffb0a8', flagBg:'#3a1e30', flagBorder:'#6a3044', flagText:'#ffd8d4', riskChipBg:'#4a1e2a', riskChipBorder:'#7a3040', riskChipText:'#ffb0a8',
+        detailRowBorder:'#1a3d66', connBg:'#11305a', connBorder:'#1e4270' } },
+      { id:'contrast', name:'High contrast', base:'dark', zones:Z(['#6cb6ff','#d2a8ff','#56f08a','#ffa657','#ffe066']), tok:{
+        appBg:'#000000', gridDot:'rgba(255,255,255,0.10)', headerBg:'#000000', headerBorder:'#ffffff', sidebarBg:'#000000', detailBg:'#000000', panelBorder:'#ffffff',
+        cardBg:'#000000', cardBorder:'#e6e6e6', cardShadow:'none', textStrong:'#ffffff', text:'#ffffff', textMid:'#ffffff', textMuted:'#d0d0d0', heading:'#d0d0d0',
+        chipText:'#ffffff', chipBg:'#000000', chipBorder:'#ffffff', inputBg:'#000000', inputBorder:'#ffffff', inputText:'#ffffff', btnBg:'#000000', btnBorder:'#ffffff', btnText:'#ffffff',
+        divider:'#ffffff', scrim:'rgba(0,0,0,0.75)', floatBg:'#000000', floatBorder:'#ffffff', floatText:'#ffffff', floatFitText:'#ffe066', handle:'#ffffff', halo:'#000000',
+        riskBadgeBg:'#ff6b6b', riskBadgeText:'#000000', flagIcon:'#ff6b6b', flagBg:'#000000', flagBorder:'#ff6b6b', flagText:'#ffffff', riskChipBg:'#000000', riskChipBorder:'#ff6b6b', riskChipText:'#ff6b6b',
+        detailRowBorder:'#555555', connBg:'#000000', connBorder:'#888888' } },
+      { id:'rgb', name:'RGB', base:'dark', rgb:true, zones:Z(['#00e5ff','#b14dff','#39ff14','#ff8a00','#fff200']), tok:{
+        appBg:'#07030d', gridDot:'rgba(255,0,200,0.10)', headerBg:'#0b0514', headerBorder:'#2a0f4a', sidebarBg:'#0b0514', detailBg:'#0d0618', panelBorder:'#2a0f4a',
+        cardBg:'#110822', cardBorder:'#3a1466', cardShadow:'0 0 14px rgba(170,0,255,0.35)', textStrong:'#ffffff', text:'#efe6ff', textMid:'#e3d4ff', textMuted:'#a58cd6', heading:'#8a6fc0',
+        chipText:'#00e5ff', chipBg:'#1a0b33', chipBorder:'#00e5ff', inputBg:'#0d0618', inputBorder:'#3a1466', inputText:'#ffffff', btnBg:'#1a0b33', btnBorder:'#ff00c8', btnText:'#ff7ae6',
+        divider:'#3a1466', scrim:'rgba(4,0,10,0.6)', floatBg:'rgba(17,8,34,0.94)', floatBorder:'#ff00c8', floatText:'#ffffff', floatFitText:'#00e5ff', handle:'#5a2a99', halo:'#07030d',
+        riskBadgeBg:'#ff2d55', riskBadgeText:'#ffffff', flagIcon:'#ff4d6d', flagBg:'#1f0010', flagBorder:'#5a0a25', flagText:'#ffd0dc', riskChipBg:'#2a0010', riskChipBorder:'#ff2d55', riskChipText:'#ff4d6d',
+        detailRowBorder:'#1f0d38', connBg:'#120826', connBorder:'#2a0f4a' } },
+      { id:'light', name:'Light', base:'light' },
+      { id:'paper', name:'Paper', base:'light', zones:Z(['#2f5fb3','#7046c2','#2b7d4b','#b8561c','#94700f']), tok:{
+        appBg:'#eee8dc', gridDot:'rgba(80,60,30,0.09)', headerBg:'#f8f4ec', headerBorder:'#e2d9c7', sidebarBg:'#f5f0e6', detailBg:'#fbf8f2', panelBorder:'#e4dac6',
+        cardBg:'#fffdf8', cardBorder:'#e4dac6', cardShadow:'0 4px 14px rgba(60,45,20,0.10)', textStrong:'#2a241b', text:'#3e362a', textMid:'#5a5040', textMuted:'#8a7f6c', heading:'#a09580',
+        chipText:'#6a5f4c', chipBg:'#f1ebdf', chipBorder:'#e2d9c7', inputBg:'#f1ebdf', inputBorder:'#ddd2bd', inputText:'#2a241b', btnBg:'#f1ebdf', btnBorder:'#ddd2bd', btnText:'#4a4033',
+        divider:'#e2d9c7', scrim:'rgba(50,38,20,0.28)', floatBg:'rgba(255,253,248,0.94)', floatBorder:'#ddd2bd', floatText:'#3e362a', floatFitText:'#2f5fb3', handle:'#cfc3aa', halo:'#fffdf8',
+        riskBadgeBg:'#b23a22', riskBadgeText:'#ffffff', flagIcon:'#b23a22', flagBg:'#f8e6df', flagBorder:'#ecc8bb', flagText:'#8a2e1c', riskChipBg:'#f8e6df', riskChipBorder:'#ecc8bb', riskChipText:'#b23a22',
+        detailRowBorder:'#efe7d8', connBg:'#f7f2e8', connBorder:'#e8dfcd' } }
+    ];
+    const m = {}; list.forEach(d => { m[d.id] = d; });
+    return (this._themeDefs = m);
+  }
+
+  pal(){
+    const defs = this.themeDefs();
+    const d = defs[this.state.theme] || defs.dark;
+    const p = Object.assign({}, this.basePal(d.base === 'light'), d.tok || {});
+    p.themeId = d.id; p.zones = d.zones || null; p.rgb = !!d.rgb;
+    return p;
+  }
+
+  themeGroups(t){
+    const defs = this.themeDefs(), cur = this.state.theme;
+    const std = ['core','server','trusted','iot','guest'];
+    const mk = base => Object.values(defs).filter(d => d.base === base).map(d => {
+      const on = d.id === cur, zs = d.zones || {};
+      const fb = base === 'light' ? ['#2563c9','#6d44d9','#1c9b54','#cf5d18','#a9790c'] : ['#5b9dff','#a98bff','#5fcf8a','#f0944a','#e0b34d'];
+      return { name:d.name, check: on ? '\u2713' : '', pick: () => this.setTheme(d.id),
+        dots: std.map((k,i) => `width:8px;height:8px;border-radius:50%;display:block;background:${zs[k] || fb[i]};`),
+        rowStyle:`display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:none;border-radius:7px;cursor:pointer;text-align:left;font:inherit;background:${on ? (t.light ? 'rgba(20,40,80,0.07)' : 'rgba(255,255,255,0.08)') : 'transparent'};`,
+        nameStyle:`flex:1;font-family:'IBM Plex Sans',sans-serif;font-size:13px;color:${t.textStrong};`,
+        checkStyle:`font-size:12px;color:${t.floatFitText};` };
+    });
+    const head = `font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.1em;color:${t.textMuted};padding:8px 10px 4px;`;
+    return [ { title:'DARK', headStyle:head, items:mk('dark') },
+             { title:'LIGHT', headStyle:head + `border-top:1px solid ${t.divider};margin-top:4px;padding-top:10px;`, items:mk('light') } ];
+  }
+
+  basePal(light){
+    if(light){
+      return {
+        light:true,
+        appBg:'#e7ecf3',
+        gridDot:'rgba(30,45,75,0.07)',
+        headerBg:'#ffffff', headerBorder:'#dde4ee',
+        sidebarBg:'#f4f7fb', detailBg:'#ffffff', panelBorder:'#e3e8f0',
+        cardBg:'#ffffff', cardBorder:'#e0e6f0',
+        cardShadow:'0 4px 14px rgba(20,30,50,0.10)',
+        textStrong:'#1b2334', text:'#33405a', textMid:'#46526a', textMuted:'#7e8a9d',
+        heading:'#94a0b3',
+        chipText:'#56627a', chipBg:'#eef2f8', chipBorder:'#dde4ee',
+        inputBg:'#eef2f8', inputBorder:'#d4dce8', inputText:'#26303f',
+        btnBg:'#eef2f8', btnBorder:'#d4dce8', btnText:'#33405a',
+        divider:'#dde4ee',
+        scrim:'rgba(30,42,64,0.30)',
+        floatBg:'rgba(255,255,255,0.94)', floatBorder:'#d4dce8', floatText:'#2a3447', floatFitText:'#2563c9',
+        handle:'#c4cedd',
+        halo:'#ffffff',
+        riskBadgeBg:'#d23b2e', riskBadgeText:'#ffffff',
+        flagIcon:'#c0392b', flagBg:'#fdeeec', flagBorder:'#f1cdc7', flagText:'#9a3328',
+        riskChipBg:'#fdeeec', riskChipBorder:'#f1cdc7', riskChipText:'#c0392b',
+        detailRowBorder:'#eef1f6',
+        connBg:'#f5f7fb', connBorder:'#e6ebf2'
+      };
+    }
+    return {
+      light:false,
+      appBg:'#0b0e14',
+      gridDot:'rgba(255,255,255,0.045)',
+      headerBg:'#0d1119', headerBorder:'#1a212c',
+      sidebarBg:'#0d1119', detailBg:'#0e131c', panelBorder:'#1c2430',
+      cardBg:'#141a24', cardBorder:'#232c3a',
+      cardShadow:'0 6px 18px rgba(0,0,0,0.45)',
+      textStrong:'#f1f5fb', text:'#dfe6f0', textMid:'#c0cad7', textMuted:'#6b7686',
+      heading:'#5a6472',
+      chipText:'#9fa9b8', chipBg:'#1b2230', chipBorder:'#29313f',
+      inputBg:'#10151e', inputBorder:'#222a36', inputText:'#e6ecf4',
+      btnBg:'#141a24', btnBorder:'#232c3a', btnText:'#cdd6e2',
+      divider:'#222a36',
+      scrim:'rgba(5,7,11,0.55)',
+      floatBg:'rgba(20,26,36,0.92)', floatBorder:'#283040', floatText:'#e6ecf4', floatFitText:'#9fb4d8',
+      handle:'#33404f',
+      halo:'#0b0e14',
+      riskBadgeBg:'#f0928a', riskBadgeText:'#0b0e14',
+      flagIcon:'#f0928a', flagBg:'#1c1216', flagBorder:'#3d2026', flagText:'#e7c9c9',
+      riskChipBg:'#221116', riskChipBorder:'#4a2127', riskChipText:'#f0928a',
+      detailRowBorder:'#161d28',
+      connBg:'#121823', connBorder:'#1b232f'
+    };
+  }
+
+  measure(){
+    const w = this.rootEl ? this.rootEl.clientWidth : window.innerWidth;
+    const h = this.rootEl ? this.rootEl.clientHeight : window.innerHeight;
+    if(w !== this.state.vw || h !== this.state.vh) this.setState({ vw:w, vh:h });
+    return { w, h };
+  }
+  _onResize(){
+    this.measure();
+    clearTimeout(this._rzT);
+    this._rzT = setTimeout(() => this.fitView(), 120);
+  }
+
+  // Fills in x/y/w/h for any node missing coordinates (layered tree by connection
+  // depth), then sizes the canvas to fit all nodes + band labels.
+  _applyLayout(){
+    const N = this.N;
+    const DW = 212, DH = 112, GX = 38, GY = 92, PAD = 60;
+    // re-flow if any node lacks coords, or a previous auto pass exists (mode switch)
+    const needs = this._autoLaidOut || N.some(n => n.x === undefined || n.y === undefined);
+    if(needs){
+      // clear coords from a previous auto-layout pass so a mode switch re-flows cleanly
+      if(this._autoLaidOut){ N.forEach(n => { if(n._auto){ delete n.x; delete n.y; } }); }
+      const byDepth = {};
+      let maxKnown = 0;
+      N.forEach(n => { const d = this.depth[n.id]; if(d !== undefined) maxKnown = Math.max(maxKnown, d); });
+      N.forEach(n => {
+        let d = this.depth[n.id];
+        if(d === undefined) d = maxKnown + 1;     // disconnected nodes drop to a bottom row
+        (byDepth[d] = byDepth[d] || []).push(n);
+      });
+      const depths = Object.keys(byDepth).map(Number).sort((a,b)=>a-b);
+      const mode = this.layoutMode;            // 'site' | 'cluster' | 'tree' | 'group'
+      const CW = DW + GX;                      // one column footprint
+      this._groupBounds = {};                  // populated only in grouped modes
+      const grouped = mode === 'group' || (mode === 'site' && this._hasSites);
+      this._groupKind = (mode === 'site' && this._hasSites) ? 'site' : 'zone';
+
+      if(grouped){
+        // GROUPED: one container per group (zone in 'group' mode, site in 'site'
+        // mode). Member devices pack into a grid inside the container; containers
+        // stack by their shallowest member depth. Edges from a shared upstream
+        // collapse into one trunk line to the container border.
+        const PADIN = 16, TITLE = 30;          // inner padding + title-bar height
+        const keyOf = n => this._gkey(n);
+        const byZone = {};
+        N.forEach(n => { const k = keyOf(n); (byZone[k] = byZone[k] || []).push(n); });
+        const order = this._groupKind === 'site' ? this._siteKeys : Object.keys(this.ZONES);
+        const zoneList = order.filter(z => byZone[z]).map(z => {
+          const mem = byZone[z];
+          const repDepth = Math.min.apply(null, mem.map(n => this.depth[n.id] === undefined ? 99 : this.depth[n.id]));
+          return { z, mem, repDepth };
+        }).sort((a,b)=> a.repDepth - b.repDepth || a.z.localeCompare(b.z));
+
+        const collapsedNow = this.state.collapsed || {};
+        const boxes = zoneList.map(zl => {
+          const mem = zl.mem;
+          mem.sort((a,b)=> String(a.label).localeCompare(String(b.label)));
+          // a collapsed site is already a single summary card — no container
+          // chrome around it, or the map turns into boxes-inside-boxes.
+          const bare = this._groupKind === 'site' && !!collapsedNow[zl.z];
+          const pad = bare ? 0 : PADIN, ttl = bare ? 0 : TITLE;
+          const cols = Math.max(1, Math.min(6, mem.length <= 3 ? mem.length : Math.ceil(Math.sqrt(mem.length * 1.4))));
+          const rows = Math.ceil(mem.length / cols);
+          // Containers never narrower than two columns: a one-member zone
+          // otherwise renders as a pinched box beside its full-width siblings.
+          const minInner = bare ? 0 : 2 * CW - GX;
+          const w = Math.max(cols * CW - GX, minInner) + pad*2;
+          const h = ttl + rows * (DH + GY) - GY + pad*2;
+          return { zl, cols, rows, w, h, bare, pad, ttl };
+        });
+        // Flow containers into wrapping rows shaped to the SCREEN's aspect — a
+        // 20-site map packed into a 3-wide column fits to ~16% zoom and reads
+        // like nothing at all.
+        const GAPX = 56, GAPY = 68;
+        const vpAspect = (this.rootEl && this.rootEl.clientHeight)
+          ? Math.max(1.2, Math.min(3.2, this.rootEl.clientWidth / this.rootEl.clientHeight)) : 1.9;
+        const sumArea = boxes.reduce((s,b)=> s + (b.w + GAPX) * (b.h + GAPY), 0);
+        const maxBoxW = boxes.reduce((m,b)=> Math.max(m, b.w), 0);
+        const targetW = Math.max(maxBoxW, Math.sqrt(sumArea * vpAspect));
+        const rowsOut = []; let cur = [], curW = 0;
+        boxes.forEach(b => {
+          if(cur.length && curW + b.w + GAPX > targetW){ rowsOut.push(cur); cur = []; curW = 0; }
+          cur.push(b); curW += b.w + GAPX;
+        });
+        if(cur.length) rowsOut.push(cur);
+        const totalW = rowsOut.reduce((m,r)=> Math.max(m, r.reduce((s,b)=> s + b.w + GAPX, -GAPX)), 0);
+        let y = PAD;
+        rowsOut.forEach(row => {
+          const rowW = row.reduce((s,b)=> s + b.w + GAPX, -GAPX);
+          const rowH = row.reduce((m,b)=> Math.max(m, b.h), 0);
+          let x = PAD + (totalW - rowW) / 2;
+          row.forEach(b => {
+            b.x = x; b.y = y;
+            const innerX = x + b.pad, innerY = y + b.ttl + b.pad;
+            b.zl.mem.forEach((n, i) => {
+              const c = i % b.cols, r = (i / b.cols) | 0;
+              if(n.w === undefined) n.w = DW;
+              if(n.h === undefined) n.h = DH;
+              if(n.x === undefined){ n.x = innerX + c * CW; n.y = innerY + r * (DH + GY); n._auto = true; }
+            });
+            if(!b.bare) this._groupBounds[b.zl.z] = { x:b.x, y:b.y, w:b.w, h:b.h };
+            x += b.w + GAPX;
+          });
+          y += rowH + GAPY;
+        });
+      } else if(mode === 'cluster'){
+        // CLUSTERED: wide depth-rows wrap into a compact grid block, sub-grouped
+        // by zone so same-kind devices sit together. Keeps the depth = vertical
+        // hierarchy, but folds long rows into multiple lines → far less horizontal.
+        const blocks = depths.map(d => {
+          const row = byDepth[d];
+          row.sort((a,b)=> String(a.zone).localeCompare(String(b.zone)) || String(a.label).localeCompare(String(b.label)));
+          // column cap scales with row size: ~sqrt, biased wider, clamped 1..8
+          const cols = Math.max(1, Math.min(8, row.length <= 4 ? row.length : Math.ceil(Math.sqrt(row.length * 1.7))));
+          const rows = Math.ceil(row.length / cols);
+          return { d, row, cols, rows, w: cols * CW - GX, h: rows * (DH + GY) - GY };
+        });
+        const maxW = blocks.reduce((m,b)=> Math.max(m, b.w), 0);
+        let y = PAD;
+        blocks.forEach(b => {
+          const x0 = PAD + (maxW - b.w) / 2;
+          b.row.forEach((n, i) => {
+            const c = i % b.cols, r = (i / b.cols) | 0;
+            if(n.w === undefined) n.w = DW;
+            if(n.h === undefined) n.h = DH;
+            if(n.x === undefined){ n.x = x0 + c * CW; n.y = y + r * (DH + GY); n._auto = true; }
+          });
+          y += b.h + GY * 1.5;                 // extra gap between depth blocks
+        });
+      } else {
+        // TREE: original single horizontal line per depth.
+        const rowW = {}; let maxRowW = 0;
+        depths.forEach(d => {
+          const row = byDepth[d];
+          row.sort((a,b)=> String(a.zone).localeCompare(String(b.zone)) || String(a.label).localeCompare(String(b.label)));
+          rowW[d] = row.length * CW - GX; maxRowW = Math.max(maxRowW, rowW[d]);
+        });
+        let y = PAD;
+        depths.forEach(d => {
+          const row = byDepth[d];
+          let x = PAD + (maxRowW - rowW[d]) / 2;
+          row.forEach(n => {
+            if(n.w === undefined) n.w = DW;
+            if(n.h === undefined) n.h = DH;
+            if(n.x === undefined){ n.x = x; n.y = y; n._auto = true; }
+            x += CW;
+          });
+          y += DH + GY;
+        });
+      }
+      this._autoLaidOut = true;
+    }
+    let maxX = 0, maxY = 0;
+    N.forEach(n => {
+      if(n.w === undefined) n.w = DW;
+      if(n.h === undefined) n.h = DH;
+      maxX = Math.max(maxX, (n.x||0) + n.w);
+      maxY = Math.max(maxY, (n.y||0) + n.h);
+    });
+    (this.BANDS || []).forEach(b => { maxX = Math.max(maxX, b.x + 280); maxY = Math.max(maxY, b.y + 24); });
+    Object.keys(this._groupBounds || {}).forEach(z => { const g = this._groupBounds[z]; maxX = Math.max(maxX, g.x + g.w); maxY = Math.max(maxY, g.y + g.h); });
+    this.canvasW = Math.max(800, maxX + PAD);
+    this.canvasH = Math.max(600, maxY + PAD);
+  }
+
+  clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  // live view = the uncommitted gesture value if one is in flight, else state
+  _view(){
+    return this._pendingView || { tx:this.state.tx, ty:this.state.ty, scale:this.state.scale };
+  }
+  _paint(v){
+    this._pendingView = v;
+    if(this.transformEl) this.transformEl.style.transform = 'translate(' + v.tx + 'px,' + v.ty + 'px) scale(' + v.scale + ')';
+  }
+  _commitView(){
+    const v = this._pendingView;
+    this._pendingView = null;
+    if(v) this.setState(v);
+  }
+
+  // point on a rectangle's border in the direction of an external point (px,py)
+  rectEdgePoint(px, py, rect){
+    const cx = rect.x + rect.w/2, cy = rect.y + rect.h/2;
+    const dx = px - cx, dy = py - cy;
+    if(dx === 0 && dy === 0) return { x:cx, y:rect.y };
+    const hw = rect.w/2, hh = rect.h/2;
+    const s = 1 / Math.max(Math.abs(dx)/hw, Math.abs(dy)/hh);
+    return { x: cx + dx*s, y: cy + dy*s };
+  }
+
+  hexA(hex, a){
+    let h = String(hex).replace('#','');
+    if(h.length === 3) h = h.split('').map(c=>c+c).join('');
+    const n = parseInt(h, 16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  }
+
+  fitView(){
+    const el = this.viewportEl; if(!el) return;
+    this._pendingView = null;
+    const vw = el.clientWidth, vh = el.clientHeight;
+    const mobile = (this.rootEl ? this.rootEl.clientWidth : window.innerWidth) < 820;
+    const pad = mobile ? 18 : 60;
+    const s = Math.min((vw - pad*2)/this.canvasW, (vh - pad*2)/this.canvasH);
+    const scale = this.clamp(s, 0.16, 1.4);
+    const tx = (vw - this.canvasW*scale)/2;
+    const ty = mobile ? pad : (vh - this.canvasH*scale)/2;
+    this.setState({ scale, tx, ty });
+  }
+
+  onWheel(e){
+    e.preventDefault();
+    const el = this.viewportEl; if(!el) return;
+    const r = el.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    const factor = e.deltaY < 0 ? 1.12 : 0.89;
+    const v = this._view();
+    const ns = this.clamp(v.scale * factor, 0.16, 2.8);
+    const k = ns / v.scale;
+    this._paint({ scale:ns, tx: px - (px - v.tx)*k, ty: py - (py - v.ty)*k });
+    clearTimeout(this._wheelT);
+    this._wheelT = setTimeout(() => this._commitView(), 140);
+  }
+
+  _pinchInfo(){
+    const pts = [...this.pointers.values()];
+    const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+    return { dist: Math.hypot(dx,dy) || 1, mx:(pts[0].x+pts[1].x)/2, my:(pts[0].y+pts[1].y)/2 };
+  }
+
+  onPointerDown(e){
+    // Always claim the gesture: prevents Android from scrolling/zooming the page,
+    // and lets a pan START on a device card (cards cover most of a phone screen).
+    e.preventDefault();
+    const cardEl = (e.target.closest && e.target.closest('[data-card]')) || null;
+    this.downCardId = cardEl ? cardEl.getAttribute('data-id') : null;
+    const grpEl = (!cardEl && e.target.closest) ? e.target.closest('[data-group]') : null;
+    this.downGroupId = grpEl ? grpEl.getAttribute('data-group') : null;
+    // Capture on the STABLE viewport element (not e.target, which re-renders mid-pan).
+    try { this.viewportEl.setPointerCapture(e.pointerId); } catch(_){}
+    this.pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    if(this.pointers.size === 1){
+      this.panning = true;
+      this.moved = 0;
+      const v0 = this._view();
+      this.panStart = { x:e.clientX, y:e.clientY, tx:v0.tx, ty:v0.ty };
+      if(this.viewportEl) this.viewportEl.style.cursor = 'grabbing';
+    } else if(this.pointers.size === 2){
+      this.panning = false;
+      this.moved = 999; // a pinch is never a tap
+      const info = this._pinchInfo();
+      this.pinchDist = info.dist;
+      this.pinchStartScale = this._view().scale;
+    }
+  }
+
+  _onPointerMove(e){
+    if(!this.pointers.has(e.pointerId)) return;
+    e.preventDefault();
+    this.pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
+    if(this.pointers.size >= 2){
+      const info = this._pinchInfo();
+      const el = this.viewportEl; if(!el) return;
+      const r = el.getBoundingClientRect();
+      const px = info.mx - r.left, py = info.my - r.top;
+      const v = this._view();
+      const ns = this.clamp(this.pinchStartScale * (info.dist / this.pinchDist), 0.16, 2.8);
+      const k = ns / v.scale;
+      this._paint({ scale:ns, tx: px - (px - v.tx)*k, ty: py - (py - v.ty)*k });
+    } else if(this.panning){
+      const dx = e.clientX - this.panStart.x, dy = e.clientY - this.panStart.y;
+      this.moved = Math.max(this.moved, Math.abs(dx) + Math.abs(dy));
+      this._paint({ scale:this._view().scale, tx: this.panStart.tx + dx, ty: this.panStart.ty + dy });
+    }
+  }
+
+  _onPointerUp(e){
+    if(!this.pointers.has(e.pointerId)) return;
+    this.pointers.delete(e.pointerId);
+    try { this.viewportEl.releasePointerCapture(e.pointerId); } catch(_){}
+    if(this.pointers.size === 1){
+      // lifted one finger of a pinch — resume single-finger pan with the other
+      const p = [...this.pointers.values()][0];
+      this.panning = true;
+      this.moved = 999;
+      const v1 = this._view();
+      this.panStart = { x:p.x, y:p.y, tx:v1.tx, ty:v1.ty };
+    } else if(this.pointers.size === 0){
+      if(this.viewportEl) this.viewportEl.style.cursor = 'grab';
+      this._commitView();
+      // low movement = a tap: focus/select the touched card or container, or clear
+      if(this.moved < 8){
+        if(this.downCardId) this.tapNode(this.downCardId);
+        else if(this.downGroupId) this.tapGroup(this.downGroupId);
+        else this.setState({ focusId:null, selectedId:null, panelOpen:false, groupSel:null, actionHL:null, activeActionId:null });
+      }
+      this.panning = false;
+      this.downCardId = null;
+      this.downGroupId = null;
+    }
+  }
+
+  zoomAtCenter(factor){
+    const el = this.viewportEl;
+    const v = this._view();
+    if(!el){ this.setState({ scale:this.clamp(v.scale*factor, 0.16, 2.8) }); return; }
+    const px = el.clientWidth/2, py = el.clientHeight/2;
+    const ns = this.clamp(v.scale*factor, 0.16, 2.8);
+    const k = ns/v.scale;
+    this._pendingView = null;
+    this.setState({ scale:ns, tx: px-(px-v.tx)*k, ty: py-(py-v.ty)*k });
+  }
+
+  selectNode(id){
+    const n0 = this.nodeMap[id];
+    if(n0 && n0.isSite){ this.tapGroup(n0.site); return; }
+    this.setState({ focusId:id, selectedId:id, panelOpen:true, menuOpen:false, groupSel:null, actionHL:null, activeActionId:null });
+  }
+
+  // Canvas tap: desktop opens details immediately; mobile is two-stage
+  // (first tap reveals connections, second tap on the same node opens details).
+  tapNode(id){
+    const n0 = this.nodeMap[id];
+    if(n0 && n0.isSite){ this.tapGroup(n0.site); return; }
+    const mobile = this.state.vw < 820;
+    if(mobile){
+      if(this.state.focusId === id && !this.state.panelOpen){
+        this.setState({ selectedId:id, panelOpen:true });
+      } else {
+        this.setState({ focusId:id, selectedId:null, panelOpen:false, actionHL:null, activeActionId:null });
+      }
+    } else {
+      // Desktop: click selects + opens details; clicking the SAME node again
+      // deselects and returns the canvas to its normal (un-highlighted) state.
+      if(this.state.selectedId === id){
+        this.setState({ focusId:null, selectedId:null, panelOpen:false, actionHL:null, activeActionId:null });
+      } else {
+        this.setState({ focusId:id, selectedId:id, panelOpen:true, actionHL:null, activeActionId:null });
+      }
+    }
+  }
+
+  center(n){ return { x:n.x + n.w/2, y:n.y + n.h/2 }; }
+
+  // A finding may point at devices currently folded inside a collapsed site —
+  // highlight the proxies that stand for them and open the site rollup.
+  _focusAction(a){
+    const vis = this._visIds(a.nodes);
+    const first = vis[0] || null;
+    const fn = first ? this.nodeMap[first] : null;
+    if(fn && fn.isSite){
+      this.setState({ actionHL:vis, activeActionId:a.id, groupSel:fn.site,
+        focusId:null, selectedId:null, panelOpen:true, menuOpen:false });
+    } else {
+      this.setState({ actionHL:vis, activeActionId:a.id, groupSel:null,
+        focusId:first, selectedId:first, panelOpen:!!first, menuOpen:false });
+    }
+  }
+
+  matchNode(n, q){
+    const hay = (n.label+' '+n.sub+' '+n.kind+' '+n.id+' '+n.details.join(' ')+' '+n.chips.join(' ')).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  }
+
+  // true when a node isn't filtered out by the VLAN toggle — nodes that don't
+  // declare `vlans` are never gated by this filter (only by ZONES).
+  _vlanOk(n, vlanActive){
+    if(!n.vlans || !n.vlans.length) return true;
+    return n.vlans.some(v => vlanActive[v] !== false);
+  }
+
+  renderVals(){
+    const st = this.state;
+    const isMobile = st.vw < 820;
+    const isDesktop = !isMobile;
+    const t = this.pal();
+    const dark = !t.light;
+    const zColor = (k) => (t.zones && t.zones[k]) || (dark ? this.ZONES[k].dark : this.ZONES[k].light);
+    const coreCol = this.ZONES.core ? zColor('core') : (dark ? '#5b9dff' : '#2563c9');
+    const highlightRisks = this.props.highlightRisks !== false;
+    const showFan = this.props.showFan !== false;
+    const curved = (this.props.edgeStyle || 'curved') === 'curved';
+    const q = (st.query || '').trim().toLowerCase();
+
+    const hlFocus = st.hoverId || st.focusId || st.selectedId;   // drives dim/highlight
+    const animFocus = st.focusId || st.selectedId;               // drives flow animation (not hover)
+    // Group-level selection: every member of the container lights up, and so does
+    // every link that crosses its boundary — "show me this site's connections".
+    const gsel = st.groupSel;
+    const groupKind = this._groupKind || 'zone';
+    const groupMembers = gsel ? this.N.filter(n => this._gkey(n) === gsel).map(n => n.id) : null;
+    const groupSet = groupMembers ? new Set(groupMembers) : null;
+    let hl = null;
+    if(hlFocus){
+      hl = new Set([hlFocus]);
+      (this.adj[hlFocus] || []).forEach(a => hl.add(a.id));
+    } else if(st.actionHL && st.actionHL.length){
+      hl = new Set(st.actionHL);
+    } else if(groupMembers && groupMembers.length){
+      hl = new Set(groupMembers);
+      groupMembers.forEach(id => (this.adj[id] || []).forEach(a => hl.add(a.id)));
+    }
+
+    const zoneActive = st.activeZones;
+    const vlanActive = st.activeVlans || {};
+    const pulseName = dark ? 'riskpulse' : 'riskpulseLight';
+
+    const chipStyle = `font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:${t.chipText};background:${t.chipBg};border:1px solid ${t.chipBorder};border-radius:5px;padding:1px 5px;`;
+
+    const nodes = this.N.map(n => {
+      const c = zColor(n.zone);
+      const visible = n.isSite ? true : (zoneActive[n.zone] !== false && this._vlanOk(n, vlanActive));
+      const match = q ? this.matchNode(n, q) : true;
+      const dimmed = (hl && !hl.has(n.id)) || (q && !match);
+      const selected = n.id === st.selectedId;
+      const focused = n.id === animFocus;
+      const searchHit = q && match;
+      const risk = n.flags.length > 0;
+      let cardStyle =
+        `position:absolute;left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;`+
+        `display:flex;flex-direction:column;overflow:hidden;`+
+        `background:${t.cardBg};border:1px solid ${t.cardBorder};border-left:3px solid ${c};`+
+        `border-radius:11px;padding:9px 12px 11px;color:${t.text};`+
+        `box-shadow:${t.cardShadow};`+
+        `opacity:${dimmed?(t.light?0.22:0.16):1};cursor:pointer;`+
+        `transition:opacity .16s ease,box-shadow .16s ease,transform .16s ease;`+
+        `z-index:${selected?6:2};`;
+      if(selected || focused){ cardStyle += `outline:2px solid ${c};outline-offset:1px;`; }
+      else if(searchHit){ cardStyle += `outline:2px solid ${t.light?'#e0a400':'#ffd76a'};outline-offset:1px;`; }
+      if(selected){ cardStyle += `transform:translateY(-2px);`; }
+      if(risk && highlightRisks && !dimmed && !selected) cardStyle += `animation:${pulseName} 2.6s ease-in-out infinite;`;
+      if(n.isSite){
+        cardStyle += `border-style:dashed;border-left-style:solid;`;
+        if(groupSet && groupSet.has(n.id)) cardStyle += `outline:2px solid ${c};outline-offset:1px;`;
+      }
+      if(!visible) cardStyle += `display:none;`;
+      return {
+        id:n.id, kind:n.kind, label:n.label, sub:n.sub, chips:n.chips,
+        hasRisk:risk, riskCount:n.flags.length, cardStyle,
+        kindStyle:`font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:500;letter-spacing:0.09em;color:${c};opacity:0.95;`+
+          `flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`,
+        badgeStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:600;color:${t.riskBadgeText};background:${t.riskBadgeBg};border-radius:6px;padding:1px 6px;white-space:nowrap;`,
+        titleStyle:`font-size:13px;font-weight:600;line-height:1.2;margin-top:3px;color:${t.textStrong};`+
+          `display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;`,
+        subStyle:`font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:${c};margin-top:3px;`,
+        onEnter:()=>{ if(!this.pointers.size && !isMobile) this.setState({hoverId:n.id}); },
+        onLeave:()=>{ if(!isMobile) this.setState({hoverId:null}); }
+      };
+    });
+
+    const edges = []; const edgeLabels = [];
+    // GROUP mode: collapse multiple edges from one upstream device into a single
+    // trunk line that terminates on the target zone container's border.
+    const groupMode = this.layoutMode === 'group' || (this.layoutMode === 'site' && this._hasSites);
+    const gBounds = this._groupBounds || {};
+    const collapseHide = new Set();
+    const collapseRectFor = {};
+    const collapseMembers = {};   // repEdgeId -> Set of downstream node ids it stands for
+    const collapseCount = {};     // repEdgeId -> how many links collapsed
+    if(groupMode){
+      const groups = {};
+      this.E.forEach(e => {
+        const a = this.nodeMap[e.from], b = this.nodeMap[e.to];
+        if(!a || !b || this._gkey(a) === this._gkey(b)) return;  // internal edges stay node-to-node
+        if(e.cls === 'wifi' && !showFan) return;     // don't fold hidden wifi links into the count
+        const key = e.from + '|' + this._gkey(b);
+        (groups[key] = groups[key] || []).push(e);
+      });
+      Object.keys(groups).forEach(key => {
+        const list = groups[key];
+        if(list.length < 2) return;                  // only 2+ collapse into a trunk
+        const rep = list[0];
+        const rect = gBounds[this._gkey(this.nodeMap[rep.to])];
+        if(!rect) return;
+        const mem = new Set();
+        list.forEach((e,i) => { mem.add(e.to); if(i>0) collapseHide.add(e.id); });
+        collapseRectFor[rep.id] = rect;
+        collapseMembers[rep.id] = mem;
+        collapseCount[rep.id] = list.length;
+      });
+    }
+    this.E.forEach(e => {
+      const a = this.nodeMap[e.from], b = this.nodeMap[e.to];
+      if((!a.isSite && (zoneActive[a.zone] === false || !this._vlanOk(a, vlanActive))) ||
+         (!b.isSite && (zoneActive[b.zone] === false || !this._vlanOk(b, vlanActive)))) return;
+      if(!showFan && e.cls === 'wifi') return;
+      if(collapseHide.has(e.id)) return;
+      const ca = this.center(a);
+      let bx, by;
+      if(collapseRectFor[e.id]){
+        const p = this.rectEdgePoint(ca.x, ca.y, collapseRectFor[e.id]);
+        bx = p.x; by = p.y;
+      } else if(e.anchor === 'L'){ bx = b.x + b.w*0.30; by = b.y + 4; }
+      else if(e.anchor === 'R'){ bx = b.x + b.w*0.70; by = b.y + 4; }
+      else { const cb = this.center(b); bx = cb.x; by = cb.y; }
+
+      let d;
+      if(curved){
+        const mx = (ca.x+bx)/2, my = (ca.y+by)/2;
+        const dx = bx-ca.x, dy = by-ca.y;
+        const len = Math.hypot(dx,dy) || 1;
+        const off = Math.min(60, len*0.12);
+        const cx = mx + (-dy/len)*off, cy = my + (dx/len)*off;
+        d = `M ${ca.x} ${ca.y} Q ${cx} ${cy} ${bx} ${by}`;
+      } else {
+        d = `M ${ca.x} ${ca.y} L ${bx} ${by}`;
+      }
+
+      const color = e.cls === 'backbone' ? coreCol : zColor(b.zone);
+      const baseW = e.cls === 'backbone' ? 2.4 : (e.cls === 'wired' ? 1.9 : 1.5);
+      const baseO = t.light
+        ? (e.cls === 'backbone' ? 0.7 : (e.cls === 'wired' ? 0.55 : 0.4))
+        : (e.cls === 'backbone' ? 0.55 : (e.cls === 'wired' ? 0.42 : 0.3));
+
+      let active = false, dimmedE = false;
+      const memSet = collapseMembers[e.id];
+      if(hl){
+        active = memSet ? (hl.has(e.from) && [...memSet].some(id => hl.has(id)))
+                        : (hl.has(e.from) && hl.has(e.to));
+        dimmedE = !active;
+      }
+      if(q) dimmedE = true;
+
+      // edges touching the focused node animate a subtle root->leaf flow
+      const touchesFocus = animFocus && (e.from === animFocus || e.to === animFocus || (memSet && memSet.has(animFocus)));
+      const touchesGroup = groupSet && (groupSet.has(e.from) || groupSet.has(e.to) ||
+        (memSet && [...memSet].some(id => groupSet.has(id))));
+      const incident = (touchesFocus || touchesGroup) && !q && !dimmedE;
+      const opacity = dimmedE ? (t.light?0.10:0.06) : (active ? 0.95 : baseO);
+      const width = active ? baseW + 1.3 : baseW;
+      let dash = e.dashed ? '5 6' : 'none';
+      let style = '';
+      if(collapseRectFor[e.id]){ dash = 'none'; }   // trunk lines always solid
+      if(incident){
+        dash = '7 11';
+        const dFrom = this.depth[e.from] === undefined ? 99 : this.depth[e.from];  // eslint-disable-line
+        const dTo = this.depth[e.to] === undefined ? 99 : this.depth[e.to];
+        // path is drawn from -> to; negative dashoffset flows toward "to".
+        // flow should always head downstream (deeper), so reverse when "to" is upstream.
+        const downstream = dTo >= dFrom;
+        style = `animation:flowDash 0.85s linear infinite;` + (downstream ? '' : 'animation-direction:reverse;');
+        const gb = t.rgb ? 4 : (t.light ? 2 : 3), ga = t.rgb ? 0.85 : (t.light ? 0.35 : 0.6);
+        if(/^#[0-9a-f]{6}$/i.test(color)) style += `filter:drop-shadow(0 0 ${gb}px ${this.hexA(color, ga)});`;
+      }
+      edges.push({ id:e.id, d, color, width: collapseRectFor[e.id] ? width + 1 : width, opacity, dash, style });
+
+      if(collapseCount[e.id]){
+        // count badge near the container entry point of a collapsed trunk
+        const lx = bx + (ca.x < bx ? -16 : 16);
+        const ly = by + (ca.y < by ? -12 : 12);
+        edgeLabels.push({ x:lx, y:ly, text:'\u00d7'+collapseCount[e.id], color, halo:t.halo, opacity: dimmedE ? 0.12 : 0.95 });
+      } else if(e.label){
+        const lx = (ca.x + bx)/2;
+        const ly = (ca.y + by)/2 - 2;
+        edgeLabels.push({ x:lx, y:ly, text:e.label, color, halo:t.halo, opacity: dimmedE ? 0.12 : 0.95 });
+      }
+    });
+
+    const counts = {};
+    this.NODES.forEach(n => { counts[n.zone] = (counts[n.zone]||0)+1; });   // authored, not visual
+    const zones = Object.keys(this.ZONES).map(key => {
+      const z = this.ZONES[key];
+      const col = zColor(key);
+      const on = zoneActive[key];
+      return {
+        key, name:z.name, vlan:z.vlan, count: counts[key]||0,
+        rowStyle:`display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:9px;cursor:pointer;margin-bottom:2px;`+
+          `background:${on?'transparent':(t.light?'#eaeef4':'#0a0d13')};opacity:${on?1:0.5};`,
+        dotStyle:`width:11px;height:11px;border-radius:3px;flex:none;background:${on?col:'transparent'};border:1.5px solid ${col};`,
+        nameStyle:`font-size:12.5px;font-weight:600;color:${t.textStrong};`,
+        vlanStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;color:${t.textMuted};`,
+        countStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.textMid};`,
+        toggle:()=>{ this.setState(s=>({activeZones:{...s.activeZones,[key]:!s.activeZones[key]}})); }
+      };
+    });
+
+    const vlanCounts = {};
+    this.NODES.forEach(n => n.vlans.forEach(v => { vlanCounts[v] = (vlanCounts[v]||0) + 1; }));
+    const vlanLegend = this._vlanKeys.map(v => {
+      const on = vlanActive[v] !== false;
+      return {
+        key:v, label:'VLAN '+v, count: vlanCounts[v]||0,
+        rowStyle:`display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:9px;cursor:pointer;margin-bottom:2px;`+
+          `background:${on?'transparent':(t.light?'#eaeef4':'#0a0d13')};opacity:${on?1:0.5};`,
+        dotStyle:`width:11px;height:11px;border-radius:3px;flex:none;background:${on?t.textMid:'transparent'};border:1.5px solid ${t.textMid};`,
+        nameStyle:`font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:${t.textStrong};`,
+        countStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.textMid};`,
+        toggle:()=>{ this.setState(s=>({activeVlans:{...s.activeVlans,[v]:!s.activeVlans[v]}})); }
+      };
+    });
+
+    const sevColor = { high:(t.light?'#d23b2e':'#f0928a'), med:(t.light?'#c08a14':'#e0b34d'), low:(t.light?'#7e8a9d':'#8a93a3') };
+    const actions = this.ACTIONS.map(a => {
+      const isActive = st.activeActionId === a.id;
+      return {
+        text:a.text,
+        rowStyle:`display:flex;gap:10px;align-items:flex-start;padding:10px 9px;border-radius:9px;cursor:pointer;margin-bottom:2px;`+
+          `background:${isActive?(t.light?'#eaf1fb':'#141d2b'):'transparent'};border:1px solid ${isActive?(t.light?'#cadcf3':'#243650'):'transparent'};`,
+        dotStyle:`width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px;background:${sevColor[a.sev]};`,
+        textStyle:`flex:1;font-size:11.5px;line-height:1.34;color:${t.textMid};`,
+        click:()=>this._focusAction(a)
+      };
+    });
+
+    const sel = st.selectedId ? this.nodeMap[st.selectedId] : null;
+    let selVals = { selKind:'', selLabel:'', selSub:'', selColor:coreCol, selZoneName:'', selZoneVlan:'',
+      selDetails:[], selFlags:[], selHasFlags:false, selConns:[], selDrawerHeadStyle:'',
+      selIsSiteGroup:false, selGroupBtnLabel:'', selGroupToggle:()=>{} };
+    const groupBtnStyle = `height:28px;padding:0 12px;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:11.5px;cursor:pointer;`;
+    if(!sel && gsel){
+      // GROUP ROLLUP: what the container is, what it holds, and every link that
+      // crosses its boundary — read off the AUTHORED graph so a collapsed site
+      // still reports its real per-device connections.
+      const isSiteGroup = groupKind === 'site';
+      const meta = (isSiteGroup ? this.SITES[gsel] : this.ZONES[gsel]) || { name:gsel };
+      const gcol = isSiteGroup ? (dark ? '#8a93a3' : '#5d6878') : zColor(gsel);
+      const memAuth = this.NODES.filter(n => (isSiteGroup ? n.site : n.zone) === gsel);
+      const memIds = new Set(memAuth.map(n => n.id));
+      const kinds = {}, zonesIn = {};
+      let flagTotal = 0;
+      memAuth.forEach(n => {
+        kinds[n.kind || 'DEVICE'] = (kinds[n.kind || 'DEVICE'] || 0) + 1;
+        zonesIn[n.zone] = (zonesIn[n.zone] || 0) + 1;
+        flagTotal += (n.flags || []).length;
+      });
+      const details = [];
+      Object.keys(kinds).sort((a,b)=> kinds[b]-kinds[a]).forEach(k => details.push(kinds[k] + ' \u00d7 ' + k.toLowerCase()));
+      if(isSiteGroup){
+        Object.keys(zonesIn).sort((a,b)=> zonesIn[b]-zonesIn[a])
+          .forEach(z => details.push(zonesIn[z] + ' in ' + this.ZONES[z].name));
+      }
+      const conns = []; let crossing = 0, internal = 0;
+      this.EDGES.forEach(e => {
+        const inA = memIds.has(e.from), inB = memIds.has(e.to);
+        if(inA && inB){ internal++; return; }
+        if(!inA && !inB) return;
+        crossing++;
+        if(conns.length >= 40) return;
+        const mine = inA ? this._authoredMap[e.from] : this._authoredMap[e.to];
+        const other = inA ? this._authoredMap[e.to] : this._authoredMap[e.from];
+        const vis = (this._folded && this._folded[other.id]) || other.id;
+        conns.push({
+          label: other.label + (inA ? '  \u2193 downstream' : '  \u2191 upstream'),
+          color: zColor(other.zone),
+          via: 'via ' + mine.label + (e.label ? '  \u00b7 ' + e.label : '') + (e.cls === 'wifi' ? '  \u00b7 WiFi' : ''),
+          go: () => { const vn = this.nodeMap[vis]; if(vn && vn.isSite) this.tapGroup(vn.site); else if(vn) this.selectNode(vis); }
+        });
+      });
+      details.push(crossing + (crossing === 1 ? ' link crosses' : ' links cross') + ' this boundary');
+      details.push(internal + (internal === 1 ? ' link inside' : ' links inside'));
+      const gflags = [];
+      memAuth.forEach(n => (n.flags || []).forEach(f => { if(gflags.length < 14) gflags.push(n.label + ' \u2014 ' + f); }));
+      const collapsedNow = isSiteGroup && !!(st.collapsed || {})[gsel];
+      selVals = {
+        selKind: isSiteGroup ? 'SITE' : 'ZONE',
+        selLabel: meta.name || gsel,
+        selSub: memAuth.length + (memAuth.length === 1 ? ' device' : ' devices') + (flagTotal ? '  \u00b7  ' + flagTotal + ' flagged' : ''),
+        selColor: gcol,
+        selZoneName: isSiteGroup ? 'Site group' : (meta.vlan || 'Zone'),
+        selZoneVlan: isSiteGroup ? (collapsedNow ? 'collapsed' : 'expanded') : '',
+        selDetails: details, selFlags: gflags, selHasFlags: gflags.length > 0, selConns: conns,
+        selDrawerHeadStyle:`padding:14px 20px 16px;border-bottom:1px solid ${t.panelBorder};background:linear-gradient(180deg, ${this.hexA(gcol,t.light?0.12:0.10)}, transparent);flex:none;`,
+        selIsSiteGroup: isSiteGroup,
+        selGroupBtnStyle: groupBtnStyle,
+        selGroupBtnLabel: collapsedNow ? 'Expand site' : 'Collapse site',
+        selGroupToggle: () => this.toggleSite(gsel)
+      };
+    }
+    if(sel){
+      const z = this.ZONES[sel.zone];
+      const col = zColor(sel.zone);
+      const conns = (this.adj[sel.id]||[]).map(a => {
+        const nb = this.nodeMap[a.id];
+        return { label:nb.label, color:zColor(nb.zone), via:(a.edge.label || (a.edge.cls==='wifi'?'WiFi':a.edge.cls)), go:()=>this.selectNode(nb.id) };
+      });
+      selVals = {
+        selKind:sel.kind, selLabel:sel.label, selSub:sel.sub, selColor:col,
+        selZoneName:z.name, selZoneVlan:z.vlan,
+        selDetails:sel.details, selFlags:sel.flags, selHasFlags:sel.flags.length>0, selConns:conns,
+        selDrawerHeadStyle:`padding:14px 20px 16px;border-bottom:1px solid ${t.panelBorder};background:linear-gradient(180deg, ${this.hexA(col,t.light?0.12:0.10)}, transparent);flex:none;`,
+        selIsSiteGroup:false, selGroupBtnStyle:groupBtnStyle, selGroupBtnLabel:'', selGroupToggle:()=>{}
+      };
+    }
+
+    const bandLabels = this.BANDS.map(b => ({
+      text:b.text,
+      style:`position:absolute;left:${b.x}px;top:${b.y}px;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;`+
+        `letter-spacing:0.12em;text-transform:uppercase;color:${dark?b.dark:b.light};opacity:${t.light?0.95:0.82};white-space:nowrap;pointer-events:none;`
+    }));
+
+    // GROUP mode: translucent zone containers drawn behind the cards
+    const groupBoxes = [];
+    if(groupMode){
+      const siteBoxes = groupKind === 'site';
+      Object.keys(gBounds).forEach(z => {
+        if(!siteBoxes && !zoneActive[z]) return;
+        const g = gBounds[z];
+        const zo = (siteBoxes ? this.SITES[z] : this.ZONES[z]) || { name:z, vlan:'' };
+        const col = siteBoxes ? (dark ? '#8a93a3' : '#5d6878') : zColor(z);
+        const on = gsel === z;
+        const stt = siteBoxes ? (this.siteStats[z] || { devices:0, flags:0 }) : null;
+        const caption = siteBoxes
+          ? (stt.devices + (stt.devices === 1 ? ' device' : ' devices') + (stt.flags ? '  \u00b7  \u26a0 ' + stt.flags : ''))
+          : (zo.vlan || '');
+        groupBoxes.push({
+          key: z, title: zo.name || z, vlan: caption,
+          style:`position:absolute;left:${g.x}px;top:${g.y}px;width:${g.w}px;height:${g.h}px;`+
+            `border:1.5px ${on ? 'solid' : (siteBoxes ? 'dashed' : 'solid')} ${this.hexA(col, on ? 0.95 : (t.light?0.55:0.5))};border-radius:18px;`+
+            `background:${this.hexA(col, on ? (t.light?0.12:0.16) : (t.light?0.06:0.09))};pointer-events:none;z-index:1;`,
+          titleStyle:`position:absolute;left:16px;top:7px;font-family:'IBM Plex Mono',monospace;`+
+            `font-size:11px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;color:${col};`+
+            `pointer-events:auto;cursor:pointer;padding:2px 4px;`,
+          vlanStyle:`position:absolute;right:16px;top:9px;font-family:'IBM Plex Mono',monospace;`+
+            `font-size:9.5px;letter-spacing:0.06em;color:${this.hexA(col, 0.8)};pointer-events:auto;cursor:pointer;padding:2px 4px;`
+        });
+      });
+    }
+
+    const headerStyle = isMobile
+      ? `display:flex;align-items:center;justify-content:space-between;gap:8px;height:52px;flex:none;position:relative;padding:0 10px;border-bottom:1px solid ${t.headerBorder};background:${t.headerBg};z-index:20;`
+      : `display:flex;align-items:center;justify-content:space-between;height:58px;flex:none;position:relative;padding:0 20px;border-bottom:1px solid ${t.headerBorder};background:${t.headerBg};z-index:20;`;
+
+    const iconBtnStyle = `width:30px;height:30px;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:16px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;`;
+    const themeBtnStyle = isMobile
+      ? `width:38px;height:38px;flex:none;border-radius:9px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:16px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;`
+      : `width:30px;height:30px;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:14px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;`;
+
+    const sideC = !isMobile && !!st.sideCollapsed, detC = !isMobile && !!st.detailCollapsed;
+    const sidebarStyle0 = isMobile
+      ? `position:absolute;top:0;left:0;bottom:0;width:86%;max-width:340px;border-right:1px solid ${t.panelBorder};background:${t.sidebarBg};display:flex;flex-direction:column;min-height:0;z-index:40;box-shadow:16px 0 44px ${t.light?'rgba(30,42,64,0.20)':'rgba(0,0,0,0.55)'};transform:translateX(${st.menuOpen?'0':'-104%'});transition:transform .26s cubic-bezier(.4,0,.2,1);`
+      : `width:316px;flex:none;border-right:1px solid ${t.panelBorder};background:${t.sidebarBg};display:flex;flex-direction:column;min-height:0;`;
+
+    const sidebarStyle = sideC ? sidebarStyle0.replace("width:316px","width:44px") : sidebarStyle0;
+    const detailStyle0 = isMobile
+      ? `position:absolute;left:0;right:0;bottom:0;max-height:76vh;background:${t.detailBg};border-top:1px solid ${t.panelBorder};border-radius:16px 16px 0 0;box-shadow:0 -16px 44px ${t.light?'rgba(30,42,64,0.22)':'rgba(0,0,0,0.55)'};display:flex;flex-direction:column;z-index:45;`
+      : `position:absolute;top:0;right:0;bottom:0;width:368px;background:${t.detailBg};border-left:1px solid ${t.panelBorder};box-shadow:-16px 0 40px ${t.light?'rgba(30,42,64,0.14)':'rgba(0,0,0,0.45)'};display:flex;flex-direction:column;z-index:30;`;
+
+    const floatBtnBase = `width:44px;height:44px;border-radius:11px;border:1px solid ${t.floatBorder};background:${t.floatBg};cursor:pointer;line-height:1;backdrop-filter:blur(6px);box-shadow:0 4px 14px ${t.light?'rgba(30,42,64,0.18)':'rgba(0,0,0,0.4)'};`;
+
+    const detailStyle = detC ? detailStyle0.replace("bottom:0;","") : detailStyle0;
+    const sectionHeadStyle = `font-size:10.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:${t.heading};padding:14px 4px 8px;`;
+    const miniBtnStyle = `flex:1;height:28px;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:11px;cursor:pointer;`;
+
+    // ---- SITES list (sidebar): expand/collapse each site group ----
+    const sites = this._siteKeys.map(k => {
+      const stt = this.siteStats[k] || { devices:0, flags:0 };
+      const open = !(st.collapsed || {})[k];
+      const on = gsel === k;
+      return {
+        count: stt.devices,
+        name: (this.SITES[k].name || k),
+        sub: stt.flags ? (stt.flags + (stt.flags === 1 ? ' flag' : ' flags')) : ((this.SITES[k].vlan || '')),
+        caret: open ? '\u25be' : '\u25b8',
+        rowStyle:`display:flex;align-items:center;gap:9px;padding:8px 8px;border-radius:9px;cursor:pointer;margin-bottom:2px;`+
+          `background:${on ? (t.light?'#eaf1fb':'#141d2b') : 'transparent'};border:1px solid ${on ? (t.light?'#cadcf3':'#243650') : 'transparent'};`,
+        caretStyle:`font-size:10px;color:${t.textMuted};width:10px;flex:none;`,
+        nameStyle:`font-size:12.5px;font-weight:${open?600:500};color:${open?t.textStrong:t.textMid};`,
+        subStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;color:${stt.flags ? t.riskChipText : t.textMuted};`,
+        countStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.textMid};`,
+        toggle:()=>this.toggleSite(k)
+      };
+    }).filter(x => x.count > 0);
+
+    // ---- FINDINGS band: the risk register, at the top where it belongs ----
+    const sevRank = { high:0, med:1, low:2 };
+    const sevWord = { high:'HIGH', med:'MED', low:'LOW' };
+    const sevCnt = { high:0, med:0, low:0 };
+    this.ACTIONS.forEach(a => { if(sevCnt[a.sev] !== undefined) sevCnt[a.sev]++; });
+    const hasFindings = this.ACTIONS.length > 0;
+    const findingsOpen = st.findingsOpen === null ? false : !!st.findingsOpen;
+    const sevChipBg = { high:t.riskChipBg, med:(t.light?'#fdf5e3':'#211c11'), low:(t.light?'#eef2f8':'#161c26') };
+    const sevChipBd = { high:t.riskChipBorder, med:(t.light?'#eddfb4':'#453a1e'), low:t.chipBorder };
+    const sevChips = ['high','med','low'].filter(k => sevCnt[k]).map(k => ({
+      text: sevCnt[k] + ' ' + sevWord[k].toLowerCase(),
+      style:`font-family:'IBM Plex Mono',monospace;font-size:10.5px;font-weight:600;letter-spacing:0.04em;`+
+        `color:${sevColor[k]};background:${sevChipBg[k]};border:1px solid ${sevChipBd[k]};border-radius:6px;padding:2px 8px;flex:none;`
+    }));
+    const findings = this.ACTIONS.slice()
+      .sort((a,b)=> (sevRank[a.sev] === undefined ? 3 : sevRank[a.sev]) - (sevRank[b.sev] === undefined ? 3 : sevRank[b.sev]))
+      .map(a => {
+        const on = st.activeActionId === a.id;
+        return {
+          sev: sevWord[a.sev] || '\u00b7',
+          text: a.text,
+          where: (a.nodes && a.nodes.length) ? (a.nodes.length + (a.nodes.length === 1 ? ' device' : ' devices')) : 'site-wide',
+          rowStyle:`display:flex;gap:10px;align-items:baseline;padding:7px 10px;border-radius:8px;cursor:pointer;`+
+            `background:${on ? (t.light?'#eaf1fb':'#141d2b') : 'transparent'};border:1px solid ${on ? (t.light?'#cadcf3':'#243650') : 'transparent'};`,
+          sevStyle:`font-family:'IBM Plex Mono',monospace;font-size:9.5px;font-weight:700;letter-spacing:0.1em;color:${sevColor[a.sev]};width:34px;flex:none;`,
+          textStyle:`flex:1;font-size:12px;line-height:1.42;color:${t.textMid};display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;`,
+          whereStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;color:${t.textMuted};flex:none;white-space:nowrap;`,
+          click:()=>this._focusAction(a)
+        };
+      });
+
+    return {
+      isMobile, isDesktop, rootRef:this.rootRef,
+      canvasW:this.canvasW, canvasH:this.canvasH,
+      appStyle:`display:flex;flex-direction:column;height:100vh;width:100vw;background:${t.appBg};font-family:'IBM Plex Sans',sans-serif;color:${t.text};overflow:hidden;`,
+      viewportStyle:`position:relative;flex:1;overflow:hidden;background:${t.appBg};background-image:radial-gradient(circle at 1px 1px, ${t.gridDot} 1px, transparent 0);background-size:28px 28px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;`,
+      transformStyle:`position:absolute;top:0;left:0;width:${this.canvasW}px;height:${this.canvasH}px;transform:translate(${st.tx}px,${st.ty}px) scale(${st.scale});transform-origin:0 0;`,
+      nodes, edges, edgeLabels, bandLabels, groupBoxes, zones, actions, chipStyle,
+      viewportRef:this.viewportRef, transformRef:this.transformRef,
+      // VLANs — independent filter dimension, sidebar-only when any node declares vlans
+      hasVlans:this._hasVlans, vlans:vlanLegend, vlanHeadLabel:'VLANs \u00b7 tap to filter',
+      // sites
+      hasSites:this._hasSites, sites, miniBtnStyle,
+      zoneHeadLabel:'Zones \u00b7 tap to filter',
+      expandAllSites:()=>this.setAllSites(false),
+      collapseAllSites:()=>this.setAllSites(true),
+      // findings band
+      hasFindings, findingsOpen, findings, sevChips,
+      isDesktop:!isMobile, sideRail:sideC, sbHide:sideC?'display:none;':'', dtHide:detC?'display:none;':'',
+      toggleSide:()=>this.setState(s=>({sideCollapsed:!s.sideCollapsed}),()=>{clearTimeout(this._fitT);this._fitT=setTimeout(()=>this.fitView(),40);}),
+      toggleDetail:()=>this.setState(s=>({detailCollapsed:!s.detailCollapsed})),
+      detailBtnLabel:detC?'\u25be':'\u25b4', detailBtnTitle:detC?'Expand details':'Collapse details',
+      panelBtnStyle:`width:28px;height:28px;flex:none;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:16px;cursor:pointer;line-height:1;`,
+      ...(()=>{ const hs=st.hiddenSecs||{}, o={}, tg=k=>()=>this.setState(s=>({hiddenSecs:{...s.hiddenSecs,[k]:!(s.hiddenSecs||{})[k]}}));
+        [['Sites','sites'],['Zones','zones'],['Vlans','vlans'],['Actions','actions']].forEach(([K,k])=>{ o['show'+K]=!hs[k]; o['hide'+K]=tg(k); o['lbl'+K]=hs[k]?'show':'hide'; });
+        o.secBtnStyle=`background:transparent;border:1px solid ${t.btnBorder};color:${t.btnText};font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:2px 8px;border-radius:5px;cursor:pointer;`; return o; })(),
+      toggleFindings:()=>this.setState({ findingsOpen: !findingsOpen }, () => {
+        clearTimeout(this._fitT); this._fitT = setTimeout(() => this.fitView(), 40);
+      }),
+      findingsHint: findingsOpen ? 'hide \u25b4' : 'show \u25be',
+      findingsBarStyle:`flex:none;background:${t.headerBg};border-bottom:1px solid ${t.headerBorder};z-index:19;`,
+      findingsHeadStyle:`display:flex;align-items:center;gap:8px;padding:${isMobile?'8px 12px':'9px 20px'};cursor:pointer;`,
+      findingsTitleStyle:`font-size:10.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:${t.heading};flex:none;`,
+      findingsHintStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;color:${t.textMuted};flex:none;`,
+      findingsListStyle:`max-height:${isMobile?'30vh':'21vh'};overflow-y:auto;padding:0 ${isMobile?'8px':'16px'} 10px;-webkit-overflow-scrolling:touch;`,
+      zoomIn:()=>this.zoomAtCenter(1.2), zoomOut:()=>this.zoomAtCenter(0.83), resetView:()=>this.fitView(),
+      scalePct:Math.round(st.scale*100),
+      query:st.query, onSearch:(e)=>this.setState({query:e.target.value}),
+      // theme
+      toggleTheme:()=>this.toggleTheme(),
+      themeIcon: t.light ? '\u263E' : '\u2600',
+      themeToggleTitle: t.light ? 'Switch to dark' : 'Switch to light',
+      rgbRail: t.rgb,
+      themeMenuOpen: !!st.themeMenuOpen,
+      toggleThemeMenu: ()=>this.setState(s=>({ themeMenuOpen: !s.themeMenuOpen, menuOpen:false })),
+      closeThemeMenu: ()=>this.setState({ themeMenuOpen:false }),
+      themesBtnLabel: isMobile ? '\u25D0' : 'Themes',
+      themesBtnStyle: isMobile ? themeBtnStyle
+        : `height:30px;padding:0 10px;border-radius:7px;border:1px solid ${st.themeMenuOpen ? t.textMuted : t.btnBorder};background:${t.btnBg};color:${t.btnText};font-family:'IBM Plex Sans',sans-serif;font-size:12px;font-weight:500;cursor:pointer;line-height:1;display:flex;align-items:center;`,
+      themesCaretStyle: isMobile ? 'display:none;' : `font-size:9px;color:${t.textMuted};margin-left:6px;`,
+      themeMenuStyle: `position:absolute;top:calc(100% + 8px);right:0;z-index:61;width:240px;max-height:70vh;overflow:auto;padding:6px;border-radius:10px;border:1px solid ${t.floatBorder};background:${t.cardBg};box-shadow:0 14px 40px ${t.light ? 'rgba(30,42,64,0.22)' : 'rgba(0,0,0,0.55)'};display:flex;flex-direction:column;gap:2px;`,
+      themeGroups: this.themeGroups(t),
+      toggleLayout:()=>this.toggleLayout(),
+      showLayoutToggle: this._isAuto,
+      layoutTitle: this._hasSites ? 'Layout: Sites / Cluster / Tree / Zones' : 'Layout: Cluster / Tree / Zones',
+      layoutLabel: this.layoutMode === 'tree' ? 'Tree'
+        : (this.layoutMode === 'group' ? 'Zones'
+        : (this.layoutMode === 'site' ? 'Sites' : 'Cluster')),
+      // header / chrome styles
+      headerStyle, sidebarStyle, detailStyle, sectionHeadStyle, iconBtnStyle, themeBtnStyle,
+      menuBtnStyle:`width:38px;height:38px;flex:none;border-radius:9px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:17px;cursor:pointer;line-height:1;display:flex;align-items:center;justify-content:center;`,
+      headerTitleStyle:`font-size:14px;font-weight:700;letter-spacing:0.01em;color:${t.textStrong};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`,
+      headerSubStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.textMuted};`,
+      hostChipStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${coreCol};background:${this.hexA(coreCol,t.light?0.10:0.14)};border:1px solid ${this.hexA(coreCol,0.4)};border-radius:7px;padding:4px 9px;`,
+      riskChipStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.riskChipText};background:${t.riskChipBg};border:1px solid ${t.riskChipBorder};border-radius:7px;padding:4px 9px;white-space:nowrap;`,
+      dividerStyle:`width:1px;height:22px;background:${t.divider};margin:0 4px;`,
+      scalePctStyle:`font-family:'IBM Plex Mono',monospace;font-size:11px;color:${t.textMid};width:42px;text-align:center;`,
+      fitBtnStyle:`height:30px;padding:0 12px;border-radius:7px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.btnText};font-size:12px;cursor:pointer;`,
+      scrimStyle:`position:absolute;inset:0;background:${t.scrim};z-index:38;`,
+      inputStyle:`flex:1;min-width:0;height:38px;border-radius:9px;border:1px solid ${t.inputBorder};background:${t.inputBg};color:${t.inputText};font-family:'IBM Plex Mono',monospace;font-size:12px;padding:0 12px;outline:none;`,
+      closeBtnStyle:`width:30px;height:30px;flex:none;border-radius:8px;border:1px solid ${t.btnBorder};background:${t.btnBg};color:${t.textMid};font-size:15px;cursor:pointer;line-height:1;`,
+      floatBtnStyle:floatBtnBase+`color:${t.floatText};font-size:22px;`,
+      floatFitStyle:floatBtnBase+`color:${t.floatFitText};font-size:10px;font-weight:600;`,
+      handleStyle:`width:38px;height:4px;border-radius:3px;background:${t.handle};`,
+      // detail panel styles
+      selLabelStyle:`font-size:18px;font-weight:700;color:${t.textStrong};margin-top:3px;line-height:1.2;`,
+      selZonePillStyle:`display:inline-flex;align-items:center;gap:7px;margin-top:12px;background:${t.light?'#f4f7fb':'#141a24'};border:1px solid ${t.cardBorder};border-radius:7px;padding:4px 10px;`,
+      selZoneNameStyle:`font-size:11.5px;color:${t.textMid};`,
+      selZoneVlanStyle:`font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:${t.textMuted};`,
+      flagHeadStyle:`font-size:10.5px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:${t.flagIcon};margin-bottom:8px;`,
+      flagRowStyle:`display:flex;gap:9px;align-items:flex-start;background:${t.flagBg};border:1px solid ${t.flagBorder};border-radius:9px;padding:9px 11px;margin-bottom:7px;`,
+      flagIconColor:t.flagIcon,
+      flagTextStyle:`font-size:12px;line-height:1.42;color:${t.flagText};`,
+      detailRowStyle:`display:flex;gap:9px;align-items:flex-start;padding:5px 0;border-bottom:1px solid ${t.detailRowBorder};`,
+      detailTextStyle:`font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.5;color:${t.textMid};`,
+      connRowStyle:`display:flex;align-items:center;gap:10px;background:${t.connBg};border:1px solid ${t.connBorder};border-radius:9px;padding:10px 11px;margin-bottom:6px;cursor:pointer;`,
+      connLabelStyle:`font-size:12px;color:${t.text};`,
+      connViaStyle:`font-family:'IBM Plex Mono',monospace;font-size:10px;color:${t.textMuted};`,
+      chevColor:t.textMuted,
+      riskWord: isMobile ? 'flags' : 'action items',
+      menuOpen:st.menuOpen,
+      toggleMenu:()=>this.setState(s=>({menuOpen:!s.menuOpen, panelOpen:false})),
+      closeOverlays:()=>this.setState({menuOpen:false, themeMenuOpen:false, panelOpen:false, focusId:null, selectedId:null, groupSel:null, actionHL:null, activeActionId:null}),
+      scrimOpen: isMobile && (st.menuOpen || st.panelOpen),
+      panelOpen:st.panelOpen && (!!sel || !!gsel),
+      clearSel:()=>this.setState({panelOpen:false, selectedId:null, groupSel:null}),
+      metaTitle:this.META.title, metaSubtitle:this.META.subtitle,
+      stats:{ hosts:this.NODES.filter(n => n.id !== 'internet' && n.id !== 'wan').length, risks:this.ACTIONS.length },
+      panelOpenAny: st.panelOpen,
+      ...selVals
+    };
+  }
+}
+</script>
+</body>
+</html>
