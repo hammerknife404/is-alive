@@ -37,6 +37,9 @@ pub struct Bundle {
     pub map_clients: bool,
     pub scanner: HostInfo,
     pub parts: Vec<Part>,
+    /// Carry the skills (`skills/`), for a Claude chat that doesn't have
+    /// them installed.
+    pub skills: bool,
 }
 
 impl Bundle {
@@ -106,6 +109,12 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
             },
             "prompt": PROMPT,
             "files": files,
+            "skills": self.skills.then(|| json!({
+                "folder": "skills/",
+                "included": crate::skills::NAMES,
+                "note": "Copies of /unifidump and /mapnetwork for a Claude without them installed: \
+        follow skills/<name>/SKILL.md as that skill; its scripts/, references/ and assets/ are beside it.",
+            })),
             "mapnetwork_preflight": {
                 "site_name": self.site.trim(),
                 "scan": self.has(INVENTORY).then_some(INVENTORY),
@@ -126,6 +135,11 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
         let mut s = format!(
             "Attached: {file_name}, an is-alive site bundle for {site}. Unzip it and read manifest.json first.\n\n"
         );
+        if self.skills {
+            s += "If /unifidump or /mapnetwork isn't installed for you, the zip's skills/ folder has \
+both: read skills/<name>/SKILL.md and follow it as that skill (its scripts/, references/ and \
+assets/ paths are relative to that folder).\n\n";
+        }
         let mut step = 1;
         if self.has(UNIFI) {
             s += &format!("{step}. Run /unifidump on {UNIFI}.\n");
@@ -180,6 +194,15 @@ Don't ask it again.\n",
             (PROMPT, prompt.as_bytes()),
         ];
         files.extend(self.parts.iter().map(|p| (p.file, p.data.as_bytes())));
+        let skills: Vec<(String, &[u8])> = if self.skills {
+            crate::skills::FILES
+                .iter()
+                .map(|(p, d)| (format!("skills/{p}"), *d))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        files.extend(skills.iter().map(|(p, d)| (p.as_str(), *d)));
         zip(&files)
     }
 }
@@ -299,7 +322,44 @@ mod tests {
             map_clients: false,
             scanner: HostInfo::default(),
             parts,
+            skills: false,
         }
+    }
+
+    #[test]
+    fn skills_ride_along_only_when_asked_and_the_prompt_says_how_to_use_them() {
+        let mut b = bundle(vec![part(INVENTORY, "{}")]);
+        let names = |b: &Bundle| -> Vec<String> {
+            unzip(&b.zip("x.zip").unwrap())
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect()
+        };
+        assert!(!names(&b).iter().any(|n| n.starts_with("skills/")));
+        assert!(!b.kickoff("x.zip").contains("skills/"));
+        assert!(b.manifest()["skills"].is_null());
+
+        b.skills = true;
+        let n = names(&b);
+        for want in [
+            "skills/unifidump/SKILL.md",
+            "skills/unifidump/scripts/extract.py",
+            "skills/mapnetwork/SKILL.md",
+            "skills/mapnetwork/scripts/validate_map.py",
+            "skills/mapnetwork/assets/Site Map Template.dc.html",
+        ] {
+            assert!(n.iter().any(|x| x == want), "{want} missing");
+        }
+        assert_eq!(
+            n.iter().filter(|x| x.starts_with("skills/")).count(),
+            crate::skills::FILES.len()
+        );
+        let k = b.kickoff("x.zip");
+        assert!(
+            k.contains("isn't installed for you") && k.contains("skills/<name>/SKILL.md"),
+            "{k}"
+        );
+        assert_eq!(b.manifest()["skills"]["included"][1], "mapnetwork");
     }
 
     /// Read every entry back from the local headers.

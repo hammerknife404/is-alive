@@ -25,7 +25,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 
 ## With Claude
 
-**Site Bundle…** (top right) zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit. See [Site Bundle and Claude](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
+**Site Bundle…** (top right) zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. **Claude Review** saves it, copies the prompt, opens a new Claude chat and shows the zip to drop in; the bundle carries both skills, so it works even where they aren't installed. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit. The Map's **Examples** menu opens two fictional sites drawn by `/mapnetwork`. See [Site Bundle and Claude](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
 
 ## Privacy
 

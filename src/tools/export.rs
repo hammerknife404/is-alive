@@ -240,6 +240,9 @@ pub fn clients_choice(ui: &mut Ui, id: &str, clients: &mut unifi::Clients) -> bo
 /// Read a file to convert: a regular file no bigger than any backup can
 /// be, so a device, a pipe or a huge file is refused rather than read.
 pub fn read_input(p: &std::path::Path) -> Result<Vec<u8>, String> {
+    if let Some(data) = crate::skills::example(p) {
+        return Ok(data.to_vec());
+    }
     let name = file_name(p);
     let meta = std::fs::metadata(p).map_err(|e| format!("{name}: {e}"))?;
     if !meta.is_file() {
@@ -376,6 +379,11 @@ impl ExportTool {
             self.pending = None;
         }
         running
+    }
+
+    /// Open one of the example maps (see `skills::EXAMPLES`).
+    pub fn open_example(&mut self, ctx: &egui::Context, i: usize) {
+        self.open(ctx, vec![crate::skills::example_path(i)]);
     }
 
     /// Convert files dropped on the window or picked elsewhere.

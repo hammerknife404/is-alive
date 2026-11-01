@@ -37,6 +37,8 @@ pub enum Action {
     HideNote,
     /// Read the map's files again and rebuild it.
     Reload,
+    /// Open example map `n` (`skills::EXAMPLES`).
+    Example(usize),
     /// A layout mode was picked: remember it.
     Layout(Mode),
 }
@@ -827,6 +829,9 @@ impl MapView {
                         );
                     }
                 });
+                if let Some(i) = examples_menu(ui) {
+                    act = Some(Action::Example(i));
+                }
             });
         });
         Toolbar {
@@ -1136,8 +1141,37 @@ can only place devices under the gateway.",
                 act = Some(Action::Export);
             }
         });
+        ui.add_space(14.0);
+        ui.weak("Or look around one of the example maps (fictional sites):");
+        ui.add_space(4.0);
+        for (i, (label, _)) in crate::skills::EXAMPLES.iter().enumerate() {
+            if ui
+                .link(*label)
+                .on_hover_text("Opens it like a /mapnetwork map loaded in Config Export")
+                .clicked()
+            {
+                act = Some(Action::Example(i));
+            }
+        }
     });
     act
+}
+
+/// The toolbar's Examples menu; the example picked, if any.
+fn examples_menu(ui: &mut Ui) -> Option<usize> {
+    let mut picked = None;
+    ui.menu_button("Examples ⏷", |ui| {
+        ui.weak("Fictional sites, as /mapnetwork maps");
+        for (i, (label, _)) in crate::skills::EXAMPLES.iter().enumerate() {
+            if ui.button(*label).clicked() {
+                picked = Some(i);
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Open an example map: a fictional site drawn by /mapnetwork");
+    picked
 }
 
 #[cfg(test)]

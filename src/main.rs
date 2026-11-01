@@ -13,6 +13,7 @@ mod meraki;
 mod net;
 mod redact;
 mod shots;
+mod skills;
 mod sonicwall;
 mod theme;
 mod tools;
@@ -393,6 +394,7 @@ impl App {
                 self.tab = Tab::Trace;
             }
             Some(Action::Bundle) => self.bundle.open = true,
+            Some(Action::Example(i)) => self.export.open_example(ctx, i),
             Some(Action::HideNote) => {
                 self.look.map_note = false;
                 theme::save(&self.look);
