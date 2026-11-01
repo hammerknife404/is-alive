@@ -1,0 +1,43 @@
+name: weekly
+
+# Things that rot without a code change: the free Speed Test servers the
+# presets point at, and advisories filed against crates already in the
+# lockfile. Weekly, by hand, and the audit on any lockfile change.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths: [Cargo.lock, Cargo.toml]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      # Third-party actions are pinned to commit SHAs (tags are mutable).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - run: cargo install cargo-audit --locked
+      # Fails on a vulnerability; unmaintained crates (zbus's zvariant, from
+      # accesskit's AT-SPI on Linux) are listed as warnings.
+      - run: cargo audit
+
+  presets:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo test --locked -- --ignored presets_answer --nocapture
