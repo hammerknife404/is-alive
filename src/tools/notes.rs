@@ -1196,6 +1196,30 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_files_open_as_they_say() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/notes-debug");
+        let open = |n: &str| read_text(&dir.join(n));
+        let crlf = open("viewer-crlf-tabs.txt").unwrap();
+        assert!(!crlf.text.contains('\r') && crlf.text.contains("X0\t1\t10.20.0.1"));
+        assert!(crlf.text.lines().any(|l| l.len() > 2000), "the long line");
+        let bom = open("viewer-utf8-bom.cfg").unwrap();
+        assert!(bom.text.starts_with("# viewer-utf8-bom.cfg"));
+        for f in ["viewer-utf16le.txt", "viewer-utf16be.txt"] {
+            let t = open(f).unwrap().text;
+            assert!(t.starts_with(f) && t.contains("emoji 🔥"), "{f}: {t}");
+        }
+        let e = open("viewer-binary.bin").err().unwrap();
+        assert!(e.contains("not a text file"), "{e}");
+        // The checklist itself draws in Preview.
+        let md = std::fs::read_to_string(dir.join("notes-debug.md")).unwrap();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            crate::markdown::render(ui, &md, &FontId::proportional(13.0));
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
     fn opens_text_files_and_refuses_binary_ones() {
         let dir = std::env::temp_dir().join(format!("is-alive-view-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

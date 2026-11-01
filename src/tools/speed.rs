@@ -86,6 +86,8 @@ enum Ev {
     Done(Phase, Throughput),
     /// Nothing got through: its probes weren't under load, so they're dropped.
     Failed(Phase, String),
+    /// Worth knowing about the run (IPv6 broken, so it ran over IPv4).
+    Note(String),
     Error(String),
 }
 
@@ -138,9 +140,9 @@ impl Level {
 /// What the test runs against.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 enum Pick {
-    #[default]
     Cloudflare,
-    /// Download the file at `file_url`.
+    /// Download the file at `file_url` (the default: Cloudflare's download).
+    #[default]
     File,
     /// Upload to `upload_url`.
     Upload,
@@ -177,7 +179,7 @@ pub struct SpeedTool {
 impl Default for SpeedTool {
     fn default() -> Self {
         Self {
-            pick: Pick::Cloudflare,
+            pick: Pick::File,
             file_url: speed::DEFAULT_FILE.into(),
             upload_url: String::new(),
             secs: 10,
@@ -221,6 +223,7 @@ impl SpeedTool {
                 self.rates[p.i()].clear();
                 self.warns.push(w);
             }
+            Ev::Note(w) => self.warns.push(w),
             Ev::Error(e) => self.err = Some(e),
         });
         if !running {
@@ -265,6 +268,7 @@ impl SpeedTool {
                                 .hint_text("https://host/100MB.bin"),
                         )
                         .on_hover_text("The file's direct link. 1 GB or more works best");
+                        presets(ui, speed::DOWNLOADS, &mut self.file_url);
                     }
                     Pick::Upload => {
                         ui.add(
@@ -277,6 +281,7 @@ impl SpeedTool {
                             "Where to POST. It must answer 2xx and throw the data away; \
                              about 25 MB goes per request, repeated for the test's duration",
                         );
+                        presets(ui, speed::UPLOADS, &mut self.upload_url);
                     }
                     Pick::Cloudflare => {}
                 }
@@ -869,6 +874,36 @@ impl Prober {
     }
 }
 
+/// A menu of public servers by region; picking one fills in `url`.
+fn presets(ui: &mut Ui, list: &[speed::Preset], url: &mut String) {
+    ui.menu_button("Presets", |ui| {
+        ui.set_min_width(240.0);
+        let mut region = "";
+        for p in list {
+            if p.region != region {
+                if !region.is_empty() {
+                    ui.separator();
+                }
+                ui.label(RichText::new(p.region).small().strong());
+                region = p.region;
+            }
+            let on = url.trim() == p.url;
+            if ui
+                .selectable_label(on, format!("{} · {}", p.place, p.who))
+                .on_hover_text(p.url)
+                .clicked()
+            {
+                *url = p.url.into();
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.weak("Free public servers, best effort. If one fails or is slow, try another nearby.");
+    })
+    .response
+    .on_hover_text("Public servers to test against, by region");
+}
+
 fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {
     let host = server.probe_host().unwrap_or_default();
     let ip = match net::resolve(&host, false) {
@@ -876,10 +911,15 @@ fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: 
         Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
     };
     tx.send(Ev::Resolved(ip));
-    let agent = speed::agent(streams);
+    // Which of IPv4 and IPv6 reach the server, worked out during the idle
+    // phase, so the transfers don't stall on a broken one.
+    let family = server.host().ok().map(|host| {
+        let port = server.port();
+        std::thread::spawn(move || speed::pick_family(&host, port))
+    });
     // Only Cloudflare says where the test ran.
     let mut meta = (*server == Server::Cloudflare).then(|| {
-        let agent = agent.clone();
+        let agent = speed::agent(1);
         std::thread::spawn(move || speed::meta(&agent, speed::BASE))
     });
 
@@ -902,6 +942,13 @@ fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: 
         }
     }
     send_meta(tx, &mut meta, false);
+    let (family, note) = family
+        .and_then(|t| t.join().ok())
+        .unwrap_or((speed::Family::Any, None));
+    if let Some(n) = note {
+        tx.send(Ev::Note(n));
+    }
+    let agent = speed::agent_for(streams, family);
 
     for (on, phase, dir) in [(down, Phase::Down, Dir::Down), (up, Phase::Up, Dir::Up)] {
         if on && !tx.cancelled() {

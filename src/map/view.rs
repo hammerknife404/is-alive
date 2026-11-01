@@ -1001,12 +1001,39 @@ impl MapView {
                     });
                     ui.add_space(4.0);
                 }
+                // Where the stack starts, so a card's place in it doesn't
+                // change as the panel scrolls.
+                let origin = ui.min_rect().top();
                 for (k, &i) in sel.iter().enumerate() {
                     if k > 0 {
                         ui.add_space(6.0);
                     }
+                    let layer = ui.layer_id();
+                    let first = ui.ctx().graphics(|g| g.get(layer).map(|l| l.next_idx()));
                     let (a, frame) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev);
                     act = act.take().or(a);
+                    // A card whose place in the stack changed (moved, or
+                    // pushed down by a new one) glides there.
+                    let at = frame.rect.top() - origin;
+                    let shown = slide(ui.ctx(), &self.map.nodes[i].id, at);
+                    if (shown - at).abs() > 0.1
+                        && let Some(first) = first
+                    {
+                        // Shapes move; their clipping stays inside the
+                        // panel, so a gliding card never draws over the
+                        // header or outside the panel.
+                        let t = egui::emath::TSTransform::from_translation(vec2(0.0, shown - at));
+                        let view = ui.clip_rect();
+                        ui.ctx().graphics_mut(|g| {
+                            let list = g.entry(layer);
+                            for n in first.0..list.next_idx().0 {
+                                list.mutate_shape(egui::layers::ShapeIdx(n), |c| {
+                                    c.shape.transform(t);
+                                    c.clip_rect = t.mul_rect(c.clip_rect).intersect(view);
+                                });
+                            }
+                        });
+                    }
                     // Drop another card's grip here to put it in this place.
                     if let Some(from) = frame.dnd_release_payload::<usize>() {
                         *ev = Some(PanelEv::Move(*from, k));
@@ -2668,6 +2695,32 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
 }
 
 /// Points `gap` apart along a polyline, the first `off` from its start.
+/// How long a panel card takes to glide to a new place in the stack.
+const SLIDE_SECS: f64 = 0.22;
+
+/// Where to draw the panel card `id`, laid out `y` down the stack: easing
+/// (cubic ease-out) from where it was shown toward `y` whenever `y` moves.
+/// A card seen for the first time is just drawn where it is.
+fn slide(ctx: &egui::Context, id: &str, y: f32) -> f32 {
+    let key = egui::Id::new(("panel_slide", id));
+    let now = ctx.input(|i| i.time);
+    let at = |(from, to, t0): (f32, f32, f64), t: f64| {
+        let k = ((t - t0) / SLIDE_SECS).clamp(0.0, 1.0) as f32;
+        from + (to - from) * (1.0 - (1.0 - k).powi(3))
+    };
+    let mut s = ctx
+        .data(|d| d.get_temp::<(f32, f32, f64)>(key))
+        .unwrap_or((y, y, now));
+    if (s.1 - y).abs() > 0.5 {
+        s = (at(s, now), y, now);
+    }
+    ctx.data_mut(|d| d.insert_temp(key, s));
+    if now - s.2 < SLIDE_SECS {
+        ctx.request_repaint();
+    }
+    at(s, now)
+}
+
 /// A small filled chevron: pointing down when `open`, right when not.
 fn chevron(p: &egui::Painter, c: Pos2, r: f32, open: bool, colour: Color32) {
     let pts = if open {

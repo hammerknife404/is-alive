@@ -11,9 +11,201 @@ use std::time::{Duration, Instant};
 
 pub const HOST: &str = "speed.cloudflare.com";
 pub const BASE: &str = "https://speed.cloudflare.com";
-/// The file "Download a file" starts with: ThinkBroadband's public test
-/// file (London), large enough that a stream never runs out.
-pub const DEFAULT_FILE: &str = "http://ipv4.download.thinkbroadband.com/5GB.zip";
+/// The file "Download a file" starts with (and the Speed Test's default):
+/// Cloudflare's own download, served from the nearest data centre. Each
+/// stream fetches it again as soon as it ends, so 25 MB never runs out, and
+/// it stays under the size Cloudflare refuses (see DOWN_BYTES).
+pub const DEFAULT_FILE: &str = "https://speed.cloudflare.com/__down?bytes=25000000";
+/// A public server for "Download a file" or "Upload to a URL".
+pub struct Preset {
+    pub region: &'static str,
+    pub place: &'static str,
+    pub who: &'static str,
+    pub url: &'static str,
+}
+
+const fn p(
+    region: &'static str,
+    place: &'static str,
+    who: &'static str,
+    url: &'static str,
+) -> Preset {
+    Preset {
+        region,
+        place,
+        who,
+        url,
+    }
+}
+
+/// Free public files to download, by region, nearest-first within it.
+/// All answered in November 2026; free hosts come and go, so a dead one
+/// just says why and another can be picked. LibreSpeed servers'
+/// `garbage.php` streams random data (`ckSize` MB per request, refetched).
+pub const DOWNLOADS: &[Preset] = &[
+    p("Nearest", "Nearest data centre", "Cloudflare", DEFAULT_FILE),
+    p(
+        "US East",
+        "Ashburn, VA",
+        "Hetzner",
+        "https://ash-speed.hetzner.com/10GB.bin",
+    ),
+    p(
+        "US East",
+        "Piscataway, NJ",
+        "Vultr",
+        "https://nj-us-ping.vultr.com/vultr.com.1000MB.bin",
+    ),
+    p(
+        "US East",
+        "New York, NY",
+        "Clouvider",
+        "https://nyc.speedtest.clouvider.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US East",
+        "Atlanta, GA",
+        "Clouvider",
+        "https://atl.speedtest.clouvider.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US Central",
+        "Chicago, IL",
+        "Sharktech",
+        "https://chispeed.sharktech.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US Central",
+        "Grand Rapids, MI",
+        "RackGenius",
+        "https://mispeed.rackgenius.com/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US Central",
+        "Dallas, TX",
+        "Vultr",
+        "https://tx-us-ping.vultr.com/vultr.com.1000MB.bin",
+    ),
+    p(
+        "US Central",
+        "Denver, CO",
+        "Sharktech",
+        "https://denspeed.sharktech.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US West",
+        "Hillsboro, OR",
+        "Hetzner",
+        "https://hil-speed.hetzner.com/10GB.bin",
+    ),
+    p(
+        "US West",
+        "Los Angeles, CA",
+        "Vultr",
+        "https://lax-ca-us-ping.vultr.com/vultr.com.1000MB.bin",
+    ),
+    p(
+        "US West",
+        "Los Angeles, CA",
+        "Clouvider",
+        "https://la.speedtest.clouvider.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "US West",
+        "Las Vegas, NV",
+        "Sharktech",
+        "https://lasspeed.sharktech.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "Canada",
+        "Beauharnois, QC",
+        "OVH",
+        "https://proof.ovh.ca/files/10Gb.dat",
+    ),
+    p(
+        "Europe",
+        "London, UK",
+        "ThinkBroadband",
+        "http://ipv4.download.thinkbroadband.com/5GB.zip",
+    ),
+    p(
+        "Europe",
+        "London, UK",
+        "Clouvider",
+        "https://lon.speedtest.clouvider.net/backend/garbage.php?ckSize=100",
+    ),
+    p(
+        "Europe",
+        "Falkenstein, DE",
+        "Hetzner",
+        "https://fsn1-speed.hetzner.com/10GB.bin",
+    ),
+    p(
+        "Europe",
+        "France",
+        "OVH",
+        "https://proof.ovh.net/files/10Gb.dat",
+    ),
+];
+
+/// Free public LibreSpeed servers that take an upload and throw it away.
+pub const UPLOADS: &[Preset] = &[
+    p(
+        "US East",
+        "New York, NY",
+        "Clouvider",
+        "https://nyc.speedtest.clouvider.net/backend/empty.php",
+    ),
+    p(
+        "US East",
+        "Atlanta, GA",
+        "Clouvider",
+        "https://atl.speedtest.clouvider.net/backend/empty.php",
+    ),
+    p(
+        "US Central",
+        "Chicago, IL",
+        "Sharktech",
+        "https://chispeed.sharktech.net/backend/empty.php",
+    ),
+    p(
+        "US Central",
+        "Grand Rapids, MI",
+        "RackGenius",
+        "https://mispeed.rackgenius.com/backend/empty.php",
+    ),
+    p(
+        "US Central",
+        "Denver, CO",
+        "Sharktech",
+        "https://denspeed.sharktech.net/backend/empty.php",
+    ),
+    p(
+        "US West",
+        "Los Angeles, CA",
+        "Sharktech",
+        "https://laxspeed.sharktech.net/backend/empty.php",
+    ),
+    p(
+        "US West",
+        "Los Angeles, CA",
+        "Clouvider",
+        "https://la.speedtest.clouvider.net/backend/empty.php",
+    ),
+    p(
+        "US West",
+        "Las Vegas, NV",
+        "Sharktech",
+        "https://lasspeed.sharktech.net/backend/empty.php",
+    ),
+    p(
+        "Europe",
+        "London, UK",
+        "Clouvider",
+        "https://lon.speedtest.clouvider.net/backend/empty.php",
+    ),
+];
+
 /// Latency target when downloading a file: Cloudflare's resolver, nearby
 /// on any line, so idle latency, jitter and bufferbloat read the local
 /// line rather than the path to wherever the file lives.
@@ -98,6 +290,119 @@ pub fn file_host(url: &str) -> Result<String, String> {
     Ok(host.to_string())
 }
 
+/// The port an http(s) URL connects to: its own, else 443 or 80.
+pub fn url_port(url: &str) -> u16 {
+    let url = url.trim();
+    let (rest, default) = match url.strip_prefix("http://") {
+        Some(r) => (r, 80),
+        None => (url.strip_prefix("https://").unwrap_or(url), 443),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let port = match authority.rsplit_once(']') {
+        Some((_, p)) => p.strip_prefix(':'),
+        None => authority.rsplit_once(':').map(|(_, p)| p),
+    };
+    port.and_then(|p| p.parse().ok()).unwrap_or(default)
+}
+
+impl Server {
+    /// The port the transfers connect to.
+    pub fn port(&self) -> u16 {
+        match self {
+            Server::Cloudflare => 443,
+            Server::File(url) | Server::Upload(url) => url_port(url),
+        }
+    }
+}
+
+/// Which addresses the transfers use.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Family {
+    /// The system's order (with ureq falling back from one to the next).
+    Any,
+    V4,
+    V6,
+}
+
+/// How long the family check waits for a connect. Far longer than a
+/// working path needs anywhere; short enough not to hold the test up (it
+/// runs alongside the idle latency phase).
+pub const FAMILY_WAIT: Duration = Duration::from_millis(2500);
+
+/// A network can hand out IPv6 addresses while its IPv6 path is broken.
+/// The system still lists IPv6 first, and each stream's connection would
+/// then wait seconds on it before falling back, inside the timed transfer.
+/// So try the host's first IPv4 and first IPv6 address at once: if only
+/// one connects, use only that family, and say so.
+pub fn pick_family(host: &str, port: u16) -> (Family, Option<String>) {
+    let Ok(addrs) = std::net::ToSocketAddrs::to_socket_addrs(&(host, port)) else {
+        return (Family::Any, None);
+    };
+    let addrs: Vec<std::net::SocketAddr> = addrs.collect();
+    let (v4, v6) = (
+        addrs.iter().find(|a| a.is_ipv4()).copied(),
+        addrs.iter().find(|a| a.is_ipv6()).copied(),
+    );
+    let (Some(v4), Some(v6)) = (v4, v6) else {
+        return (Family::Any, None);
+    };
+    let try_one = |a| std::thread::spawn(move || reach(a));
+    let (t4, t6) = (try_one(v4), try_one(v6));
+    let r4 = t4.join().unwrap_or(Reach::No);
+    let r6 = t6.join().unwrap_or(Reach::No);
+    decide(host, r4, r6)
+}
+
+/// What a connect to one address showed about its family.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Reach {
+    /// It answered (a refusal counts: the path works).
+    Yes,
+    /// This machine has no route for that family at all: an IPv4-only (or
+    /// IPv6-only) network, nothing wrong.
+    NoRoute,
+    /// It should have worked and didn't: timed out, or unreachable on the way.
+    No,
+}
+
+fn reach(a: std::net::SocketAddr) -> Reach {
+    match std::net::TcpStream::connect_timeout(&a, FAMILY_WAIT) {
+        Ok(_) => Reach::Yes,
+        Err(e) => match e.kind() {
+            io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset => Reach::Yes,
+            io::ErrorKind::NetworkUnreachable | io::ErrorKind::AddrNotAvailable => Reach::NoRoute,
+            _ => Reach::No,
+        },
+    }
+}
+
+/// The family for what connected, with a note only when one family looked
+/// set up but didn't get through.
+fn decide(host: &str, r4: Reach, r6: Reach) -> (Family, Option<String>) {
+    match (r4, r6) {
+        (Reach::Yes, Reach::Yes) => (Family::Any, None),
+        (Reach::Yes, Reach::NoRoute) => (Family::V4, None),
+        (Reach::NoRoute, Reach::Yes) => (Family::V6, None),
+        (Reach::Yes, Reach::No) => (
+            Family::V4,
+            Some(format!(
+                "IPv6 to {host} didn't connect, so the test ran over IPv4. This network's IPv6 \
+                 looks broken: browsers hide that by falling back, but other apps can stall \
+                 for seconds first."
+            )),
+        ),
+        (Reach::No, Reach::Yes) => (
+            Family::V6,
+            Some(format!(
+                "IPv4 to {host} didn't connect, so the test ran over IPv6."
+            )),
+        ),
+        // Neither got through (a proxy, or the transfer will say why).
+        _ => (Family::Any, None),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dir {
     Down,
@@ -108,12 +413,22 @@ pub enum Dir {
 /// Timeouts are per read/write so a long transfer isn't cut, but a stalled
 /// one is.
 pub fn agent(streams: usize) -> ureq::Agent {
+    agent_for(streams, Family::Any)
+}
+
+/// An agent that connects only over `family` (Any: the system's order).
+pub fn agent_for(streams: usize, family: Family) -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
     ureq::Agent::config_builder()
         .tls_config(tls)
         .timeout_connect(Some(Duration::from_secs(5)))
+        .ip_family(match family {
+            Family::Any => ureq::config::IpFamily::Any,
+            Family::V4 => ureq::config::IpFamily::Ipv4Only,
+            Family::V6 => ureq::config::IpFamily::Ipv6Only,
+        })
         .timeout_per_read(Some(Duration::from_secs(10)))
         .timeout_per_write(Some(Duration::from_secs(10)))
         // Every stream keeps its connection between requests.
@@ -586,6 +901,53 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn presets_are_usable_and_grouped() {
+        for (list, up) in [(DOWNLOADS, false), (UPLOADS, true)] {
+            let mut seen_regions: Vec<&str> = Vec::new();
+            for (i, p) in list.iter().enumerate() {
+                assert!(file_host(p.url).is_ok(), "{}", p.url);
+                assert_eq!(p.url.ends_with("empty.php"), up, "{}", p.url);
+                assert!(
+                    !list[..i].iter().any(|q| q.url == p.url),
+                    "twice: {}",
+                    p.url
+                );
+                // Each region's servers sit together, for the menu's headings.
+                if seen_regions.last() != Some(&p.region) {
+                    assert!(!seen_regions.contains(&p.region), "{} split", p.region);
+                    seen_regions.push(p.region);
+                }
+            }
+        }
+        assert_eq!(DOWNLOADS[0].url, DEFAULT_FILE, "the default heads the list");
+    }
+
+    #[test]
+    fn ports_and_the_family_decision() {
+        assert_eq!(url_port("https://h/x"), 443);
+        assert_eq!(url_port("http://h/x"), 80);
+        assert_eq!(url_port("https://files.example.net:8443/1GB.bin?x=1"), 8443);
+        assert_eq!(url_port("http://[2001:db8::1]:8080/f"), 8080);
+        assert_eq!(url_port("https://[2001:db8::1]/f"), 443);
+        assert_eq!(url_port("https://u:p@h:9/f"), 9);
+        assert_eq!(Server::Cloudflare.port(), 443);
+        use Reach::*;
+        let (f, note) = decide("h", Yes, No);
+        assert_eq!(f, Family::V4);
+        assert!(note.unwrap().contains("IPv6 to h didn't connect"));
+        // No IPv6 here at all: IPv4, quietly.
+        assert_eq!(decide("h", Yes, NoRoute), (Family::V4, None));
+        assert_eq!(decide("h", NoRoute, Yes), (Family::V6, None));
+        assert_eq!(decide("h", No, Yes).0, Family::V6);
+        assert!(decide("h", No, Yes).1.is_some());
+        assert_eq!(decide("h", Yes, Yes), (Family::Any, None));
+        assert_eq!(decide("h", No, No), (Family::Any, None));
+        assert_eq!(decide("h", NoRoute, No), (Family::Any, None));
+        // A literal address has one family: nothing to pick between.
+        assert_eq!(pick_family("127.0.0.1", 9), (Family::Any, None));
+    }
+
+    #[test]
     fn refused_transfer_reports_why() {
         let base = mock();
         let t = Transfer::start(&agent(1), &format!("{base}/nope"), Dir::Down, 1);
@@ -637,9 +999,11 @@ pub(crate) mod tests {
         assert_eq!(f.probe_host().unwrap(), FILE_PROBE);
         assert_eq!(cf.probe_host().unwrap(), HOST);
         assert!(Server::File("ftp://x".into()).probe_host().is_err());
+        assert_eq!(file_host(DEFAULT_FILE).unwrap(), HOST);
         assert_eq!(
-            file_host(DEFAULT_FILE).unwrap(),
-            "ipv4.download.thinkbroadband.com"
+            DEFAULT_FILE,
+            Server::Cloudflare.url(Dir::Down),
+            "the same download the Cloudflare server uses"
         );
         assert!(!f.uploads());
         let u = Server::Upload(" https://speed.example.net/backend/empty.php ".into());
