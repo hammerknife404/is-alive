@@ -127,30 +127,33 @@ impl MapView {
                             .id_salt("map_side_sites")
                             .default_open(true)
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let any_open = sites.iter().any(|s| !s.2);
-                                    let any_closed = sites.iter().any(|s| s.2);
-                                    if ui
-                                        .add_enabled(
-                                            any_open,
-                                            egui::Button::new("Collapse all").small(),
-                                        )
-                                        .on_hover_text("Fold every site to one card")
-                                        .clicked()
-                                    {
-                                        flip_all = Some(true);
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            any_closed,
-                                            egui::Button::new("Expand all").small(),
-                                        )
-                                        .on_hover_text("Open every site again")
-                                        .clicked()
-                                    {
-                                        flip_all = Some(false);
-                                    }
-                                });
+                                // One site: nothing to fold all of.
+                                if sites.len() > 1 {
+                                    ui.horizontal(|ui| {
+                                        let any_open = sites.iter().any(|s| !s.2);
+                                        let any_closed = sites.iter().any(|s| s.2);
+                                        if ui
+                                            .add_enabled(
+                                                any_open,
+                                                egui::Button::new("Collapse all").small(),
+                                            )
+                                            .on_hover_text("Fold every site to one card")
+                                            .clicked()
+                                        {
+                                            flip_all = Some(true);
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                any_closed,
+                                                egui::Button::new("Expand all").small(),
+                                            )
+                                            .on_hover_text("Open every site again")
+                                            .clicked()
+                                        {
+                                            flip_all = Some(false);
+                                        }
+                                    });
+                                }
                                 for (site, n, closed) in &sites {
                                     let row = ui.horizontal(|ui| {
                                         let (d, _) = ui

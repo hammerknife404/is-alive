@@ -1786,7 +1786,7 @@ pub fn build(input: &Input) -> Map {
         .unwrap_or_else(|| "This network".into());
     map.fill_sites(&site);
     if map.hidden > 0 && !input.clients {
-        map.summary += " · clients not mapped";
+        map.summary += &format!(" · {} clients hidden", map.hidden);
     }
     map
 }

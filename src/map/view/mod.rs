@@ -726,16 +726,24 @@ impl MapView {
                 }
             }
             ui.separator();
-            ui.label("Clients");
-            for c in Clients::ALL {
-                if ui
-                    .selectable_label(self.clients == c, c.name())
-                    .on_hover_text(c.tip())
-                    .clicked()
-                {
-                    self.clients = c;
+            // A map with no end devices at all (an infrastructure-only
+            // /mapnetwork map) has nothing for the switch to show or hide.
+            let any = empty || self.map.hidden > 0 || self.map.nodes.iter().any(|n| n.client);
+            ui.add_enabled_ui(any, |ui| {
+                ui.label("Clients");
+                for c in Clients::ALL {
+                    if ui
+                        .selectable_label(self.clients == c, c.name())
+                        .on_hover_text(c.tip())
+                        .on_disabled_hover_text(
+                            "This map has no end devices: it was drawn with infrastructure only",
+                        )
+                        .clicked()
+                    {
+                        self.clients = c;
+                    }
                 }
-            }
+            });
             ui.separator();
             let subnet = src
                 .info
@@ -770,10 +778,12 @@ impl MapView {
                 {
                     fit = true;
                 }
-                if ui
-                    .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
-                    .on_hover_text("Undo card moves")
-                    .clicked()
+                // Only once a card was dragged: room for the rest.
+                if !self.placed.is_empty()
+                    && ui
+                        .button("Re-layout")
+                        .on_hover_text("Put dragged cards back where the layout had them")
+                        .clicked()
                 {
                     self.placed.clear();
                     fit = true;
@@ -790,6 +800,7 @@ impl MapView {
                     act = Some(Action::Reload);
                 }
                 ui.separator();
+                ui.label("Layout");
                 let now = self.mode();
                 for m in Mode::ALL {
                     if ui
@@ -829,7 +840,7 @@ impl MapView {
                         );
                     }
                 });
-                if let Some(i) = examples_menu(ui) {
+                if let Some(i) = examples_menu(ui, src) {
                     act = Some(Action::Example(i));
                 }
             });
@@ -1158,12 +1169,19 @@ can only place devices under the gateway.",
 }
 
 /// The toolbar's Examples menu; the example picked, if any.
-fn examples_menu(ui: &mut Ui) -> Option<usize> {
+fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<usize> {
     let mut picked = None;
+    // The example on the map now, ticked; picking it again reads it again.
+    let shown = src
+        .export
+        .mapnetwork()
+        .and_then(|m| m.0.file_name().map(|f| f.to_os_string()));
     ui.menu_button("Examples ⏷", |ui| {
         ui.weak("Fictional sites, as /mapnetwork maps");
         for (i, (label, _)) in crate::skills::EXAMPLES.iter().enumerate() {
-            if ui.button(*label).clicked() {
+            let on =
+                shown.is_some() && shown.as_deref() == crate::skills::example_path(i).file_name();
+            if ui.selectable_label(on, *label).clicked() {
                 picked = Some(i);
                 ui.close();
             }

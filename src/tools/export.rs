@@ -158,7 +158,7 @@ pub struct ExportTool {
     /// File being read while the job runs.
     pending: Option<PathBuf>,
     /// Every file converted, in the order opened; each has its own sub-tab.
-    /// Opening a file again replaces its result.
+    /// Opening a file again replaces its result and moves it to the end.
     slots: Vec<Slot>,
     /// Every loaded file's stripped secret values, for Notes to redact.
     secrets: Vec<String>,
@@ -348,17 +348,7 @@ impl ExportTool {
             Ev::Picked(p) => self.pending = Some(p),
             Ev::Done(path, r) => match *r {
                 Ok(export) => {
-                    let slot = Slot { path, export };
-                    self.shown = match self.slots.iter().position(|s| s.path == slot.path) {
-                        Some(i) => {
-                            self.slots[i] = slot;
-                            i
-                        }
-                        None => {
-                            self.slots.push(slot);
-                            self.slots.len() - 1
-                        }
-                    };
+                    self.shown = land(&mut self.slots, path, export);
                     loaded = true;
                 }
                 Err(e) => {
@@ -573,6 +563,15 @@ impl ExportTool {
     }
 }
 
+/// A file read goes in its own slot, at the end; its index. Opened again,
+/// it moves to the end, so it is the one opened last and the Map shows it
+/// (switching between two maps, or two examples, back and forth).
+fn land(slots: &mut Vec<Slot>, path: PathBuf, export: Export) -> usize {
+    slots.retain(|s| s.path != path);
+    slots.push(Slot { path, export });
+    slots.len() - 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +644,19 @@ mod tests {
         let long = map("/x/a-very-long-site-name-for-a-map.dc.html").label();
         // 21 characters and an ellipsis, so the sub-tab stays narrow.
         assert_eq!(long, "Map · a-very-long-site-name…");
+    }
+
+    #[test]
+    fn a_file_opened_again_is_the_one_the_map_shows() {
+        let mut t = ExportTool::default();
+        let map = || convert(MAP.as_bytes().to_vec(), unifi::Clients::None).unwrap();
+        t.shown = land(&mut t.slots, PathBuf::from("/x/a.dc.html"), map());
+        t.shown = land(&mut t.slots, PathBuf::from("/x/b.dc.html"), map());
+        assert_eq!(t.mapnetwork().unwrap().0, &PathBuf::from("/x/b.dc.html"));
+        t.shown = land(&mut t.slots, PathBuf::from("/x/a.dc.html"), map());
+        assert_eq!(t.mapnetwork().unwrap().0, &PathBuf::from("/x/a.dc.html"));
+        assert_eq!(t.slots.len(), 2);
+        assert_eq!(t.shown, 1);
     }
 
     #[test]
