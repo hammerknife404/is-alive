@@ -174,6 +174,26 @@ pub struct MapView {
 pub const GONE_FLAG: &str =
     "Not in the latest data. Kept because it's pinned: check it, then unpin it or × to let it go.";
 
+/// What the toolbar asked for this frame.
+struct Toolbar {
+    act: Option<Action>,
+    search_enter: bool,
+    fit: bool,
+}
+
+/// Cards or a site the canvas should bring into view this frame.
+#[derive(Default)]
+struct Focus {
+    /// From the findings band or the sidebar's action items.
+    on: Option<Vec<usize>>,
+    /// A site title clicked in the sidebar.
+    site: Option<String>,
+    /// A card named in the panel (an uplink, a child).
+    pick: Option<usize>,
+    /// Enter in the search box: the first match.
+    search: bool,
+}
+
 impl MapView {
     pub fn new(mode: Option<Mode>) -> Self {
         // The screenshot tour can start with clients shown
@@ -655,12 +675,34 @@ impl MapView {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
-        let mut act = None;
         let ctx = ui.ctx().clone();
         self.refresh(&ctx, &src);
         let empty = self.map.nodes.is_empty();
+        let bar = self.toolbar(ui, &src, empty);
+        // The first thing asked for wins: a toolbar click isn't lost to
+        // the accuracy note drawn after it.
+        let mut act = bar.act;
+        act = act.or(self.notices(ui, &src, empty));
+        if empty {
+            ui.separator();
+            return act.or(empty_state(ui, src.info));
+        }
+        let mut focus = Focus {
+            search: bar.search_enter,
+            ..Default::default()
+        };
+        self.findings_band(ui, &mut focus.on);
+        act = act.or(self.detail_panel(ui, &src, &mut focus.pick));
+        // Left: roles and action items, as /mapnetwork's sidebar has them.
+        self.sidebar(ui, &mut focus.on, &mut focus.site);
+        self.canvas(ui, bar.fit, focus);
+        act
+    }
 
-        // Toolbar.
+    /// Search, clients, scan, fit and layout, and Export SVG.
+    fn toolbar(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Toolbar {
+        let ctx = ui.ctx().clone();
+        let mut act = None;
         let mut search_enter = false;
         let mut fit = false;
         ui.horizontal(|ui| {
@@ -784,6 +826,17 @@ impl MapView {
                 });
             });
         });
+        Toolbar {
+            act,
+            search_enter,
+            fit,
+        }
+    }
+
+    /// Under the toolbar: the map's summary, the accuracy note, and how far
+    /// a running sweep has got.
+    fn notices(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
+        let mut act = None;
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
         }
@@ -802,20 +855,22 @@ impl MapView {
                 }
             });
         }
-        if empty {
-            ui.separator();
-            act = empty_state(ui, src.info);
-            return act;
-        }
-        let mut focus_on: Option<Vec<usize>> = None;
-        self.findings_band(ui, &mut focus_on);
+        act
+    }
 
-        // Detail panel; it keeps the last card while it slides shut.
+    /// The card panel on the right (it keeps the last card while it slides
+    /// shut), and what was done in it. `pick` is a card it asked to show.
+    fn detail_panel(
+        &mut self,
+        ui: &mut Ui,
+        src: &Sources,
+        pick: &mut Option<usize>,
+    ) -> Option<Action> {
+        let mut act = None;
         if self.selected.is_some() {
             self.shown.clone_from(&self.selected);
         }
         let mut open = !self.selection().is_empty();
-        let mut pick: Option<usize> = None;
         let mut ev: Option<PanelEv> = None;
         let stack = self.ordered();
         egui::Panel::right("map_detail")
@@ -823,9 +878,7 @@ impl MapView {
             .default_size(320.0)
             .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
-                act = act
-                    .take()
-                    .or(self.detail(ui, stack, src.busy, &mut pick, &mut ev));
+                act = self.detail(ui, stack, src.busy, pick, &mut ev);
             });
         if !open {
             self.select(None);
@@ -853,12 +906,19 @@ impl MapView {
             }
             _ => {}
         }
+        act
+    }
 
-        // Left: roles and action items, as /mapnetwork's sidebar has them.
-        let mut focus_site: Option<String> = None;
-        self.sidebar(ui, &mut focus_on, &mut focus_site);
-
-        // Canvas.
+    /// The map itself: fit and focus, input, animation and painting, and
+    /// the controls over it.
+    fn canvas(&mut self, ui: &mut Ui, fit: bool, focus: Focus) {
+        let ctx = ui.ctx().clone();
+        let Focus {
+            on: focus_on,
+            site: focus_site,
+            pick,
+            search: search_enter,
+        } = focus;
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if self.zoom == 0.0 {
             self.zoom = 1.0;
@@ -911,7 +971,6 @@ impl MapView {
             self.legend(ui, rect);
         }
         self.zoom_controls(ui, rect);
-        act
     }
 }
 
