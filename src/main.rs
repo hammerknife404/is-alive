@@ -177,6 +177,9 @@ impl eframe::App for App {
         self.central(ui, now);
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
+        // Links (Help, the update notice, a card's Web) open through the
+        // app's own launcher: egui's needs a feature this build leaves out.
+        widgets::open_requested_links(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
