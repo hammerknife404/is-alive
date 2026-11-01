@@ -459,6 +459,18 @@ impl MapView {
         let vpad = (7.0 * z).clamp(3.0, 9.0);
         let inner = r.width() - pad * 2.0;
         let room = r.height() - 2.0 * vpad;
+        // Too narrow for about 8 characters of name: a colour tile, no
+        // text. "Harl…" on every card says nothing; hovering names it.
+        if inner < label_f.size * 0.55 * 8.0 {
+            if !n.flags.is_empty() {
+                p.circle_filled(
+                    pos2(r.max.x - 4.0, r.min.y + 4.0),
+                    3.0,
+                    widgets::warn().gamma_multiply(a),
+                );
+            }
+            return;
+        }
         let full_badge = z >= 0.6;
         let badge = if !full_badge || n.flags.is_empty() {
             0.0

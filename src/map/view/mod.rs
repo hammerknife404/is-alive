@@ -147,6 +147,9 @@ pub struct MapView {
     aim: Option<(Vec2, f32)>,
     /// Keep the whole map in view as it grows, until the user pans or zooms.
     follow: bool,
+    /// The canvas as it was with no card selected: what the map fits to
+    /// while the panel is open.
+    wide: Option<Rect>,
     drag: Option<String>,
     /// When the map was last rebuilt, to pace rebuilds during a sweep.
     built_at: f64,
@@ -927,11 +930,29 @@ impl MapView {
                 (self.pan, self.zoom) = (p, z);
             }
         }
+        // While cards are selected the panel takes the right of the view;
+        // fitting to what's left would zoom the whole map out as it opens.
+        // So the map keeps the fit it had without the panel (the panel lies
+        // over its right edge), panned only to keep the selected card clear.
+        let selected = self.selection().first().copied();
+        if selected.is_none() || self.wide.is_none_or(|w| w.min != rect.min) {
+            self.wide = Some(rect);
+        }
+        let wide = self.wide.map_or(rect, |w| w.union(rect));
         if fit {
             self.follow = true;
             self.fit(rect);
         } else if self.follow && self.drag.is_none() {
-            self.fit(rect);
+            self.fit(wide);
+            if let (Some(i), Some((pan, zoom))) = (selected, self.aim)
+                && let Some(p) = self.target(i)
+            {
+                let right = rect.min.x + pan.x + (p.x + CARD.x) * zoom;
+                let over = right - (rect.right() - 16.0);
+                if over > 0.0 {
+                    self.aim = Some((pan - vec2(over, 0.0), zoom));
+                }
+            }
         }
         if let Some(&first) = focus_on.as_ref().and_then(|ids| ids.first()) {
             self.select(Some(first));
