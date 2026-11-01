@@ -190,7 +190,13 @@ impl MapView {
         // (parent, box) → (children, any lit, brightest).
         let mut trunks: std::collections::BTreeMap<(usize, usize), (Vec<usize>, bool, f32)> =
             Default::default();
-        for (i, n) in self.map.nodes.iter().enumerate() {
+        // Weakest first: cards stacked under one uplink share its line, so a
+        // solid link drawn last covers the dashes of an assumed one there
+        // instead of beading it.
+        let mut order: Vec<usize> = (0..self.map.nodes.len()).collect();
+        order.sort_by_key(|&i| self.map.nodes[i].link().map_or(0, strength));
+        for i in order {
+            let n = &self.map.nodes[i];
             let Some((up, link, _)) = &n.up else {
                 continue;
             };
@@ -261,7 +267,13 @@ impl MapView {
                 ]
             };
             let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
-            let first = &self.map.nodes[kids[0]];
+            // The trunk carries its strongest link: one solid uplink makes
+            // the shared line solid.
+            let first = kids
+                .iter()
+                .map(|&k| &self.map.nodes[k])
+                .max_by_key(|m| m.link().map_or(0, strength))
+                .expect("a trunk has cards");
             let link = first.link().unwrap_or(Link::Wired);
             let count = format!("×{}", kids.len());
             let end = *pts.last().expect("route has points");
@@ -548,4 +560,14 @@ impl MapView {
 /// Height of one line of text in `font`, as laid out in a card.
 fn ui_row_height(font: &FontId) -> f32 {
     font.size * 1.25
+}
+
+/// How solid a link is drawn, weakest first: the order links are painted in.
+fn strength(l: Link) -> u8 {
+    match l {
+        Link::Assumed => 0,
+        Link::Wireless => 1,
+        Link::Wired => 2,
+        Link::Backbone => 3,
+    }
 }

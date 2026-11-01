@@ -34,7 +34,10 @@ e('core', 'srv1', 'wired', 'port 20'); e('core', 'srv2', 'wired', 'port 21')
 n('prn', 'iot', 'PRINTER', 'Office printer', '10.10.30.5', flags=['Plain HTTP management'])
 n('cam1', 'iot', 'CAMERA', 'Lobby camera', '10.10.30.20')
 n('cam2', 'iot', 'CAMERA', 'Car park camera', '10.10.30.21', chips=['no answer'])
-for x in ['prn', 'cam1', 'cam2']: e('sw0', x, 'wired')
+# A sweep can't see these uplinks: /mapnetwork draws them dashed, 'inferred'.
+for x in ['prn', 'cam1', 'cam2']:
+    e('sw0', x, 'wired', 'inferred')
+    edges[-1]['dashed'] = True
 n('unk', 'unknown', 'UNKNOWN DEVICE', 'Unidentified upstream device', '58:11:22:aa:bb:cc', chips=['not managed'])
 e('sw1', 'unk', 'wired', 'port 24')
 # second site
