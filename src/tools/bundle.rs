@@ -559,3 +559,44 @@ fn part_row(ui: &mut Ui, on: &mut bool, name: &str, loaded: Option<String>, miss
     }
     ui.end_row();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log::{Entry, Table};
+
+    fn run(tool: &'static str, first: &'static str, target: &str) -> Entry {
+        Entry {
+            tool,
+            started: "s".into(),
+            ended: "e".into(),
+            text: String::new(),
+            table: Some(Table {
+                columns: match first {
+                    "host" => &["host", "state"],
+                    "range" => &["range", "ip"],
+                    _ => &["field", "value"],
+                },
+                rows: vec![vec![target.into(), "x".into()]],
+            }),
+        }
+    }
+
+    #[test]
+    fn log_targets_are_distinct_in_run_order() {
+        let mut log = Log::default();
+        for e in [
+            run("Ping", "host", "10.0.0.1"),
+            run("Subnet Sweep", "range", "10.0.0.0/24"),
+            run("Port Check", "host", "10.0.0.1"),
+            run("Subnet Calc", "field", "ignored"),
+            run("Ping", "host", "192.168.1.1"),
+        ] {
+            log.push(e);
+        }
+        assert_eq!(
+            log_targets(&log),
+            ["10.0.0.1", "10.0.0.0/24", "192.168.1.1"]
+        );
+    }
+}
