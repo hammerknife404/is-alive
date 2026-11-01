@@ -2,7 +2,7 @@
 
 > **Attending a demo?** Start with the plain-language **[follow-along guide](FOLLOW-ALONG.md)**: download, open, and try it step by step. No technical background needed.
 
-**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development.
+**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it.
 
 A native network tester for site visits, written in Rust. One portable `.exe` on Windows, one `.AppImage` on Linux: no installer, no admin rights. **[Download the latest release](https://github.com/hammerknife404/is-alive/releases/latest).**
 

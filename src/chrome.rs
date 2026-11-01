@@ -6,6 +6,9 @@ use crate::job::Job;
 use crate::{App, FULL_SCAN_TIP, TABS, VERSION, tab_key, theme, widgets};
 use eframe::egui;
 
+/// The wiki's front page: Help and F1 open it.
+pub const WIKI: &str = "https://github.com/hammerknife404/is-alive/wiki";
+
 impl App {
     /// The tab bar.
     pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
@@ -165,6 +168,14 @@ impl App {
                     }
                     ui.separator();
                     ui.weak(format!("v{VERSION}"));
+                    ui.separator();
+                    if ui
+                        .add(egui::Button::new("Help").small())
+                        .on_hover_text("Open the is-alive wiki in the browser (F1)")
+                        .clicked()
+                    {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(WIKI));
+                    }
                     if self.look.theme == theme::Theme::Miami
                         && let Some(e) = &self.backdrop.err
                     {
@@ -183,6 +194,15 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("is-alive").heading().strong());
             ui.weak(format!("v{VERSION}"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(framed(ui, egui::Button::new("Help wiki")))
+                    .on_hover_text("Open the is-alive wiki in the browser: a page per tab (F1)")
+                    .clicked()
+                {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(WIKI));
+                }
+            });
         });
         ui.separator();
         match theme::appearance(
@@ -241,7 +261,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.update_job.is_none(),
-                    egui::Button::new("Check now").small(),
+                    framed(ui, egui::Button::new("Check now").small()),
                 )
                 .clicked()
             {
@@ -290,6 +310,19 @@ impl App {
 }
 
 /// Keyboard and mouse tips, in Settings.
+/// A button inside a menu drawn as the app's other buttons are: menus make
+/// buttons frameless and see-through, so a real button there reads as text.
+fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
+    let fill = ui
+        .ctx()
+        .global_style()
+        .visuals
+        .widgets
+        .inactive
+        .weak_bg_fill;
+    b.frame(true).fill(fill)
+}
+
 fn shortcuts(ui: &mut egui::Ui) {
     ui.label(egui::RichText::new("Keyboard").strong());
     egui::Grid::new("keys")
@@ -307,6 +340,7 @@ fn shortcuts(ui: &mut egui::Ui) {
                     "Next item in Notes (twice ends the list)",
                 ),
                 ("Esc", "Clear the selection on the Map"),
+                ("F1", "Open the is-alive wiki (Help)"),
             ] {
                 ui.label(egui::RichText::new(k).monospace());
                 ui.label(what);
