@@ -137,6 +137,8 @@ struct App {
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
     shots: Option<shots::Shots>,
+    /// The screenshot tour's last step: Settings open.
+    shots_settings: bool,
 }
 
 impl eframe::App for App {
@@ -152,9 +154,17 @@ impl eframe::App for App {
             }
         }
         if let Some(s) = &mut self.shots {
-            let names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
-            if let Some(i) = s.step(ui.ctx(), &names) {
-                self.tab = TABS[i].0;
+            // Every tab, then the Map again with a card selected.
+            let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
+            names.extend(["Map panel", "Settings"]);
+            match s.step(ui.ctx(), &names) {
+                Some(i) if i < TABS.len() => self.tab = TABS[i].0,
+                Some(i) if i == TABS.len() => {
+                    self.tab = crate::Tab::Map;
+                    self.map.select_for_shots();
+                }
+                Some(_) => self.shots_settings = true,
+                None => {}
             }
         }
         let now = ui.input(|i| i.time);
@@ -214,24 +224,19 @@ impl eframe::App for App {
             // Wraps to a second row when the window (or display scaling)
             // leaves too little width, so every tab stays reachable.
             ui.horizontal_wrapped(|ui| {
-                let busy = self.any_running();
-                let tip = if busy {
-                    "Wait for running tools to finish (or stop them) to run a full scan."
-                } else {
-                    FULL_SCAN_TIP
-                };
-                let b = ui
-                    .add_enabled(
-                        !busy,
-                        // The name, drawn as a title; clicking it runs a full scan.
+                // The app's name, drawn as a title; it opens Settings.
+                let name = ui
+                    .add(
                         egui::Button::new(egui::RichText::new("is-alive").heading().strong())
                             .frame(false),
                     )
-                    .on_hover_text(tip)
-                    .on_disabled_hover_text(tip);
-                if b.clicked() {
-                    self.full_scan(ui.ctx());
+                    .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
+                if self.shots_settings {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&name));
                 }
+                egui::Popup::menu(&name)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| self.settings_ui(ui));
                 ui.separator();
                 // The selected tab is marked by a sliding underline rather
                 // than a filled box; running jobs get a pulsing dot that
@@ -333,33 +338,22 @@ impl eframe::App for App {
                     {
                         self.refresh_info(ui.ctx());
                     }
-                    ui.menu_button("?", shortcuts)
-                        .response
-                        .on_hover_text("Keyboard shortcuts and tips");
-                    ui.weak(format!("v{VERSION}"));
-                    ui.separator();
-                    match theme::menu(
-                        ui,
-                        &mut self.look,
-                        &self.backdrop.renderer,
-                        self.backdrop.on_gpu(),
-                    ) {
-                        Some(theme::MenuAction::Changed) => {
-                            theme::apply(ui.ctx(), self.look.theme);
-                            theme::save(&self.look);
-                        }
-                        Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
-                            self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
-                                tx.send(
-                                    rfd::FileDialog::new()
-                                        .set_title("Miami backdrop")
-                                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
-                                        .pick_file(),
-                                )
-                            }));
-                        }
-                        _ => {}
+                    let busy = self.any_running();
+                    let tip = if busy {
+                        "Wait for running tools to finish (or stop them) to run a full scan."
+                    } else {
+                        FULL_SCAN_TIP
+                    };
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Full scan").small())
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(tip)
+                        .clicked()
+                    {
+                        self.full_scan(ui.ctx());
                     }
+                    ui.separator();
+                    ui.weak(format!("v{VERSION}"));
                     if self.look.theme == theme::Theme::Miami
                         && let Some(e) = &self.backdrop.err
                     {
@@ -415,6 +409,59 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Settings, opened from the app's name: appearance, the Map, keyboard
+    /// shortcuts and where the app keeps its files.
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(320.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("is-alive").heading().strong());
+            ui.weak(format!("v{VERSION}"));
+        });
+        ui.separator();
+        match theme::appearance(
+            ui,
+            &mut self.look,
+            &self.backdrop.renderer,
+            self.backdrop.on_gpu(),
+        ) {
+            Some(theme::MenuAction::Changed) => {
+                theme::apply(ui.ctx(), self.look.theme);
+                theme::save(&self.look);
+            }
+            Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
+                self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
+                    tx.send(
+                        rfd::FileDialog::new()
+                            .set_title("Miami backdrop")
+                            .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                            .pick_file(),
+                    )
+                }));
+            }
+            _ => {}
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("Map").strong());
+        if ui
+            .checkbox(&mut self.look.map_note, "Show the accuracy note")
+            .on_hover_text("The note over the Map on how to get an accurate one")
+            .changed()
+        {
+            theme::save(&self.look);
+        }
+        ui.separator();
+        ui.collapsing("Keyboard and mouse", shortcuts);
+        ui.separator();
+        if let Some(dir) = theme::data_dir() {
+            ui.weak("Settings and autosaved notes are kept in");
+            ui.label(
+                egui::RichText::new(dir.display().to_string())
+                    .monospace()
+                    .small(),
+            );
+        }
+    }
+
     fn tab_ui(&mut self, ui: &mut egui::Ui) {
         match self.tab {
             Tab::Ping => self.ping.ui(ui),
@@ -811,7 +858,7 @@ fn shortcuts(ui: &mut egui::Ui) {
     for tip in [
         "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
         "Drop a UniFi backup, SonicWall .exp / .wri or /mapnetwork map anywhere to open it",
-        "Click the is-alive button for a full scan of this network",
+        "Full scan (bottom right) pings, traces and sweeps this network in one go",
         "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {
         ui.label(format!("• {tip}"));
@@ -984,6 +1031,7 @@ fn main() -> eframe::Result {
                 pick_image: None,
                 reloading: false,
                 shots: shots::Shots::from_env(),
+                shots_settings: false,
             };
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =

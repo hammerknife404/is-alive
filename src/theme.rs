@@ -810,10 +810,15 @@ pub enum MenuAction {
 /// Footer "Theme" menu: the themes (the default marked), and Miami's
 /// backdrop and animation.
 /// `renderer` says what draws the backdrop (GPU, or CPU and why).
-pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> Option<MenuAction> {
+/// The appearance section of Settings: theme, and the Miami backdrop.
+pub fn appearance(
+    ui: &mut egui::Ui,
+    s: &mut Settings,
+    renderer: &str,
+    gpu: bool,
+) -> Option<MenuAction> {
     let mut act = None;
-    ui.menu_button(format!("Theme: {} ⏷", s.theme.name()), |ui| {
-        ui.set_min_width(240.0);
+    {
         ui.label(egui::RichText::new("Theme").strong());
         for t in Theme::ALL {
             let (label, tip) = match t {
@@ -924,7 +929,7 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             ui.label(egui::RichText::new(renderer).small().weak())
                 .on_hover_text("What draws the backdrop. Set IS_ALIVE_GPU=off to force the CPU.");
         });
-    });
+    }
     act
 }
 

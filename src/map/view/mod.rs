@@ -529,6 +529,23 @@ impl MapView {
     }
 
     /// One card selected, the rest let go.
+    /// For the screenshot tour: select the card most findings name, so the
+    /// panel has something in every section.
+    pub fn select_for_shots(&mut self) {
+        let best = (0..self.map.nodes.len()).max_by_key(|&i| {
+            let named = self
+                .map
+                .findings
+                .iter()
+                .filter(|f| f.nodes.contains(&i))
+                .count();
+            (named + self.map.nodes[i].flags.len(), usize::MAX - i)
+        });
+        if best.is_some() && self.selection().is_empty() {
+            self.select(best);
+        }
+    }
+
     fn select(&mut self, i: Option<usize>) {
         self.selected = i.map(|i| self.map.nodes[i].id.clone());
         self.also.clear();

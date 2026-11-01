@@ -139,13 +139,15 @@ impl CalcTool {
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            widgets::field(
-                ui,
-                "Is this address inside?",
-                &mut self.check,
-                220.0,
-                if b.v6() { "2001:db8::1" } else { "10.0.3.7" },
-            );
+            let h = ui.spacing().interact_size.y;
+            cell(ui, KEY_W, h, RichText::new("Check address"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.check)
+                    .char_limit(widgets::FIELD_MAX)
+                    .desired_width(220.0)
+                    .hint_text(if b.v6() { "2001:db8::1" } else { "10.0.3.7" }),
+            )
+            .on_hover_text("Is this address inside the block?");
             let c = self.check.trim();
             if !c.is_empty() {
                 match c.parse::<IpAddr>() {
@@ -181,7 +183,8 @@ impl CalcTool {
         let n = 1u128 << n_bits;
         let mut copy = false;
         ui.horizontal(|ui| {
-            ui.strong("Split into");
+            let h = ui.spacing().interact_size.y;
+            cell(ui, KEY_W, h, RichText::new("Split into").strong());
             ui.add(
                 egui::DragValue::new(&mut self.split)
                     .range(lo..=hi)
@@ -283,8 +286,12 @@ impl CalcTool {
     }
 }
 
+/// Width of the key column every result section shares (the details' names,
+/// "Check address", "Split into", the split table's #), so values line up.
+const KEY_W: f32 = 130.0;
+
 /// Column widths for the split table: number, block, then addresses.
-const COL: [f32; 3] = [56.0, 170.0, 130.0];
+const COL: [f32; 3] = [KEY_W, 170.0, 130.0];
 
 fn cols(v6: bool) -> Vec<f32> {
     if v6 {
@@ -358,6 +365,7 @@ fn details(ui: &mut Ui, b: &Block, i: &Info) {
     egui::Grid::new("calc")
         .num_columns(2)
         .striped(true)
+        .min_col_width(KEY_W + ui.spacing().item_spacing.x - 24.0)
         .spacing([24.0, 4.0])
         .show(ui, |ui| {
             for (k, v) in rows(b, i) {

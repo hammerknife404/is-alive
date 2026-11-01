@@ -191,8 +191,11 @@ impl MapView {
         let mut act = None;
         let n = &self.map.nodes[i];
         let accent = self.accent(n);
+        // Every section: a small caps title, then body-size text, keys in a
+        // fixed column so values line up from one section to the next.
+        const KEY_W: f32 = 76.0;
         let section = |ui: &mut Ui, title: &str| {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.label(
                 RichText::new(title.to_uppercase())
                     .small()
@@ -255,7 +258,7 @@ impl MapView {
                         }
                     });
                 });
-                ui.label(RichText::new(&n.label).heading());
+                ui.label(RichText::new(&n.label).size(17.0).strong());
                 if !n.sub.is_empty() {
                     ui.label(RichText::new(&n.sub).monospace().color(accent));
                 }
@@ -287,7 +290,14 @@ impl MapView {
                             Sev::Low => ui.visuals().weak_text_color(),
                         };
                         ui.horizontal_top(|ui| {
-                            ui.label(RichText::new(f.sev.label()).monospace().small().color(c));
+                            ui.allocate_ui_with_layout(
+                                vec2(34.0, ui.spacing().interact_size.y),
+                                egui::Layout::left_to_right(egui::Align::Min),
+                                |ui| {
+                                    ui.set_min_width(34.0 - ui.spacing().item_spacing.x);
+                                    ui.label(RichText::new(f.sev.label()).monospace().color(c));
+                                },
+                            );
                             ui.add(egui::Label::new(&f.text).wrap());
                         });
                     }
@@ -314,6 +324,7 @@ impl MapView {
                 }
                 egui::Grid::new(("map_facts", i))
                     .num_columns(2)
+                    .min_col_width(KEY_W - 8.0)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
                         for (k, v) in &facts {
@@ -325,11 +336,7 @@ impl MapView {
                 for d in &n.details {
                     ui.horizontal_top(|ui| {
                         ui.weak("·");
-                        ui.add(
-                            egui::Label::new(RichText::new(d).small())
-                                .wrap()
-                                .selectable(true),
-                        );
+                        ui.add(egui::Label::new(d.as_str()).wrap().selectable(true));
                     });
                 }
                 if facts.is_empty() && n.details.is_empty() {
@@ -387,7 +394,7 @@ impl MapView {
                     ui.weak(format!("…{} more below it", kids.len() - 14));
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     if n.ip.is_some() {
@@ -471,29 +478,34 @@ impl MapView {
 
                 let runs = self.runs.runs(&n.id);
                 if !runs.is_empty() {
-                    ui.add_space(4.0);
-                    egui::CollapsingHeader::new(RichText::new("RESULTS").small().strong())
-                        .id_salt(("map_runs", &n.id))
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for r in runs {
-                                if let Some(e) = run_section(ui, &n.id, r, busy) {
-                                    match e {
-                                        RunEv::Again => *ev = Some(PanelEv::Run(i, r.tool)),
-                                        RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
-                                        RunEv::Clear => *ev = Some(PanelEv::Clear(i, r.tool)),
-                                        RunEv::Tab => {
-                                            let ip = r.ip.to_string();
-                                            act = Some(match r.tool {
-                                                Tool::Ping => Action::Ping(ip),
-                                                Tool::Ports => Action::Ports(ip),
-                                                Tool::Trace => Action::Trace(ip),
-                                            });
-                                        }
+                    ui.add_space(8.0);
+                    egui::CollapsingHeader::new(
+                        RichText::new("RESULTS")
+                            .small()
+                            .strong()
+                            .color(ui.visuals().weak_text_color()),
+                    )
+                    .id_salt(("map_runs", &n.id))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for r in runs {
+                            if let Some(e) = run_section(ui, &n.id, r, busy) {
+                                match e {
+                                    RunEv::Again => *ev = Some(PanelEv::Run(i, r.tool)),
+                                    RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
+                                    RunEv::Clear => *ev = Some(PanelEv::Clear(i, r.tool)),
+                                    RunEv::Tab => {
+                                        let ip = r.ip.to_string();
+                                        act = Some(match r.tool {
+                                            Tool::Ping => Action::Ping(ip),
+                                            Tool::Ports => Action::Ports(ip),
+                                            Tool::Trace => Action::Trace(ip),
+                                        });
                                     }
                                 }
                             }
-                        });
+                        }
+                    });
                 }
             });
         (act, frame.response)

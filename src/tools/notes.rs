@@ -370,16 +370,15 @@ impl NotesTool {
             self.toolbar(ui, info, &hits, &font, look);
         }
         widgets::error(ui, &self.err);
-        egui::Panel::bottom("notes_footer")
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                ui.add_space(2.0);
-                if self.on_file {
-                    self.file_footer(ui);
-                } else {
-                    self.footer(ui, &hits, now);
-                }
-            });
+        // The status row, as on every tab: counts and what's redacted on
+        // the left, the ways out on the right.
+        ui.separator();
+        if self.on_file {
+            self.file_footer(ui);
+        } else {
+            self.footer(ui, &hits, now);
+        }
+        ui.add_space(2.0);
         if self.on_file {
             if let Some(v) = &self.file {
                 viewer(ui, v, &font);
@@ -727,7 +726,7 @@ impl NotesTool {
         }
     }
 
-    /// Under the notes: counts, what's redacted, autosave, and the ways out.
+    /// Under the toolbar: counts, what's redacted, autosave, and the ways out.
     fn footer(&mut self, ui: &mut Ui, hits: &[Hit], now: f64) {
         ui.horizontal_wrapped(|ui| {
             let (words, lines) = (
