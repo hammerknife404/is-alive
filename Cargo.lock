@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "is-alive"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "aes",
  "arboard",
