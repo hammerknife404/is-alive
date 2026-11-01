@@ -39,6 +39,8 @@ pub enum Action {
     Reload,
     /// Open example map `n` (`skills::EXAMPLES`).
     Example(usize),
+    /// Close the example map, back to this network.
+    CloseExample,
     /// A layout mode was picked: remember it.
     Layout(Mode),
 }
@@ -590,6 +592,43 @@ impl MapView {
         self.also.clear();
     }
 
+    /// Select card `i` with `others` (the right-click menu's "Select
+    /// children" and the like): `i` stays the one shown first, the rest
+    /// join it. Cards a folded site hides are left out.
+    fn select_with(&mut self, i: usize, others: &[usize]) {
+        self.select(Some(i));
+        for &c in others {
+            let shown = self.lay.pos.get(c).is_some_and(Option::is_some);
+            let id = &self.map.nodes[c].id;
+            if c != i && shown && !self.also.contains(id) {
+                self.also.push(id.clone());
+            }
+        }
+    }
+
+    /// Every card below `i`, nearest first.
+    fn below(&self, i: usize) -> Vec<usize> {
+        let kids = self.map.children();
+        let mut out = Vec::new();
+        let mut next = vec![i];
+        let mut seen = vec![false; kids.len()];
+        seen[i] = true;
+        while !next.is_empty() {
+            let mut level = Vec::new();
+            for p in next {
+                for &c in &kids[p] {
+                    if !seen[c] {
+                        seen[c] = true;
+                        level.push(c);
+                    }
+                }
+            }
+            out.extend(&level);
+            next = level;
+        }
+        out
+    }
+
     /// Ctrl+click: add the card to the selection, or take it out (pinned too).
     fn toggle(&mut self, i: usize) {
         let id = self.map.nodes[i].id.clone();
@@ -841,8 +880,8 @@ impl MapView {
                         );
                     }
                 });
-                if let Some(i) = examples_menu(ui, src) {
-                    act = Some(Action::Example(i));
+                if let Some(a) = examples_menu(ui, src) {
+                    act = Some(a);
                 }
             });
         });
@@ -1170,7 +1209,7 @@ can only place devices under the gateway.",
 }
 
 /// The toolbar's Examples menu; the example picked, if any.
-fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<usize> {
+fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<Action> {
     let mut picked = None;
     // The example on the map now, ticked; picking it again reads it again.
     let shown = src
@@ -1183,7 +1222,18 @@ fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<usize> {
             let on =
                 shown.is_some() && shown.as_deref() == crate::skills::example_path(i).file_name();
             if ui.selectable_label(on, *label).clicked() {
-                picked = Some(i);
+                picked = Some(Action::Example(i));
+                ui.close();
+            }
+        }
+        if src.export.example_open() {
+            ui.separator();
+            if ui
+                .button("Close the example")
+                .on_hover_text("Back to this network's map (a Scan closes it too)")
+                .clicked()
+            {
+                picked = Some(Action::CloseExample);
                 ui.close();
             }
         }
@@ -1207,6 +1257,28 @@ mod tests {
             })
             .collect();
         v
+    }
+
+    #[test]
+    fn select_with_uplinks_and_children() {
+        // 0 internet - 1 gateway - 2 switch - {3 ap - 5 client, 4 server}
+        let mut v = view(6);
+        for (c, p) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3)] {
+            v.map.nodes[c].up = Some((p, crate::map::Link::Wired, None));
+        }
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
+        assert_eq!(v.below(2), [3, 4, 5]);
+        assert_eq!(v.below(5), Vec::<usize>::new());
+        let path = v.map.path(5);
+        v.select_with(5, &path);
+        assert_eq!(v.selected.as_deref(), Some("n5"));
+        assert_eq!(v.also, ["n0", "n1", "n2", "n3"]);
+        v.select_with(2, &v.map.children()[2].clone());
+        assert_eq!(v.selection().len(), 3);
+        // A card the layout doesn't show (a folded site) stays out.
+        v.lay.pos[4] = None;
+        v.select_with(2, &v.below(2));
+        assert_eq!(v.also, ["n3", "n5"]);
     }
 
     #[test]

@@ -668,6 +668,10 @@ pub struct Settings {
     pub size: Option<(u32, u32)>,
     /// Show the Map tab's accuracy note (until it's closed).
     pub map_note: bool,
+    /// Look up the public IP when the app starts (one DNS query to
+    /// OpenDNS). Off: nothing leaves the machine until the user runs
+    /// something.
+    pub wan_on_start: bool,
     pub backdrop: Source,
     /// Notes and text-viewer font (see `fonts`) and size in points.
     pub notes_font: String,
@@ -678,6 +682,9 @@ pub struct Settings {
     /// Map layout picked (Cluster, Tree, Zones, Sites); None until one is.
     pub map_layout: Option<crate::map::layout::Mode>,
 }
+
+/// Whether the public IP is looked up at start unless the user says.
+pub const WAN_ON_START: bool = true;
 
 /// Font sizes the Notes tab offers.
 pub const NOTES_SIZES: &[u8] = &[8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28, 32];
@@ -691,6 +698,7 @@ impl Default for Settings {
             vhs: true,
             size: None,
             map_note: true,
+            wan_on_start: WAN_ON_START,
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
             notes_split: 0.5,
@@ -714,6 +722,7 @@ impl Settings {
                 "glow" => s.glow = v.trim() != "0",
                 "vhs" => s.vhs = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
@@ -776,6 +785,9 @@ impl Settings {
         }
         if !self.map_note {
             s += "map_note=0\n";
+        }
+        if self.wan_on_start != WAN_ON_START {
+            s += &format!("wan_on_start={}\n", self.wan_on_start as u8);
         }
         if !self.vhs {
             s += "vhs=0\n";
@@ -1025,6 +1037,7 @@ mod tests {
             vhs: false,
             size: Some((1280, 800)),
             map_note: false,
+            wan_on_start: !WAN_ON_START,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_font: "DejaVu Sans Mono".into(),
             notes_size: 16,
