@@ -311,14 +311,8 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         Ordering::Relaxed,
     );
     let (slot, visuals) = match theme {
-        // Untouched: egui's own dark style, as the app always looked.
-        Theme::Dark => {
-            ctx.set_theme(egui::Theme::Dark);
-            let mut style = Style::default();
-            text_sizes(&mut style);
-            ctx.set_style_of(egui::Theme::Dark, style);
-            return;
-        }
+        // egui's own dark colours, as the app always looked.
+        Theme::Dark => (egui::Theme::Dark, Visuals::dark()),
         Theme::Light => (egui::Theme::Light, light()),
         Theme::Miami => (egui::Theme::Dark, miami()),
         t => {
@@ -335,14 +329,19 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         visuals,
         ..Style::default()
     };
-    let s = &mut style.spacing;
-    s.item_spacing = egui::vec2(8.0, 6.0);
-    s.button_padding = egui::vec2(6.0, 2.0);
-    s.window_margin = egui::Margin::same(12);
-    s.menu_margin = egui::Margin::same(6);
+    spacing(&mut style.spacing);
     text_sizes(&mut style);
     ctx.set_theme(slot);
     ctx.set_style_of(slot, style);
+}
+
+/// One set of spacing for every theme, so a tab is laid out the same in
+/// each: rows and buttons don't change size with the colours.
+fn spacing(s: &mut egui::style::Spacing) {
+    s.item_spacing = egui::vec2(8.0, 4.0);
+    s.button_padding = egui::vec2(5.0, 2.0);
+    s.window_margin = egui::Margin::same(12);
+    s.menu_margin = egui::Margin::same(6);
 }
 
 /// A size up from egui's defaults (12.5 body) for every theme: easier to

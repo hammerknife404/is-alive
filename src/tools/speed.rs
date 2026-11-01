@@ -237,7 +237,7 @@ impl SpeedTool {
 
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!running, |ui| {
-                ui.label("Server");
+                widgets::lead(ui, "Server");
                 egui::ComboBox::from_id_salt("speed_server")
                     .selected_text(match self.pick {
                         Pick::Cloudflare => speed::HOST,
@@ -286,9 +286,15 @@ impl SpeedTool {
                     Pick::Cloudflare => {}
                 }
             });
-            ui.separator();
+            match widgets::run_button(ui, running, false) {
+                Action::Start => self.run(ui.ctx()),
+                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::None => {}
+            }
+        });
+        ui.horizontal(|ui| {
             ui.add_enabled_ui(!running, |ui| {
-                ui.label("Duration");
+                widgets::lead(ui, "Duration");
                 ui.add(
                     egui::DragValue::new(&mut self.secs)
                         .range(5..=60)
@@ -309,33 +315,43 @@ impl SpeedTool {
                 )
                 .on_disabled_hover_text("A file download can't measure upload");
             });
-            ui.separator();
-            match widgets::run_button(ui, running, false) {
-                Action::Start => self.run(ui.ctx()),
-                Action::Stop => self.job.as_ref().map_or((), Job::stop),
-                Action::None => {}
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_enabled_ui(self.has_results(), |ui| {
-                    widgets::save_button(ui, "speed", || self.report());
-                    widgets::copy_button(ui, || self.report());
-                });
-            });
         });
         let place = self.place();
         if !place.is_empty() {
-            ui.weak(place.join("  ·  "));
+            widgets::toolbar_note(ui, &place.join("  ·  "));
         }
         for w in &self.warns {
             widgets::warning(ui, w);
         }
         widgets::error(ui, &self.err);
         ui.separator();
+        widgets::status_row(
+            ui,
+            |ui| {
+                if self.has_results() {
+                    ui.label(RichText::new(&self.ran_host).strong());
+                    for p in [Phase::Down, Phase::Up] {
+                        if let Some(r) = self.results[p.i()] {
+                            ui.separator();
+                            ui.label(format!("{} {}", p.name(), speed::fmt_rate(r.mbps)));
+                        }
+                    }
+                }
+            },
+            |ui| {
+                ui.add_enabled_ui(self.has_results(), |ui| {
+                    widgets::save_button(ui, "speed", || self.report());
+                    widgets::copy_button(ui, || self.report());
+                });
+            },
+        );
 
         if !self.has_results() && !running {
-            widgets::empty_hint(
+            widgets::empty_state(
                 ui,
-                "Press Start. Measures latency, then download and upload under load. It fills the line while it runs.",
+                "Test this connection",
+                "Press Start. Measures latency, then download and upload under load, and grades the line for VoIP. It fills the line while it runs.",
+                &[],
             );
             return;
         }

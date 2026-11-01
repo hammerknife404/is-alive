@@ -145,10 +145,9 @@ impl SweepTool {
                 ui,
                 "Range",
                 &mut self.range,
-                220.0,
+                widgets::MAIN_W,
                 "10.0.0.0/24 or 10.0.0.1-254",
             );
-            ui.separator();
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
@@ -165,21 +164,24 @@ impl SweepTool {
         widgets::error(ui, &self.err);
         ui.separator();
 
-        ui.horizontal(|ui| {
-            if self.total > 0 {
-                ui.label(
-                    RichText::new(format!("{} alive", self.alive.len()))
-                        .color(widgets::ok())
-                        .strong(),
-                );
-                let arp = self.arp_only();
-                if arp > 0 {
-                    ui.label(RichText::new(format!("({arp} ARP only)")).weak())
-                        .on_hover_text(ARP_TIP);
+        widgets::status_row(
+            ui,
+            |ui| {
+                if self.total > 0 {
+                    ui.label(
+                        RichText::new(format!("{} alive", self.alive.len()))
+                            .color(widgets::ok())
+                            .strong(),
+                    );
+                    let arp = self.arp_only();
+                    if arp > 0 {
+                        ui.label(RichText::new(format!("({arp} ARP only)")).weak())
+                            .on_hover_text(ARP_TIP);
+                    }
+                    ui.label(format!("· {} / {} probed", self.probed, self.total));
                 }
-                ui.label(format!("· {} / {} probed", self.probed, self.total));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            },
+            |ui| {
                 ui.add_enabled_ui(self.total > 0 && !running, |ui| {
                     if ui
                         .button("Inventory…")
@@ -198,18 +200,27 @@ impl SweepTool {
                     widgets::save_button(ui, "sweep", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
         if running && self.total > 0 {
             widgets::progress(ui, self.probed, self.total, self.started_at);
         }
         if self.alive.is_empty() && !running {
-            let hint = if self.total > 0 {
-                "No hosts answered ping or ARP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host."
+            if self.total > 0 {
+                widgets::empty_state(
+                    ui,
+                    "No hosts answered",
+                    "Nothing answered ping or ARP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host.",
+                    &[],
+                );
             } else {
-                "Enter a CIDR or range and press Enter."
-            };
-            widgets::empty_hint(ui, hint);
+                widgets::empty_state(
+                    ui,
+                    "Find what's on a network",
+                    "Enter a CIDR or range and press Enter. Every address is pinged and ARPed, with names, MACs and vendors.",
+                    &[],
+                );
+            }
             return;
         }
 

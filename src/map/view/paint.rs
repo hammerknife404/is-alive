@@ -100,7 +100,7 @@ impl MapView {
                     pos2(x, mid),
                     egui::Align2::LEFT_CENTER,
                     title,
-                    FontId::proportional((11.0 * z).max(7.0)),
+                    FontId::proportional((11.0 * z).max(9.5)),
                     c.gamma_multiply(a),
                 );
             }
@@ -447,7 +447,7 @@ impl MapView {
         // Zoomed out: just the name, at a size that can still be read.
         if z < 0.6 {
             if r.width() > 30.0 {
-                let font = FontId::proportional((13.0 * z).max(8.5));
+                let font = FontId::proportional((13.0 * z).max(10.0));
                 let g = text(&n.label, font, strong, 2, r.width() - 10.0 * z.max(0.5));
                 let at = pos2(
                     r.min.x + 6.0 * z.max(0.5) + 2.0,

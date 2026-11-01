@@ -72,8 +72,13 @@ impl TraceTool {
 
         let mut enter = false;
         ui.horizontal(|ui| {
-            enter |= widgets::field(ui, "Host", &mut self.host, 220.0, "hostname or IP");
-            ui.separator();
+            enter |= widgets::field(
+                ui,
+                "Host",
+                &mut self.host,
+                widgets::MAIN_W,
+                "hostname or IP",
+            );
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
@@ -89,28 +94,37 @@ impl TraceTool {
         widgets::error(ui, &self.err);
         ui.separator();
 
-        ui.horizontal(|ui| {
-            if let Some(ip) = self.target {
-                ui.label(RichText::new(format!("Tracing {ip}")).strong());
-            }
-            match self.reached {
-                Some(true) => {
-                    _ = ui.label(RichText::new("✔ destination reached").color(widgets::ok()))
+        widgets::status_row(
+            ui,
+            |ui| {
+                if let Some(ip) = self.target {
+                    ui.label(RichText::new(format!("Tracing {ip}")).strong());
                 }
-                Some(false) => {
-                    _ = ui.label(RichText::new("destination not reached").color(widgets::warn()))
+                match self.reached {
+                    Some(true) => {
+                        _ = ui.label(RichText::new("✔ destination reached").color(widgets::ok()))
+                    }
+                    Some(false) => {
+                        _ = ui
+                            .label(RichText::new("destination not reached").color(widgets::warn()))
+                    }
+                    None => {}
                 }
-                None => {}
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            },
+            |ui| {
                 ui.add_enabled_ui(!self.hops.is_empty(), |ui| {
                     widgets::save_button(ui, "traceroute", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
         if self.hops.is_empty() && !running {
-            widgets::empty_hint(ui, "Enter a host and press Enter.");
+            widgets::empty_state(
+                ui,
+                "Trace the route to a host",
+                "Enter a host and press Enter. Each router on the way is listed with three round-trip times.",
+                &[],
+            );
             return;
         }
 

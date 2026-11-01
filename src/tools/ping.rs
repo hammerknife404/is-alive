@@ -122,18 +122,23 @@ impl PingTool {
 
         let mut enter = false;
         ui.horizontal(|ui| {
-            enter |= widgets::field(ui, "Host", &mut self.host, 220.0, "hostname or IP");
+            enter |= widgets::field(
+                ui,
+                "Host",
+                &mut self.host,
+                widgets::MAIN_W,
+                "hostname or IP",
+            );
+            match widgets::run_button(ui, running, enter) {
+                Action::Start => self.start(ui.ctx()),
+                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::None => {}
+            }
             ui.separator();
             ui.selectable_value(&mut self.mode, Mode::Icmp, "ICMP");
             ui.selectable_value(&mut self.mode, Mode::Tcp, "TCP");
             if self.mode == Mode::Tcp {
                 widgets::num(ui, "Port", &mut self.port, 1..=65535, "");
-            }
-            ui.separator();
-            match widgets::run_button(ui, running, enter) {
-                Action::Start => self.start(ui.ctx()),
-                Action::Stop => self.job.as_ref().map_or((), Job::stop),
-                Action::None => {}
             }
         });
         ui.horizontal(|ui| {
@@ -157,9 +162,12 @@ impl PingTool {
         }
 
         if self.lines.is_empty() && !running {
-            widgets::empty_hint(
+            widgets::empty_state(
                 ui,
-                "Enter a host and press Enter. Count 0 pings until stopped.",
+                "Ping a host",
+                "Enter a host and press Enter. ICMP is a classic ping; TCP times a \
+                 connection to a port, for hosts that drop ICMP. Count 0 pings until stopped.",
+                &[],
             );
             return;
         }
@@ -182,39 +190,42 @@ impl PingTool {
 
     fn stats_row(&self, ui: &mut Ui) {
         let (sent, recv, mm) = (self.stats.sent, self.stats.recv, self.stats.min_avg_max());
-        ui.horizontal(|ui| {
-            if let Some(ip) = self.target {
-                ui.label(RichText::new(ip.to_string()).strong());
-                ui.separator();
-            }
-            ui.label(format!("Sent {sent}  Received {recv}"));
-            if sent > 0 {
-                let loss = 100.0 * (sent - recv) as f64 / sent as f64;
-                let c = if loss == 0.0 {
-                    widgets::ok()
-                } else if loss < 100.0 {
-                    widgets::warn()
-                } else {
-                    widgets::bad()
-                };
-                ui.label(RichText::new(format!("Loss {loss:.0}%")).color(c));
-            }
-            if let Some((min, avg, max)) = mm {
-                ui.separator();
-                ui.label(format!(
-                    "Min {}  Avg {}  Max {}",
-                    widgets::fmt_ms(min),
-                    widgets::fmt_ms(avg),
-                    widgets::fmt_ms(max)
-                ));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        widgets::status_row(
+            ui,
+            |ui| {
+                if let Some(ip) = self.target {
+                    ui.label(RichText::new(ip.to_string()).strong());
+                    ui.separator();
+                }
+                ui.label(format!("Sent {sent}  Received {recv}"));
+                if sent > 0 {
+                    let loss = 100.0 * (sent - recv) as f64 / sent as f64;
+                    let c = if loss == 0.0 {
+                        widgets::ok()
+                    } else if loss < 100.0 {
+                        widgets::warn()
+                    } else {
+                        widgets::bad()
+                    };
+                    ui.label(RichText::new(format!("Loss {loss:.0}%")).color(c));
+                }
+                if let Some((min, avg, max)) = mm {
+                    ui.separator();
+                    ui.label(format!(
+                        "Min {}  Avg {}  Max {}",
+                        widgets::fmt_ms(min),
+                        widgets::fmt_ms(avg),
+                        widgets::fmt_ms(max)
+                    ));
+                }
+            },
+            |ui| {
                 ui.add_enabled_ui(sent > 0, |ui| {
                     widgets::save_button(ui, "ping", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
     }
 
     /// Start time and logged text of a run that has just ended, once.

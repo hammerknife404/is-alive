@@ -71,7 +71,17 @@ impl CalcTool {
             {
                 self.input = format!("{ip}/{bits}");
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        });
+        widgets::toolbar_note(
+            ui,
+            "A prefix (/22), a netmask (255.255.252.0) or an ACL wildcard (0.0.3.255) after \
+             the address; IPv6 too. A range shows the CIDR blocks that cover it.",
+        );
+        ui.separator();
+        widgets::status_row(
+            ui,
+            |_| {},
+            |ui| {
                 let ok = parsed.is_ok();
                 ui.add_enabled_ui(ok, |ui| {
                     widgets::save_button(ui, "subnet", || self.report(&parsed));
@@ -95,19 +105,19 @@ impl CalcTool {
                 {
                     sweep = target;
                 }
-            });
-        });
-        ui.weak(
-            "A prefix (/22), a netmask (255.255.252.0) or an ACL wildcard (0.0.3.255) after \
-             the address; IPv6 too. A range shows the CIDR blocks that cover it.",
+            },
         );
-        ui.separator();
 
         let input = match parsed {
             Ok(i) => i,
             Err(e) => {
                 if self.input.trim().is_empty() {
-                    widgets::empty_hint(ui, "Enter a subnet, an address and mask, or a range.");
+                    widgets::empty_state(
+                        ui,
+                        "Work out a subnet",
+                        "Enter a subnet, an address and mask, or a range.",
+                        &[],
+                    );
                 } else {
                     widgets::error_text(ui, &e);
                 }

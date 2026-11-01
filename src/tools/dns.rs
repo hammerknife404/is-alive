@@ -112,9 +112,15 @@ impl DnsTool {
                 ui,
                 "Name or IP",
                 &mut self.query,
-                220.0,
+                widgets::MAIN_W,
                 "example.com or 8.8.8.8",
             );
+            match widgets::run_button(ui, running, enter) {
+                Action::Start => self.start(ui.ctx()),
+                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::None => {}
+            }
+            ui.separator();
             ui.label("Type");
             egui::ComboBox::from_id_salt("dns-type")
                 .selected_text(self.rtype)
@@ -134,50 +140,53 @@ impl DnsTool {
                         ui.selectable_value(&mut self.source, *s, s.label());
                     }
                 });
-            ui.separator();
-            match widgets::run_button(ui, running, enter) {
-                Action::Start => self.start(ui.ctx()),
-                Action::Stop => self.job.as_ref().map_or((), Job::stop),
-                Action::None => {}
-            }
         });
-        ui.weak(match self.source {
-            Source::System => {
-                "System: as apps see it (hosts file, suffixes)."
-            }
-            Source::Authoritative => {
-                "Authoritative: asks the zone's own nameserver, so you see what is published before any caching."
-            }
-            Source::Compare => {
-                "Compare: asks every resolver and the authoritative server, and flags answers that differ (split DNS, stale cache)."
-            }
-            Source::Public(..) => "Asks this public resolver directly: what the internet sees.",
-        });
+        widgets::toolbar_note(
+            ui,
+            match self.source {
+                Source::System => "System: as apps see it (hosts file, suffixes).",
+                Source::Authoritative => {
+                    "Authoritative: asks the zone's own nameserver, so you see what is published before any caching."
+                }
+                Source::Compare => {
+                    "Compare: asks every resolver and the authoritative server, and flags answers that differ (split DNS, stale cache)."
+                }
+                Source::Public(..) => "Asks this public resolver directly: what the internet sees.",
+            },
+        );
         widgets::error(ui, &self.err);
         for n in &self.notes {
             widgets::warning(ui, n);
         }
         ui.separator();
 
-        ui.horizontal(|ui| {
-            if let Some(ms) = self.took {
-                ui.label(format!(
-                    "{} record(s) in {}",
-                    self.records.len(),
-                    widgets::fmt_ms(ms)
-                ));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        widgets::status_row(
+            ui,
+            |ui| {
+                if let Some(ms) = self.took {
+                    ui.label(format!(
+                        "{} record(s) in {}",
+                        self.records.len(),
+                        widgets::fmt_ms(ms)
+                    ));
+                }
+            },
+            |ui| {
                 ui.add_enabled_ui(!self.records.is_empty(), |ui| {
                     widgets::save_button(ui, "dns", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
         if self.records.is_empty() && !running {
             // After a run the error or the record count above says what happened.
             if self.took.is_none() && self.err.is_none() {
-                widgets::empty_hint(ui, "Enter a name or IP and press Enter.");
+                widgets::empty_state(
+                    ui,
+                    "Look up a name or address",
+                    "Enter a name or IP and press Enter. Pick a record type, and a resolver to see what it answers.",
+                    &[],
+                );
             }
             return;
         }

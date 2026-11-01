@@ -262,10 +262,121 @@ fn fmt_secs(s: f64) -> String {
     }
 }
 
-/// Muted placeholder for an empty result view.
+/// Width of the label that starts a toolbar row, so every row's first
+/// input lines up under the one above it.
+pub const LEAD_W: f32 = 76.0;
+/// Width of a tab's main input (Host, Range, Domain, Name or IP).
+pub const MAIN_W: f32 = 240.0;
+/// Widest an empty state's text runs before it wraps.
+const EMPTY_W: f32 = 560.0;
+
+/// A label; at the start of a row it takes `LEAD_W`, so the rows of a
+/// toolbar line up.
+pub fn lead(ui: &mut Ui, text: &str) {
+    let at_start = (ui.cursor().min.x - ui.max_rect().min.x).abs() < 0.5;
+    if !at_start {
+        ui.label(text);
+        return;
+    }
+    let h = ui.spacing().interact_size.y;
+    ui.allocate_ui_with_layout(
+        egui::vec2(LEAD_W, h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_min_width(LEAD_W - ui.spacing().item_spacing.x);
+            ui.label(text);
+        },
+    );
+}
+
+/// A muted line under a toolbar row, lined up with its inputs.
+pub fn toolbar_note(ui: &mut Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(LEAD_W);
+        ui.add(egui::Label::new(RichText::new(text).weak()).wrap());
+    });
+}
+
+/// The row under a tab's toolbar: what the run found on the left, its
+/// output actions on the right (add them in reverse: Save…, then Copy).
+/// Drawn on every tab, empty or not, so content starts at the same height.
+pub fn status_row(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(ui.spacing().interact_size.y);
+        left(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
+    });
+}
+
+/// Muted line for a view that ran but has nothing to show ("No runs match
+/// the filter").
 pub fn empty_hint(ui: &mut Ui, text: &str) {
     ui.add_space(12.0);
     ui.vertical_centered(|ui| ui.weak(text));
+}
+
+/// What a tab shows before its first run: a title, a line on what to do,
+/// and buttons for the likely first step. Returns the index of the button
+/// clicked. Each action is (label, hover text, enabled).
+pub fn empty_state(
+    ui: &mut Ui,
+    title: &str,
+    hint: &str,
+    actions: &[(&str, &str, bool)],
+) -> Option<usize> {
+    let avail = ui.available_rect_before_wrap();
+    let w = avail.width().min(EMPTY_W);
+    let top = (avail.height() * 0.12).clamp(12.0, 90.0);
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(avail.center().x - w / 2.0, avail.top() + top),
+        egui::pos2(avail.center().x + w / 2.0, avail.bottom()),
+    );
+    let mut hit = None;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        |ui| {
+            ui.label(RichText::new(title).size(17.0).strong());
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(hint).weak()).wrap());
+            if actions.is_empty() {
+                return;
+            }
+            ui.add_space(10.0);
+            let pad = ui.spacing().button_padding.x * 2.0;
+            let gap = ui.spacing().item_spacing.x;
+            let total: f32 = actions
+                .iter()
+                .map(|(label, ..)| {
+                    egui::WidgetText::from(*label)
+                        .into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Extend),
+                            f32::INFINITY,
+                            egui::TextStyle::Button,
+                        )
+                        .size()
+                        .x
+                        + pad
+                })
+                .sum::<f32>()
+                + gap * (actions.len() - 1) as f32;
+            ui.horizontal(|ui| {
+                ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
+                for (i, (label, tip, enabled)) in actions.iter().enumerate() {
+                    if ui
+                        .add_enabled(*enabled, egui::Button::new(*label))
+                        .on_hover_text(*tip)
+                        .clicked()
+                    {
+                        hit = Some(i);
+                    }
+                }
+            });
+        },
+    );
+    hit
 }
 
 /// Most characters a field takes. A host, domain or search never needs
@@ -280,7 +391,7 @@ pub const PROBLEMS_MAX: usize = 20_000;
 
 /// Single-line text field; returns true if Enter was pressed in it.
 pub fn field(ui: &mut Ui, label: &str, value: &mut String, width: f32, hint: &str) -> bool {
-    ui.label(label);
+    lead(ui, label);
     let r = ui.add(
         egui::TextEdit::singleline(value)
             .char_limit(FIELD_MAX)
@@ -297,7 +408,7 @@ pub fn num<T: egui::emath::Numeric>(
     range: std::ops::RangeInclusive<T>,
     suffix: &str,
 ) {
-    ui.label(label);
+    lead(ui, label);
     ui.add(egui::DragValue::new(v).range(range).suffix(suffix));
 }
 

@@ -11,6 +11,7 @@ mod markdown;
 mod meraki;
 mod net;
 mod redact;
+mod shots;
 mod sonicwall;
 mod theme;
 mod tools;
@@ -135,6 +136,7 @@ struct App {
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
+    shots: Option<shots::Shots>,
 }
 
 impl eframe::App for App {
@@ -147,6 +149,12 @@ impl eframe::App for App {
                 && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, keys[d]))
             {
                 self.tab = *tab;
+            }
+        }
+        if let Some(s) = &mut self.shots {
+            let names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
+            if let Some(i) = s.step(ui.ctx(), &names) {
+                self.tab = TABS[i].0;
             }
         }
         let now = ui.input(|i| i.time);
@@ -215,7 +223,9 @@ impl eframe::App for App {
                 let b = ui
                     .add_enabled(
                         !busy,
-                        egui::Button::new(egui::RichText::new("is-alive").heading()),
+                        // The name, drawn as a title; clicking it runs a full scan.
+                        egui::Button::new(egui::RichText::new("is-alive").heading().strong())
+                            .frame(false),
                     )
                     .on_hover_text(tip)
                     .on_disabled_hover_text(tip);
@@ -228,6 +238,10 @@ impl eframe::App for App {
                 // doesn't change the tab's width.
                 let fill = ui.visuals().selection.bg_fill;
                 ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                // Tabs sit closer than other controls: twelve of them and
+                // Site Bundle fit one row at the default width in any theme.
+                let gap = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 let mut selected = None;
                 let mut dots = Vec::new();
                 for (n, (tab, name, tip)) in TABS.iter().enumerate() {
@@ -253,6 +267,7 @@ impl eframe::App for App {
                     }
                 }
                 ui.visuals_mut().selection.bg_fill = fill;
+                ui.spacing_mut().item_spacing.x = gap;
                 if let Some(r) = selected {
                     tab_underline(ui, r);
                 }
@@ -677,24 +692,41 @@ impl App {
         let filtered = !needle.is_empty();
         let mut clear = false;
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "{}{} logged run(s){}",
-                if filtered {
-                    format!("{} of ", shown.len())
-                } else {
-                    String::new()
-                },
-                self.log.entries.len(),
-                if running.is_empty() {
-                    String::new()
-                } else {
-                    format!(", {} running", running.len())
-                }
-            ));
-            if self.log.dropped > 0 {
-                ui.weak(format!("({} oldest dropped)", self.log.dropped));
+            widgets::lead(ui, "Filter");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .char_limit(widgets::FIELD_MAX)
+                    .desired_width(240.0)
+                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
+            )
+            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
+            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
+                self.filter.clear();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        });
+        ui.separator();
+        widgets::status_row(
+            ui,
+            |ui| {
+                ui.label(format!(
+                    "{}{} logged run(s){}",
+                    if filtered {
+                        format!("{} of ", shown.len())
+                    } else {
+                        String::new()
+                    },
+                    self.log.entries.len(),
+                    if running.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} running", running.len())
+                    }
+                ));
+                if self.log.dropped > 0 {
+                    ui.weak(format!("({} oldest dropped)", self.log.dropped));
+                }
+            },
+            |ui| {
                 ui.add_enabled_ui(!shown.is_empty(), |ui| {
                     clear =
                         widgets::confirm_button(ui, "log_clear", true, "Clear", "Clear the log");
@@ -709,26 +741,14 @@ impl App {
                     widgets::save_button(ui, "log", render);
                     widgets::copy_button(ui, render);
                 });
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Filter");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(240.0)
-                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
-            )
-            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
-            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
-                self.filter.clear();
-            }
-        });
-        ui.separator();
+            },
+        );
         if self.log.entries.is_empty() && running.is_empty() {
-            widgets::empty_hint(
+            widgets::empty_state(
                 ui,
-                "No results yet. Finished runs from every tab are logged here with start and end times.",
+                "No results yet",
+                "Finished runs from every tab are logged here with start and end times, to copy, save or export together.",
+                &[],
             );
         } else if shown.is_empty() && running.is_empty() {
             widgets::empty_hint(ui, "No runs match the filter.");
@@ -963,6 +983,7 @@ fn main() -> eframe::Result {
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
                 reloading: false,
+                shots: shots::Shots::from_env(),
             };
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =
