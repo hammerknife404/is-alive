@@ -214,7 +214,7 @@ pub fn slug(site: &str) -> String {
 }
 
 /// Minimal deflate zip writer (UTF-8 names, no zip64; bundles are small).
-fn zip(files: &[(&str, &[u8])]) -> std::io::Result<Vec<u8>> {
+pub(crate) fn zip(files: &[(&str, &[u8])]) -> std::io::Result<Vec<u8>> {
     let (time, date) = dos_now();
     let mut out = Vec::new();
     let mut central = Vec::new();

@@ -433,3 +433,79 @@ fn sweepable(input: &Input) -> Option<String> {
     };
     (swept <= targets::MAX_HOSTS as u64).then_some(spec)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> Input {
+        subnet::parse(s).unwrap()
+    }
+
+    #[test]
+    fn sweepable_takes_ipv4_up_to_the_sweep_limit() {
+        assert_eq!(
+            sweepable(&parse("10.0.0.5/24")).as_deref(),
+            Some("10.0.0.0/24")
+        );
+        // A /16 is 65,534 hosts once network and broadcast are left out.
+        assert_eq!(
+            sweepable(&parse("10.1.0.0/16")).as_deref(),
+            Some("10.1.0.0/16")
+        );
+        assert_eq!(sweepable(&parse("10.0.0.0/15")), None, "too many");
+        assert_eq!(
+            sweepable(&parse("10.0.0.10-10.0.0.20")).as_deref(),
+            Some("10.0.0.10-10.0.0.20")
+        );
+        assert_eq!(sweepable(&parse("2001:db8::/64")), None, "IPv6");
+    }
+
+    #[test]
+    fn rows_fit_the_block() {
+        let Input::Block(b) = parse("10.0.0.91/24") else {
+            panic!("a block")
+        };
+        let r = rows(&b, &b.info());
+        let get = |k: &str| r.iter().find(|(n, _)| *n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("Block"), Some("10.0.0.0/24"));
+        assert_eq!(get("Usable hosts"), Some("254"));
+        assert_eq!(get("Broadcast"), Some("10.0.0.255"));
+        assert_eq!(get("Previous block"), Some("9.255.255.0/24"));
+        let Input::Block(p2p) = parse("10.0.0.0/31") else {
+            panic!("a block")
+        };
+        let r = rows(&p2p, &p2p.info());
+        assert!(
+            r.iter()
+                .any(|(k, v)| *k == "Usable hosts" && v.contains("RFC 3021"))
+        );
+        let Input::Block(v6) = parse("2001:db8::/48") else {
+            panic!("a block")
+        };
+        let r = rows(&v6, &v6.info());
+        assert!(r.iter().any(|(k, _)| *k == "/64 networks"));
+        assert!(!r.iter().any(|(k, _)| *k == "Wildcard"));
+    }
+
+    #[test]
+    fn report_includes_the_address_check_and_ranges_as_blocks() {
+        let mut c = CalcTool {
+            check: "10.0.0.7".into(),
+            ..Default::default()
+        };
+        let r = c.report(&subnet::parse("10.0.0.0/24"));
+        assert!(r.contains("10.0.0.7 is inside (address #7)"), "{r}");
+        c.check = "10.0.1.7".into();
+        assert!(
+            c.report(&subnet::parse("10.0.0.0/24"))
+                .contains("is not inside")
+        );
+        let r = c.report(&subnet::parse("10.0.0.0-10.0.0.5"));
+        assert!(
+            r.starts_with("Range 10.0.0.0 - 10.0.0.5: 6 addresses in 2 CIDR blocks"),
+            "{r}"
+        );
+        assert!(r.contains("10.0.0.0/30\n10.0.0.4/31\n"), "{r}");
+    }
+}

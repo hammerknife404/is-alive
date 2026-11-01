@@ -564,3 +564,89 @@ impl ExportTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAP: &str = "<html>/* ===== SITE DATA ===== */ this.META = { title:'Acme' };\
+        this.NODES = [ {id:'gw', kind:'GATEWAY', label:'GW'} ]; this.EDGES = [];\
+        /* ===== END SITE DATA ===== */</html>";
+
+    fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        crate::bundle::zip(files).unwrap()
+    }
+
+    fn kind(r: &Result<Export, String>) -> &'static str {
+        match r {
+            Ok(e) => e.tab(),
+            Err(_) => "error",
+        }
+    }
+
+    #[test]
+    fn a_mapnetwork_page_is_a_map() {
+        let r = convert(MAP.as_bytes().to_vec(), unifi::Clients::None);
+        assert_eq!(kind(&r), "/mapnetwork map");
+        assert!(r.unwrap().headline().contains("Acme: 1 device(s)"));
+    }
+
+    #[test]
+    fn a_zip_holding_the_map_opens_the_map() {
+        let z = zip(&[("manifest.json", b"{}"), ("acme.dc.html", MAP.as_bytes())]);
+        assert_eq!(kind(&convert(z, unifi::Clients::None)), "/mapnetwork map");
+    }
+
+    #[test]
+    fn a_site_bundle_without_a_map_says_what_to_open() {
+        let z = zip(&[("manifest.json", br#"{"kind":"is-alive site bundle"}"#)]);
+        let e = convert(z, unifi::Clients::None).err().unwrap();
+        assert!(e.contains("no /mapnetwork map in it yet"), "{e}");
+    }
+
+    #[test]
+    fn a_sonicwall_export_is_read_as_one() {
+        let exp: String = (0..12)
+            .map(|i| format!("iface_name_{i}=X{i}&interface_Zone_{i}=LAN&"))
+            .collect::<String>()
+            + "shortProdName=TZ%20470&firmwareVersion=SonicOS%207.0.1";
+        let r = convert(exp.into_bytes(), unifi::Clients::None);
+        assert_eq!(kind(&r), "SonicWall");
+        let e = r.unwrap();
+        assert_eq!(e.suffix(), "sonicwall");
+        assert!(e.headline().starts_with("SonicWall: "));
+    }
+
+    #[test]
+    fn anything_else_names_every_format_it_takes() {
+        let e = convert(b"just some text".to_vec(), unifi::Clients::None)
+            .err()
+            .unwrap();
+        for f in [".unf", ".exp", ".wri", ".json", ".dc.html"] {
+            assert!(e.contains(f), "{f} missing from: {e}");
+        }
+    }
+
+    #[test]
+    fn sub_tab_labels_are_short() {
+        let map = |path: &str| Slot {
+            path: PathBuf::from(path),
+            export: convert(MAP.as_bytes().to_vec(), unifi::Clients::None).unwrap(),
+        };
+        assert_eq!(map("/x/fw-main.dc.html").label(), "Map · fw-main");
+        let long = map("/x/a-very-long-site-name-for-a-map.dc.html").label();
+        // 21 characters and an ellipsis, so the sub-tab stays narrow.
+        assert_eq!(long, "Map · a-very-long-site-name…");
+    }
+
+    #[test]
+    fn read_input_refuses_what_isnt_a_file() {
+        let dir = std::env::temp_dir();
+        let e = read_input(&dir).err().unwrap();
+        assert!(e.ends_with("not a regular file"), "{e}");
+        let e = read_input(&dir.join("is-alive-no-such-file"))
+            .err()
+            .unwrap();
+        assert!(e.starts_with("is-alive-no-such-file: "), "{e}");
+    }
+}

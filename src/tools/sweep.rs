@@ -96,37 +96,47 @@ impl SweepTool {
     /// Drain worker messages. Called every frame so results stay current
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
-        let mut got = false;
         let was = self.job.is_some();
-        let mut changed = false;
-        let running = pump(&mut self.job, |ev| match ev {
-            Ev::Probed => self.probed += 1,
-            Ev::Alive(h) => {
-                self.alive.push(h);
-                got = true;
-            }
-            Ev::Mac(ip, m) => {
-                if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
-                    h.mac = Some(m);
-                    changed = true;
-                }
-            }
-            Ev::PortProbes(n) => self.total += n,
-            Ev::Open(ip, port) => {
-                if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
-                    h.open.push(port);
-                    h.open.sort_unstable();
-                    changed = true;
-                }
-            }
-        });
-        if got {
-            self.alive.sort_by_key(|h| h.ip);
-        }
-        if got || changed || was != running {
+        let mut evs = Vec::new();
+        let running = pump(&mut self.job, |ev| evs.push(ev));
+        if self.apply(evs) || was != running {
             self.revision += 1;
         }
         running
+    }
+
+    /// Fold the workers' messages into the host list: hosts kept in address
+    /// order, a MAC or open port joined to the host it belongs to. True
+    /// when the hosts changed (the map then rebuilds).
+    fn apply(&mut self, evs: Vec<Ev>) -> bool {
+        let (mut got, mut changed) = (false, false);
+        for ev in evs {
+            match ev {
+                Ev::Probed => self.probed += 1,
+                Ev::Alive(h) => {
+                    self.alive.push(h);
+                    got = true;
+                }
+                Ev::Mac(ip, m) => {
+                    if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                        h.mac = Some(m);
+                        changed = true;
+                    }
+                }
+                Ev::PortProbes(n) => self.total += n,
+                Ev::Open(ip, port) => {
+                    if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                        h.open.push(port);
+                        h.open.sort_unstable();
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if got {
+            self.alive.sort_by_key(|h| h.ip);
+        }
+        got || changed
     }
 
     pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
@@ -579,4 +589,113 @@ fn port_list(open: &[u16]) -> String {
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(ip: [u8; 4], rtt: Option<f64>) -> Host {
+        Host {
+            ip: Ipv4Addr::from(ip),
+            rtt,
+            ttl: rtt.map(|_| 64),
+            name: None,
+            mac: None,
+            open: Vec::new(),
+        }
+    }
+
+    fn mac(last: u8) -> Mac {
+        [0x00, 0x11, 0x32, 0x00, 0x00, last]
+    }
+
+    fn swept(hosts: Vec<Host>) -> SweepTool {
+        let mut s = SweepTool {
+            range: "10.0.0.0/24".into(),
+            total: 254,
+            ..Default::default()
+        };
+        s.apply(hosts.into_iter().map(Ev::Alive).collect());
+        s
+    }
+
+    #[test]
+    fn hosts_stay_in_address_order_and_take_their_mac_and_ports() {
+        let mut s = SweepTool::default();
+        let changed = s.apply(vec![
+            Ev::Alive(host([10, 0, 0, 20], Some(1.0))),
+            Ev::Alive(host([10, 0, 0, 3], None)),
+            Ev::Probed,
+            Ev::Mac(Ipv4Addr::new(10, 0, 0, 20), mac(1)),
+            Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 443),
+            Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 22),
+            Ev::PortProbes(5),
+        ]);
+        assert!(changed);
+        let ips: Vec<String> = s.alive.iter().map(|h| h.ip.to_string()).collect();
+        assert_eq!(ips, ["10.0.0.3", "10.0.0.20"]);
+        assert_eq!(s.alive[1].mac, Some(mac(1)));
+        assert_eq!(s.alive[1].open, [22, 443]);
+        assert_eq!((s.probed, s.total), (1, 5));
+    }
+
+    #[test]
+    fn a_mac_or_port_for_a_host_not_found_changes_nothing() {
+        let mut s = swept(vec![host([10, 0, 0, 1], Some(0.5))]);
+        let changed = s.apply(vec![
+            Ev::Mac(Ipv4Addr::new(10, 0, 0, 99), mac(9)),
+            Ev::Open(Ipv4Addr::new(10, 0, 0, 99), 80),
+            Ev::Probed,
+        ]);
+        assert!(!changed, "the map shouldn't rebuild for nothing");
+        assert_eq!(s.alive[0].mac, None);
+        assert!(s.alive[0].open.is_empty());
+    }
+
+    #[test]
+    fn report_counts_arp_only_hosts_and_lists_ports() {
+        let mut a = host([10, 0, 0, 1], Some(0.42));
+        a.open = vec![22, 443];
+        a.name = Some("gw.lan".into());
+        let s = swept(vec![a, host([10, 0, 0, 7], None)]);
+        let r = s.report();
+        assert!(
+            r.starts_with("Sweep of 10.0.0.0/24: 2 alive (1 found by ARP only, no ping reply)\n")
+        );
+        assert!(r.contains("10.0.0.1") && r.contains("0.4 ms") && r.contains("gw.lan  [22 443]"));
+        assert!(r.contains("ARP only"));
+        assert!(r.lines().all(|l| l == l.trim_end()), "no trailing spaces");
+        let t = s.table().unwrap();
+        assert_eq!(t.rows[0][8], "ping");
+        assert_eq!(t.rows[1][8], "arp");
+        assert_eq!(t.rows[0][7], "22 443");
+    }
+
+    #[test]
+    fn inventory_marks_the_gateway_and_this_machine_and_ports_only_if_checked() {
+        let mut gw = host([10, 0, 0, 1], Some(1.0));
+        gw.open = vec![443];
+        let mut s = swept(vec![gw, host([10, 0, 0, 50], None)]);
+        s.local = HostInfo {
+            lan: Some((Ipv4Addr::new(10, 0, 0, 50), 24)),
+            gateway: Some(Ipv4Addr::new(10, 0, 0, 1)),
+            ..Default::default()
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        let hosts = v["hosts"].as_array().unwrap();
+        assert_eq!(hosts[0]["is_gateway"], true);
+        assert_eq!(hosts[1]["is_this_machine"], true);
+        assert_eq!(hosts[1]["found_by"], "arp");
+        assert!(hosts[1]["rtt_ms"].is_null());
+        assert!(hosts[0]["open_ports"].is_null(), "ports weren't checked");
+        assert_eq!(v["scanner"]["lan"], "10.0.0.50/24");
+        assert_eq!(v["range"], "10.0.0.0/24");
+
+        s.checked_ports = true;
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        assert_eq!(v["hosts"][0]["open_ports"][0]["port"], 443);
+    }
 }
