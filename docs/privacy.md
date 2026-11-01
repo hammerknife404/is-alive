@@ -1,0 +1,13 @@
+# Privacy and security
+
+Built for sites with regulated data (HIPAA): zero trust and as little as possible.
+
+- **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, MTA-STS/RDAP over HTTPS with the OS trust store, and the Speed Test's transfers to Cloudflare. No telemetry, no update checks, no accounts.
+- **Sanitized on this machine before anything is saved or shared**: UniFi exports (secret fields stripped; client notes, email and phone always dropped; client names only when you choose *full*), SonicWall exports (an allowlist of fields; comments redacted), tech notes and Known problems (what you mark, plus the loaded configs' secrets).
+- **Clipboard.** On Windows, everything the app copies is marked to stay out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy (something you copied elsewhere since is left alone).
+- **At rest** there are only the settings file (theme and backdrop picture path) and `notes.md`, which only ever holds the sanitized text. The Results log lives in memory and is gone when the app closes.
+- **Input files are untrusted.** Only regular files up to 2 GB are read; decompression is capped at 2 GB per layer and document nesting at 64 levels, so a crafted backup is refused rather than exhausting memory or the stack. The parsers are tested against truncated, bit-flipped and random input.
+- **Input is bounded.** Text fields take at most 255 characters (2,048 for a link, 1 MB of text in Notes, 20,000 in Known problems), so a pasted log can't swell a field.
+- **Nothing it writes can run.** Every save keeps the type it offers: a name typed as `notes.bat` or `report.xlsm` saves as `notes.bat.txt`, so no export becomes a script or a macro-enabled Office file. CSV cells that start with `=`, `+`, `-`, `@`, `|`, a tab or their full-width forms get a leading `'`, so Excel shows a hostile hostname or TXT record as text instead of running it as a formula. **Open…** in Notes only displays a file; Markdown links are shown, never followed.
+- **Notes stay private on disk.** `notes.md` and the allow list are written readable by this user only (mode 600 on Linux and macOS; the profile folder on Windows).
+- **System tools** (`ip` and `arp` for the neighbor table, `ping` as a fallback) run only from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin` with a C locale, never from a PATH lookup. On Windows the app uses the OS APIs instead.
