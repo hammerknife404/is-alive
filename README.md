@@ -41,3 +41,7 @@ packaging/linux/build-appimage.sh
 ```
 
 Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes).
+
+## License
+
+[PolyForm Internal Use 1.0.0](LICENSE.md): any company may use and change is-alive for its own internal business operations, but not distribute it. Versions up to and including 0.23.0 were released under MIT, and that still applies to those versions.
