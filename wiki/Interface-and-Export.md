@@ -1,5 +1,3 @@
-# Interface, Results and export
-
 ## Settings
 
 Click **is-alive** at the top left. It holds the theme, the Miami backdrop, the Map's accuracy note, keyboard and mouse tips, and the folder where settings and notes are kept.

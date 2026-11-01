@@ -1,5 +1,3 @@
-# Privacy and security
-
 Built for sites with regulated data (HIPAA): zero trust and as little as possible.
 
 - **Nothing leaves on its own.** Launching the app sends nothing. Traffic happens only when you run something: the public-IP lookup (one DNS query to OpenDNS) on **Refresh** or a full scan, the DNS and domain-health queries you start, MTA-STS/RDAP over HTTPS with the OS trust store, and the Speed Test's transfers to Cloudflare. No telemetry, no update checks, no accounts.

@@ -1,5 +1,3 @@
-# Config Export
-
 ## UniFi
 
 **Open file…** takes a `.unf` (site export or classic autobackup), a `.unifi` (UniFi OS console backup), a `.zip` holding one, or a bare `db.gz`; the format is detected from the content, not the name. Everything runs locally: nothing is uploaded or sent anywhere.
@@ -29,7 +27,7 @@ The output is built only from those named fields, so admin and user accounts, pa
 
 ## Meraki MX
 
-Meraki keeps no config file on the box: its config is what the Dashboard API returns. [`scripts/meraki-export.ps1`](../scripts/meraki-export.ps1) saves an organization's into one JSON file (read-only GET calls; the API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is never written):
+Meraki keeps no config file on the box: its config is what the Dashboard API returns. [`scripts/meraki-export.ps1`](https://github.com/hammerknife404/is-alive/blob/main/scripts/meraki-export.ps1) saves an organization's into one JSON file (read-only GET calls; the API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is never written):
 
 ```powershell
 .\meraki-export.ps1 -Org "Harbor Dental" -Out harbor.meraki.json

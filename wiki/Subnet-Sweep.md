@@ -1,8 +1,23 @@
-# Scanning: Subnet Sweep and scan speed
+Ping sweep of a range, with hostnames, MAC, vendor, ping-silent devices and an inventory for `/mapnetwork`.
 
-## Subnet Sweep: MAC, vendor and inventory
+```
+Range [10.0.0.0/24] [Start]
+Timeout [..]  Speed [Normal ⏷]  [x] Resolve names  [ ] Check mgmt ports      [Inventory…]
+```
 
-Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetTable2`, Linux `/proc/net/arp`; no admin rights), so only hosts on your own segment have one. **Vendor** is the IEEE registry owner of the MAC prefix (MA-L, MA-M and MA-S, bundled offline; rebuild with `python3 ../scripts/update-oui.py`). A locally administered MAC shows as *private/virtual*: a phone or laptop's per-network private address, or a VM/container NIC.
+## Range syntax
+
+| Form | Example |
+|---|---|
+| CIDR | `10.0.0.0/24` |
+| Last-octet range | `10.0.0.1-254` |
+| Full range | `10.0.0.10-10.0.1.20` |
+
+IPv4 only, up to 65,536 hosts per sweep. [Subnet Calc](Subnet-Calc)'s **Sweep** button fills this in for you.
+
+## MAC, vendor and inventory
+
+Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetTable2`, Linux `/proc/net/arp`; no admin rights), so only hosts on your own segment have one. **Vendor** is the IEEE registry owner of the MAC prefix (MA-L, MA-M and MA-S, bundled offline; rebuild with `python3 scripts/update-oui.py`). A locally administered MAC shows as *private/virtual*: a phone or laptop's per-network private address, or a VM/container NIC.
 
 **Ping-silent devices.** Pinging an address on your own segment makes the OS send an ARP request first, and almost nothing refuses ARP. Hosts that answer ARP but drop ping (Windows firewall defaults, many IoT devices and cameras) are listed with *no ping* in the Time column and counted as *ARP only* in the header. Only entries the OS has just confirmed count (Linux `ip neigh` REACHABLE, Windows Reachable), so devices that left minutes ago don't show up. The sweep reads the table every 3 s while it runs. Past a router there is no ARP, so only ping counts there. On Linux this needs `ip` (iproute2); without it the sweep is ping-only. The Inventory marks each host `found_by` `ping` or `arp`.
 
@@ -10,17 +25,8 @@ Each live host's **MAC** comes from this machine's ARP table (Windows `GetIpNetT
 
 **Inventory** saves the run as JSON for `/mapnetwork`'s scan input: this machine's LAN, gateway and WAN, the ports checked, and per host `ip`, `mac`, `vendor`, `private_mac`, `name`, `rtt_ms`, `ttl`, `open_ports`, `is_gateway` and `is_this_machine`. Facts only, no role guesses; the MACs are what join it to `/unifidump`'s `discovered_devices` and uplink MACs.
 
-## Scan speed
+The sweep's **Speed** preset is explained in [Scan Speed](Scan-Speed).
 
-Port Check and Subnet Sweep have a **Speed** preset. Threads only cap how many probes are in flight; the **rate** (probes started per second, evenly spaced) is what stops a scan from bursting against hosts that answer fast.
+## Export
 
-| Preset | Rate | In flight | 1-1024 ports | /24 sweep |
-|---|---|---|---|---|
-| Gentle | 10/s | 4 | ~1m 43s | ~26 s |
-| Normal (default) | 50/s | 16 | ~21 s | ~5 s |
-| Fast | 500/s | 64 | ~2 s | <1 s |
-| Unthrottled | none | 256 | tens of ms | tens of ms |
-
-Any TCP connect or ICMP sweep is a scan by definition; throttling reduces noise and load but won't make it invisible to IDS/EDR. For sanctioned use, exclude the tool or the source host in the security stack.
-
-ICMP goes through the Windows IP Helper API (`IcmpSendEcho2` / `Icmp6SendEcho2`), so it works as a normal user — no raw sockets.
+CSV columns: `range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by` (alive hosts only; `arp` rows have no `rtt_ms`).

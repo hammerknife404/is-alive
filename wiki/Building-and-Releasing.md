@@ -1,5 +1,3 @@
-# Building and releasing
-
 ```powershell
 cargo build --release
 # -> target\release\is-alive.exe

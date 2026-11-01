@@ -1,5 +1,3 @@
-# Speed Test (VoIP readiness)
-
 Runs against Cloudflare's speed test service (`speed.cloudflare.com`, anycast, so the nearest Cloudflare data centre answers; the header names it and your ISP). Three phases:
 
 1. **Idle**: 40 latency probes, 10 a second.

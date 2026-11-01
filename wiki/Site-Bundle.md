@@ -1,5 +1,3 @@
-# Site Bundle
-
 **Site Bundle…** (top right, any tab) gathers what the other tabs have produced into one `<site>.bundle.zip` to attach in Claude:
 
 | File | From | For |
