@@ -973,6 +973,732 @@ impl B {
             }
         }
     }
+
+    /// The firewall as the gateway card, from its own config, with a finding
+    /// for any WAN interface that allows management.
+    fn sonic_gateway(&mut self, s: &Sonic, input: &Input, internet: usize) -> usize {
+        let lan = s
+            .ifaces
+            .iter()
+            .find(|f| f.ip.is_some() && f.ip == input.gateway)
+            .or_else(|| {
+                s.ifaces
+                    .iter()
+                    .find(|f| f.ip.is_some() && f.zone.eq_ignore_ascii_case("lan"))
+            });
+        let mut n = Node {
+            id: "gateway".into(),
+            zone: Zone::Gateway,
+            kind: caps(&format!("SONICWALL {}", s.model.as_deref().unwrap_or(""))),
+            label: s
+                .name
+                .clone()
+                .or_else(|| s.model.clone())
+                .unwrap_or_else(|| "SonicWall".into()),
+            sub: lan
+                .and_then(|f| f.ip)
+                .map(|i| i.to_string())
+                .unwrap_or_default(),
+            ip: lan.and_then(|f| f.ip),
+            mac: lan.and_then(|f| f.mac),
+            seen_by: vec!["SonicWall"],
+            up: Some((internet, Link::Backbone, None)),
+            ..Default::default()
+        };
+        for (k, v) in [
+            ("Model", &s.model),
+            ("Firmware", &s.firmware),
+            ("Serial", &s.serial),
+        ] {
+            if let Some(v) = v {
+                n.details.push(format!("{k} {v}"));
+            }
+        }
+        for f in &s.ifaces {
+            let mut l = format!("{} {}", f.name, f.zone);
+            if let Some(ip) = f.ip {
+                l += &format!(" {ip}");
+                if let Some(m) = &f.mask {
+                    l += &format!(" / {m}");
+                }
+            }
+            if !f.mgmt.is_empty() {
+                l += &format!(" (mgmt: {})", f.mgmt.join(", "));
+            }
+            n.details.push(l);
+        }
+        let i = self.add(n);
+        for f in &s.ifaces {
+            if let Some(m) = f.mac {
+                self.by_mac.entry(m).or_insert(i);
+            }
+            if let Some(ip) = f.ip {
+                self.by_ip.entry(ip).or_insert(i);
+            }
+        }
+        for f in &s.ifaces {
+            let open: Vec<&str> = f
+                .mgmt
+                .iter()
+                .map(String::as_str)
+                .filter(|m| matches!(*m, "http" | "https" | "ssh"))
+                .collect();
+            if f.zone.to_ascii_lowercase().contains("wan") && !open.is_empty() {
+                self.finding(
+                    Sev::High,
+                    format!(
+                        "{} ({}) allows {} management from the internet: limit it to LAN or VPN.",
+                        f.name,
+                        f.zone,
+                        open.join("/").to_uppercase()
+                    ),
+                    &[i],
+                );
+                self.nodes[i].flags.push(format!(
+                    "{} management on {}",
+                    open.join("/").to_uppercase(),
+                    f.name
+                ));
+            }
+        }
+        i
+    }
+
+    /// UniFi devices. A UniFi gateway takes the gateway role if the firewall
+    /// didn't.
+    fn unifi_devices(&mut self, u: &Unifi, internet: usize, gw: &mut Option<usize>) -> Vec<usize> {
+        let mut device_idx: Vec<usize> = Vec::new();
+        for d in &u.devices {
+            let (zone, kind) = unifi_role(&d.kind, &d.model);
+            let mut n = Node {
+                id: format!("mac:{}", mac::fmt(&d.mac)),
+                zone,
+                kind,
+                label: d.name.clone(),
+                sub: d.ip.map(|i| i.to_string()).unwrap_or_default(),
+                ip: d.ip,
+                mac: Some(d.mac),
+                seen_by: vec!["UniFi"],
+                ..Default::default()
+            };
+            // A multi-site controller: each device at its own site.
+            if u.site_ids.len() > 1 {
+                n.site = d.site_id.as_ref().and_then(|id| {
+                    u.site_ids
+                        .iter()
+                        .find(|(k, _)| k == id)
+                        .map(|(_, name)| name.clone())
+                });
+                if let Some(site) = n.site.clone() {
+                    n.chip(site.clone());
+                    n.details.push(format!("Site: {site}"));
+                }
+            }
+            n.details.push(format!("Model {}", d.model));
+            n.details.push(format!("MAC {}", mac::fmt(&d.mac)));
+            if let Some(v) = &d.version {
+                n.details.push(format!("Firmware {v}"));
+            }
+            if let Some(s) = &d.serial {
+                n.details.push(format!("Serial {s}"));
+            }
+            if d.ports > 0 {
+                n.chip(format!("{} ports", d.ports));
+            }
+            if d.eol {
+                n.flags.push("End-of-life model".into());
+            }
+            if d.disabled {
+                n.flags.push("Disabled in the controller".into());
+            }
+            let gateway_type = is_unifi_gateway(&d.kind);
+            let i = self.add(n);
+            if gateway_type && gw.is_none() {
+                self.nodes[i].up = Some((internet, Link::Backbone, None));
+                self.nodes[i].id = "gateway".into();
+                *gw = Some(i);
+            }
+            device_idx.push(i);
+        }
+        if !u.networks.is_empty()
+            && let Some(g) = *gw
+        {
+            self.nodes[g].details.push("Networks (UniFi):".into());
+            self.nodes[g]
+                .details
+                .extend(u.networks.iter().map(|n| format!("  {n}")));
+        }
+        device_idx
+    }
+
+    /// Still none: this machine's default route, or a placeholder holding
+    /// the tree when there's data but no gateway in it.
+    fn fallback_gateway(
+        &mut self,
+        input: &Input,
+        has_data: bool,
+        gw: Option<usize>,
+        internet: usize,
+    ) -> usize {
+        let gw = match gw {
+            Some(g) => g,
+            None if input.gateway.is_some() || has_data => self.add(Node {
+                id: "gateway".into(),
+                zone: Zone::Gateway,
+                kind: "GATEWAY".into(),
+                label: if input.gateway.is_some() {
+                    "Gateway".into()
+                } else {
+                    "Gateway (not in the data)".into()
+                },
+                sub: input.gateway.map(|g| g.to_string()).unwrap_or_default(),
+                ip: input.gateway,
+                details: input
+                    .gateway
+                    .map(|g| format!("Default gateway of this machine: {g}"))
+                    .into_iter()
+                    .collect(),
+                up: Some((internet, Link::Backbone, None)),
+                ..Default::default()
+            }),
+            None => internet,
+        };
+        if let Some(m) = input
+            .gateway
+            .and_then(|g| input.sweep.iter().find(|s| s.ip == g).and_then(|s| s.mac))
+        {
+            self.by_mac.entry(m).or_insert(gw);
+            if self.nodes[gw].mac.is_none() {
+                self.nodes[gw].mac = Some(m);
+            }
+        }
+        gw
+    }
+
+    /// UniFi uplinks: each device under the one it reports, with mutual
+    /// uplinks and unmanaged upstream devices called out.
+    fn unifi_uplinks(
+        &mut self,
+        u: &Unifi,
+        device_idx: &[usize],
+        gw: usize,
+        seen_mac: &HashMap<Mac, &Seen>,
+    ) {
+        let resolved: Vec<Option<usize>> = u
+            .devices
+            .iter()
+            .map(|d| d.up.and_then(|(m, ..)| self.by_mac.get(&m).copied()))
+            .collect();
+        let children = |p: usize| resolved.iter().filter(|r| **r == Some(p)).count();
+        let mut cut = HashSet::new();
+        for a in 0..u.devices.len() {
+            let (ia, Some(ib)) = (device_idx[a], resolved[a]) else {
+                continue;
+            };
+            // Each other's uplink: one record is stale, or there's a loop.
+            if let Some(bpos) = device_idx.iter().position(|&x| x == ib)
+                && resolved[bpos] == Some(ia)
+                && ia < ib
+            {
+                // The one with more below it goes on top and loses its uplink.
+                let top = if children(ia) >= children(ib) { ia } else { ib };
+                cut.insert(top);
+                self.finding(
+                    Sev::Med,
+                    format!(
+                        "UniFi lists {} and {} as each other's uplink: one record is stale or there's a loop. Drawn with {} on top; check the uplink port on both.",
+                        self.nodes[ia].label, self.nodes[ib].label, self.nodes[top].label
+                    ),
+                    &[ia, ib],
+                );
+            }
+        }
+        let mut unresolved: BTreeMap<Mac, Vec<usize>> = BTreeMap::new();
+        for (a, d) in u.devices.iter().enumerate() {
+            let i = device_idx[a];
+            if i == gw || cut.contains(&i) {
+                continue;
+            }
+            let Some((um, port, wireless)) = d.up else {
+                continue;
+            };
+            let link = if wireless {
+                Link::Wireless
+            } else {
+                Link::Wired
+            };
+            let label = port.filter(|p| *p > 0).map(|p| format!("port {p}"));
+            match resolved[a] {
+                Some(p) => self.nodes[i].up = Some((p, link, label)),
+                None => {
+                    unresolved.entry(um).or_default().push(i);
+                    self.nodes[i].up = Some((usize::MAX, link, label));
+                }
+            }
+        }
+        // An uplink MAC nothing here manages: a real device we can't name.
+        for (um, kids) in unresolved {
+            let s = seen_mac.get(&um);
+            let vendor = mac::vendor(&um);
+            let mut n = Node {
+                id: format!("mac:{}", mac::fmt(&um)),
+                zone: Zone::Unknown,
+                kind: vendor.map_or("UNKNOWN DEVICE".into(), |v| {
+                    caps(&format!("{} DEVICE", short_vendor(v)))
+                }),
+                label: s
+                    .and_then(|s| s.name.clone())
+                    .unwrap_or_else(|| "Unidentified upstream device".into()),
+                sub: s.map_or_else(|| mac::fmt(&um), |s| s.ip.to_string()),
+                ip: s.map(|s| s.ip),
+                mac: Some(um),
+                up: Some((gw, Link::Assumed, None)),
+                ..Default::default()
+            };
+            n.chip("not managed");
+            n.details.push(format!("MAC {}", mac::fmt(&um)));
+            n.details.push(match vendor {
+                Some(v) => format!("Vendor {v} (MAC prefix; confirm on site)"),
+                None => "Vendor unknown (MAC prefix not registered)".into(),
+            });
+            let names: Vec<_> = kids.iter().map(|&k| self.nodes[k].label.clone()).collect();
+            n.details.push(format!("Uplink of {}", names.join(", ")));
+            let d = self.add(n);
+            for &k in &kids {
+                if let Some(up) = &mut self.nodes[k].up {
+                    up.0 = d;
+                }
+            }
+            self.finding(
+                Sev::Med,
+                format!(
+                    "{} uplink{} to {}{}, which neither the UniFi backup nor the firewall export describes: identify it on site.",
+                    names.join(", "),
+                    if kids.len() == 1 { "s" } else { "" },
+                    mac::fmt(&um),
+                    vendor.map(|v| format!(" ({v})")).unwrap_or_default()
+                ),
+                &[d],
+            );
+        }
+        // No uplink recorded, or cut from a pair: under the gateway.
+        for &i in device_idx {
+            if self.nodes[i].up.is_none() {
+                self.nodes[i].up = Some((gw, Link::Assumed, None));
+                if !cut.contains(&i) {
+                    self.finding(
+                        Sev::Low,
+                        format!(
+                            "No uplink recorded for {}: drawn under the gateway.",
+                            self.nodes[i].label
+                        ),
+                        &[i],
+                    );
+                }
+            }
+        }
+    }
+
+    /// EOL hardware and mixed firmware.
+    fn unifi_firmware(&mut self, u: &Unifi, device_idx: &[usize]) {
+        let eol: Vec<usize> = u
+            .devices
+            .iter()
+            .zip(device_idx)
+            .filter(|(d, _)| d.eol)
+            .map(|(_, &i)| i)
+            .collect();
+        if !eol.is_empty() {
+            let list: Vec<_> = eol
+                .iter()
+                .map(|&i| format!("{} ({})", self.nodes[i].label, self.nodes[i].kind))
+                .collect();
+            self.finding(
+                Sev::Med,
+                format!(
+                    "End-of-life hardware: {}. Plan replacements; no more firmware fixes.",
+                    list.join(", ")
+                ),
+                &eol,
+            );
+        }
+        let mut fw: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for d in &u.devices {
+            if let Some(v) = &d.version {
+                fw.entry(&d.model).or_default().insert(v);
+            }
+        }
+        for (model, versions) in fw.iter().filter(|(_, v)| v.len() > 1) {
+            let nodes: Vec<usize> = u
+                .devices
+                .iter()
+                .zip(device_idx)
+                .filter(|(d, _)| d.model == *model)
+                .map(|(_, &i)| i)
+                .collect();
+            self.finding(
+                Sev::Low,
+                format!(
+                    "{model} units run {} firmware versions ({}): bring them level.",
+                    versions.len(),
+                    versions.iter().copied().collect::<Vec<_>>().join(", ")
+                ),
+                &nodes,
+            );
+        }
+    }
+
+    /// What the firewall heard on its ports. LLDP never crosses a switch, so
+    /// an LLDP neighbour is plugged into that port: a real link, which beats
+    /// an assumed one. LLTD does cross switches: a Windows host is somewhere
+    /// on that port's network, so its link stays assumed.
+    fn firewall_heard(&mut self, s: &Sonic, gw: usize, internet: usize) {
+        for h in &s.heard {
+            let at = match &h.port {
+                Some(p) => format!("{}, its {p}", h.iface),
+                None => h.iface.clone(),
+            };
+            let note = if h.lltd {
+                format!(
+                    "The firewall hears it on {}'s network (LLTD; the switch path isn't known)",
+                    h.iface
+                )
+            } else {
+                format!("Plugged into the firewall's {at} (LLDP)")
+            };
+            let link = if h.lltd { Link::Assumed } else { Link::Wired };
+            match self.find(h.mac, h.ip) {
+                Some(i) if i == gw || i == internet => {}
+                Some(i) => {
+                    let n = &mut self.nodes[i];
+                    n.seen("firewall");
+                    n.details.push(note);
+                    if !h.lltd && n.up.as_ref().is_none_or(|u| u.1 == Link::Assumed) {
+                        n.up = Some((gw, Link::Wired, Some(at)));
+                        // Its uplink is known now.
+                        let id = n.id.clone();
+                        self.findings.retain(|(_, text, ids)| {
+                            !(text.starts_with("No uplink recorded")
+                                && ids.len() == 1
+                                && ids[0] == id)
+                        });
+                    }
+                }
+                None => {
+                    let (zone, kind) = heard_role(h);
+                    let mut n = Node {
+                        id: match (h.mac, h.ip) {
+                            (Some(m), _) => format!("mac:{}", mac::fmt(&m)),
+                            (None, Some(ip)) => format!("ip:{ip}"),
+                            _ => continue,
+                        },
+                        zone,
+                        kind,
+                        label: h
+                            .name
+                            .clone()
+                            .or_else(|| h.ip.map(|ip| ip.to_string()))
+                            .or_else(|| h.mac.map(|m| mac::fmt(&m)))
+                            .unwrap_or_default(),
+                        sub: h.ip.map(|ip| ip.to_string()).unwrap_or_default(),
+                        ip: h.ip,
+                        mac: h.mac,
+                        client: zone == Zone::Client,
+                        rank: (1, h.ip.map_or(u64::MAX, |ip| u32::from(ip) as u64)),
+                        up: Some((gw, link, (!h.lltd).then_some(at))),
+                        ..Default::default()
+                    };
+                    n.seen("firewall");
+                    n.details.push(note);
+                    if let Some(d) = &h.description {
+                        n.details.push(d.clone());
+                    }
+                    if let Some(m) = h.mac {
+                        n.details.push(format!("MAC {}", mac::fmt(&m)));
+                    }
+                    self.add(n);
+                }
+            }
+        }
+    }
+
+    /// Sweep hosts. A client UniFi also knows is returned instead, to become
+    /// its UniFi card under its AP or switch.
+    fn sweep_hosts<'i>(
+        &mut self,
+        input: &'i Input,
+        unifi: Option<&Unifi>,
+        gw: usize,
+        internet: usize,
+    ) -> Vec<&'i Seen> {
+        let unifi_client: HashSet<Mac> = unifi
+            .map(|u| u.clients.iter().map(|c| c.mac).collect())
+            .unwrap_or_default();
+        let mut deferred = Vec::new();
+        for s in &input.sweep {
+            let is_gw = Some(s.ip) == input.gateway;
+            let at = if is_gw {
+                Some(gw)
+            } else {
+                self.find(s.mac, Some(s.ip))
+            };
+            if let Some(i) = at.filter(|&i| i != internet) {
+                self.merge_seen(i, s);
+                continue;
+            }
+            let this = Some(s.ip) == input.this;
+            let vendor = s.mac.as_ref().and_then(mac::vendor);
+            let private = s.mac.as_ref().is_some_and(mac::local_admin);
+            let (zone, kind, client) = if this {
+                (Zone::Client, "THIS MACHINE".into(), false)
+            } else {
+                classify(vendor, private, &s.open)
+            };
+            // A client UniFi knows becomes its card below, under its AP or switch.
+            if client && s.mac.is_some_and(|m| unifi_client.contains(&m)) {
+                deferred.push(s);
+                continue;
+            }
+            let label = match (&s.name, this) {
+                (_, true) => "This machine".into(),
+                (Some(n), _) => n.split('.').next().unwrap_or(n).to_string(),
+                (None, _) => match vendor {
+                    Some(v) => format!(
+                        "{} device",
+                        short_vendor(v).to_lowercase().replace_first_upper()
+                    ),
+                    None => format!("Host {}", s.ip),
+                },
+            };
+            let mut n = Node {
+                id: format!("ip:{}", s.ip),
+                zone,
+                kind,
+                label,
+                sub: String::new(),
+                mac: s.mac,
+                client,
+                up: Some((gw, Link::Assumed, None)),
+                rank: (if s.name.is_some() { 1 } else { 2 }, u32::from(s.ip) as u64),
+                ..Default::default()
+            };
+            if let Some(m) = &s.mac {
+                n.details.push(
+                    format!("MAC {} {}", mac::fmt(m), mac::vendor_label(m))
+                        .trim_end()
+                        .to_string(),
+                );
+            } else if !this {
+                n.details
+                    .push("No MAC: past a router, or this machine".into());
+            }
+            if zone == Zone::Gear || zone == Zone::Server {
+                n.chip("inferred");
+                n.details
+                    .push("Role inferred from vendor and open ports".into());
+            }
+            let i = self.add(n);
+            self.merge_seen(i, s);
+        }
+        if let Some(t) = input.this
+            && !self.by_ip.contains_key(&t)
+            && !input.is_empty()
+        {
+            self.add(Node {
+                id: format!("ip:{t}"),
+                zone: Zone::Client,
+                kind: "THIS MACHINE".into(),
+                label: "This machine".into(),
+                sub: t.to_string(),
+                ip: Some(t),
+                up: Some((gw, Link::Assumed, None)),
+                details: vec!["Where the sweep ran from".into()],
+                ..Default::default()
+            });
+        }
+        deferred
+    }
+
+    /// UniFi clients: placed under the AP or switch they were last seen on.
+    fn unifi_clients(&mut self, u: &Unifi, gw: usize, deferred: &[&Seen]) {
+        for c in &u.clients {
+            let parent = c.up.and_then(|(m, _)| self.by_mac.get(&m).copied());
+            let link = match (parent, c.wired) {
+                (None, _) => Link::Assumed,
+                (Some(_), true) => Link::Wired,
+                (Some(_), false) => Link::Wireless,
+            };
+            let port =
+                c.up.and_then(|(_, p)| p)
+                    .filter(|p| *p > 0 && c.wired)
+                    .map(|p| format!("port {p}"));
+            let up = Some((parent.unwrap_or(gw), link, port));
+            if let Some(i) = self.find(Some(c.mac), None) {
+                // Already a card (the sweep's): now we know where it plugs in.
+                if i != gw && self.nodes[i].link() == Some(Link::Assumed) {
+                    self.nodes[i].up = up;
+                }
+                self.nodes[i].seen("UniFi");
+                continue;
+            }
+            let vendor = c.oui.as_deref();
+            // Infrastructure hiding in the client table (an unadopted AP,
+            // a NAS) is shown even with clients off.
+            let (zone, kind, client) = match classify(vendor, false, &[]) {
+                (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
+                r => r,
+            };
+            let mut n = Node {
+                id: format!("mac:{}", mac::fmt(&c.mac)),
+                zone,
+                kind,
+                label: c.name.clone().unwrap_or_else(|| mac::fmt(&c.mac)),
+                sub: c.ip.map(|i| i.to_string()).unwrap_or_default(),
+                ip: c.ip,
+                mac: Some(c.mac),
+                client,
+                seen_by: vec!["UniFi"],
+                up,
+                rank: (
+                    if c.blocked {
+                        0
+                    } else if c.name.is_some() {
+                        1
+                    } else {
+                        2
+                    },
+                    u64::MAX - c.last_seen.max(0) as u64,
+                ),
+                ..Default::default()
+            };
+            n.details.push(format!("MAC {}", mac::fmt(&c.mac)));
+            if let Some(v) = vendor {
+                n.details.push(format!("Vendor {v} (UniFi)"));
+            }
+            n.details
+                .push(if c.wired { "Wired" } else { "Wireless" }.into());
+            if c.guest {
+                n.chip("guest");
+            }
+            if !client {
+                n.chip("in client table");
+            }
+            if c.blocked {
+                n.flags.push("Blocked in the controller".into());
+            }
+            let i = self.add(n);
+            if let Some(s) = deferred.iter().find(|s| s.mac == Some(c.mac)) {
+                self.merge_seen(i, s);
+                self.nodes[i].rank.0 = self.nodes[i].rank.0.min(1);
+            }
+        }
+    }
+
+    /// Findings the sweep's evidence supports.
+    fn sweep_findings(&mut self, input: &Input, has_unifi: bool, device_idx: &[usize]) {
+        let telnet: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].open.contains(&23))
+            .collect();
+        if !telnet.is_empty() {
+            let list: Vec<_> = telnet.iter().map(|&i| describe(&self.nodes[i])).collect();
+            self.finding(
+            Sev::High,
+            format!(
+                "Telnet is open on {}: it sends logins in clear text. Turn it off; use SSH or HTTPS.",
+                list.join(", ")
+            ),
+            &telnet,
+        );
+            for &i in &telnet {
+                self.nodes[i].flags.push("Telnet open".into());
+            }
+        }
+        let plain: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| {
+                let n = &self.nodes[i];
+                matches!(
+                    n.zone,
+                    Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear
+                ) && n.open.contains(&80)
+                    && ![443, 8443, 4433].iter().any(|p| n.open.contains(p))
+            })
+            .collect();
+        if !plain.is_empty() {
+            let list: Vec<_> = plain.iter().map(|&i| describe(&self.nodes[i])).collect();
+            self.finding(
+                Sev::Low,
+                format!(
+                    "Management page only over plain HTTP on {}: enable HTTPS.",
+                    list.join(", ")
+                ),
+                &plain,
+            );
+        }
+        if input.ports_checked {
+            let rdp: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| self.nodes[i].open.contains(&3389))
+                .collect();
+            if rdp.len() > 1 {
+                self.finding(
+                Sev::Low,
+                format!(
+                    "Remote Desktop answers on {} hosts: make sure it isn't forwarded from the internet and needs NLA.",
+                    rdp.len()
+                ),
+                &rdp,
+            );
+            }
+        }
+        if let (Some(range), true) = (&input.range, has_unifi) {
+            let swept: HashSet<Ipv4Addr> = crate::net::targets::parse_range(range)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let silent: Vec<usize> = device_idx
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    let n = &self.nodes[i];
+                    n.ip.is_some_and(|ip| swept.contains(&ip)) && !n.seen_by.contains(&"sweep")
+                })
+                .collect();
+            if !silent.is_empty() {
+                let list: Vec<_> = silent.iter().map(|&i| describe(&self.nodes[i])).collect();
+                self.finding(
+                Sev::Low,
+                format!(
+                    "In the swept range but no answer to ping or ARP: {}. Offline, or its address changed.",
+                    list.join(", ")
+                ),
+                &silent,
+            );
+                for &i in &silent {
+                    self.nodes[i].chip("no answer");
+                }
+            }
+            let stray: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| {
+                    let n = &self.nodes[i];
+                    n.seen_by == ["sweep"]
+                        && n.mac
+                            .as_ref()
+                            .and_then(mac::vendor)
+                            .is_some_and(|v| v.to_ascii_lowercase().contains("ubiquiti"))
+                })
+                .collect();
+            if !stray.is_empty() {
+                let list: Vec<_> = stray.iter().map(|&i| describe(&self.nodes[i])).collect();
+                self.finding(
+                Sev::Low,
+                format!(
+                    "Ubiquiti hardware not in this backup: {}. Unadopted, or managed by another controller.",
+                    list.join(", ")
+                ),
+                &stray,
+            );
+            }
+        }
+    }
 }
 
 pub fn build(input: &Input) -> Map {
@@ -1024,698 +1750,24 @@ pub fn build(input: &Input) -> Map {
 
     // The gateway: the firewall's own config beats a UniFi gateway, which
     // beats the default route of this machine.
-    let mut gw = None;
-    if let Some(s) = &sonic {
-        let lan = s
-            .ifaces
-            .iter()
-            .find(|f| f.ip.is_some() && f.ip == input.gateway)
-            .or_else(|| {
-                s.ifaces
-                    .iter()
-                    .find(|f| f.ip.is_some() && f.zone.eq_ignore_ascii_case("lan"))
-            });
-        let mut n = Node {
-            id: "gateway".into(),
-            zone: Zone::Gateway,
-            kind: caps(&format!("SONICWALL {}", s.model.as_deref().unwrap_or(""))),
-            label: s
-                .name
-                .clone()
-                .or_else(|| s.model.clone())
-                .unwrap_or_else(|| "SonicWall".into()),
-            sub: lan
-                .and_then(|f| f.ip)
-                .map(|i| i.to_string())
-                .unwrap_or_default(),
-            ip: lan.and_then(|f| f.ip),
-            mac: lan.and_then(|f| f.mac),
-            seen_by: vec!["SonicWall"],
-            up: Some((internet, Link::Backbone, None)),
-            ..Default::default()
-        };
-        for (k, v) in [
-            ("Model", &s.model),
-            ("Firmware", &s.firmware),
-            ("Serial", &s.serial),
-        ] {
-            if let Some(v) = v {
-                n.details.push(format!("{k} {v}"));
-            }
-        }
-        for f in &s.ifaces {
-            let mut l = format!("{} {}", f.name, f.zone);
-            if let Some(ip) = f.ip {
-                l += &format!(" {ip}");
-                if let Some(m) = &f.mask {
-                    l += &format!(" / {m}");
-                }
-            }
-            if !f.mgmt.is_empty() {
-                l += &format!(" (mgmt: {})", f.mgmt.join(", "));
-            }
-            n.details.push(l);
-        }
-        let i = b.add(n);
-        for f in &s.ifaces {
-            if let Some(m) = f.mac {
-                b.by_mac.entry(m).or_insert(i);
-            }
-            if let Some(ip) = f.ip {
-                b.by_ip.entry(ip).or_insert(i);
-            }
-        }
-        for f in &s.ifaces {
-            let open: Vec<&str> = f
-                .mgmt
-                .iter()
-                .map(String::as_str)
-                .filter(|m| matches!(*m, "http" | "https" | "ssh"))
-                .collect();
-            if f.zone.to_ascii_lowercase().contains("wan") && !open.is_empty() {
-                b.finding(
-                    Sev::High,
-                    format!(
-                        "{} ({}) allows {} management from the internet: limit it to LAN or VPN.",
-                        f.name,
-                        f.zone,
-                        open.join("/").to_uppercase()
-                    ),
-                    &[i],
-                );
-                b.nodes[i].flags.push(format!(
-                    "{} management on {}",
-                    open.join("/").to_uppercase(),
-                    f.name
-                ));
-            }
-        }
-        gw = Some(i);
-    }
-
-    // UniFi devices.
-    let mut device_idx: Vec<usize> = Vec::new();
-    if let Some(u) = &unifi {
-        for d in &u.devices {
-            let (zone, kind) = unifi_role(&d.kind, &d.model);
-            let mut n = Node {
-                id: format!("mac:{}", mac::fmt(&d.mac)),
-                zone,
-                kind,
-                label: d.name.clone(),
-                sub: d.ip.map(|i| i.to_string()).unwrap_or_default(),
-                ip: d.ip,
-                mac: Some(d.mac),
-                seen_by: vec!["UniFi"],
-                ..Default::default()
-            };
-            // A multi-site controller: each device at its own site.
-            if u.site_ids.len() > 1 {
-                n.site = d.site_id.as_ref().and_then(|id| {
-                    u.site_ids
-                        .iter()
-                        .find(|(k, _)| k == id)
-                        .map(|(_, name)| name.clone())
-                });
-                if let Some(site) = n.site.clone() {
-                    n.chip(site.clone());
-                    n.details.push(format!("Site: {site}"));
-                }
-            }
-            n.details.push(format!("Model {}", d.model));
-            n.details.push(format!("MAC {}", mac::fmt(&d.mac)));
-            if let Some(v) = &d.version {
-                n.details.push(format!("Firmware {v}"));
-            }
-            if let Some(s) = &d.serial {
-                n.details.push(format!("Serial {s}"));
-            }
-            if d.ports > 0 {
-                n.chip(format!("{} ports", d.ports));
-            }
-            if d.eol {
-                n.flags.push("End-of-life model".into());
-            }
-            if d.disabled {
-                n.flags.push("Disabled in the controller".into());
-            }
-            let gateway_type = is_unifi_gateway(&d.kind);
-            let i = b.add(n);
-            if gateway_type && gw.is_none() {
-                b.nodes[i].up = Some((internet, Link::Backbone, None));
-                b.nodes[i].id = "gateway".into();
-                gw = Some(i);
-            }
-            device_idx.push(i);
-        }
-        if !u.networks.is_empty()
-            && let Some(g) = gw
-        {
-            b.nodes[g].details.push("Networks (UniFi):".into());
-            b.nodes[g]
-                .details
-                .extend(u.networks.iter().map(|n| format!("  {n}")));
-        }
-    }
-
-    // Still none: this machine's default route, or a placeholder holding
-    // the tree when there's data but no gateway in it.
-    let gw = match gw {
-        Some(g) => g,
-        None if input.gateway.is_some() || unifi.is_some() => b.add(Node {
-            id: "gateway".into(),
-            zone: Zone::Gateway,
-            kind: "GATEWAY".into(),
-            label: if input.gateway.is_some() {
-                "Gateway".into()
-            } else {
-                "Gateway (not in the data)".into()
-            },
-            sub: input.gateway.map(|g| g.to_string()).unwrap_or_default(),
-            ip: input.gateway,
-            details: input
-                .gateway
-                .map(|g| format!("Default gateway of this machine: {g}"))
-                .into_iter()
-                .collect(),
-            up: Some((internet, Link::Backbone, None)),
-            ..Default::default()
-        }),
-        None => internet,
+    let mut gw = sonic.as_ref().map(|s| b.sonic_gateway(s, input, internet));
+    let device_idx = match &unifi {
+        Some(u) => b.unifi_devices(u, internet, &mut gw),
+        None => Vec::new(),
     };
-    if let Some(m) = input
-        .gateway
-        .and_then(|g| input.sweep.iter().find(|s| s.ip == g).and_then(|s| s.mac))
-    {
-        b.by_mac.entry(m).or_insert(gw);
-        if b.nodes[gw].mac.is_none() {
-            b.nodes[gw].mac = Some(m);
-        }
-    }
-
-    // UniFi uplinks.
+    let gw = b.fallback_gateway(input, unifi.is_some(), gw, internet);
     if let Some(u) = &unifi {
-        let resolved: Vec<Option<usize>> = u
-            .devices
-            .iter()
-            .map(|d| d.up.and_then(|(m, ..)| b.by_mac.get(&m).copied()))
-            .collect();
-        let children = |p: usize| resolved.iter().filter(|r| **r == Some(p)).count();
-        let mut cut = HashSet::new();
-        for a in 0..u.devices.len() {
-            let (ia, Some(ib)) = (device_idx[a], resolved[a]) else {
-                continue;
-            };
-            // Each other's uplink: one record is stale, or there's a loop.
-            if let Some(bpos) = device_idx.iter().position(|&x| x == ib)
-                && resolved[bpos] == Some(ia)
-                && ia < ib
-            {
-                // The one with more below it goes on top and loses its uplink.
-                let top = if children(ia) >= children(ib) { ia } else { ib };
-                cut.insert(top);
-                b.finding(
-                    Sev::Med,
-                    format!(
-                        "UniFi lists {} and {} as each other's uplink: one record is stale or there's a loop. Drawn with {} on top; check the uplink port on both.",
-                        b.nodes[ia].label, b.nodes[ib].label, b.nodes[top].label
-                    ),
-                    &[ia, ib],
-                );
-            }
-        }
-        let mut unresolved: BTreeMap<Mac, Vec<usize>> = BTreeMap::new();
-        for (a, d) in u.devices.iter().enumerate() {
-            let i = device_idx[a];
-            if i == gw || cut.contains(&i) {
-                continue;
-            }
-            let Some((um, port, wireless)) = d.up else {
-                continue;
-            };
-            let link = if wireless {
-                Link::Wireless
-            } else {
-                Link::Wired
-            };
-            let label = port.filter(|p| *p > 0).map(|p| format!("port {p}"));
-            match resolved[a] {
-                Some(p) => b.nodes[i].up = Some((p, link, label)),
-                None => {
-                    unresolved.entry(um).or_default().push(i);
-                    b.nodes[i].up = Some((usize::MAX, link, label));
-                }
-            }
-        }
-        // An uplink MAC nothing here manages: a real device we can't name.
-        for (um, kids) in unresolved {
-            let s = seen_mac.get(&um);
-            let vendor = mac::vendor(&um);
-            let mut n = Node {
-                id: format!("mac:{}", mac::fmt(&um)),
-                zone: Zone::Unknown,
-                kind: vendor.map_or("UNKNOWN DEVICE".into(), |v| {
-                    caps(&format!("{} DEVICE", short_vendor(v)))
-                }),
-                label: s
-                    .and_then(|s| s.name.clone())
-                    .unwrap_or_else(|| "Unidentified upstream device".into()),
-                sub: s.map_or_else(|| mac::fmt(&um), |s| s.ip.to_string()),
-                ip: s.map(|s| s.ip),
-                mac: Some(um),
-                up: Some((gw, Link::Assumed, None)),
-                ..Default::default()
-            };
-            n.chip("not managed");
-            n.details.push(format!("MAC {}", mac::fmt(&um)));
-            n.details.push(match vendor {
-                Some(v) => format!("Vendor {v} (MAC prefix; confirm on site)"),
-                None => "Vendor unknown (MAC prefix not registered)".into(),
-            });
-            let names: Vec<_> = kids.iter().map(|&k| b.nodes[k].label.clone()).collect();
-            n.details.push(format!("Uplink of {}", names.join(", ")));
-            let d = b.add(n);
-            for &k in &kids {
-                if let Some(up) = &mut b.nodes[k].up {
-                    up.0 = d;
-                }
-            }
-            b.finding(
-                Sev::Med,
-                format!(
-                    "{} uplink{} to {}{}, which neither the UniFi backup nor the firewall export describes: identify it on site.",
-                    names.join(", "),
-                    if kids.len() == 1 { "s" } else { "" },
-                    mac::fmt(&um),
-                    vendor.map(|v| format!(" ({v})")).unwrap_or_default()
-                ),
-                &[d],
-            );
-        }
-        // No uplink recorded, or cut from a pair: under the gateway.
-        for &i in &device_idx {
-            if b.nodes[i].up.is_none() {
-                b.nodes[i].up = Some((gw, Link::Assumed, None));
-                if !cut.contains(&i) {
-                    b.finding(
-                        Sev::Low,
-                        format!(
-                            "No uplink recorded for {}: drawn under the gateway.",
-                            b.nodes[i].label
-                        ),
-                        &[i],
-                    );
-                }
-            }
-        }
-        // EOL hardware and mixed firmware.
-        let eol: Vec<usize> = u
-            .devices
-            .iter()
-            .zip(&device_idx)
-            .filter(|(d, _)| d.eol)
-            .map(|(_, &i)| i)
-            .collect();
-        if !eol.is_empty() {
-            let list: Vec<_> = eol
-                .iter()
-                .map(|&i| format!("{} ({})", b.nodes[i].label, b.nodes[i].kind))
-                .collect();
-            b.finding(
-                Sev::Med,
-                format!(
-                    "End-of-life hardware: {}. Plan replacements; no more firmware fixes.",
-                    list.join(", ")
-                ),
-                &eol,
-            );
-        }
-        let mut fw: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-        for d in &u.devices {
-            if let Some(v) = &d.version {
-                fw.entry(&d.model).or_default().insert(v);
-            }
-        }
-        for (model, versions) in fw.iter().filter(|(_, v)| v.len() > 1) {
-            let nodes: Vec<usize> = u
-                .devices
-                .iter()
-                .zip(&device_idx)
-                .filter(|(d, _)| d.model == *model)
-                .map(|(_, &i)| i)
-                .collect();
-            b.finding(
-                Sev::Low,
-                format!(
-                    "{model} units run {} firmware versions ({}): bring them level.",
-                    versions.len(),
-                    versions.iter().copied().collect::<Vec<_>>().join(", ")
-                ),
-                &nodes,
-            );
-        }
+        b.unifi_uplinks(u, &device_idx, gw, &seen_mac);
+        b.unifi_firmware(u, &device_idx);
     }
-
-    // What the firewall heard on its ports. LLDP never crosses a switch, so
-    // an LLDP neighbour is plugged into that port: a real link, which beats
-    // an assumed one. LLTD does cross switches: a Windows host is somewhere
-    // on that port's network, so its link stays assumed.
     if let Some(s) = &sonic {
-        for h in &s.heard {
-            let at = match &h.port {
-                Some(p) => format!("{}, its {p}", h.iface),
-                None => h.iface.clone(),
-            };
-            let note = if h.lltd {
-                format!(
-                    "The firewall hears it on {}'s network (LLTD; the switch path isn't known)",
-                    h.iface
-                )
-            } else {
-                format!("Plugged into the firewall's {at} (LLDP)")
-            };
-            let link = if h.lltd { Link::Assumed } else { Link::Wired };
-            match b.find(h.mac, h.ip) {
-                Some(i) if i == gw || i == internet => {}
-                Some(i) => {
-                    let n = &mut b.nodes[i];
-                    n.seen("firewall");
-                    n.details.push(note);
-                    if !h.lltd && n.up.as_ref().is_none_or(|u| u.1 == Link::Assumed) {
-                        n.up = Some((gw, Link::Wired, Some(at)));
-                        // Its uplink is known now.
-                        let id = n.id.clone();
-                        b.findings.retain(|(_, text, ids)| {
-                            !(text.starts_with("No uplink recorded")
-                                && ids.len() == 1
-                                && ids[0] == id)
-                        });
-                    }
-                }
-                None => {
-                    let (zone, kind) = heard_role(h);
-                    let mut n = Node {
-                        id: match (h.mac, h.ip) {
-                            (Some(m), _) => format!("mac:{}", mac::fmt(&m)),
-                            (None, Some(ip)) => format!("ip:{ip}"),
-                            _ => continue,
-                        },
-                        zone,
-                        kind,
-                        label: h
-                            .name
-                            .clone()
-                            .or_else(|| h.ip.map(|ip| ip.to_string()))
-                            .or_else(|| h.mac.map(|m| mac::fmt(&m)))
-                            .unwrap_or_default(),
-                        sub: h.ip.map(|ip| ip.to_string()).unwrap_or_default(),
-                        ip: h.ip,
-                        mac: h.mac,
-                        client: zone == Zone::Client,
-                        rank: (1, h.ip.map_or(u64::MAX, |ip| u32::from(ip) as u64)),
-                        up: Some((gw, link, (!h.lltd).then_some(at))),
-                        ..Default::default()
-                    };
-                    n.seen("firewall");
-                    n.details.push(note);
-                    if let Some(d) = &h.description {
-                        n.details.push(d.clone());
-                    }
-                    if let Some(m) = h.mac {
-                        n.details.push(format!("MAC {}", mac::fmt(&m)));
-                    }
-                    b.add(n);
-                }
-            }
-        }
+        b.firewall_heard(s, gw, internet);
     }
-
-    // Sweep hosts.
-    let unifi_client: HashSet<Mac> = unifi
-        .as_ref()
-        .map(|u| u.clients.iter().map(|c| c.mac).collect())
-        .unwrap_or_default();
-    let mut deferred = Vec::new();
-    for s in &input.sweep {
-        let is_gw = Some(s.ip) == input.gateway;
-        let at = if is_gw {
-            Some(gw)
-        } else {
-            b.find(s.mac, Some(s.ip))
-        };
-        if let Some(i) = at.filter(|&i| i != internet) {
-            b.merge_seen(i, s);
-            continue;
-        }
-        let this = Some(s.ip) == input.this;
-        let vendor = s.mac.as_ref().and_then(mac::vendor);
-        let private = s.mac.as_ref().is_some_and(mac::local_admin);
-        let (zone, kind, client) = if this {
-            (Zone::Client, "THIS MACHINE".into(), false)
-        } else {
-            classify(vendor, private, &s.open)
-        };
-        // A client UniFi knows becomes its card below, under its AP or switch.
-        if client && s.mac.is_some_and(|m| unifi_client.contains(&m)) {
-            deferred.push(s);
-            continue;
-        }
-        let label = match (&s.name, this) {
-            (_, true) => "This machine".into(),
-            (Some(n), _) => n.split('.').next().unwrap_or(n).to_string(),
-            (None, _) => match vendor {
-                Some(v) => format!(
-                    "{} device",
-                    short_vendor(v).to_lowercase().replace_first_upper()
-                ),
-                None => format!("Host {}", s.ip),
-            },
-        };
-        let mut n = Node {
-            id: format!("ip:{}", s.ip),
-            zone,
-            kind,
-            label,
-            sub: String::new(),
-            mac: s.mac,
-            client,
-            up: Some((gw, Link::Assumed, None)),
-            rank: (if s.name.is_some() { 1 } else { 2 }, u32::from(s.ip) as u64),
-            ..Default::default()
-        };
-        if let Some(m) = &s.mac {
-            n.details.push(
-                format!("MAC {} {}", mac::fmt(m), mac::vendor_label(m))
-                    .trim_end()
-                    .to_string(),
-            );
-        } else if !this {
-            n.details
-                .push("No MAC: past a router, or this machine".into());
-        }
-        if zone == Zone::Gear || zone == Zone::Server {
-            n.chip("inferred");
-            n.details
-                .push("Role inferred from vendor and open ports".into());
-        }
-        let i = b.add(n);
-        b.merge_seen(i, s);
-    }
-    if let Some(t) = input.this
-        && !b.by_ip.contains_key(&t)
-        && !input.is_empty()
-    {
-        b.add(Node {
-            id: format!("ip:{t}"),
-            zone: Zone::Client,
-            kind: "THIS MACHINE".into(),
-            label: "This machine".into(),
-            sub: t.to_string(),
-            ip: Some(t),
-            up: Some((gw, Link::Assumed, None)),
-            details: vec!["Where the sweep ran from".into()],
-            ..Default::default()
-        });
-    }
-
-    // UniFi clients: placed under the AP or switch they were last seen on.
+    let deferred = b.sweep_hosts(input, unifi.as_ref(), gw, internet);
     if let Some(u) = &unifi {
-        for c in &u.clients {
-            let parent = c.up.and_then(|(m, _)| b.by_mac.get(&m).copied());
-            let link = match (parent, c.wired) {
-                (None, _) => Link::Assumed,
-                (Some(_), true) => Link::Wired,
-                (Some(_), false) => Link::Wireless,
-            };
-            let port =
-                c.up.and_then(|(_, p)| p)
-                    .filter(|p| *p > 0 && c.wired)
-                    .map(|p| format!("port {p}"));
-            let up = Some((parent.unwrap_or(gw), link, port));
-            if let Some(i) = b.find(Some(c.mac), None) {
-                // Already a card (the sweep's): now we know where it plugs in.
-                if i != gw && b.nodes[i].link() == Some(Link::Assumed) {
-                    b.nodes[i].up = up;
-                }
-                b.nodes[i].seen("UniFi");
-                continue;
-            }
-            let vendor = c.oui.as_deref();
-            // Infrastructure hiding in the client table (an unadopted AP,
-            // a NAS) is shown even with clients off.
-            let (zone, kind, client) = match classify(vendor, false, &[]) {
-                (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
-                r => r,
-            };
-            let mut n = Node {
-                id: format!("mac:{}", mac::fmt(&c.mac)),
-                zone,
-                kind,
-                label: c.name.clone().unwrap_or_else(|| mac::fmt(&c.mac)),
-                sub: c.ip.map(|i| i.to_string()).unwrap_or_default(),
-                ip: c.ip,
-                mac: Some(c.mac),
-                client,
-                seen_by: vec!["UniFi"],
-                up,
-                rank: (
-                    if c.blocked {
-                        0
-                    } else if c.name.is_some() {
-                        1
-                    } else {
-                        2
-                    },
-                    u64::MAX - c.last_seen.max(0) as u64,
-                ),
-                ..Default::default()
-            };
-            n.details.push(format!("MAC {}", mac::fmt(&c.mac)));
-            if let Some(v) = vendor {
-                n.details.push(format!("Vendor {v} (UniFi)"));
-            }
-            n.details
-                .push(if c.wired { "Wired" } else { "Wireless" }.into());
-            if c.guest {
-                n.chip("guest");
-            }
-            if !client {
-                n.chip("in client table");
-            }
-            if c.blocked {
-                n.flags.push("Blocked in the controller".into());
-            }
-            let i = b.add(n);
-            if let Some(s) = deferred.iter().find(|s| s.mac == Some(c.mac)) {
-                b.merge_seen(i, s);
-                b.nodes[i].rank.0 = b.nodes[i].rank.0.min(1);
-            }
-        }
+        b.unifi_clients(u, gw, &deferred);
     }
-
-    // Findings the sweep's evidence supports.
-    let telnet: Vec<usize> = (0..b.nodes.len())
-        .filter(|&i| b.nodes[i].open.contains(&23))
-        .collect();
-    if !telnet.is_empty() {
-        let list: Vec<_> = telnet.iter().map(|&i| describe(&b.nodes[i])).collect();
-        b.finding(
-            Sev::High,
-            format!(
-                "Telnet is open on {}: it sends logins in clear text. Turn it off; use SSH or HTTPS.",
-                list.join(", ")
-            ),
-            &telnet,
-        );
-        for &i in &telnet {
-            b.nodes[i].flags.push("Telnet open".into());
-        }
-    }
-    let plain: Vec<usize> = (0..b.nodes.len())
-        .filter(|&i| {
-            let n = &b.nodes[i];
-            matches!(
-                n.zone,
-                Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear
-            ) && n.open.contains(&80)
-                && ![443, 8443, 4433].iter().any(|p| n.open.contains(p))
-        })
-        .collect();
-    if !plain.is_empty() {
-        let list: Vec<_> = plain.iter().map(|&i| describe(&b.nodes[i])).collect();
-        b.finding(
-            Sev::Low,
-            format!(
-                "Management page only over plain HTTP on {}: enable HTTPS.",
-                list.join(", ")
-            ),
-            &plain,
-        );
-    }
-    if input.ports_checked {
-        let rdp: Vec<usize> = (0..b.nodes.len())
-            .filter(|&i| b.nodes[i].open.contains(&3389))
-            .collect();
-        if rdp.len() > 1 {
-            b.finding(
-                Sev::Low,
-                format!(
-                    "Remote Desktop answers on {} hosts: make sure it isn't forwarded from the internet and needs NLA.",
-                    rdp.len()
-                ),
-                &rdp,
-            );
-        }
-    }
-    if let (Some(range), Some(_)) = (&input.range, &unifi) {
-        let swept: HashSet<Ipv4Addr> = crate::net::targets::parse_range(range)
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-        let silent: Vec<usize> = device_idx
-            .iter()
-            .copied()
-            .filter(|&i| {
-                let n = &b.nodes[i];
-                n.ip.is_some_and(|ip| swept.contains(&ip)) && !n.seen_by.contains(&"sweep")
-            })
-            .collect();
-        if !silent.is_empty() {
-            let list: Vec<_> = silent.iter().map(|&i| describe(&b.nodes[i])).collect();
-            b.finding(
-                Sev::Low,
-                format!(
-                    "In the swept range but no answer to ping or ARP: {}. Offline, or its address changed.",
-                    list.join(", ")
-                ),
-                &silent,
-            );
-            for &i in &silent {
-                b.nodes[i].chip("no answer");
-            }
-        }
-        let stray: Vec<usize> = (0..b.nodes.len())
-            .filter(|&i| {
-                let n = &b.nodes[i];
-                n.seen_by == ["sweep"]
-                    && n.mac
-                        .as_ref()
-                        .and_then(mac::vendor)
-                        .is_some_and(|v| v.to_ascii_lowercase().contains("ubiquiti"))
-            })
-            .collect();
-        if !stray.is_empty() {
-            let list: Vec<_> = stray.iter().map(|&i| describe(&b.nodes[i])).collect();
-            b.finding(
-                Sev::Low,
-                format!(
-                    "Ubiquiti hardware not in this backup: {}. Unadopted, or managed by another controller.",
-                    list.join(", ")
-                ),
-                &stray,
-            );
-        }
-    }
+    b.sweep_findings(input, unifi.is_some(), &device_idx);
 
     let mut summary = summary(input, unifi.as_ref(), sonic.as_ref());
     if !local && had_sweep {
