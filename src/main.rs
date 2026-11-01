@@ -41,6 +41,7 @@ enum Tab {
     Map,
     Notes,
     Speed,
+    Calc,
     Results,
 }
 
@@ -85,6 +86,11 @@ const TABS: &[(Tab, &str, &str)] = &[
         "Speed, latency, bufferbloat and VoIP quality",
     ),
     (
+        Tab::Calc,
+        "Subnet Calc",
+        "Subnet calculator: masks, host ranges, splitting a block, range to CIDR",
+    ),
+    (
         Tab::Results,
         "Results",
         "Every finished run. Filter, copy or export",
@@ -103,6 +109,7 @@ struct App {
     trace: tools::trace::TraceTool,
     speed: tools::speed::SpeedTool,
     sweep: tools::sweep::SweepTool,
+    calc: tools::calc::CalcTool,
     dns: tools::dns::DnsTool,
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
@@ -191,6 +198,7 @@ impl eframe::App for App {
                 &self.look.backdrop,
                 self.look.animate,
                 self.look.glow,
+                self.look.vhs,
             );
         }
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
@@ -276,12 +284,7 @@ impl eframe::App for App {
             });
             ui.add_space(2.0);
         });
-        theme::top_rule(
-            ui.ctx(),
-            tabs.response.rect.bottom(),
-            self.look.animate,
-            self.backdrop.on_gpu(),
-        );
+        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let i = &self.info;
@@ -423,6 +426,12 @@ impl App {
                 self.map_action(ui.ctx(), act);
             }
             Tab::Notes => self.notes.ui(ui, &self.info, &mut self.look),
+            Tab::Calc => {
+                if let Some(range) = self.calc.ui(ui, &self.info, self.sweep.is_running()) {
+                    self.sweep.run(ui.ctx(), &range);
+                    self.tab = Tab::Sweep;
+                }
+            }
             Tab::Results => self.results_ui(ui),
         }
     }
@@ -533,7 +542,7 @@ impl App {
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
             Tab::Export => self.export.is_running(),
-            Tab::Map | Tab::Notes | Tab::Results => false,
+            Tab::Map | Tab::Notes | Tab::Calc | Tab::Results => false,
         }
     }
 
@@ -936,6 +945,7 @@ fn main() -> eframe::Result {
                 trace: Default::default(),
                 speed: Default::default(),
                 sweep: Default::default(),
+                calc: Default::default(),
                 dns: Default::default(),
                 advanced: Default::default(),
                 export: Default::default(),

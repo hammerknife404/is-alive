@@ -236,6 +236,8 @@ pub struct Map {
     /// Ids of the cards left out to keep the map readable (clients off, or
     /// past the per-uplink cap): still in the data, just not drawn.
     pub folded: HashSet<String>,
+    /// Sites collapsed into one card, with the ids of the cards inside.
+    pub closed: BTreeMap<String, Vec<String>>,
 }
 
 impl Map {
@@ -260,6 +262,165 @@ impl Map {
         v
     }
 
+    /// Give every card but the internet a site: its own, else its
+    /// parent's, else (hung straight off the internet) the first one below
+    /// it, else `default`.
+    pub fn fill_sites(&mut self, default: &str) {
+        let kids = self.children();
+        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
+        order.sort_by_key(|&i| self.path(i).len());
+        for i in order {
+            let n = &self.nodes[i];
+            if n.zone == Zone::Internet || n.site.is_some() {
+                continue;
+            }
+            let site = n
+                .parent()
+                .filter(|&p| self.nodes[p].zone != Zone::Internet)
+                .and_then(|p| self.nodes[p].site.clone())
+                .or_else(|| site_below(&self.nodes, &kids, i))
+                .unwrap_or_else(|| default.to_string());
+            self.nodes[i].site = Some(site);
+        }
+    }
+
+    /// Whether the card `id` is inside a collapsed site.
+    pub fn tucked(&self, id: &str) -> bool {
+        self.closed.values().any(|v| v.iter().any(|s| s == id))
+    }
+
+    /// The id of a collapsed site's card.
+    pub fn site_id(site: &str) -> String {
+        format!("site:{site}")
+    }
+
+    /// Fold each site in `close` into one card that hangs where the site
+    /// does, with everything below the site hanging off it. The cards inside
+    /// are listed in its details and their findings point at it.
+    pub fn close_sites(&mut self, close: &HashSet<String>) {
+        for site in self.sites() {
+            if !close.contains(&site) {
+                continue;
+            }
+            let inside: Vec<usize> = (0..self.nodes.len())
+                .filter(|&i| {
+                    let n = &self.nodes[i];
+                    n.zone != Zone::Internet && n.site.as_ref() == Some(&site)
+                })
+                .collect();
+            if !inside.is_empty() {
+                self.fold_site(&site, &inside);
+            }
+        }
+    }
+
+    fn fold_site(&mut self, site: &str, inside: &[usize]) {
+        let n = self.nodes.len();
+        let mut member = vec![false; n];
+        for &i in inside {
+            member[i] = true;
+        }
+        // It hangs where the site's top card does.
+        let up = inside
+            .iter()
+            .filter(|&&i| self.nodes[i].parent().is_none_or(|p| !member[p]))
+            .min_by_key(|&&i| self.path(i).len())
+            .and_then(|&i| self.nodes[i].up.clone())
+            .filter(|u| !member[u.0])
+            .unwrap_or((0, Link::Assumed, None));
+        let zone = inside
+            .iter()
+            .map(|&i| self.nodes[i].zone)
+            .min_by_key(|&z| layout::zone_order(z))
+            .unwrap_or(Zone::Unknown);
+        let mut roles: Vec<(Zone, usize)> = Vec::new();
+        for &i in inside {
+            let z = self.nodes[i].zone;
+            match roles.iter_mut().find(|r| r.0 == z) {
+                Some(r) => r.1 += 1,
+                None => roles.push((z, 1)),
+            }
+        }
+        roles.sort_by_key(|r| layout::zone_order(r.0));
+        let flags: usize = inside.iter().map(|&i| self.nodes[i].flags.len()).sum();
+        let mut card = Node {
+            id: Self::site_id(site),
+            zone,
+            kind: "SITE".into(),
+            label: site.to_string(),
+            sub: format!(
+                "{} card{} inside",
+                inside.len(),
+                if inside.len() == 1 { "" } else { "s" }
+            ),
+            chips: vec!["collapsed".into()],
+            site: Some(site.to_string()),
+            up: Some(up),
+            ..Default::default()
+        };
+        card.details = roles
+            .iter()
+            .map(|(z, c)| format!("{}: {c}", z.name()))
+            .collect();
+        card.details.push("Inside:".into());
+        for &i in inside.iter().take(60) {
+            let c = &self.nodes[i];
+            card.details.push(
+                [c.label.as_str(), c.sub.as_str()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            );
+        }
+        if inside.len() > 60 {
+            card.details
+                .push(format!("…and {} more", inside.len() - 60));
+        }
+        if flags > 0 {
+            card.flags.push(format!(
+                "{flags} flag{} on cards inside: expand the site to see them",
+                if flags == 1 { "" } else { "s" }
+            ));
+        }
+        let ids: Vec<String> = inside.iter().map(|&i| self.nodes[i].id.clone()).collect();
+
+        // Reindex: the cards inside become the site's card.
+        let mut map_to = vec![usize::MAX; n];
+        let mut out = Vec::with_capacity(n - inside.len() + 1);
+        for (i, node) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            if !member[i] {
+                map_to[i] = out.len();
+                out.push(node);
+            }
+        }
+        let at = out.len();
+        for (i, m) in member.iter().enumerate() {
+            if *m {
+                map_to[i] = at;
+            }
+        }
+        out.push(card);
+        for node in &mut out {
+            if let Some(u) = &mut node.up {
+                u.0 = map_to[u.0];
+            }
+        }
+        self.nodes = out;
+        for f in &mut self.findings {
+            let mut v: Vec<usize> = Vec::new();
+            for &k in &f.nodes {
+                let k = map_to[k];
+                if !v.contains(&k) {
+                    v.push(k);
+                }
+            }
+            f.nodes = v;
+        }
+        self.closed.insert(site.to_string(), ids);
+    }
+
     /// Path from the internet down to `i`.
     pub fn path(&self, mut i: usize) -> Vec<usize> {
         let mut p = vec![i];
@@ -273,6 +434,22 @@ impl Map {
         p.reverse();
         p
     }
+}
+
+/// The site of the first card below `i` that has one.
+fn site_below(nodes: &[Node], kids: &[Vec<usize>], i: usize) -> Option<String> {
+    let mut seen = vec![false; nodes.len()];
+    let mut stack = kids[i].clone();
+    while let Some(k) = stack.pop() {
+        if std::mem::replace(&mut seen[k], true) {
+            continue;
+        }
+        if let Some(s) = &nodes[k].site {
+            return Some(s.clone());
+        }
+        stack.extend(kids[k].iter().rev());
+    }
+    None
 }
 
 /// A host from the sweep.
@@ -331,6 +508,8 @@ struct UDevice {
     ports: usize,
     /// (uplink MAC, port on the uplink, wireless).
     up: Option<(Mac, Option<i64>, bool)>,
+    /// The controller site it belongs to (the site's `_id`).
+    site_id: Option<String>,
 }
 
 struct UClient {
@@ -352,6 +531,8 @@ struct Unifi {
     /// "VLAN 10 Voice" lines.
     networks: Vec<String>,
     sites: Vec<String>,
+    /// (site `_id`, name), to name each device's site.
+    site_ids: Vec<(String, String)>,
 }
 
 fn text(v: &Value, k: &str) -> Option<String> {
@@ -380,7 +561,14 @@ fn parse_unifi(json: &str) -> Unifi {
             continue;
         }
         match coll.as_str() {
-            "site" => u.sites.extend(text(d, "desc").or_else(|| text(d, "name"))),
+            "site" => {
+                if let Some(name) = text(d, "desc").or_else(|| text(d, "name")) {
+                    if let Some(id) = text(d, "_id") {
+                        u.site_ids.push((id, name.clone()));
+                    }
+                    u.sites.push(name);
+                }
+            }
             "device" => {
                 let Some(m) = text(d, "mac").and_then(|m| mac::parse_mac(&m)) else {
                     continue;
@@ -411,6 +599,7 @@ fn parse_unifi(json: &str) -> Unifi {
                         .and_then(Value::as_array)
                         .map_or(0, Vec::len),
                     up,
+                    site_id: text(d, "site_id"),
                 });
             }
             "user" => {
@@ -940,6 +1129,19 @@ pub fn build(input: &Input) -> Map {
                 seen_by: vec!["UniFi"],
                 ..Default::default()
             };
+            // A multi-site controller: each device at its own site.
+            if u.site_ids.len() > 1 {
+                n.site = d.site_id.as_ref().and_then(|id| {
+                    u.site_ids
+                        .iter()
+                        .find(|(k, _)| k == id)
+                        .map(|(_, name)| name.clone())
+                });
+                if let Some(site) = n.site.clone() {
+                    n.chip(site.clone());
+                    n.details.push(format!("Site: {site}"));
+                }
+            }
             n.details.push(format!("Model {}", d.model));
             n.details.push(format!("MAC {}", mac::fmt(&d.mac)));
             if let Some(v) = &d.version {
@@ -1523,6 +1725,14 @@ pub fn build(input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     map.summary = summary;
+    // One site unless a multi-site controller says otherwise: the
+    // controller's site, the firewall's name, or this network.
+    let site = unifi
+        .as_ref()
+        .and_then(|u| u.sites.first().cloned())
+        .or_else(|| sonic.as_ref().and_then(|s| s.name.clone()))
+        .unwrap_or_else(|| "This network".into());
+    map.fill_sites(&site);
     if map.hidden > 0 && !input.clients {
         map.summary += " · clients not mapped";
     }
@@ -1729,6 +1939,7 @@ fn limit(b: B, input: &Input) -> Map {
         summary: String::new(),
         hidden,
         folded,
+        closed: BTreeMap::new(),
     }
 }
 
@@ -1893,6 +2104,131 @@ mod tests {
         });
         assert!(m.nodes.iter().any(|n| n.kind == "PRINTER"));
         assert_eq!(m.hidden, 0);
+    }
+
+    /// internet → gw (HQ) → core (HQ) → ap (Branch, hung off HQ's core)
+    /// → client (no site); internet → edge (no site) → br-sw (Branch).
+    fn two_sites() -> Map {
+        let n = |label: &str, zone: Zone, up: Option<usize>, site: Option<&str>| Node {
+            id: label.into(),
+            label: label.into(),
+            zone,
+            up: up.map(|p| (p, Link::Wired, None)),
+            site: site.map(str::to_string),
+            ..Default::default()
+        };
+        Map {
+            nodes: vec![
+                n("internet", Zone::Internet, None, None),
+                n("gw", Zone::Gateway, Some(0), Some("HQ")),
+                n("core", Zone::Switch, Some(1), Some("HQ")),
+                n("ap", Zone::Wireless, Some(2), Some("Branch")),
+                n("client", Zone::Client, Some(3), None),
+                n("edge", Zone::Unknown, Some(0), None),
+                n("br-sw", Zone::Switch, Some(5), Some("Branch")),
+            ],
+            findings: vec![Finding {
+                sev: Sev::Med,
+                text: "x".into(),
+                nodes: vec![2, 3, 4],
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn every_card_but_the_internet_gets_a_site() {
+        let mut m = two_sites();
+        m.fill_sites("Elsewhere");
+        let site = |l: &str| by_label(&m, l).site.clone();
+        assert_eq!(site("internet"), None);
+        assert_eq!(site("client").as_deref(), Some("Branch"), "its parent's");
+        assert_eq!(
+            site("edge").as_deref(),
+            Some("Branch"),
+            "the first below it"
+        );
+        let mut lone = Map {
+            nodes: vec![m.nodes[0].clone(), m.nodes[5].clone()],
+            ..Default::default()
+        };
+        lone.nodes[1].site = None;
+        lone.fill_sites("Elsewhere");
+        assert_eq!(lone.nodes[1].site.as_deref(), Some("Elsewhere"));
+
+        // A sweep alone is one site: this network.
+        let m = build(&Input {
+            sweep: vec![Seen {
+                ip: "10.0.0.9".parse().unwrap(),
+                mac: None,
+                name: None,
+                rtt: Some(1.0),
+                open: vec![23],
+            }],
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            ..Default::default()
+        });
+        assert_eq!(m.sites(), ["This network"]);
+    }
+
+    #[test]
+    fn a_closed_site_is_one_card_where_the_site_hangs() {
+        let mut m = two_sites();
+        m.fill_sites("Elsewhere");
+        m.close_sites(&HashSet::from(["Branch".to_string()]));
+        let card = by_label(&m, "Branch");
+        assert_eq!(
+            (card.id.as_str(), card.kind.as_str()),
+            ("site:Branch", "SITE")
+        );
+        // Its top card is edge, which took Branch from the switch below it.
+        assert_eq!(parent(&m, "Branch"), "internet");
+        assert_eq!(card.zone, Zone::Unknown, "the most significant role inside");
+        assert_eq!(m.nodes.len(), 4);
+        assert!(m.tucked("ap") && m.tucked("br-sw") && !m.tucked("core"));
+        assert_eq!(m.closed["Branch"].len(), 4);
+        // The finding now names core and the site's card, once.
+        let site = m.nodes.iter().position(|n| n.id == "site:Branch").unwrap();
+        let core = m.nodes.iter().position(|n| n.id == "core").unwrap();
+        assert_eq!(m.findings[0].nodes, [core, site]);
+        for i in 0..m.nodes.len() {
+            assert_eq!(m.path(i)[0], 0, "{}", m.nodes[i].label);
+        }
+
+        // Closing HQ instead: Branch's AP hangs off HQ's card.
+        let mut m = two_sites();
+        m.fill_sites("Elsewhere");
+        m.close_sites(&HashSet::from(["HQ".to_string()]));
+        assert_eq!(parent(&m, "HQ"), "internet");
+        assert_eq!(parent(&m, "ap"), "HQ");
+        assert_eq!(by_label(&m, "HQ").zone, Zone::Gateway);
+    }
+
+    #[test]
+    fn unifi_devices_go_to_their_controller_site() {
+        let j = Value::Array(vec![
+            json!({"__cmd": "select", "collection": "site"}),
+            json!({"_id": "a", "desc": "Head Office"}),
+            json!({"_id": "b", "desc": "Warehouse"}),
+            json!({"__cmd": "select", "collection": "device"}),
+            json!({"name": "HQ-SW", "type": "usw", "model": "M", "mac": "00:00:00:00:00:01",
+                "site_id": "a"}),
+            json!({"name": "WH-SW", "type": "usw", "model": "M", "mac": "00:00:00:00:00:02",
+                "site_id": "b"}),
+        ])
+        .to_string();
+        let m = build(&Input {
+            unifi: Some(&j),
+            ..Default::default()
+        });
+        assert_eq!(by_label(&m, "HQ-SW").site.as_deref(), Some("Head Office"));
+        assert_eq!(by_label(&m, "WH-SW").site.as_deref(), Some("Warehouse"));
+        assert!(
+            by_label(&m, "WH-SW")
+                .chips
+                .contains(&"Warehouse".to_string())
+        );
+        assert_eq!(m.sites().len(), 2);
     }
 
     #[test]

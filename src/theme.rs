@@ -589,20 +589,17 @@ fn miami() -> Visuals {
 
 /// Miami's sunset rule along the bottom of the tab bar: pink, orange
 /// and teal, drifting slowly from side to side and back when animating.
-/// `smooth`: animate at the display's refresh rate (there's a GPU).
-pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool, smooth: bool) {
+pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     let theme = current();
     if !theme.has_rule() {
         return;
     }
     let shift = if animate {
-        let t = ctx.input(|i| i.time) as f32;
+        // In step with the backdrop's 10 frames a second.
+        let (t, wait) = crate::backdrop::tick(ctx.input(|i| i.time), crate::backdrop::FPS);
+        let t = t as f32;
         if ctx.input(|i| i.viewport().focused != Some(false)) {
-            ctx.request_repaint_after(if smooth {
-                crate::backdrop::SMOOTH
-            } else {
-                std::time::Duration::from_millis(100)
-            });
+            crate::backdrop::repaint_in(ctx, wait);
         }
         // Over to one side and back every 12 seconds.
         0.5 - 0.5 * (t * std::f32::consts::TAU / 12.0).cos()
@@ -666,6 +663,8 @@ pub struct Settings {
     pub animate: bool,
     /// A soft glow on the bright parts of the Miami backdrop.
     pub glow: bool,
+    /// The Miami scene as if off a worn VHS tape (on the GPU).
+    pub vhs: bool,
     /// Window size (points) at the last exit.
     pub size: Option<(u32, u32)>,
     /// Show the Map tab's accuracy note (until it's closed).
@@ -690,6 +689,7 @@ impl Default for Settings {
             theme: Theme::Dark,
             animate: true,
             glow: true,
+            vhs: true,
             size: None,
             map_note: true,
             notes_font: crate::fonts::MONO.into(),
@@ -713,6 +713,7 @@ impl Settings {
                 "theme" => s.theme = Theme::from_key(v).unwrap_or_default(),
                 "animate" => s.animate = v.trim() != "0",
                 "glow" => s.glow = v.trim() != "0",
+                "vhs" => s.vhs = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 // 0.18 builds wrote sans / mono.
@@ -776,6 +777,9 @@ impl Settings {
         }
         if !self.map_note {
             s += "map_note=0\n";
+        }
+        if !self.vhs {
+            s += "vhs=0\n";
         }
         if self.notes_font != crate::fonts::MONO {
             s += &format!("notes_font={}\n", self.notes_font);
@@ -885,7 +889,7 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
-                "At your display's refresh rate on the GPU, paused while the window isn't focused"
+                "10 frames a second on the GPU, paused while the window isn't focused"
             } else {
                 "10 frames a second (no usable GPU), paused while the window isn't focused"
             };
@@ -904,6 +908,16 @@ pub fn menu(ui: &mut egui::Ui, s: &mut Settings, renderer: &str, gpu: bool) -> O
             if ui
                 .checkbox(&mut s.glow, "Glow")
                 .on_hover_text(tip)
+                .changed()
+            {
+                act = Some(MenuAction::Changed);
+            }
+            let tip = "Scanlines, a slight colour bleed, grain and a tracking band now and then, \
+                as if off a worn tape (the 16-bit scene, on the GPU)";
+            if ui
+                .add_enabled(gpu, egui::Checkbox::new(&mut s.vhs, "VHS"))
+                .on_hover_text(tip)
+                .on_disabled_hover_text("Needs the GPU")
                 .changed()
             {
                 act = Some(MenuAction::Changed);
@@ -1004,6 +1018,7 @@ mod tests {
             theme: Theme::Miami,
             animate: false,
             glow: false,
+            vhs: false,
             size: Some((1280, 800)),
             map_note: false,
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),

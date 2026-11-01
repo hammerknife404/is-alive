@@ -153,8 +153,15 @@ pub struct MapView {
     mode: Option<Mode>,
     /// Rebuild on the next frame even if nothing seems to have changed.
     stale: bool,
-    /// The map has two or more sites (Sites mode is offered).
+    /// The map has two or more sites (Sites is then the default layout).
     multi_site: bool,
+    /// Sites the user collapsed to one card. Kept through rebuilds (a
+    /// Reload or a new sweep starts from an empty map), so a site back in
+    /// the data comes back collapsed.
+    closed: HashSet<String>,
+    /// A site's title was clicked (or its row in the sidebar): collapse or
+    /// expand it.
+    flip_site: Option<String>,
 }
 
 /// Flag on a pinned card that's missing from the latest data.
@@ -171,13 +178,45 @@ impl MapView {
         }
     }
 
-    /// The layout in use: the one picked, if this map can do it.
+    /// The layout in use: the one picked, else Sites on a map with two or
+    /// more sites and Cluster on the rest.
     fn mode(&self) -> Mode {
         match self.mode {
-            Some(Mode::Sites) | None if self.multi_site => Mode::Sites,
-            Some(Mode::Sites) | None => Mode::Cluster,
             Some(m) => m,
+            None if self.multi_site => Mode::Sites,
+            None => Mode::Cluster,
         }
+    }
+
+    /// Collapse a site to one card, or expand it again (rebuilds).
+    fn flip(&mut self, site: &str) {
+        if !self.closed.remove(site) {
+            self.closed.insert(site.to_string());
+        }
+        self.stale = true;
+    }
+
+    /// Every site with how many cards it holds, collapsed or not.
+    fn site_counts(&self) -> Vec<(String, usize, bool)> {
+        self.map
+            .sites()
+            .into_iter()
+            .map(|s| match self.map.closed.get(&s) {
+                Some(v) => {
+                    let n = v.len();
+                    (s, n, true)
+                }
+                None => {
+                    let n = self
+                        .map
+                        .nodes
+                        .iter()
+                        .filter(|n| n.site.as_ref() == Some(&s) && n.zone != Zone::Internet)
+                        .count();
+                    (s, n, false)
+                }
+            })
+            .collect()
     }
 
     /// A card's colour: its role's, or the gone red.
@@ -209,7 +248,10 @@ impl MapView {
         // gone ones pushed below.
         let base = new.nodes.len();
         for id in &self.kept {
-            if new.nodes[..base].iter().any(|n| n.id == *id) || new.folded.contains(id) {
+            if new.nodes[..base].iter().any(|n| n.id == *id)
+                || new.folded.contains(id)
+                || new.tucked(id)
+            {
                 continue;
             }
             let Some(o) = old.nodes.iter().find(|n| n.id == *id) else {
@@ -347,6 +389,7 @@ impl MapView {
         } else {
             super::build(&input)
         };
+        map.close_sites(&self.closed);
         for (from, to) in self.carry_gone(&self.map, &mut map) {
             self.rename(&from, &to);
         }
@@ -375,8 +418,13 @@ impl MapView {
         self.pos.retain(|k, _| ids.contains(k.as_str()));
         self.born.retain(|k, _| ids.contains(k.as_str()));
         self.also.retain(|s| ids.contains(s.as_str()));
-        self.kept.retain(|s| ids.contains(s.as_str()));
-        self.slots.retain(|s, _| ids.contains(s.as_str()));
+        // A pinned card inside a collapsed site keeps its pin for when the
+        // site opens again.
+        let map = &self.map;
+        self.kept
+            .retain(|s| ids.contains(s.as_str()) || map.tucked(s));
+        self.slots
+            .retain(|s, _| ids.contains(s.as_str()) || map.tucked(s));
         self.runs.keep_only(&ids);
         if self
             .selected
@@ -533,7 +581,23 @@ impl MapView {
     }
 
     fn fit(&mut self, view: Rect) {
+        self.fit_to(view, self.bounds());
+    }
+
+    /// Ease the view so the middle of the map sits in the middle of `view`,
+    /// keeping the zoom.
+    fn center(&mut self, view: Rect) {
         let b = self.bounds();
+        if !b.is_positive() {
+            return;
+        }
+        let zoom = self.aim.map_or(self.zoom, |a| a.1);
+        self.aim = Some((view.size() / 2.0 - b.center().to_vec2() * zoom, zoom));
+        self.follow = false;
+    }
+
+    /// Ease the view to show the world rect `b`.
+    fn fit_to(&mut self, view: Rect, b: Rect) {
         if !b.is_positive() {
             return;
         }
@@ -644,9 +708,6 @@ impl MapView {
                 ui.separator();
                 let now = self.mode();
                 for m in Mode::ALL {
-                    if m == Mode::Sites && !self.multi_site {
-                        continue;
-                    }
                     if ui
                         .selectable_label(now == m, m.name())
                         .on_hover_text(m.tip())
@@ -757,7 +818,8 @@ impl MapView {
         }
 
         // Left: roles and action items, as /mapnetwork's sidebar has them.
-        self.sidebar(ui, &mut focus_on);
+        let mut focus_site: Option<String> = None;
+        self.sidebar(ui, &mut focus_on, &mut focus_site);
 
         // Canvas.
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -786,7 +848,14 @@ impl MapView {
             self.select(Some(i));
             self.focus(rect, i);
         }
+        if let Some(site) = focus_site {
+            self.show_site(rect, &site);
+        }
         self.interact(ui, rect, &resp);
+        if let Some(site) = self.flip_site.take() {
+            self.flip(&site);
+            ctx.request_repaint();
+        }
         self.animate(&ctx);
         self.paint(ui, rect);
         // With the sidebar shut, the roles go back on the canvas, beside a
@@ -1292,9 +1361,30 @@ impl MapView {
         })
     }
 
+    /// The site whose box title strip is under the screen point `at`.
+    fn site_title_at(&self, rect: Rect, at: Option<Pos2>) -> Option<String> {
+        let w = self.to_world(rect, at.filter(|p| rect.contains(*p))?);
+        self.lay
+            .boxes
+            .iter()
+            .find(|b| {
+                b.tree && {
+                    let mut strip = b.rect;
+                    strip.max.y = strip.min.y + layout::BOX_TITLE;
+                    strip.contains(w)
+                }
+            })
+            .map(|b| b.title.clone())
+    }
+
     fn interact(&mut self, ui: &Ui, rect: Rect, resp: &egui::Response) {
         let pointer = resp.hover_pos();
         let over = pointer.and_then(|p| self.hit(self.to_world(rect, p)));
+        let title = if over.is_none() {
+            self.site_title_at(rect, pointer)
+        } else {
+            None
+        };
         if resp.drag_started() {
             self.drag = resp
                 .interact_pointer_pos()
@@ -1329,7 +1419,11 @@ impl MapView {
         if resp.drag_stopped() {
             self.drag = None;
         }
-        if resp.clicked() {
+        if resp.clicked()
+            && let Some(site) = &title
+        {
+            self.flip_site = Some(site.clone());
+        } else if resp.clicked() {
             let ctrl = ui.input(|i| i.modifiers.command);
             match over {
                 Some(i) if ctrl => self.toggle(i),
@@ -1369,6 +1463,19 @@ impl MapView {
                     }
                     ui.close();
                 }
+                if let Some(site) = self.map.nodes[i].site.clone()
+                    && self.mode() == Mode::Sites
+                {
+                    let label = if self.map.closed.contains_key(&site) {
+                        format!("Expand {site}")
+                    } else {
+                        format!("Collapse {site}")
+                    };
+                    if ui.button(label).clicked() {
+                        self.flip_site = Some(site);
+                        ui.close();
+                    }
+                }
                 if ui.button("Copy details").clicked() {
                     widgets::copy(ui.ctx(), card_text(&self.map.nodes[i]));
                     widgets::toast("Card details copied", true);
@@ -1403,7 +1510,7 @@ impl MapView {
         }
         let icon = if self.drag.is_some() || (resp.dragged() && over.is_none()) {
             egui::CursorIcon::Grabbing
-        } else if over.is_some() {
+        } else if over.is_some() || title.is_some() {
             egui::CursorIcon::PointingHand
         } else {
             egui::CursorIcon::Grab
@@ -1543,10 +1650,29 @@ impl MapView {
                 StrokeKind::Inside,
             );
             if z >= 0.25 {
-                p.text(
-                    r.min + vec2(layout::BOX_PAD * z, layout::BOX_TITLE * z / 2.0),
+                let mid = r.min.y + layout::BOX_TITLE * z / 2.0;
+                let mut x = r.min.x + layout::BOX_PAD * z;
+                let mut title = format!("{} · {}", b.title.to_uppercase(), b.count);
+                // A site's title folds it: a chevron says which way.
+                if b.tree {
+                    let closed = self.map.closed.get(&b.title);
+                    let hot = self
+                        .site_title_at(rect, ui.input(|i| i.pointer.hover_pos()))
+                        .as_deref()
+                        == Some(b.title.as_str());
+                    let tc = if hot { vis.strong_text_color() } else { c };
+                    chevron(&p, pos2(x + 5.0 * z, mid), 4.5 * z, closed.is_none(), tc);
+                    x += 14.0 * z;
+                    if let Some(v) = closed {
+                        title = format!("{} · {} inside", b.title.to_uppercase(), v.len());
+                    }
+                }
+                // Clipped to its box: zoomed out, the text stays legible
+                // and so outgrows it.
+                p.with_clip_rect(r.shrink(2.0).intersect(rect)).text(
+                    pos2(x, mid),
                     egui::Align2::LEFT_CENTER,
-                    format!("{} · {}", b.title.to_uppercase(), b.count),
+                    title,
                     FontId::proportional((11.0 * z).max(7.0)),
                     c.gamma_multiply(a),
                 );
@@ -1655,7 +1781,11 @@ impl MapView {
             }
             // Inside one box, links would cut across its grid: shown only
             // while one end is selected.
-            if group(i).is_some() && group(i) == group(*up) && !on {
+            // (Sites boxes hold a tree, so theirs are drawn.)
+            let tree = group(i)
+                .and_then(|g| self.lay.boxes.get(g))
+                .is_some_and(|b| b.tree);
+            if group(i).is_some() && group(i) == group(*up) && !on && !tree {
                 continue;
             }
             let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
@@ -1768,11 +1898,11 @@ impl MapView {
         if focused && (flows || pulse) {
             // Flowing links at the display's rate; the warning pulse is slow
             // enough for 20 fps, and it's on screen as long as the tab is.
-            ui.ctx().request_repaint_after(if flows {
-                crate::backdrop::SMOOTH
+            if flows {
+                ui.ctx().request_repaint_after(crate::backdrop::SMOOTH);
             } else {
-                std::time::Duration::from_millis(50)
-            });
+                crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
+            }
         }
     }
 
@@ -1987,6 +2117,12 @@ impl MapView {
                 .clicked()
         };
         let fit = button(ui, 36.0, "Fit", "Show the whole map");
+        let center = button(
+            ui,
+            56.0,
+            "Center",
+            "Move the middle of the map to the middle of the view, at this zoom",
+        );
         let zoom_in = button(ui, 24.0, "+", "Zoom in");
         let pct = format!("{:.0}%", self.zoom * 100.0);
         let reset = button(ui, 48.0, &pct, "Back to 100%");
@@ -2003,6 +2139,8 @@ impl MapView {
         if fit {
             self.follow = true;
             self.fit(rect);
+        } else if center {
+            self.center(rect);
         } else if let Some(z) = target {
             // Zoom about the middle of the canvas.
             let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
@@ -2012,9 +2150,41 @@ impl MapView {
         }
     }
 
-    /// Roles to fade in and out, and the action items, worst first: the
-    /// sidebar /mapnetwork's maps have.
-    fn sidebar(&mut self, ui: &mut Ui, focus: &mut Option<Vec<usize>>) {
+    /// Select every card at `site` (its card, when collapsed), lighting
+    /// the whole group's connections, and bring its box into view.
+    fn show_site(&mut self, view: Rect, site: &str) {
+        let cards: Vec<usize> = (0..self.map.nodes.len())
+            .filter(|&i| {
+                let n = &self.map.nodes[i];
+                n.site.as_deref() == Some(site) && n.zone != Zone::Internet
+            })
+            .collect();
+        let Some((&first, rest)) = cards.split_first() else {
+            return;
+        };
+        self.select(Some(first));
+        self.also = rest.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
+        let area = match self.lay.boxes.iter().find(|b| b.tree && b.title == site) {
+            Some(b) => b.rect,
+            None => cards
+                .iter()
+                .filter_map(|&i| self.target(i))
+                .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD))),
+        };
+        self.fit_to(view, area);
+        self.follow = false;
+    }
+
+    /// Sites, roles to fade in and out, and the action items, worst first:
+    /// the sidebar /mapnetwork's maps have.
+    fn sidebar(
+        &mut self,
+        ui: &mut Ui,
+        focus: &mut Option<Vec<usize>>,
+        focus_site: &mut Option<String>,
+    ) {
+        let sites = self.site_counts();
+        let mut flip_all: Option<bool> = None;
         let counts: Vec<(Zone, usize)> = Zone::ALL
             .iter()
             .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
@@ -2047,6 +2217,102 @@ impl MapView {
                     .id_salt("map_side_scroll")
                     .auto_shrink(false)
                     .show(ui, |ui| {
+                        if !sites.is_empty() {
+                            egui::CollapsingHeader::new(
+                                RichText::new(format!("SITES ({})", sites.len()))
+                                    .small()
+                                    .strong(),
+                            )
+                            .id_salt("map_side_sites")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let any_open = sites.iter().any(|s| !s.2);
+                                    let any_closed = sites.iter().any(|s| s.2);
+                                    if ui
+                                        .add_enabled(
+                                            any_open,
+                                            egui::Button::new("Collapse all").small(),
+                                        )
+                                        .on_hover_text("Fold every site to one card")
+                                        .clicked()
+                                    {
+                                        flip_all = Some(true);
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            any_closed,
+                                            egui::Button::new("Expand all").small(),
+                                        )
+                                        .on_hover_text("Open every site again")
+                                        .clicked()
+                                    {
+                                        flip_all = Some(false);
+                                    }
+                                });
+                                for (site, n, closed) in &sites {
+                                    let row = ui.horizontal(|ui| {
+                                        let (d, _) = ui
+                                            .allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                                        let toggle = ui.interact(
+                                            d.expand(2.0),
+                                            ui.id().with(("site_flip", site)),
+                                            Sense::click(),
+                                        );
+                                        let c = if toggle.hovered() {
+                                            ui.visuals().strong_text_color()
+                                        } else {
+                                            ui.visuals().text_color()
+                                        };
+                                        chevron(ui.painter(), d.center(), 4.5, !closed, c);
+                                        let toggle = toggle.on_hover_text(if *closed {
+                                            "Expand this site"
+                                        } else {
+                                            "Collapse this site to one card"
+                                        });
+                                        if toggle.clicked() {
+                                            self.flip_site = Some(site.clone());
+                                        }
+                                        if toggle.hovered() {
+                                            ui.ctx()
+                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        let text = RichText::new(site);
+                                        let text = if *closed { text.italics() } else { text };
+                                        // Long names cut short, the count kept.
+                                        let room = (ui.available_width() - 34.0).max(40.0);
+                                        ui.allocate_ui(
+                                            vec2(room, ui.spacing().interact_size.y),
+                                            |ui| {
+                                                ui.add(egui::Label::new(text).truncate())
+                                                    .on_hover_text(site);
+                                            },
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| ui.weak(n.to_string()),
+                                        );
+                                    });
+                                    let r = ui
+                                        .interact(
+                                            row.response
+                                                .rect
+                                                .with_min_x(row.response.rect.min.x + 18.0),
+                                            ui.id().with(("site_row", site)),
+                                            Sense::click(),
+                                        )
+                                        .on_hover_text(
+                                            "Show this site's cards and their connections",
+                                        );
+                                    if r.clicked() {
+                                        *focus_site = Some(site.clone());
+                                    }
+                                    if r.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                }
+                            });
+                        }
                         egui::CollapsingHeader::new(RichText::new("ROLES").small().strong())
                             .id_salt("map_side_roles")
                             .default_open(true)
@@ -2136,6 +2402,17 @@ impl MapView {
             });
         if hide {
             self.side = false;
+        }
+        match flip_all {
+            Some(true) => {
+                self.closed = sites.into_iter().map(|s| s.0).collect();
+                self.stale = true;
+            }
+            Some(false) => {
+                self.closed.clear();
+                self.stale = true;
+            }
+            None => {}
         }
         if let Some(z) = flip
             && !self.hidden.remove(&z)
@@ -2391,6 +2668,24 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
 }
 
 /// Points `gap` apart along a polyline, the first `off` from its start.
+/// A small filled chevron: pointing down when `open`, right when not.
+fn chevron(p: &egui::Painter, c: Pos2, r: f32, open: bool, colour: Color32) {
+    let pts = if open {
+        vec![
+            c + vec2(-r, -r * 0.5),
+            c + vec2(r, -r * 0.5),
+            c + vec2(0.0, r * 0.6),
+        ]
+    } else {
+        vec![
+            c + vec2(-r * 0.5, -r),
+            c + vec2(r * 0.6, 0.0),
+            c + vec2(-r * 0.5, r),
+        ]
+    };
+    p.add(Shape::convex_polygon(pts, colour, Stroke::NONE));
+}
+
 fn along(pts: &[Pos2], off: f32, gap: f32) -> Vec<Pos2> {
     let mut out = Vec::new();
     let mut next = off;
@@ -2485,6 +2780,23 @@ mod tests {
             })
             .collect();
         v
+    }
+
+    #[test]
+    fn center_puts_the_map_middle_mid_view_at_the_same_zoom() {
+        let mut v = view(3);
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
+        v.zoom = 0.5;
+        v.follow = true;
+        let view = Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 600.0));
+        v.center(view);
+        let (pan, zoom) = v.aim.expect("eases there");
+        assert_eq!(zoom, 0.5);
+        assert!(!v.follow, "the user moved the view");
+        // Once eased there, the map's middle lands on the view's middle.
+        (v.pan, v.zoom) = (pan, zoom);
+        let mid = v.to_screen(view, v.bounds().center());
+        assert!((mid - view.center()).length() < 0.01, "{mid:?}");
     }
 
     #[test]

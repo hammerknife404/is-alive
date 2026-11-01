@@ -6,6 +6,7 @@ pub mod icmp;
 pub mod mac;
 pub mod ports;
 pub mod speed;
+pub mod subnet;
 pub mod targets;
 
 use socket2::{Domain, Protocol, Socket, Type};

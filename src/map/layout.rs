@@ -5,7 +5,7 @@
 //!   compact instead of one very wide row.
 //! - **Tree**: one row per depth, every card side by side (can get wide).
 //! - **Zones**: one box per role, its cards in a grid inside.
-//! - **Sites**: one box per site, for maps that have sites.
+//! - **Sites**: one box per site, each holding its part of the tree.
 
 use super::{Map, Zone};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
@@ -39,7 +39,10 @@ impl Mode {
             Mode::Zones => {
                 "One box per role; links from one device into a box fold into one counted line"
             }
-            Mode::Sites => "One box per site",
+            Mode::Sites => {
+                "One box per site, each with its part of the tree. Click a site's title to \
+                 collapse it to one card"
+            }
         }
     }
 
@@ -65,6 +68,9 @@ pub struct Group {
     /// The role, in Zones mode (its colour and whether it's hidden).
     pub zone: Option<Zone>,
     pub count: usize,
+    /// Its cards are laid out as a tree (Sites), so the links between them
+    /// are drawn; in a grid (Zones) they'd cut across it.
+    pub tree: bool,
 }
 
 /// Room inside a box: around the cards, and the title above them.
@@ -98,18 +104,18 @@ struct Block {
 }
 
 /// Lay out the cards `shown` allows in `mode`. Sites on a map without them
-/// lays out as Cluster.
+/// (only the internet, or nothing) lays out as Cluster.
 pub fn layout_in(map: &Map, shown: &dyn Fn(usize) -> bool, mode: Mode) -> Layout {
     match mode {
         Mode::Cluster => tree(map, shown, true),
         Mode::Tree => tree(map, shown, false),
-        Mode::Zones => grouped(map, shown, &|i| {
+        Mode::Zones => grouped(map, shown, false, &|i| {
             let z = map.nodes[i].zone;
             (z != Zone::Internet).then(|| (zone_order(z) as usize, z.name().to_string(), Some(z)))
         }),
-        Mode::Sites if map.sites().len() > 1 => {
+        Mode::Sites if !map.sites().is_empty() => {
             let sites = map.sites();
-            grouped(map, shown, &|i| {
+            grouped(map, shown, true, &|i| {
                 let s = map.nodes[i].site.as_ref()?;
                 let k = sites.iter().position(|x| x == s)?;
                 Some((k, s.clone(), None))
@@ -136,14 +142,7 @@ fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool) -> Layout {
     if n == 0 || !shown(0) {
         return out;
     }
-    let mut kids = map.children();
-    for k in &mut kids {
-        k.retain(|&c| shown(c));
-        k.sort_by(|&a, &b| {
-            let (x, y) = (&map.nodes[a], &map.nodes[b]);
-            (zone_order(x.zone), x.client, &x.label).cmp(&(zone_order(y.zone), y.client, &y.label))
-        });
-    }
+    let kids = sorted_kids(map, shown);
     let mut seen = vec![false; n];
     let root = place(0, &kids, &mut seen, stack);
     let mut place_block = |b: &Block, at: Vec2| {
@@ -169,7 +168,20 @@ fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool) -> Layout {
     out
 }
 
-fn zone_order(z: Zone) -> u8 {
+/// Each card's shown children, infrastructure first.
+fn sorted_kids(map: &Map, shown: &dyn Fn(usize) -> bool) -> Vec<Vec<usize>> {
+    let mut kids = map.children();
+    for k in &mut kids {
+        k.retain(|&c| shown(c));
+        k.sort_by(|&a, &b| {
+            let (x, y) = (&map.nodes[a], &map.nodes[b]);
+            (zone_order(x.zone), x.client, &x.label).cmp(&(zone_order(y.zone), y.client, &y.label))
+        });
+    }
+    kids
+}
+
+pub(super) fn zone_order(z: Zone) -> u8 {
     // Infrastructure first, then servers and devices, clients last.
     match z {
         Zone::Internet => 0,
@@ -247,11 +259,13 @@ fn place(i: usize, kids: &[Vec<usize>], seen: &mut [bool], stack: bool) -> Block
 }
 
 /// One box per group `key` gives (order, title, zone), its cards in a grid
-/// in tree order; cards with no group (the internet, devices at no site) go
-/// in a row across the top. Boxes wrap into rows.
+/// in tree order, or (`as_tree`) as the group's part of the tree, in
+/// Cluster's style; cards with no group (the internet, devices at no site)
+/// go in a row across the top. Boxes wrap into rows.
 fn grouped(
     map: &Map,
     shown: &dyn Fn(usize) -> bool,
+    as_tree: bool,
     key: &dyn Fn(usize) -> Option<(usize, String, Option<Zone>)>,
 ) -> Layout {
     let n = map.nodes.len();
@@ -284,12 +298,31 @@ fn grouped(
         h: f32,
         title: String,
         zone: Option<Zone>,
-        items: Vec<(usize, Vec2)>,
+        items: Vec<(usize, Vec2, bool)>,
     }
+    let kids = sorted_kids(map, shown);
     let boxes: Vec<Boxed> = groups
         .into_iter()
         .map(|((_, title), (zone, mut v))| {
             sort(&mut v);
+            if as_tree {
+                let (w, h, items) = subtree(&kids, &v);
+                // Room for the title, chevron and "· N inside" at 11 pt
+                // caps, so a collapsed site's one card doesn't crop it.
+                let title_w = 14.0 + 7.2 * (title.chars().count() + 12) as f32;
+                let (inner, w) = (w, w.max(title_w));
+                let x0 = BOX_PAD + (w - inner) / 2.0;
+                return Boxed {
+                    w: 2.0 * BOX_PAD + w,
+                    h: BOX_TITLE + BOX_PAD + h,
+                    title,
+                    zone,
+                    items: items
+                        .into_iter()
+                        .map(|(i, p, s)| (i, vec2(x0, BOX_TITLE) + p, s))
+                        .collect(),
+                };
+            }
             let cols = ((v.len() as f32 * 1.5).sqrt().ceil() as usize).clamp(1, 6);
             let rows = v.len().div_ceil(cols);
             let items = v
@@ -301,7 +334,7 @@ fn grouped(
                         BOX_PAD + c * (CARD.x + GAP_X),
                         BOX_TITLE + r * (CARD.y + STACK_GAP),
                     );
-                    (i, at)
+                    (i, at, false)
                 })
                 .collect();
             Boxed {
@@ -335,8 +368,9 @@ fn grouped(
         }
         let at = vec2(x, y);
         let g = out.boxes.len();
-        for (i, p) in &b.items {
+        for (i, p, s) in &b.items {
             out.pos[*i] = Some((at + *p).to_pos2());
+            out.stacked[*i] = *s;
             out.group[*i] = Some(g);
         }
         out.boxes.push(Group {
@@ -344,6 +378,7 @@ fn grouped(
             title: b.title,
             zone: b.zone,
             count: b.items.len(),
+            tree: as_tree,
         });
         x += b.w + BOX_GAP;
         row_h = row_h.max(b.h);
@@ -359,6 +394,45 @@ fn grouped(
     }
     out.size = vec2(w, y + row_h);
     out
+}
+
+/// The cards `v` (in sort order) as their own part of the tree: each card
+/// whose parent isn't among them starts a subtree, side by side. Returns
+/// the width, height and (card, place, stacked).
+fn subtree(kids: &[Vec<usize>], v: &[usize]) -> (f32, f32, Vec<(usize, Vec2, bool)>) {
+    let n = kids.len();
+    let mut member = vec![false; n];
+    for &i in v {
+        member[i] = true;
+    }
+    let inner: Vec<Vec<usize>> = kids
+        .iter()
+        .map(|k| k.iter().copied().filter(|&c| member[c]).collect())
+        .collect();
+    let mut has_parent = vec![false; n];
+    for k in &inner {
+        for &c in k {
+            has_parent[c] = true;
+        }
+    }
+    let mut seen = vec![false; n];
+    let mut items = Vec::new();
+    let (mut x, mut h) = (0.0_f32, 0.0_f32);
+    // Roots first, then anything a loop kept from them.
+    let roots = v.iter().filter(|&&i| member[i] && !has_parent[i]);
+    let rest = v.iter().filter(|&&i| member[i] && has_parent[i]);
+    for &i in roots.chain(rest) {
+        if seen[i] {
+            continue;
+        }
+        let b = place(i, &inner, &mut seen, true);
+        for (c, p, s) in b.items {
+            items.push((c, vec2(x, 0.0) + p, s));
+        }
+        x += b.w + GAP_X;
+        h = h.max(b.h);
+    }
+    ((x - GAP_X).max(CARD.x), h.max(CARD.y), items)
 }
 
 /// Orthogonal route from parent to child, in world space. Branches drop to
@@ -496,10 +570,21 @@ mod tests {
     }
 
     #[test]
-    fn sites_mode_needs_two_sites() {
+    fn sites_mode_boxes_each_site_as_a_tree() {
         let mut m = tree(&[None, Some(0), Some(1), Some(0), Some(3)]);
+        let none = layout_in(&m, &|_| true, Mode::Sites);
+        assert!(none.boxes.is_empty());
+        m.fill_sites("Here");
         let one = layout_in(&m, &|_| true, Mode::Sites);
-        assert!(one.boxes.is_empty());
+        assert_eq!(one.boxes.len(), 1);
+        assert_eq!(one.boxes[0].count, 4);
+        assert!(one.boxes[0].tree);
+        assert!(!overlaps(&one));
+        // A parent sits above its child inside the box.
+        assert!(one.pos[1].unwrap().y < one.pos[2].unwrap().y);
+        for n in &mut m.nodes[1..] {
+            n.site = None;
+        }
         for (i, s) in [(1, "HQ"), (2, "HQ"), (3, "Branch"), (4, "Branch")] {
             m.nodes[i].site = Some(s.into());
         }

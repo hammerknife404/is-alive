@@ -1,8 +1,12 @@
 //! Miami backdrop: a 16-bit synthwave scene at one art pixel per 2×2
 //! points (chunkier on big windows), scaled up with hard edges, or the
 //! user's own image with a slow pan. A 4-second loop, only while the window
-//! has focus: at the display's refresh rate on the GPU (`gpu`), or 10 frames
-//! a second on the CPU where there's no usable GPU.
+//! has focus, at 10 frames a second: drawn on the GPU (`gpu`), or on the CPU
+//! where there's no usable GPU.
+//!
+//! Why 10: the slight chop suits the 16-bit, off-a-VHS-tape look, and it's
+//! cheap. Every frame egui lays out and paints the whole app; at the
+//! display's rate (120 Hz) the Map tab alone took a third of a core.
 
 mod gpu;
 
@@ -17,15 +21,32 @@ const PX: f32 = 2.0;
 const MAX_ART: (f32, f32) = (640.0, 400.0);
 /// Art-pixel scale for sizes first tuned at 4 points per pixel.
 const K: i32 = 2;
-/// CPU frames a second; the GPU draws every frame the display shows.
-const FPS: f64 = 10.0;
+/// Frames a second for the scene, a picture's pan and the sunset rule.
+pub const FPS: f64 = 10.0;
 const LOOP_FRAMES: i64 = 40;
 const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
-/// Smooth animation asks for the next frame at once and lets the display's
-/// refresh (vsync) pace it, so it runs at 60, 120 or 144 Hz as the OS has the
-/// screen set. The short floor only matters where vsync is off: it stops a
-/// runaway loop at 250 frames a second.
+/// Smooth animation (the Map's flowing links) asks for the next frame at
+/// once and lets the display's refresh (vsync) pace it. The short floor only
+/// matters where vsync is off: it stops a runaway loop at 250 frames a second.
 pub const SMOOTH: Duration = Duration::from_millis(4);
+
+/// Repaint in `wait`, really. egui takes its predicted frame time off every
+/// delayed repaint, so a request a few ms short of that became "now": an
+/// animation at 10 fps spun at the display's rate (120 Hz here)
+/// while waiting for its next tick.
+pub fn repaint_in(ctx: &egui::Context, wait: Duration) {
+    let predicted = ctx.input(|i| i.predicted_dt);
+    ctx.request_repaint_after(wait + Duration::from_secs_f32(predicted.clamp(0.0, 0.1)));
+}
+
+/// Animation time snapped to `fps` ticks, so frames that come early or
+/// late (another repaint, a slow one) don't jitter the motion; and how long
+/// until the next tick.
+pub fn tick(time: f64, fps: f64) -> (f64, Duration) {
+    let n = (time * fps).floor();
+    let next = ((n + 1.0) / fps - time).max(0.001);
+    (n / fps, Duration::from_secs_f64(next))
+}
 /// Behind the panels when the backdrop is off.
 pub const SOLID: Color32 = Color32::from_rgb(22, 14, 44);
 
@@ -60,6 +81,8 @@ pub struct Backdrop {
     upload: Option<Arc<gpu::Layers>>,
     /// What draws the scene, for the theme menu.
     pub renderer: String,
+    /// The palms' triangles at a phase, reused while the phase holds.
+    palms: Option<(u32, Arc<Vec<f32>>)>,
 }
 
 impl Backdrop {
@@ -74,7 +97,7 @@ impl Backdrop {
         };
         let renderer = match &gpu {
             Ok(g) => format!("GPU: {}", g.name),
-            Err(e) => format!("CPU, 10 fps: {e}"),
+            Err(e) => format!("CPU: {e}"),
         };
         Self {
             gpu: gpu.ok().map(|g| Arc::new(Mutex::new(g))),
@@ -83,16 +106,36 @@ impl Backdrop {
         }
     }
 
+    /// The palms at phase `ph`, as triangles for the GPU.
+    fn palm_tris(&mut self, ph: f32) -> Arc<Vec<f32>> {
+        if let Some((at, t)) = &self.palms
+            && *at == ph.to_bits()
+        {
+            return t.clone();
+        }
+        let scene = self.scene.as_ref().expect("built before palms");
+        let t = Arc::new(gpu::triangles(&scene.palms(ph)));
+        self.palms = Some((ph.to_bits(), t.clone()));
+        t
+    }
+
     pub fn on_gpu(&self) -> bool {
         self.gpu.is_some()
     }
 
     /// Paint under the panels; call before they are shown.
-    pub fn paint(&mut self, ctx: &egui::Context, source: &Source, animate: bool, glow: bool) {
+    pub fn paint(
+        &mut self,
+        ctx: &egui::Context,
+        source: &Source,
+        animate: bool,
+        glow: bool,
+        vhs: bool,
+    ) {
         let rect = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::background());
         let focused = ctx.input(|i| i.viewport().focused != Some(false));
-        let time = ctx.input(|i| i.time);
+        let (time, wait) = tick(ctx.input(|i| i.time), FPS);
         let moving = animate && focused;
         match source {
             Source::None => {
@@ -113,25 +156,30 @@ impl Backdrop {
                     }
                     self.scene = Some(scene);
                     self.frame = None;
+                    self.palms = None;
                 }
-                if let Some(g) = &self.gpu {
-                    let scene = self.scene.as_ref().expect("built above");
+                if self.gpu.is_some() {
                     let ph = if animate {
                         (time / LOOP_SECS).fract() as f32
                     } else {
                         0.0
                     };
+                    let scene = self.scene.as_ref().expect("built above");
+                    let sun = scene.sun();
                     let frame = gpu::Frame {
                         art: [w, h],
                         view: [rect.width() / px, rect.height() / px],
                         phase: ph,
-                        sun: scene.sun(),
+                        sun,
                         k: K as f32,
-                        palms: gpu::triangles(&scene.palms(ph)),
+                        palms: self.palm_tris(ph),
                         upload: self.upload.take(),
                         glow,
+                        vhs,
+                        // f32 seconds lose precision after a while: wrap hourly.
+                        time: if animate { (time % 3600.0) as f32 } else { 0.0 },
                     };
-                    let g = g.clone();
+                    let g = self.gpu.clone().expect("checked above");
                     let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| {
                         if let Ok(mut g) = g.lock() {
                             g.paint(painter.gl(), &info, &frame);
@@ -142,7 +190,7 @@ impl Backdrop {
                         callback: Arc::new(cb),
                     });
                     if moving {
-                        ctx.request_repaint_after(SMOOTH);
+                        repaint_in(ctx, wait);
                     }
                     return;
                 }
@@ -207,12 +255,7 @@ impl Backdrop {
             }
         }
         if moving && *source != Source::None {
-            // A picture pans smoothly when the GPU has frames to spare.
-            let gap = match source {
-                Source::Image(_) if self.gpu.is_some() => SMOOTH,
-                _ => Duration::from_millis(100),
-            };
-            ctx.request_repaint_after(gap);
+            repaint_in(ctx, wait);
         }
     }
 }
@@ -659,6 +702,18 @@ mod tests {
         assert_ne!(a, b, "animation changes the picture");
         // Frame 40 would be frame 0 again: callers wrap with rem_euclid.
         assert_eq!(s.render(0).pixels, a);
+    }
+
+    #[test]
+    fn ticks_snap_and_wait_for_the_next() {
+        let (t, wait) = tick(1.01, 30.0);
+        assert!((t - 30.0 / 30.0).abs() < 1e-9);
+        let next = wait.as_secs_f64();
+        assert!((1.01 + next - 31.0 / 30.0).abs() < 1e-6, "{next}");
+        // Exactly on a tick: that tick, and a whole frame to wait.
+        let (t, wait) = tick(2.0, 10.0);
+        assert_eq!(t, 2.0);
+        assert!((wait.as_secs_f64() - 0.1).abs() < 1e-9);
     }
 
     #[test]
