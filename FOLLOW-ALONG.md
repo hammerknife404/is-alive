@@ -17,7 +17,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
 4. Check the version: the title bar at the top of the window says `is-alive 0.7.2` (or newer).
 
-You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export** and **Results**. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address.
+You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export**, **Map**, **Notes**, **Speed Test**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Full scan** and **Refresh** on the right. Clicking **is-alive** at the top left opens Settings (theme and the like).
 
 > **Please watch, don't run, the Port Check and Subnet Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -25,7 +25,7 @@ You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute*
 
 ## 2. One-click health check (watch along)
 
-The presenter clicks the **is-alive** button at the top left. Several checks start at once and the app jumps to the **Results** tab.
+The presenter clicks **Full scan** at the bottom right. Several checks start at once and the app jumps to the **Results** tab.
 
 | Result | What it tells you |
 |---|---|
