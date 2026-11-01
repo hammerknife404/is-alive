@@ -231,6 +231,8 @@ python3 scripts/demo-map.py demo.dc.html
 IS_ALIVE_SHOTS=shots ./is-alive demo.dc.html
 ```
 
+`IS_ALIVE_SHOTS_SELECT=<card id>` picks the card selected for the Map panel shot, and `IS_ALIVE_SHOTS_CLIENTS=some` (or `all`) starts the Map with clients shown. On a pull request that touches `src/`, the **screenshots** workflow runs the tour in Dark and Light and attaches the images as an artifact.
+
 ### Linux AppImage
 
 ```sh
