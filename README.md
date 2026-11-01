@@ -221,6 +221,16 @@ cargo build --release
 Cross-compile from Linux: `rustup target add x86_64-pc-windows-gnu`, install `mingw-w64`, then
 `cargo build --release --target x86_64-pc-windows-gnu`.
 
+### Screenshots for UI work
+
+`IS_ALIVE_SHOTS=<dir>` makes the app visit every tab, save `<dir>/NN-<tab>.png` of each, and close.
+For the Map with data, make the fictional demo map and open it at the same time:
+
+```sh
+python3 scripts/demo-map.py demo.dc.html
+IS_ALIVE_SHOTS=shots ./is-alive demo.dc.html
+```
+
 ### Linux AppImage
 
 ```sh

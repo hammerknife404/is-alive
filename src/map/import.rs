@@ -316,8 +316,12 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     let link_of = |e: &Value| {
         if s(e, "cls") == "backbone" {
             Link::Backbone
-        } else if s(e, "cls") == "wifi" || e.get("dashed").and_then(Value::as_bool) == Some(true) {
+        } else if s(e, "cls") == "wifi" {
             Link::Wireless
+        } else if e.get("dashed").and_then(Value::as_bool) == Some(true) {
+            // /mapnetwork dashes a link it inferred (a sweep can't see
+            // uplinks): assumed, as this app's own sweep draws it.
+            Link::Assumed
         } else {
             Link::Wired
         }
@@ -565,5 +569,29 @@ mod tests {
         assert_eq!(m.nodes[0].zone, Zone::Internet);
         assert_eq!(by(&m, "gw").link(), Some(Link::Backbone));
         assert_eq!(m.nodes[by(&m, "s").parent().unwrap()].id, "gw");
+    }
+
+    #[test]
+    fn a_dashed_wired_link_is_assumed_not_wireless() {
+        // How /mapnetwork draws an uplink a sweep could only infer.
+        let doc = crate::mapnetwork::parse(
+            b"this.NODES = [ {id:'gw', kind:'GATEWAY', label:'GW'}, {id:'pc', kind:'PC', label:'PC'},\
+              {id:'ap', kind:'AP', label:'AP'}, {id:'ph', kind:'PHONE', label:'Phone'} ];\
+              this.EDGES = [ {from:'gw', to:'pc', cls:'wired', dashed:true, label:'inferred'},\
+              {from:'gw', to:'ap', cls:'wired'}, {from:'ap', to:'ph', cls:'wifi', dashed:true} ];",
+        )
+        .unwrap();
+        let m = build(
+            &doc,
+            &Input {
+                clients: true,
+                ..Default::default()
+            },
+        );
+        let pc = by(&m, "pc");
+        assert_eq!(pc.link(), Some(Link::Assumed));
+        assert_eq!(pc.up.as_ref().unwrap().2.as_deref(), Some("inferred"));
+        assert_eq!(by(&m, "ap").link(), Some(Link::Wired));
+        assert_eq!(by(&m, "ph").link(), Some(Link::Wireless));
     }
 }

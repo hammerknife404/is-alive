@@ -75,9 +75,13 @@ impl AdvancedTool {
 
         let mut enter = false;
         ui.horizontal(|ui| {
-            enter |= widgets::field(ui, "Domain", &mut self.domain, 200.0, "example.com");
-            enter |= widgets::field(ui, "Resolver", &mut self.resolver, 110.0, DEFAULT_RESOLVER);
-            ui.separator();
+            enter |= widgets::field(
+                ui,
+                "Domain",
+                &mut self.domain,
+                widgets::MAIN_W,
+                "example.com",
+            );
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
@@ -86,49 +90,55 @@ impl AdvancedTool {
         });
         ui.horizontal(|ui| {
             // Enter here starts a run too; the Start button above has already been drawn.
-            let enter = widgets::field(
-                ui,
-                "Extra DKIM selectors",
-                &mut self.selectors,
-                200.0,
-                "s1024, mykey",
-            );
-            ui.weak("(common ones are always probed)")
+            let mut enter =
+                widgets::field(ui, "Resolver", &mut self.resolver, 110.0, DEFAULT_RESOLVER);
+            ui.separator();
+            enter |= widgets::field(ui, "DKIM", &mut self.selectors, 160.0, "s1024, mykey");
+            ui.weak("extra selectors; common ones are always probed")
                 .on_hover_text(domain::SELECTORS.join(", "));
             if enter && !running {
                 self.start(ui.ctx());
             }
         });
-        ui.weak("Asks the resolver above directly, so you see what the internet sees.");
+        widgets::toolbar_note(
+            ui,
+            "Asks the resolver directly, so you see what the internet sees.",
+        );
         widgets::error(ui, &self.err);
         ui.separator();
 
-        ui.horizontal(|ui| {
-            let done: Vec<Status> = self.checks.iter().flatten().map(Check::status).collect();
-            if !done.is_empty() {
-                for s in [Status::Fail, Status::Warn, Status::Pass] {
-                    let n = done.iter().filter(|&&d| d == s).count();
-                    ui.label(
-                        RichText::new(format!("{n} {}", s.tag().to_lowercase())).color(color(s)),
-                    );
+        let done: Vec<Status> = self.checks.iter().flatten().map(Check::status).collect();
+        widgets::status_row(
+            ui,
+            |ui| {
+                if !done.is_empty() {
+                    for s in [Status::Fail, Status::Warn, Status::Pass] {
+                        let n = done.iter().filter(|&&d| d == s).count();
+                        ui.label(
+                            RichText::new(format!("{n} {}", s.tag().to_lowercase()))
+                                .color(color(s)),
+                        );
+                    }
+                    if let Some(ms) = self.took {
+                        ui.weak(format!("in {}", widgets::fmt_ms(ms)));
+                    } else {
+                        ui.weak(format!("{}/{}", done.len(), NAMES.len()));
+                    }
                 }
-                if let Some(ms) = self.took {
-                    ui.weak(format!("in {}", widgets::fmt_ms(ms)));
-                } else {
-                    ui.weak(format!("{}/{}", done.len(), NAMES.len()));
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            },
+            |ui| {
                 ui.add_enabled_ui(!done.is_empty(), |ui| {
                     widgets::save_button(ui, "domain", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
         if self.checks.is_empty() {
-            widgets::empty_hint(
+            widgets::empty_state(
                 ui,
+                "Check a domain's health",
                 "Enter a domain and press Enter to check MX, SPF, DMARC, DKIM, nameservers and more.",
+                &[],
             );
             return;
         }

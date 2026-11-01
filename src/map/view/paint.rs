@@ -100,7 +100,7 @@ impl MapView {
                     pos2(x, mid),
                     egui::Align2::LEFT_CENTER,
                     title,
-                    FontId::proportional((11.0 * z).max(7.0)),
+                    FontId::proportional((11.0 * z).max(9.5)),
                     c.gamma_multiply(a),
                 );
             }
@@ -144,7 +144,14 @@ impl MapView {
             let stroke = Stroke::new(w, c);
             match link {
                 Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
-                Link::Assumed => p.extend(Shape::dashed_line(pts, stroke, 2.5 * z, 4.0 * z)),
+                // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
+                // dots beat against the pixel grid and the line seems to break.
+                Link::Assumed => p.extend(Shape::dashed_line(
+                    pts,
+                    Stroke::new(stroke.width.max(1.5), stroke.color),
+                    (2.5 * z).max(2.0).round(),
+                    (4.0 * z).max(3.0).round(),
+                )),
                 _ => {
                     p.add(Shape::line(pts.to_vec(), stroke));
                 }
@@ -164,14 +171,13 @@ impl MapView {
                 }
             }
             if let Some((pos, align, l)) = label
-                && z >= 0.7
                 && alpha > 0.3
             {
                 p.text(
                     pos,
                     align,
                     l,
-                    FontId::proportional(10.0 * z.min(1.2)),
+                    FontId::proportional((10.0 * z).clamp(9.5, 12.0)),
                     vis.weak_text_color().gamma_multiply(alpha),
                 );
             }
@@ -191,8 +197,14 @@ impl MapView {
         // (parent, box) → (children, any lit, brightest).
         let mut trunks: std::collections::BTreeMap<(usize, usize), (Vec<usize>, bool, f32)> =
             Default::default();
-        for (i, n) in self.map.nodes.iter().enumerate() {
-            let Some((up, link, label)) = &n.up else {
+        // Weakest first: cards stacked under one uplink share its line, so a
+        // solid link drawn last covers the dashes of an assumed one there
+        // instead of beading it.
+        let mut order: Vec<usize> = (0..self.map.nodes.len()).collect();
+        order.sort_by_key(|&i| self.map.nodes[i].link().map_or(0, strength));
+        for i in order {
+            let n = &self.map.nodes[i];
+            let Some((up, link, _)) = &n.up else {
                 continue;
             };
             let alpha = fade(i).min(fade(*up));
@@ -223,19 +235,7 @@ impl MapView {
                 .into_iter()
                 .map(|w| self.to_screen(rect, w))
                 .collect();
-            let end = *pts.last().expect("route has points");
-            // A stacked card's stub is short: just the number over it.
-            let label = label.as_deref().map(|l| {
-                if self.lay.stacked[i] {
-                    (
-                        end - vec2(layout::INDENT / 4.0 * z, 2.0),
-                        egui::Align2::CENTER_BOTTOM,
-                        l.trim_start_matches("port "),
-                    )
-                } else {
-                    (end + vec2(4.0, -3.0), egui::Align2::LEFT_BOTTOM, l)
-                }
-            });
+            // The link's port or note is a chip on its card (see `card`).
             flows |= draw(
                 &pts,
                 colour(n, *link),
@@ -244,7 +244,7 @@ impl MapView {
                 width(*link, on),
                 alpha,
                 on,
-                label,
+                None,
             );
         }
         for ((up, g), (kids, on, alpha)) in &trunks {
@@ -274,7 +274,13 @@ impl MapView {
                 ]
             };
             let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
-            let first = &self.map.nodes[kids[0]];
+            // The trunk carries its strongest link: one solid uplink makes
+            // the shared line solid.
+            let first = kids
+                .iter()
+                .map(|&k| &self.map.nodes[k])
+                .max_by_key(|m| m.link().map_or(0, strength))
+                .expect("a trunk has cards");
             let link = first.link().unwrap_or(Link::Wired);
             let count = format!("×{}", kids.len());
             let end = *pts.last().expect("route has points");
@@ -418,8 +424,6 @@ impl MapView {
             },
             accent.gamma_multiply(a),
         );
-        let pad = 12.0 * z;
-        let inner = r.width() - pad * 2.0;
         let text = |s: &str, font: FontId, colour: Color32, rows: usize, width: f32| {
             let mut job =
                 LayoutJob::single_section(s.to_string(), egui::TextFormat::simple(font, colour));
@@ -444,17 +448,92 @@ impl MapView {
                 crate::theme::emoji_colour('📌', vis.strong_text_color()).gamma_multiply(a),
             );
         }
-        // Zoomed out: just the name, at a size that can still be read.
-        if z < 0.6 {
-            if r.width() > 30.0 {
-                let font = FontId::proportional((13.0 * z).max(8.5));
-                let g = text(&n.label, font, strong, 2, r.width() - 10.0 * z.max(0.5));
-                let at = pos2(
-                    r.min.x + 6.0 * z.max(0.5) + 2.0,
-                    r.center().y - g.size().y / 2.0,
+        // Text never shrinks past a readable size: a card too small for all
+        // of it drops lines instead, least useful first (kind, then chips,
+        // then the address). The name always shows.
+        let kind_f = FontId::monospace((9.5 * z).max(9.0));
+        let label_f = FontId::proportional((13.0 * z).max(11.0));
+        let sub_f = FontId::monospace((10.5 * z).max(10.0));
+        let chip_f = FontId::proportional((9.5 * z).max(9.0));
+        let pad = (12.0 * z).clamp(5.0, 14.0);
+        let vpad = (7.0 * z).clamp(3.0, 9.0);
+        let inner = r.width() - pad * 2.0;
+        let room = r.height() - 2.0 * vpad;
+        let full_badge = z >= 0.6;
+        let badge = if !full_badge || n.flags.is_empty() {
+            0.0
+        } else {
+            20.0 * z
+        } + if self.is_kept(i) { 20.0 * z } else { 0.0 };
+        let row = |f: &FontId| ui_row_height(f);
+        // Two lines of name when the address still fits under them; else one.
+        let sub_h = row(&sub_f);
+        let has_sub = !n.sub.is_empty();
+        let mut label = text(&n.label, label_f.clone(), strong, 2, inner - badge);
+        if label.rows.len() > 1 && label.size().y + if has_sub { sub_h } else { 0.0 } > room {
+            label = text(&n.label, label_f.clone(), strong, 1, inner - badge);
+        }
+        let mut need = label.size().y;
+        let show_sub = has_sub && need + sub_h <= room;
+        if show_sub {
+            need += sub_h;
+        }
+        // The uplink's port or note ("port 3", "inferred") rides on the
+        // card it leads to, not as tiny text at the end of the line.
+        let uplink = n.up.as_ref().and_then(|u| u.2.as_deref());
+        // In Sites the box already names the site.
+        let boxed = self.mode() == Mode::Sites;
+        let chips: Vec<&str> = uplink
+            .into_iter()
+            .chain(n.chips.iter().map(String::as_str))
+            .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
+            .collect();
+        let chip_h = row(&chip_f) + 4.0;
+        let show_chips = !chips.is_empty() && need + chip_h + 2.0 <= room;
+        if show_chips {
+            need += chip_h + 2.0;
+        }
+        let kind_h = row(&kind_f) + 1.0;
+        let show_kind = !n.kind.is_empty() && need + kind_h <= room;
+        if show_kind {
+            need += kind_h;
+        }
+        // What shows sits centred in the space above the chips.
+        let body = need - if show_chips { chip_h + 2.0 } else { 0.0 };
+        let top_room = room - if show_chips { chip_h + 2.0 } else { 0.0 };
+        let mut y = r.min.y + vpad + ((top_room - body) / 2.0).max(0.0);
+        if show_kind {
+            let g = text(&n.kind, kind_f, weak, 1, inner - badge);
+            p.galley(pos2(r.min.x + pad, y), g, weak);
+            y += kind_h;
+        }
+        let h = label.size().y;
+        p.galley(pos2(r.min.x + pad, y), label, strong);
+        y += h;
+        if show_sub {
+            let g = text(&n.sub, sub_f, accent.gamma_multiply(a), 1, inner);
+            p.galley(pos2(r.min.x + pad, y), g, accent);
+        }
+        if show_chips {
+            let mut x = r.min.x + pad;
+            let cy = r.max.y - vpad;
+            for c in chips {
+                let g = text(c, chip_f.clone(), accent.gamma_multiply(a), 1, inner);
+                let w = g.size().x + 10.0;
+                if x + w > r.max.x - pad + 4.0 {
+                    break;
+                }
+                let chip = Rect::from_min_max(pos2(x, cy - chip_h), pos2(x + w, cy));
+                p.rect_filled(
+                    chip,
+                    (chip.height() / 2.0) as u8,
+                    accent.gamma_multiply(0.16 * a),
                 );
-                p.galley(at, g, strong);
+                p.galley(pos2(x + 5.0, chip.center().y - g.size().y / 2.0), g, accent);
+                x += w + 4.0;
             }
+        }
+        if !full_badge {
             if !n.flags.is_empty() {
                 p.circle_filled(
                     pos2(r.max.x - 4.0, r.min.y + 4.0),
@@ -463,52 +542,6 @@ impl MapView {
                 );
             }
             return;
-        }
-        let mut y = r.min.y + 7.0 * z;
-        let badge = if n.flags.is_empty() { 0.0 } else { 20.0 * z }
-            + if self.is_kept(i) { 20.0 * z } else { 0.0 };
-        let g = text(&n.kind, FontId::monospace(9.5 * z), weak, 1, inner - badge);
-        p.galley(pos2(r.min.x + pad, y), g.clone(), weak);
-        y += g.size().y + 2.0 * z;
-        let g = text(&n.label, FontId::proportional(13.0 * z), strong, 2, inner);
-        p.galley(pos2(r.min.x + pad, y), g.clone(), strong);
-        y += g.size().y + 1.0 * z;
-        if !n.sub.is_empty() && y + 12.0 * z < r.max.y - 14.0 * z {
-            let g = text(
-                &n.sub,
-                FontId::monospace(10.5 * z),
-                accent.gamma_multiply(a),
-                1,
-                inner,
-            );
-            p.galley(pos2(r.min.x + pad, y), g, accent);
-        }
-        // Chips along the bottom, as many as fit.
-        let mut x = r.min.x + pad;
-        let cy = r.max.y - 7.0 * z;
-        for c in &n.chips {
-            let g = text(
-                c,
-                FontId::proportional(9.5 * z),
-                accent.gamma_multiply(a),
-                1,
-                inner,
-            );
-            let w = g.size().x + 10.0 * z;
-            if x + w > r.max.x - pad + 4.0 * z {
-                break;
-            }
-            let chip = Rect::from_min_max(
-                pos2(x, cy - g.size().y - 2.0 * z),
-                pos2(x + w, cy + 1.0 * z),
-            );
-            p.rect_filled(
-                chip,
-                (chip.height() / 2.0) as u8,
-                accent.gamma_multiply(0.16 * a),
-            );
-            p.galley(pos2(x + 5.0 * z, chip.min.y + 1.5 * z), g, accent);
-            x += w + 4.0 * z;
         }
         if !n.flags.is_empty() {
             let c = pos2(r.max.x - 12.0 * z, r.min.y + 12.0 * z);
@@ -528,5 +561,20 @@ impl MapView {
                 Color32::BLACK.gamma_multiply(a),
             );
         }
+    }
+}
+
+/// Height of one line of text in `font`, as laid out in a card.
+fn ui_row_height(font: &FontId) -> f32 {
+    font.size * 1.25
+}
+
+/// How solid a link is drawn, weakest first: the order links are painted in.
+fn strength(l: Link) -> u8 {
+    match l {
+        Link::Assumed => 0,
+        Link::Wireless => 1,
+        Link::Wired => 2,
+        Link::Backbone => 3,
     }
 }

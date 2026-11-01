@@ -11,6 +11,7 @@ mod markdown;
 mod meraki;
 mod net;
 mod redact;
+mod shots;
 mod sonicwall;
 mod theme;
 mod tools;
@@ -135,6 +136,9 @@ struct App {
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
+    shots: Option<shots::Shots>,
+    /// The screenshot tour's last step: Settings open.
+    shots_settings: bool,
 }
 
 impl eframe::App for App {
@@ -147,6 +151,20 @@ impl eframe::App for App {
                 && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, keys[d]))
             {
                 self.tab = *tab;
+            }
+        }
+        if let Some(s) = &mut self.shots {
+            // Every tab, then the Map again with a card selected.
+            let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
+            names.extend(["Map panel", "Settings"]);
+            match s.step(ui.ctx(), &names) {
+                Some(i) if i < TABS.len() => self.tab = TABS[i].0,
+                Some(i) if i == TABS.len() => {
+                    self.tab = crate::Tab::Map;
+                    self.map.select_for_shots();
+                }
+                Some(_) => self.shots_settings = true,
+                None => {}
             }
         }
         let now = ui.input(|i| i.time);
@@ -206,28 +224,29 @@ impl eframe::App for App {
             // Wraps to a second row when the window (or display scaling)
             // leaves too little width, so every tab stays reachable.
             ui.horizontal_wrapped(|ui| {
-                let busy = self.any_running();
-                let tip = if busy {
-                    "Wait for running tools to finish (or stop them) to run a full scan."
-                } else {
-                    FULL_SCAN_TIP
-                };
-                let b = ui
-                    .add_enabled(
-                        !busy,
-                        egui::Button::new(egui::RichText::new("is-alive").heading()),
+                // The app's name, drawn as a title; it opens Settings.
+                let name = ui
+                    .add(
+                        egui::Button::new(egui::RichText::new("is-alive").heading().strong())
+                            .frame(false),
                     )
-                    .on_hover_text(tip)
-                    .on_disabled_hover_text(tip);
-                if b.clicked() {
-                    self.full_scan(ui.ctx());
+                    .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
+                if self.shots_settings {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&name));
                 }
+                egui::Popup::menu(&name)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| self.settings_ui(ui));
                 ui.separator();
                 // The selected tab is marked by a sliding underline rather
                 // than a filled box; running jobs get a pulsing dot that
                 // doesn't change the tab's width.
                 let fill = ui.visuals().selection.bg_fill;
                 ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                // Tabs sit closer than other controls: twelve of them and
+                // Site Bundle fit one row at the default width in any theme.
+                let gap = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 4.0;
                 let mut selected = None;
                 let mut dots = Vec::new();
                 for (n, (tab, name, tip)) in TABS.iter().enumerate() {
@@ -253,6 +272,7 @@ impl eframe::App for App {
                     }
                 }
                 ui.visuals_mut().selection.bg_fill = fill;
+                ui.spacing_mut().item_spacing.x = gap;
                 if let Some(r) = selected {
                     tab_underline(ui, r);
                 }
@@ -318,33 +338,22 @@ impl eframe::App for App {
                     {
                         self.refresh_info(ui.ctx());
                     }
-                    ui.menu_button("?", shortcuts)
-                        .response
-                        .on_hover_text("Keyboard shortcuts and tips");
-                    ui.weak(format!("v{VERSION}"));
-                    ui.separator();
-                    match theme::menu(
-                        ui,
-                        &mut self.look,
-                        &self.backdrop.renderer,
-                        self.backdrop.on_gpu(),
-                    ) {
-                        Some(theme::MenuAction::Changed) => {
-                            theme::apply(ui.ctx(), self.look.theme);
-                            theme::save(&self.look);
-                        }
-                        Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
-                            self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
-                                tx.send(
-                                    rfd::FileDialog::new()
-                                        .set_title("Miami backdrop")
-                                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
-                                        .pick_file(),
-                                )
-                            }));
-                        }
-                        _ => {}
+                    let busy = self.any_running();
+                    let tip = if busy {
+                        "Wait for running tools to finish (or stop them) to run a full scan."
+                    } else {
+                        FULL_SCAN_TIP
+                    };
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Full scan").small())
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(tip)
+                        .clicked()
+                    {
+                        self.full_scan(ui.ctx());
                     }
+                    ui.separator();
+                    ui.weak(format!("v{VERSION}"));
                     if self.look.theme == theme::Theme::Miami
                         && let Some(e) = &self.backdrop.err
                     {
@@ -400,6 +409,59 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Settings, opened from the app's name: appearance, the Map, keyboard
+    /// shortcuts and where the app keeps its files.
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(320.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("is-alive").heading().strong());
+            ui.weak(format!("v{VERSION}"));
+        });
+        ui.separator();
+        match theme::appearance(
+            ui,
+            &mut self.look,
+            &self.backdrop.renderer,
+            self.backdrop.on_gpu(),
+        ) {
+            Some(theme::MenuAction::Changed) => {
+                theme::apply(ui.ctx(), self.look.theme);
+                theme::save(&self.look);
+            }
+            Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
+                self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
+                    tx.send(
+                        rfd::FileDialog::new()
+                            .set_title("Miami backdrop")
+                            .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                            .pick_file(),
+                    )
+                }));
+            }
+            _ => {}
+        }
+        ui.separator();
+        ui.label(egui::RichText::new("Map").strong());
+        if ui
+            .checkbox(&mut self.look.map_note, "Show the accuracy note")
+            .on_hover_text("The note over the Map on how to get an accurate one")
+            .changed()
+        {
+            theme::save(&self.look);
+        }
+        ui.separator();
+        ui.collapsing("Keyboard and mouse", shortcuts);
+        ui.separator();
+        if let Some(dir) = theme::data_dir() {
+            ui.weak("Settings and autosaved notes are kept in");
+            ui.label(
+                egui::RichText::new(dir.display().to_string())
+                    .monospace()
+                    .small(),
+            );
+        }
+    }
+
     fn tab_ui(&mut self, ui: &mut egui::Ui) {
         match self.tab {
             Tab::Ping => self.ping.ui(ui),
@@ -677,24 +739,41 @@ impl App {
         let filtered = !needle.is_empty();
         let mut clear = false;
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "{}{} logged run(s){}",
-                if filtered {
-                    format!("{} of ", shown.len())
-                } else {
-                    String::new()
-                },
-                self.log.entries.len(),
-                if running.is_empty() {
-                    String::new()
-                } else {
-                    format!(", {} running", running.len())
-                }
-            ));
-            if self.log.dropped > 0 {
-                ui.weak(format!("({} oldest dropped)", self.log.dropped));
+            widgets::lead(ui, "Filter");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.filter)
+                    .char_limit(widgets::FIELD_MAX)
+                    .desired_width(240.0)
+                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
+            )
+            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
+            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
+                self.filter.clear();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        });
+        ui.separator();
+        widgets::status_row(
+            ui,
+            |ui| {
+                ui.label(format!(
+                    "{}{} logged run(s){}",
+                    if filtered {
+                        format!("{} of ", shown.len())
+                    } else {
+                        String::new()
+                    },
+                    self.log.entries.len(),
+                    if running.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} running", running.len())
+                    }
+                ));
+                if self.log.dropped > 0 {
+                    ui.weak(format!("({} oldest dropped)", self.log.dropped));
+                }
+            },
+            |ui| {
                 ui.add_enabled_ui(!shown.is_empty(), |ui| {
                     clear =
                         widgets::confirm_button(ui, "log_clear", true, "Clear", "Clear the log");
@@ -709,26 +788,14 @@ impl App {
                     widgets::save_button(ui, "log", render);
                     widgets::copy_button(ui, render);
                 });
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.label("Filter");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(240.0)
-                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
-            )
-            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
-            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
-                self.filter.clear();
-            }
-        });
-        ui.separator();
+            },
+        );
         if self.log.entries.is_empty() && running.is_empty() {
-            widgets::empty_hint(
+            widgets::empty_state(
                 ui,
-                "No results yet. Finished runs from every tab are logged here with start and end times.",
+                "No results yet",
+                "Finished runs from every tab are logged here with start and end times, to copy, save or export together.",
+                &[],
             );
         } else if shown.is_empty() && running.is_empty() {
             widgets::empty_hint(ui, "No runs match the filter.");
@@ -791,7 +858,7 @@ fn shortcuts(ui: &mut egui::Ui) {
     for tip in [
         "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
         "Drop a UniFi backup, SonicWall .exp / .wri or /mapnetwork map anywhere to open it",
-        "Click the is-alive button for a full scan of this network",
+        "Full scan (bottom right) pings, traces and sweeps this network in one go",
         "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
     ] {
         ui.label(format!("• {tip}"));
@@ -963,6 +1030,8 @@ fn main() -> eframe::Result {
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
                 reloading: false,
+                shots: shots::Shots::from_env(),
+                shots_settings: false,
             };
             // Files named on the command line ("Open with") go to Config Export.
             let files: Vec<std::path::PathBuf> =

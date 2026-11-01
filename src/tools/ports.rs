@@ -71,8 +71,13 @@ impl PortTool {
 
         let mut enter = false;
         ui.horizontal(|ui| {
-            enter |= widgets::field(ui, "Host", &mut self.host, 220.0, "hostname or IP");
-            ui.separator();
+            enter |= widgets::field(
+                ui,
+                "Host",
+                &mut self.host,
+                widgets::MAIN_W,
+                "hostname or IP",
+            );
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
@@ -84,7 +89,7 @@ impl PortTool {
                 ui,
                 "Ports",
                 &mut self.ports,
-                ui.available_width() - 120.0,
+                ui.available_width() - widgets::LEAD_W - 90.0,
                 "22,80,443,8000-8100",
             );
             ui.menu_button("Presets ⏷", |ui| {
@@ -117,27 +122,30 @@ impl PortTool {
             TcpState::Error(e) => Some(e.as_str()),
             _ => None,
         });
-        ui.horizontal(|ui| {
-            if let Some(ip) = self.target {
-                ui.label(RichText::new(ip.to_string()).strong());
-                ui.separator();
-            }
-            if self.total > 0 {
-                let c = if open > 0 {
-                    widgets::ok()
-                } else {
-                    ui.visuals().text_color()
-                };
-                ui.label(RichText::new(format!("{open} open")).color(c).strong());
-                ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        widgets::status_row(
+            ui,
+            |ui| {
+                if let Some(ip) = self.target {
+                    ui.label(RichText::new(ip.to_string()).strong());
+                    ui.separator();
+                }
+                if self.total > 0 {
+                    let c = if open > 0 {
+                        widgets::ok()
+                    } else {
+                        ui.visuals().text_color()
+                    };
+                    ui.label(RichText::new(format!("{open} open")).color(c).strong());
+                    ui.label(format!("· {} / {} scanned", self.results.len(), self.total));
+                }
+            },
+            |ui| {
                 ui.add_enabled_ui(!self.results.is_empty(), |ui| {
                     widgets::save_button(ui, "ports", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
-            });
-        });
+            },
+        );
         if let Some(e) = first_err {
             // Errors (no route, bad address, out of sockets) are always shown:
             // hiding them would make a broken scan look like "0 open".
@@ -148,9 +156,11 @@ impl PortTool {
         }
         if self.results.is_empty() {
             if !running {
-                widgets::empty_hint(
+                widgets::empty_state(
                     ui,
-                    "Enter a host and press Enter. Pick ports or a preset above.",
+                    "Check a host's ports",
+                    "Enter a host and press Enter. Ports takes lists and ranges, or pick a preset.",
+                    &[],
                 );
             }
             return;

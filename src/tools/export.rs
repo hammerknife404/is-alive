@@ -447,11 +447,17 @@ impl ExportTool {
         ui.separator();
 
         if self.slots.is_empty() {
-            if !running {
-                widgets::empty_hint(
+            if !running
+                && widgets::empty_state(
                     ui,
-                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, or /mapnetwork map.",
-                );
+                    "Convert a config",
+                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, or a /mapnetwork map. \
+                     The result is sanitized JSON for the skills, and it feeds the Map.",
+                    &[("Open file…", "Pick one or more files", true)],
+                )
+                .is_some()
+            {
+                self.start(ui.ctx(), None);
             }
             return;
         }
