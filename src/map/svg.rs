@@ -57,6 +57,7 @@ pub fn render(
     map: &Map,
     pos: &[Option<Pos2>],
     stacked: &[bool],
+    trunk: &[Option<layout::Trunk>],
     boxes: &[layout::Group],
     dark: bool,
 ) -> String {
@@ -127,7 +128,7 @@ pub fn render(
             continue;
         };
         let Some(p) = pos[*up] else { continue };
-        let pts: Vec<Pos2> = layout::route(p, c, stacked[i])
+        let pts: Vec<Pos2> = layout::route(p, c, stacked[i], trunk[i])
             .into_iter()
             .map(at)
             .collect();
@@ -290,7 +291,7 @@ mod tests {
             ..Default::default()
         });
         let l = crate::map::layout::layout_in(&m, &|_| true, crate::map::layout::Mode::Cluster);
-        let s = render(&m, &l.pos, &l.stacked, &l.boxes, true);
+        let s = render(&m, &l.pos, &l.stacked, &l.trunk, &l.boxes, true);
         assert!(s.starts_with("<svg") && s.trim_end().ends_with("</svg>"));
         assert!(s.contains("a&lt;b&gt;&amp;c"));
         assert!(!s.contains("a<b>"));

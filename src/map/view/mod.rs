@@ -834,6 +834,7 @@ impl MapView {
                                 &self.map,
                                 &pos,
                                 &self.lay.stacked,
+                                &self.lay.trunk,
                                 &self.lay.boxes,
                                 ui.visuals().dark_mode,
                             ),
