@@ -342,7 +342,7 @@ fn parent(name: &str) -> Option<&str> {
 }
 
 /// HTTPS GET (MTA-STS policy, RDAP) with the OS trust store and proxy.
-fn http_get(url: &str, follow: bool) -> Result<String, String> {
+pub(crate) fn http_get(url: &str, follow: bool) -> Result<String, String> {
     // OS trust store, so TLS-inspecting firewalls and proxies work.
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
