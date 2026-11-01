@@ -922,6 +922,52 @@ pub(crate) mod tests {
         assert_eq!(DOWNLOADS[0].url, DEFAULT_FILE, "the default heads the list");
     }
 
+    /// Every preset still answers: a download sends its first 256 KB, an
+    /// upload takes 64 KB. Live network, so ignored by default; the
+    /// `presets` workflow runs it weekly
+    /// (`cargo test -- --ignored presets_answer`).
+    #[test]
+    #[ignore = "reaches the public internet"]
+    fn presets_answer() {
+        let agent = agent(1);
+        let mut dead = Vec::new();
+        for p in DOWNLOADS {
+            let why = match agent.get(p.url).call() {
+                Err(e) => Some(e.to_string()),
+                Ok(mut r) => refusal(&r, Dir::Down).or_else(|| {
+                    let mut buf = vec![0u8; 256 * 1024];
+                    r.body_mut()
+                        .as_reader()
+                        .read_exact(&mut buf)
+                        .err()
+                        .map(|e| format!("short body: {e}"))
+                }),
+            };
+            if let Some(why) = why {
+                dead.push(format!("down {} ({}, {}): {why}", p.url, p.who, p.place));
+            }
+        }
+        let body = vec![0u8; 64 * 1024];
+        for p in UPLOADS {
+            let why = match agent
+                .post(p.url)
+                .header("content-type", "application/octet-stream")
+                .send(&body[..])
+            {
+                Err(e) => Some(e.to_string()),
+                Ok(r) => refusal(&r, Dir::Up),
+            };
+            if let Some(why) = why {
+                dead.push(format!("up {} ({}, {}): {why}", p.url, p.who, p.place));
+            }
+        }
+        assert!(
+            dead.is_empty(),
+            "presets not answering:\n{}",
+            dead.join("\n")
+        );
+    }
+
     #[test]
     fn ports_and_the_family_decision() {
         assert_eq!(url_port("https://h/x"), 443);
