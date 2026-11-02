@@ -492,17 +492,18 @@ impl BundleTool {
                 skill: "/mapnetwork",
                 what: NOTES_WHAT,
                 summary: json!({ "lines": clean.lines().count(), "redacted": hits.len() }),
-                data: clean,
+                // Without the emoji style marks, like Copy and Save.
+                data: crate::theme::strip_emoji_styles(&clean),
             });
         }
         let b = Bundle {
             site: self.site.trim().to_string(),
-            // Same rules as the notes: nothing redactable goes in the zip.
-            notes: crate::redact::sanitize_with(
-                &self.notes,
-                &src.notes.overrides().merged(&self.ov),
-            )
-            .0,
+            // Same rules as the notes: nothing redactable goes in the zip,
+            // nor emoji style marks pasted in from them.
+            notes: crate::theme::strip_emoji_styles(
+                &crate::redact::sanitize_with(&self.notes, &src.notes.overrides().merged(&self.ov))
+                    .0,
+            ),
             clients: self.clients,
             map_clients: self.map_clients,
             scanner: src.info.clone(),
