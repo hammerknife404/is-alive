@@ -1074,7 +1074,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
-- **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1 MB of text in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
+- **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
 
 **Scanning is visible.** Port Check, Subnet Sweep, Check mgmt ports and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
 
