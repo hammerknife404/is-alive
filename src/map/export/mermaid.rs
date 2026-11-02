@@ -207,6 +207,7 @@ mod tests {
             lay: &lay,
             pos: &lay.pos,
             moved: &moved,
+            legend: false,
         });
         assert!(too_big(&s));
         let body: Vec<&str> = s.lines().skip(3).collect();

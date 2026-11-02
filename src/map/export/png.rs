@@ -141,7 +141,7 @@ fn draw(ctx: &mut RenderContext, faces: &Faces, item: &Item) {
                 x = text_run(ctx, faces, face, r, x, at.y, *size);
             }
         }
-        Item::Card(items) => {
+        Item::Card(items) | Item::Legend(items) => {
             for i in items {
                 draw(ctx, faces, i);
             }

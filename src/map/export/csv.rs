@@ -135,6 +135,7 @@ mod tests {
             lay: &lay,
             pos: &lay.pos,
             moved: &[false, false],
+            legend: false,
         });
         let r = rows(&s);
         assert_eq!(r.len(), 3);

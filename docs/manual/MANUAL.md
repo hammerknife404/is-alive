@@ -632,8 +632,9 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
+| **Legend** | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Your choice is remembered |
 | **Examples ⏷** | Open one of two fictional sites, or **Close the example** |
-| **Export ⏷** | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings) for a spreadsheet |
+| **Export ⏷** | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings) for a spreadsheet |
 
 **Layouts:**
 
@@ -648,9 +649,20 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
-- **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout** and **Export** (the same formats).
+- **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Legend** and **Export** (the same formats).
 - **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
+
+### The legend
+
+The **Legend** panel in the bottom left corner says what everything on the map means, listing only what this map has, with counts:
+
+- **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
+- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, and the chips cards carry (an uplink's port, or a note such as *inferred*).
+- **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
+- **Boxes:** site boxes (Sites) or role boxes (Zones).
+
+Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** in the toolbar, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ⏷** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
 
 ### Selecting cards
 
@@ -701,7 +713,7 @@ With several cards selected, the panel's header says how many and offers **Copy 
 - **Sites:** each site with a ▾/▸ toggle to collapse or expand it; **Collapse all**, **Expand all**; click a site's name to select its cards and bring it into view. You can also click a site's title on the map.
 - **Roles** with counts; click one to fade those cards out.
 - **Action items**, worst first; click one to select the devices it's about.
-- **‹** hides the panel (the roles move onto the map); **›** brings it back.
+- **‹** hides the panel (the legend still fades roles); **›** brings it back.
 
 **Findings** (the band above the map) come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **Copy** puts them in a ticket.
 

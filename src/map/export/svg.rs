@@ -1,5 +1,5 @@
 //! The map as a standalone SVG: same layout, colours and cards, a title
-//! line and the findings underneath, for a ticket or a site doc.
+//! line, the legend and the findings underneath, for a ticket or a site doc.
 
 use super::scene::{Item, Run, Scene, Stroke};
 use super::{hex, xml};
@@ -151,6 +151,13 @@ fn item_to(s: &mut String, item: &Item) {
             }
             *s += "</g>\n";
         }
+        Item::Legend(items) => {
+            *s += "<g class=\"legend\">\n";
+            for i in items {
+                item_to(s, i);
+            }
+            *s += "</g>\n";
+        }
     }
 }
 
@@ -162,12 +169,17 @@ mod tests {
     use crate::map::{Input, Link, Map, Seen, Zone, build};
 
     fn render(m: &Map, lay: &layout::Layout, moved: &[bool]) -> String {
+        render_with(m, lay, moved, false)
+    }
+
+    fn render_with(m: &Map, lay: &layout::Layout, moved: &[bool], legend: bool) -> String {
         write(&scene::draw(
             &Drawn {
                 map: m,
                 lay,
                 pos: &lay.pos,
                 moved,
+                legend,
             },
             Look::new(&eframe::egui::Visuals::dark(), false),
         ))
@@ -234,6 +246,45 @@ mod tests {
         moved[trunk.kids[0]] = true;
         let dragged = render(&m, &l, &moved);
         assert!(dragged.contains(&format!(">×{}<", trunk.kids.len() - 1)));
+    }
+
+    #[test]
+    fn the_legend_goes_under_the_map_when_asked_for() {
+        let m = super::super::tests::acme();
+        for mode in Mode::ALL {
+            let l = layout::layout_in(&m, &|_| true, mode);
+            let moved = vec![false; m.nodes.len()];
+            let off = render_with(&m, &l, &moved, false);
+            let on = render_with(&m, &l, &moved, true);
+            assert!(!off.contains("class=\"legend\"") && !off.contains(">Legend<"));
+            assert!(
+                on.contains("class=\"legend\"") && on.contains(">Legend<"),
+                "{mode:?}"
+            );
+            assert_eq!(on.matches("<g").count(), on.matches("</g>").count());
+            super::super::tests::parse_xml(&on);
+            // The same entries the canvas lists (bar pins and the lit path).
+            let lines = layout::lines(&m, &l, &|i| l.pos[i], &|_| false);
+            let sites = mode == Mode::Sites;
+            for e in crate::map::legend::entries(&m, &l.boxes, &lines, sites, 0, false) {
+                assert!(on.contains(&xml(&e.label)), "{mode:?}: {}", e.label);
+            }
+            // Below the map: the picture grows, and nothing above moves.
+            let height = |s: &str| -> f32 {
+                let h = s.split("height=\"").nth(1).unwrap();
+                h[..h.find('"').unwrap()].parse().unwrap()
+            };
+            assert!(height(&on) > height(&off) + 40.0);
+            // Each card's group, as drawn.
+            let cards = |s: &str| -> Vec<String> {
+                s.split("<g>\n")
+                    .skip(1)
+                    .map(|g| g[..g.find("</g>").expect("closed")].to_string())
+                    .collect()
+            };
+            assert!(!cards(&off).is_empty());
+            assert_eq!(cards(&on), cards(&off), "{mode:?}: the cards stay put");
+        }
     }
 
     #[test]

@@ -6,6 +6,7 @@
 
 mod export;
 mod interact;
+mod legend;
 mod paint;
 mod panel;
 mod sidebar;
@@ -46,6 +47,8 @@ pub enum Action {
     CloseExample,
     /// A layout mode was picked: remember it.
     Layout(Mode),
+    /// The legend was shown or hidden: remember it.
+    Legend(bool),
 }
 
 /// Which end devices get cards.
@@ -124,6 +127,8 @@ pub struct Sources<'a> {
     pub busy: bool,
     /// Show the accuracy note (until the user closes it).
     pub note: bool,
+    /// Show the legend on the map (as saved in Settings).
+    pub legend: bool,
 }
 
 /// Far enough out for Fit to show a wide Tree of a big map whole: its
@@ -220,6 +225,14 @@ pub struct MapView {
     flipped_at: f64,
     /// The sidebar's starting state was picked for the window's width.
     sized: bool,
+    /// The legend is shown on the canvas.
+    legend: bool,
+    /// The setting the legend was last told (`Sources::legend`): a change
+    /// there wins over the toggle here.
+    legend_seen: Option<bool>,
+    /// How much of the canvas's bottom left corner the legend took last
+    /// frame (zero when hidden): Fit keeps the map clear of it.
+    legend_size: Vec2,
 }
 
 /// What a right-click menu was opened on.
@@ -275,6 +288,7 @@ impl MapView {
         Self {
             follow: true,
             side: true,
+            legend: true,
             mode,
             clients,
             ..Default::default()
@@ -971,15 +985,18 @@ impl MapView {
     }
 
     /// Ease the view to show the world rect `b`, clear of the zoom
-    /// controls and legend along the bottom.
+    /// controls along the bottom and the legend.
     fn fit_to(&mut self, view: Rect, b: Rect) {
         if !b.is_positive() {
             return;
         }
-        let room = fit_room(view);
-        let zoom = (room.width() / b.width())
-            .min(room.height() / b.height())
-            .clamp(MIN_ZOOM, 1.0);
+        let zoom_in = |room: Rect| {
+            (room.width() / b.width())
+                .min(room.height() / b.height())
+                .clamp(MIN_ZOOM, 1.0)
+        };
+        let room = fit_room(view, self.legend_size, &zoom_in);
+        let zoom = zoom_in(room);
         let pan = room.center() - view.min - b.center().to_vec2() * zoom;
         self.aim = Some((pan, zoom));
     }
@@ -996,6 +1013,10 @@ impl MapView {
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let ctx = ui.ctx().clone();
+        if self.legend_seen != Some(src.legend) {
+            self.legend_seen = Some(src.legend);
+            self.legend = src.legend;
+        }
         self.refresh(&ctx, &src);
         let empty = self.map.nodes.is_empty();
         let bar = self.toolbar(ui, &src, empty);
@@ -1024,6 +1045,11 @@ impl MapView {
         self.canvas(ui, bar.fit, focus);
         // Esc next frame closes a menu or leaves a text box: not the map's.
         self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
+        // The legend shown or hidden: saved (a frame later if something
+        // else was asked for this one).
+        if self.legend != src.legend && act.is_none() {
+            act = Some(Action::Legend(self.legend));
+        }
         act
     }
 
@@ -1034,7 +1060,7 @@ impl MapView {
         let mut search_enter = false;
         let mut fit = false;
         // Roughly what one row needs.
-        let narrow = ui.available_width() < 1030.0;
+        let narrow = ui.available_width() < 1110.0;
         ui.horizontal(|ui| {
             // Narrower with text in it: room for the count and ×.
             let width = if self.search.is_empty() { 220.0 } else { 140.0 };
@@ -1183,6 +1209,16 @@ impl MapView {
                     picked = Some(m);
                 }
             }
+            // The legend's switch sits with the other ways to show the map.
+            ui.separator();
+            if ui
+                .selectable_label(self.legend, "Legend")
+                .on_hover_text("Show what the colours, lines and badges mean (L)")
+                .on_disabled_hover_text(NOTHING_YET)
+                .clicked()
+            {
+                self.legend = !self.legend;
+            }
         });
         picked
     }
@@ -1285,6 +1321,13 @@ impl MapView {
             search: search_enter,
         } = focus;
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // L shows or hides the legend, unless a text box or menu has the keys.
+        if !self.keys_busy
+            && !ctx.text_edit_focused()
+            && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::L))
+        {
+            self.legend = !self.legend;
+        }
         if self.zoom == 0.0 {
             self.zoom = 1.0;
             self.fit(rect);
@@ -1345,21 +1388,26 @@ impl MapView {
             ctx.request_repaint();
         }
         self.animate(&ctx);
-        self.paint(ui, rect, hover);
-        // With the sidebar shut, the roles go back on the canvas, beside a
-        // button that opens it again.
-        if !self.side {
-            if ui
+        let lines = self.lines_now();
+        self.paint(ui, rect, hover, &lines);
+        // With the sidebar shut, a button that opens it again (the legend
+        // keeps the roles' fading).
+        if !self.side
+            && ui
                 .put(
                     Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(24.0, 24.0)),
                     egui::Button::new("›").corner_radius(6),
                 )
-                .on_hover_text("Show the roles and action items")
+                .on_hover_text("Show the sites, roles and action items")
                 .clicked()
-            {
-                self.side = true;
-            }
-            self.legend(ui, rect);
+        {
+            self.side = true;
+        }
+        if self.legend {
+            let entries = self.legend_entries(&lines);
+            self.legend_panel(ui, rect, &entries);
+        } else {
+            self.legend_size = Vec2::ZERO;
         }
         self.zoom_controls(ui, rect);
     }
@@ -1434,9 +1482,25 @@ fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
 }
 
 /// Where Fit puts the map in `view`: a margin all round, more at the
-/// bottom, where the zoom controls and the legend sit.
-fn fit_room(view: Rect) -> Rect {
-    Rect::from_min_max(view.min + vec2(30.0, 24.0), view.max - vec2(30.0, 44.0))
+/// bottom, where the zoom controls sit, and clear of a `legend` that size
+/// in the bottom left corner: above it or beside it, whichever lets the
+/// map be drawn bigger (`zoom` says how big in a room).
+fn fit_room(view: Rect, legend: Vec2, zoom: &dyn Fn(Rect) -> f32) -> Rect {
+    let room = Rect::from_min_max(view.min + vec2(30.0, 24.0), view.max - vec2(30.0, 44.0));
+    if legend == Vec2::ZERO {
+        return room;
+    }
+    let mut above = room;
+    above.max.y = above.max.y.min(view.max.y - 10.0 - legend.y - 12.0);
+    let mut beside = room;
+    beside.min.x = beside.min.x.max(view.min.x + 10.0 + legend.x + 12.0);
+    let usable = |r: Rect| r.width() > 60.0 && r.height() > 60.0;
+    match (usable(above), usable(beside)) {
+        (true, true) if zoom(beside) > zoom(above) => beside,
+        (true, _) => above,
+        (false, true) => beside,
+        (false, false) => room,
+    }
 }
 
 /// A small filled chevron: pointing down when `open`, right when not.

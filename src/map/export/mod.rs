@@ -26,6 +26,9 @@ pub struct Drawn<'a> {
     pub pos: &'a [Option<Pos2>],
     /// Dragged by hand: joined straight to its uplink, out of any trunk.
     pub moved: &'a [bool],
+    /// The legend is shown on the canvas: the pictures (SVG, PNG) put it
+    /// under the map.
+    pub legend: bool,
 }
 
 impl Drawn<'_> {
@@ -304,6 +307,7 @@ pub(crate) mod tests {
             lay: &lay,
             pos: &lay.pos,
             moved: &moved,
+            legend: false,
         })
     }
 
@@ -354,6 +358,7 @@ pub(crate) mod tests {
             lay: &lay,
             pos: &lay.pos,
             moved: &moved,
+            legend: false,
         };
         let look = Look::new(&eframe::egui::Visuals::dark(), false);
         for f in [Format::Svg, Format::DrawIo] {

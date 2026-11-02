@@ -270,7 +270,11 @@ const MANUAL: &[Scene] = &[
     scene(
         "map",
         Tab::Map,
-        |a, ctx| a.export.open_example(ctx, 0),
+        |a, ctx| {
+            // The map's pictures show its legend, whatever was saved.
+            a.look.map_legend = true;
+            a.export.open_example(ctx, 0)
+        },
         |a| over(a.export.is_running(), None),
     ),
     scene("config-export", Tab::Export, nothing, at_once),

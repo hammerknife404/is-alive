@@ -380,6 +380,7 @@ impl App {
                         info: &self.info,
                         busy,
                         note: self.look.map_note,
+                        legend: self.look.map_legend,
                     },
                 );
                 self.map_action(ui.ctx(), act);
@@ -468,6 +469,10 @@ impl App {
             }
             Some(Action::Layout(m)) => {
                 self.look.map_layout = Some(m);
+                theme::save(&self.look);
+            }
+            Some(Action::Legend(on)) => {
+                self.look.map_legend = on;
                 theme::save(&self.look);
             }
             Some(Action::Reload) => {

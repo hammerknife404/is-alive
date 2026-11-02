@@ -8,6 +8,7 @@
 pub mod export;
 pub mod import;
 pub mod layout;
+pub mod legend;
 pub mod runs;
 pub mod view;
 

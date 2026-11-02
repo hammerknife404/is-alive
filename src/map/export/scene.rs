@@ -1,9 +1,10 @@
-//! The map as a picture: boxes, lines, cards and the findings under them,
-//! as shapes and text runs that SVG and PNG both draw from, so the two
-//! always match.
+//! The map as a picture: boxes, lines, cards, the legend and the findings
+//! under them, as shapes and text runs that SVG and PNG both draw from, so
+//! the two always match.
 
 use super::Drawn;
-use crate::map::layout::{self, CARD};
+use crate::map::layout::{self, CARD, Line};
+use crate::map::legend::{self, Entry, Swatch};
 use crate::map::{Link, Sev, Zone};
 use eframe::egui::{Color32, Pos2, Rect, Vec2, Visuals, pos2, vec2};
 
@@ -97,6 +98,8 @@ pub enum Item {
     },
     /// One card's shapes (an SVG group).
     Card(Vec<Item>),
+    /// The legend's shapes (an SVG group of class "legend").
+    Legend(Vec<Item>),
 }
 
 pub struct Scene {
@@ -211,8 +214,22 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
     let b = d.bounds();
     let (m, head) = (32.0, 64.0);
     let foot = 28.0 + 20.0 * map.findings.len().min(12) as f32;
+    let drawn = d.lines();
+    // In Sites the box already names the site.
+    let sites = d.lay.boxes.iter().any(|g| g.tree);
+    // The legend, when it's shown on the canvas, goes under the map.
+    let entries = if d.legend {
+        legend::entries(map, &d.lay.boxes, &drawn, sites, 0, false)
+    } else {
+        Vec::new()
+    };
+    let leg = (!entries.is_empty()).then(|| legend_plan(&entries, b.width()));
+    let leg_h = leg.as_ref().map_or(0.0, |l| l.height + 16.0);
     let off = vec2(m - b.min.x, m + head - b.min.y);
-    let size = vec2(b.width() + 2.0 * m, b.height() + 2.0 * m + head + foot);
+    let size = vec2(
+        b.width().max(leg.as_ref().map_or(0.0, |l| l.width)) + 2.0 * m,
+        b.height() + 2.0 * m + head + leg_h + foot,
+    );
     let at = |p: Pos2| p + off;
     let mut items = vec![Item::Rect {
         r: Rect::from_min_size(Pos2::ZERO, size),
@@ -237,11 +254,14 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
         ),
     ));
     boxes(d, &ink, &at, &mut items);
-    lines(d, &ink, &at, &mut items);
-    // In Sites the box already names the site.
-    let sites = d.lay.boxes.iter().any(|g| g.tree);
+    lines(d, &drawn, &ink, &at, &mut items);
     for (_, n, p) in d.cards() {
         items.push(Item::Card(card(n, at(p), sites, &ink)));
+    }
+    // The legend under the map, clear of everything on it.
+    if let Some(plan) = &leg {
+        let top = pos2(m, m + head + b.height() + 16.0);
+        items.push(Item::Legend(draw_legend(&entries, plan, top, &ink)));
     }
     findings(d, &ink, m, size.y - foot + 8.0, &mut items);
     Scene { size, items }
@@ -252,17 +272,7 @@ fn boxes(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>)
     for g in &d.lay.boxes {
         let r = Rect::from_min_size(at(g.rect.min), g.rect.size());
         let colour = g.zone.map_or(ink.weak, |z| ink.role(z));
-        items.push(Item::Rect {
-            r,
-            round: 10.0,
-            fill: Some((colour, 0.07)),
-            stroke: Some(Stroke {
-                rgb: colour,
-                alpha: 0.5,
-                width: 1.0,
-                dash: None,
-            }),
-        });
+        items.push(box_rect(r, 10.0, colour));
         items.push(text(
             pos2(
                 r.min.x + layout::BOX_PAD,
@@ -280,9 +290,9 @@ fn boxes(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>)
 }
 
 /// Links and trunks, styled by the link they carry.
-fn lines(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>) {
+fn lines(d: &Drawn, drawn: &[Line], ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>) {
     let map = d.map;
-    for line in d.lines().iter().filter(|l| !l.quiet) {
+    for line in drawn.iter().filter(|l| !l.quiet) {
         let pts: Vec<Pos2> = line.pts.iter().map(|p| at(*p)).collect();
         // A trunk carries its strongest link, in its box's colour.
         let n = line
@@ -291,25 +301,12 @@ fn lines(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>)
             .map(|&k| &map.nodes[k])
             .max_by_key(|m| m.link().map_or(0, layout::strength))
             .expect("a line carries a link");
-        let (rgb, width, dash) = match n.link().unwrap_or(Link::Wired) {
-            Link::Backbone => (ink.role(Zone::Gateway), 3.0, None),
-            Link::Wired => (ink.role(n.zone), 1.6, None),
-            Link::Wireless => (ink.role(n.zone), 1.6, Some([7.0, 5.0])),
-            Link::Assumed => (ink.weak, 1.4, Some([2.5, 4.0])),
-        };
+        let (rgb, width, dash) = link_style(n.link().unwrap_or(Link::Wired), ink.role(n.zone), ink);
         let into = line.into.and_then(|g| d.lay.boxes.get(g));
         let rgb = into.and_then(|g| g.zone).map_or(rgb, |z| ink.role(z));
         let width = if into.is_some() { width + 0.6 } else { width };
         let end = *pts.last().expect("route has points");
-        items.push(Item::Line {
-            pts,
-            stroke: Stroke {
-                rgb,
-                alpha: 0.75,
-                width,
-                dash,
-            },
-        });
+        items.push(link_line(pts, rgb, width, dash));
         if into.is_some() && line.kids.len() > 1 {
             items.push(text(
                 pos2(end.x + 5.0, end.y - 4.0),
@@ -325,32 +322,14 @@ fn lines(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>)
 fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
     let accent = if n.gone { ink.gone } else { ink.role(n.zone) };
     let (x, y) = (p.x, p.y);
-    let mut v = vec![
-        // A pinned card missing from the latest data: dashed, in red.
-        Item::Rect {
-            r: Rect::from_min_size(p, CARD),
-            round: 7.0,
-            fill: Some((ink.card, 1.0)),
-            stroke: Some(Stroke {
-                rgb: if n.gone { accent } else { ink.line },
-                alpha: 1.0,
-                width: 1.0,
-                dash: n.gone.then_some([6.0, 4.0]),
-            }),
-        },
-        Item::Rect {
-            r: Rect::from_min_size(p, vec2(4.0, CARD.y)),
-            round: 2.0,
-            fill: Some((accent, 1.0)),
-            stroke: None,
-        },
-        text(
-            pos2(x + 12.0, y + 17.0),
-            9.5,
-            true,
-            run(&n.kind, ink.weak, 400),
-        ),
-    ];
+    // A pinned card missing from the latest data: dashed, in red.
+    let mut v = card_body(Rect::from_min_size(p, CARD), 7.0, accent, n.gone, ink);
+    v.push(text(
+        pos2(x + 12.0, y + 17.0),
+        9.5,
+        true,
+        run(&n.kind, ink.weak, 400),
+    ));
     let label = wrap(&n.label, 26, 2);
     for (k, l) in label.iter().enumerate() {
         v.push(text(
@@ -382,12 +361,10 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
         if cx + cw > x + CARD.x - 8.0 {
             break;
         }
-        v.push(Item::Rect {
-            r: Rect::from_min_size(pos2(cx, y + CARD.y - 22.0), vec2(cw, 15.0)),
-            round: 7.5,
-            fill: Some((accent, 0.16)),
-            stroke: None,
-        });
+        v.push(chip_pill(
+            Rect::from_min_size(pos2(cx, y + CARD.y - 22.0), vec2(cw, 15.0)),
+            accent,
+        ));
         v.push(text(
             pos2(cx + 5.0, y + CARD.y - 11.0),
             9.5,
@@ -397,19 +374,258 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
         cx += cw + 4.0;
     }
     if !n.flags.is_empty() {
-        let c = pos2(x + CARD.x - 12.0, y + 12.0);
-        v.push(Item::Dot {
+        v.extend(warn_badge(pos2(x + CARD.x - 12.0, y + 12.0)));
+    }
+    v
+}
+
+// The pieces the map is drawn with, shared with the legend so its swatches
+// are the picture's own drawing.
+
+/// How a link is drawn: (colour, width, dashes). `accent` is its card's
+/// colour.
+fn link_style(link: Link, accent: Rgb, ink: &Ink) -> (Rgb, f32, Option<[f32; 2]>) {
+    match link {
+        Link::Backbone => (ink.role(Zone::Gateway), 3.0, None),
+        Link::Wired => (accent, 1.6, None),
+        Link::Wireless => (accent, 1.6, Some([7.0, 5.0])),
+        Link::Assumed => (ink.weak, 1.4, Some([2.5, 4.0])),
+    }
+}
+
+/// A line along `pts` in a link's style.
+fn link_line(pts: Vec<Pos2>, rgb: Rgb, width: f32, dash: Option<[f32; 2]>) -> Item {
+    Item::Line {
+        pts,
+        stroke: Stroke {
+            rgb,
+            alpha: 0.75,
+            width,
+            dash,
+        },
+    }
+}
+
+/// A card's body: fill, edge (dashed in `accent` when `gone`) and colour bar.
+fn card_body(r: Rect, round: f32, accent: Rgb, gone: bool, ink: &Ink) -> Vec<Item> {
+    vec![
+        Item::Rect {
+            r,
+            round,
+            fill: Some((ink.card, 1.0)),
+            stroke: Some(Stroke {
+                rgb: if gone { accent } else { ink.line },
+                alpha: 1.0,
+                width: 1.0,
+                dash: gone.then_some([6.0, 4.0]),
+            }),
+        },
+        Item::Rect {
+            r: Rect::from_min_size(r.min, vec2(4.0, r.height())),
+            round: 2.0,
+            fill: Some((accent, 1.0)),
+            stroke: None,
+        },
+    ]
+}
+
+/// A chip's pill (its text goes over it).
+fn chip_pill(r: Rect, accent: Rgb) -> Item {
+    Item::Rect {
+        r,
+        round: r.height() / 2.0,
+        fill: Some((accent, 0.16)),
+        stroke: None,
+    }
+}
+
+/// The warning badge centred at `c`.
+fn warn_badge(c: Pos2) -> [Item; 2] {
+    [
+        Item::Dot {
             c,
             r: 7.0,
             rgb: AMBER,
-        });
-        v.push(Item::Text {
-            at: pos2(c.x, y + 16.0),
+        },
+        Item::Text {
+            at: pos2(c.x, c.y + 4.0),
             size: 11.0,
             mono: false,
             middle: true,
             runs: run("!", [0; 3], 700),
-        });
+        },
+    ]
+}
+
+/// A site's or a role's box.
+fn box_rect(r: Rect, round: f32, colour: Rgb) -> Item {
+    Item::Rect {
+        r,
+        round,
+        fill: Some((colour, 0.07)),
+        stroke: Some(Stroke {
+            rgb: colour,
+            alpha: 0.5,
+            width: 1.0,
+            dash: None,
+        }),
+    }
+}
+
+/// The legend's rows and columns, laid out for a picture `w` wide.
+struct LegendPlan {
+    slots: Vec<legend::Slot>,
+    /// A column's width, with the gap after it.
+    col: f32,
+    width: f32,
+    height: f32,
+}
+
+const LEG_ROW: f32 = 18.0;
+const LEG_SWATCH: f32 = 30.0;
+/// Roughly how wide a character of the legend's 11.5 px text is.
+const LEG_CHAR: f32 = 6.2;
+const LEG_GAP: f32 = 20.0;
+
+fn legend_plan(entries: &[Entry], w: f32) -> LegendPlan {
+    let col = entries
+        .iter()
+        .map(|e| {
+            let chars = e.label.chars().count() + e.count.map_or(0, |n| n.to_string().len() + 2);
+            LEG_SWATCH + 8.0 + chars as f32 * LEG_CHAR
+        })
+        .fold(140.0f32, f32::max);
+    // As many columns as the picture is wide for, as few rows as that lets
+    // with the longest section in one column.
+    let fit = (((w + LEG_GAP) / (col + LEG_GAP)).floor() as usize).max(1);
+    let total = entries.len() + 4;
+    let longest = entries
+        .iter()
+        .map(|e| entries.iter().filter(|x| x.section == e.section).count() + 1)
+        .max()
+        .unwrap_or(1);
+    let mut rows = total.div_ceil(fit).max(longest);
+    let slots = loop {
+        let slots = legend::slots(entries, rows);
+        if slots.iter().all(|s| s.col < fit) || rows >= total {
+            break slots;
+        }
+        rows += 1;
+    };
+    let cols = slots.iter().map(|s| s.col + 1).max().unwrap_or(1);
+    let used = slots.iter().map(|s| s.row + 1).max().unwrap_or(1);
+    LegendPlan {
+        slots,
+        col: col + LEG_GAP,
+        width: cols as f32 * (col + LEG_GAP) - LEG_GAP,
+        height: 24.0 + used as f32 * LEG_ROW,
+    }
+}
+
+/// A legend colour as the picture draws the map.
+fn legend_ink(i: legend::Ink, ink: &Ink) -> Rgb {
+    match i {
+        legend::Ink::Role(z) => ink.role(z),
+        legend::Ink::Gone => ink.gone,
+        legend::Ink::Weak => ink.weak,
+        legend::Ink::Warn => AMBER,
+    }
+}
+
+/// The legend with its top-left at `top`, each swatch drawn as the picture
+/// draws the map.
+fn draw_legend(entries: &[Entry], plan: &LegendPlan, top: Pos2, ink: &Ink) -> Vec<Item> {
+    let mut v = vec![text(
+        pos2(top.x, top.y + 12.0),
+        13.0,
+        false,
+        run("Legend", ink.text, 600),
+    )];
+    for slot in &plan.slots {
+        let rx = top.x + slot.col as f32 * plan.col;
+        let mid = top.y + 24.0 + slot.row as f32 * LEG_ROW + LEG_ROW / 2.0;
+        let Some(k) = slot.entry else {
+            let title = slot.head.map_or("", |h| h.title());
+            v.push(text(
+                pos2(rx, mid + 3.5),
+                9.5,
+                false,
+                run(title, ink.weak, 600),
+            ));
+            continue;
+        };
+        let e = &entries[k];
+        let c = legend_ink(e.ink, ink);
+        let sw = Rect::from_min_size(pos2(rx, mid - 6.5), vec2(LEG_SWATCH, 13.0));
+        match e.swatch {
+            Swatch::Card | Swatch::Gone | Swatch::Folded => {
+                v.extend(card_body(sw, 3.0, c, e.swatch == Swatch::Gone, ink));
+                if e.swatch == Swatch::Folded {
+                    let chip = Rect::from_min_max(
+                        pos2(sw.min.x + 6.0, sw.max.y - 6.0),
+                        pos2(sw.max.x - 5.0, sw.max.y - 2.0),
+                    );
+                    v.push(chip_pill(chip, c));
+                }
+            }
+            Swatch::Warn => v.extend(warn_badge(pos2(sw.center().x, mid))),
+            Swatch::Pin => v.push(Item::Text {
+                at: pos2(sw.center().x, mid + 4.0),
+                size: 11.0,
+                mono: false,
+                middle: true,
+                runs: run("📌", c, 400),
+            }),
+            Swatch::Chip => {
+                v.push(chip_pill(sw, c));
+                v.push(Item::Text {
+                    at: pos2(sw.center().x, mid + 3.0),
+                    size: 9.0,
+                    mono: false,
+                    middle: true,
+                    runs: run("port", c, 400),
+                });
+            }
+            Swatch::Line(link) => {
+                // The entry's colour is the one its lines have (a box's,
+                // for lines into one); the width and dashes are the kind's.
+                let (_, width, dash) = link_style(link, c, ink);
+                v.push(link_line(
+                    vec![pos2(sw.min.x, mid), pos2(sw.max.x, mid)],
+                    c,
+                    width,
+                    dash,
+                ));
+            }
+            Swatch::Trunk(link) => {
+                let (_, width, dash) = link_style(link, c, ink);
+                let end = sw.max.x - 12.0;
+                v.push(link_line(
+                    vec![pos2(sw.min.x, mid), pos2(end, mid)],
+                    c,
+                    width + 0.6,
+                    dash,
+                ));
+                v.push(text(
+                    pos2(end + 1.0, mid + 3.5),
+                    10.0,
+                    false,
+                    run("×N", ink.weak, 400),
+                ));
+            }
+            Swatch::Box => v.push(box_rect(sw, 3.0, c)),
+            // Only on the canvas: a picture has no selection.
+            Swatch::Lit => {}
+        }
+        let mut runs = run(&e.label, ink.text, 400);
+        if let Some(n) = e.count {
+            runs.push(Run {
+                text: format!("  {n}"),
+                rgb: ink.weak,
+                weight: 400,
+            });
+        }
+        v.push(text(pos2(sw.max.x + 8.0, mid + 4.0), 11.5, false, runs));
     }
     v
 }

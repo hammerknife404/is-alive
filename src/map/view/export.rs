@@ -76,6 +76,7 @@ impl MapView {
             lay: &self.lay,
             pos: &pos,
             moved: &moved,
+            legend: self.legend,
         };
         let white = matches!(f, Format::Png { white: true, .. });
         let look = Look::new(vis, white);
