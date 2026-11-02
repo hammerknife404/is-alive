@@ -673,9 +673,9 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 | **Select its path to the WAN** | This card and every uplink up to the internet |
 | **Select with its direct children** | This card and the cards straight under it |
 | **Select with everything below it** | This card and every card under it, all the way down |
-| **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it's selected if it wasn't, and the result shows under **Results** in its section of the panel |
+| **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
-| **Open web admin** | (Firewalls and gateways, switches, access points, other network gear and servers) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
+| **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
 | **Copy IP** / **Copy MAC** | (When it has one) The address, shown on the right of the item |
 | **Copy details** | Copy the card as text |
 | **Put back in the layout** | (A card you've dragged) Back where the layout had it |
@@ -683,7 +683,7 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 
 Each item shows only when it applies, with how many cards it takes, and a line sets each group apart. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
 
-**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the panel. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
+**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the panel; a message says so and the panel scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
 
 **☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
 

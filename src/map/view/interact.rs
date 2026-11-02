@@ -576,37 +576,63 @@ impl MapView {
 
     /// Ping all, Port Check all: each of `cards` (those of `n` that have
     /// an IP) gets the panel's quick run; a few at a time, the rest queued.
+    /// A card already running that test is left to finish, as the panel's
+    /// button is greyed out while it runs.
     fn menu_test_all(&mut self, ui: &mut Ui, sep: &mut Sep, cards: &[usize], n: usize) {
-        let k = cards.len();
-        let room = k <= MAX_TESTS;
         for (tool, tip) in TESTS.into_iter().take(2) {
-            let label = if k == n {
-                format!("{} all {k}", tool.name())
+            let idle: Vec<usize> = cards
+                .iter()
+                .copied()
+                .filter(|&k| !self.runs.active(&self.map.nodes[k].id, tool))
+                .collect();
+            let (k, busy) = (idle.len(), cards.len() - idle.len());
+            let label = all_label(tool, k, cards.len(), n);
+            let tip = if busy > 0 && k > 0 {
+                format!("{tip}\nNot the {busy} already running it")
             } else {
-                format!("{} the {k} with an IP", tool.name())
+                tip.to_string()
+            };
+            let off = if k == 0 {
+                "Running: see their sections in the panel".to_string()
+            } else {
+                format!("At most {MAX_TESTS} at once: select fewer cards")
             };
             if sep
-                .add_enabled(ui, room, egui::Button::new(label))
+                .add_enabled(ui, k > 0 && k <= MAX_TESTS, egui::Button::new(label))
                 .on_hover_text(tip)
-                .on_disabled_hover_text(format!("At most {MAX_TESTS} at once: select fewer cards"))
+                .on_disabled_hover_text(off)
                 .clicked()
             {
-                self.menu_run(ui.ctx(), cards, tool);
+                self.menu_run(ui.ctx(), &idle, tool);
                 ui.close();
             }
         }
     }
 
-    /// Run `tool` on each of `cards`, as the panel's buttons do. A card
-    /// that isn't selected is selected first, so its result shows.
+    /// Run `tool` on each of `cards`, as the panel's buttons do, and scroll
+    /// the panel to the result. A card that isn't selected joins the
+    /// selection (or is selected, when nothing is), so its result shows.
+    /// Several: a toast says where the results are, and the panel goes to
+    /// the first.
     fn menu_run(&mut self, ctx: &egui::Context, cards: &[usize], tool: Tool) {
         if let [i] = cards
             && !self.selection().contains(i)
         {
-            self.select(Some(*i));
+            if self.selection().is_empty() {
+                self.select(Some(*i));
+            } else {
+                self.toggle(*i);
+            }
         }
         for &k in cards {
             self.run_card(ctx, k, tool);
+        }
+        if cards.len() > 1 {
+            widgets::toast(started(tool, cards.len()), true);
+        }
+        let first = self.ordered().into_iter().find(|k| cards.contains(k));
+        if let Some(k) = first {
+            panel::reveal(ctx, &self.map.nodes[k].id, tool);
         }
     }
 
@@ -932,14 +958,64 @@ const MAX_TESTS: usize = 32;
 /// A site's name in the card menu is cut to this many characters.
 const SITE_CHARS: usize = 28;
 
-/// Network gear with a web admin page worth offering: the gateway or
-/// firewall, switches, access points, other gear and servers (a NAS).
+/// A card with a web admin page worth offering: the gateway or firewall,
+/// switches, access points and other gear. A server or device only when a
+/// web port is known to be open, or it's one that has a page (a NAS, ESXi
+/// or Proxmox, a BMC, a backup appliance, a UPS card); not every server.
 pub(super) fn has_admin(n: &Node) -> bool {
-    !n.client
-        && matches!(
-            n.zone,
-            Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear | Zone::Server
-        )
+    if n.client {
+        return false;
+    }
+    match n.zone {
+        Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear => true,
+        Zone::Server | Zone::Device => web_open(&n.open) || admin_words(n),
+        _ => false,
+    }
+}
+
+/// A web port is known to be open.
+pub(super) fn web_open(open: &[u16]) -> bool {
+    [443, 8443, 80].iter().any(|p| open.contains(p))
+}
+
+/// The card's kind, name, line or chips name a device that has a web
+/// admin page.
+fn admin_words(n: &Node) -> bool {
+    const WORDS: [&str; 20] = [
+        "NAS", "SAN", "SYNOLOGY", "QNAP", "TRUENAS", "UNRAID", "ESXI", "VCENTER", "PROXMOX", "PVE",
+        "XCP", "IDRAC", "ILO", "IPMI", "BMC", "BDR", "DATTO", "UPS", "PDU", "NVR",
+    ];
+    std::iter::once(&n.kind)
+        .chain([&n.label, &n.sub])
+        .chain(&n.chips)
+        .any(|s| {
+            s.to_uppercase()
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|w| WORDS.contains(&w))
+        })
+}
+
+/// Ping all or Port Check all: `k` cards to run, of the `ip` that have an
+/// IP, of the `n` the menu acts on. None left (all running): as if all.
+pub(super) fn all_label(tool: Tool, k: usize, ip: usize, n: usize) -> String {
+    let name = tool.name();
+    if k == n || (k == 0 && ip == n) {
+        format!("{name} all {n}")
+    } else if k == ip || k == 0 {
+        format!("{name} the {ip} with an IP")
+    } else {
+        format!("{name} the other {k}")
+    }
+}
+
+/// The toast when a test starts on `k` cards.
+fn started(tool: Tool, k: usize) -> String {
+    let what = match tool {
+        Tool::Ping => format!("Pinging {k} cards"),
+        Tool::Ports => format!("Checking the ports of {k} cards"),
+        Tool::Trace => format!("Tracing the route to {k} cards"),
+    };
+    format!("{what}: each result shows in its card's section of the panel")
 }
 
 /// A device's web page: https on its own port, unless its known open ports

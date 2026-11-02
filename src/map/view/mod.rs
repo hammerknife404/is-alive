@@ -2263,6 +2263,8 @@ mod tests {
         canvas: Vec<(String, Rect)>,
         panel: Vec<(String, Rect)>,
         buttons: HashMap<usize, Rect>,
+        /// The text in view in the detail panel.
+        detail: Vec<(String, Rect)>,
         /// Separators on the canvas's menu.
         canvas_lines: usize,
     }
@@ -2323,6 +2325,13 @@ mod tests {
             for id in popups {
                 shown.panel.extend(lines(on(ui.ctx(), id)).1);
             }
+            ui.ctx().graphics(|g| {
+                if let Some(l) = g.get(LayerId::background()) {
+                    l.all_entries()
+                        .for_each(|c| texts(&c.shape, &mut shown.detail));
+                }
+            });
+            shown.detail.retain(|(_, r)| panel.contains_rect(*r));
         });
         out.textures_delta.clear();
         // As the tab does at the end of each frame.
@@ -2523,6 +2532,87 @@ mod tests {
         assert!(has(&menu_on(&mut v, 7), "Ping all 2"));
     }
 
+    /// tree8 on the canvas, cards 4, 5 and 7 with a loopback IP each.
+    fn testable() -> MapView {
+        let mut v = on_canvas();
+        for i in [4, 5, 7] {
+            v.map.nodes[i].ip = Some(std::net::Ipv4Addr::new(127, 0, 0, i as u8));
+        }
+        v
+    }
+
+    /// Pick `label` on the canvas's right-click menu on card `i`.
+    fn menu_pick(ctx: &egui::Context, v: &mut MapView, i: usize, label: &str) -> Shown {
+        let at = v.pos[&v.map.nodes[i].id] + CARD / 2.0;
+        let menu = click(ctx, v, at, egui::PointerButton::Secondary);
+        click(
+            ctx,
+            v,
+            item(&menu.canvas, label),
+            egui::PointerButton::Primary,
+        );
+        let mut shown = frame(ctx, v, vec![]);
+        // Time for the panel to scroll.
+        for _ in 0..6 {
+            shown = frame(ctx, v, vec![]);
+        }
+        shown
+    }
+
+    #[test]
+    fn a_test_from_the_menu_scrolls_the_panel_to_its_result() {
+        let ctx = egui::Context::default();
+        let mut v = testable();
+        // A long card: its Results far below the top of the panel.
+        v.map.nodes[4].flags = (0..60).map(|k| format!("flag {k}")).collect();
+        let shown = menu_pick(&ctx, &mut v, 4, "Port Check");
+        assert_eq!(v.selection(), [4]);
+        let texts = words(&shown.detail);
+        assert!(has(&texts, "Port Check"), "result not in view: {texts:?}");
+        assert!(!has(&texts, "⚠ flag 0"), "the panel didn't scroll");
+    }
+
+    #[test]
+    fn a_test_on_a_card_outside_the_selection_adds_it() {
+        let ctx = egui::Context::default();
+        let mut v = testable();
+        v.select(Some(7));
+        menu_pick(&ctx, &mut v, 5, "Ping");
+        assert_eq!(set(&v.selection()), set(&[5, 7]));
+        assert!(!v.runs.runs("n5").is_empty());
+    }
+
+    #[test]
+    fn ping_all_leaves_a_running_test_to_finish() {
+        let ctx = egui::Context::default();
+        let mut v = testable();
+        v.select(Some(4));
+        v.toggle(5);
+        v.toggle(7);
+        // Card 4 already pinging (another address, to tell its run apart).
+        let other: std::net::IpAddr = "127.0.0.99".parse().unwrap();
+        v.runs.start("n4", Tool::Ping, other);
+        let menu = menu_on(&mut v, 4);
+        assert!(has(&menu, "Ping the other 2"), "{menu:?}");
+        assert!(has(&menu, "Port Check all 3"), "{menu:?}");
+        menu_pick(&ctx, &mut v, 4, "Ping the other 2");
+        assert_eq!(v.runs.runs("n4")[0].ip, other, "card 4's ping restarted");
+        assert!(!v.runs.runs("n5").is_empty());
+        assert!(!v.runs.runs("n7").is_empty());
+    }
+
+    #[test]
+    fn ping_all_counts_the_cards_it_will_run() {
+        use interact::all_label;
+        assert_eq!(all_label(Tool::Ping, 3, 3, 3), "Ping all 3");
+        assert_eq!(all_label(Tool::Ping, 2, 2, 3), "Ping the 2 with an IP");
+        assert_eq!(all_label(Tool::Ports, 2, 3, 3), "Port Check the other 2");
+        assert_eq!(all_label(Tool::Ping, 1, 2, 3), "Ping the other 1");
+        // All running: greyed out, named as if all.
+        assert_eq!(all_label(Tool::Ping, 0, 3, 3), "Ping all 3");
+        assert_eq!(all_label(Tool::Ping, 0, 2, 3), "Ping the 2 with an IP");
+    }
+
     #[test]
     fn copy_ip_and_mac_give_a_line_for_each_card_that_has_one() {
         let mut v = view(3);
@@ -2612,22 +2702,38 @@ mod tests {
     }
 
     #[test]
-    fn web_admin_is_for_network_gear_not_clients() {
-        let card = |zone| Node {
+    fn web_admin_is_for_network_gear_and_servers_that_have_a_page() {
+        let card = |zone, kind: &str| Node {
             zone,
+            kind: kind.into(),
             ..Default::default()
         };
-        for z in [
-            Zone::Gateway,
-            Zone::Switch,
-            Zone::Wireless,
-            Zone::Gear,
-            Zone::Server,
-        ] {
-            assert!(interact::has_admin(&card(z)), "{z:?}");
+        for z in [Zone::Gateway, Zone::Switch, Zone::Wireless, Zone::Gear] {
+            assert!(interact::has_admin(&card(z, "")), "{z:?}");
         }
-        for z in [Zone::Client, Zone::Device, Zone::Internet, Zone::Unknown] {
-            assert!(!interact::has_admin(&card(z)), "{z:?}");
+        for z in [Zone::Client, Zone::Internet, Zone::Unknown] {
+            assert!(!interact::has_admin(&card(z, "NAS")), "{z:?}");
         }
+        // A server or device: not just any (a domain controller has no
+        // page), but a NAS, a hypervisor, a UPS card, or one with a web
+        // port known to be open.
+        for kind in ["DOMAIN CONTROLLER", "SQL SERVER", "FILE SERVER", "PRINTER"] {
+            assert!(!interact::has_admin(&card(Zone::Server, kind)), "{kind}");
+        }
+        for kind in ["NAS", "ESXI HOST", "BDR", "UPS", "IDRAC"] {
+            assert!(interact::has_admin(&card(Zone::Server, kind)), "{kind}");
+        }
+        let mut ups = card(Zone::Device, "UPS");
+        assert!(interact::has_admin(&ups));
+        ups.kind = "POWER".into();
+        ups.chips = vec!["Synology".into()];
+        assert!(interact::has_admin(&ups), "a chip names it");
+        let mut dc = card(Zone::Server, "DOMAIN CONTROLLER");
+        dc.open = vec![135, 443];
+        assert!(interact::has_admin(&dc), "https is open");
+        // A client never, whatever it is.
+        let mut nas = card(Zone::Server, "NAS");
+        nas.client = true;
+        assert!(!interact::has_admin(&nas));
     }
 }

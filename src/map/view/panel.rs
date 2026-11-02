@@ -516,7 +516,7 @@ impl MapView {
                     }
                     // Web only when a web port is known to be open.
                     if let Some(ip) = n.ip
-                        && [443, 8443, 80].iter().any(|p| n.open.contains(p))
+                        && interact::web_open(&n.open)
                     {
                         let url = interact::web_url(ip.into(), &n.open);
                         if ui
@@ -556,6 +556,7 @@ impl MapView {
                 });
 
                 let runs = self.runs.runs(&n.id);
+                let reveal = revealing(ui.ctx(), &n.id);
                 if !runs.is_empty() {
                     ui.add_space(8.0);
                     egui::CollapsingHeader::new(
@@ -566,9 +567,20 @@ impl MapView {
                     )
                     .id_salt(("map_runs", &n.id))
                     .default_open(true)
+                    .open(reveal.map(|_| true))
                     .show(ui, |ui| {
                         for r in runs {
-                            if let Some(e) = run_section(ui, &n.id, r, busy) {
+                            let top = ui.cursor().top();
+                            let e = run_section(ui, &n.id, r, busy);
+                            if reveal == Some(r.tool) {
+                                let rect = Rect::from_x_y_ranges(
+                                    ui.max_rect().x_range(),
+                                    top..=ui.min_rect().bottom(),
+                                );
+                                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                                ui.ctx().data_mut(|d| d.remove::<Reveal>(reveal_id()));
+                            }
+                            if let Some(e) = e {
                                 match e {
                                     RunEv::Again => *ev = Some(PanelEv::Run(i, r.tool)),
                                     RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
@@ -597,6 +609,32 @@ impl MapView {
             self.runs.poll(ctx);
         }
     }
+}
+
+/// A result for the panel to scroll to: the card, the test, and when it
+/// was asked for.
+type Reveal = (String, Tool, f64);
+
+fn reveal_id() -> egui::Id {
+    egui::Id::new("map_reveal")
+}
+
+/// Scroll the panel to card `id`'s `tool` result the next time it's
+/// drawn: a test started from the card menu, which can be picked with the
+/// panel scrolled anywhere, or shut.
+pub(super) fn reveal(ctx: &egui::Context, id: &str, tool: Tool) {
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| d.insert_temp::<Reveal>(reveal_id(), (id.to_string(), tool, now)));
+}
+
+/// The result of card `id` the panel is to scroll to, if any. Asked for
+/// over two seconds ago, it's dropped: the card wasn't shown, and the
+/// panel shouldn't jump to it later.
+fn revealing(ctx: &egui::Context, id: &str) -> Option<Tool> {
+    let now = ctx.input(|i| i.time);
+    ctx.data(|d| d.get_temp::<Reveal>(reveal_id()))
+        .filter(|(card, _, at)| card == id && now - at < 2.0)
+        .map(|(_, tool, _)| tool)
 }
 
 /// What opens a card's IP in a tool's own tab, for a full run.
