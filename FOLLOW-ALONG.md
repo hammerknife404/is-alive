@@ -14,6 +14,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
    - **Linux:** `is-alive-x86_64.AppImage`
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
+   - **Windows, "Unknown Publisher":** if a box says *"The publisher could not be verified"*, click **Run**. is-alive isn't code-signed yet, so Windows can't show who made it. Only download it from the release page above.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
 4. Check the version: the bottom right corner of the window says `v0.24.0` (or newer), and so does the title bar.
 5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
