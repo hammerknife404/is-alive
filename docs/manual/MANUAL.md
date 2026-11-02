@@ -1,14 +1,10 @@
 <!--
 Maintainers: the screenshots in img/ are made by scripts/manual-shots.sh and
 are updated only for full releases (x.y.0). See "Updating this manual" at the
-end. Until the first full release after this manual was written (0.25.0), the
-img/ folder is empty and the pictures below don't show yet: remove the note
-under the title when they're committed.
+end.
 -->
 
 # is-alive user manual
-
-> **The pictures arrive with is-alive 0.25.0.** Until that release, the places they go show only their descriptions.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
