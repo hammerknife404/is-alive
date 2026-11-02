@@ -229,6 +229,9 @@ pub struct MapView {
     /// toggle was clicked.
     bar: bool,
     bar_flip: bool,
+    /// What the toolbar's one row took the last time it was drawn as
+    /// one, with a gap to spare: narrower, the layouts wrap.
+    row_need: f32,
 }
 
 /// What a right-click menu was opened on.
@@ -1010,6 +1013,14 @@ impl MapView {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let ctx = ui.ctx().clone();
         let mode = self.mode;
+        // A drag whose button came up while another tab showed never saw
+        // its end: it's over, and its move a step (or undo would wait for
+        // it forever).
+        let lost = ctx.dragged_id().is_none() && ctx.drag_stopped_id().is_none();
+        if self.drag.is_some() && lost && !ctx.input(|i| i.pointer.any_down()) {
+            self.drag = None;
+            self.track_edits();
+        }
         self.history_keys(&ctx);
         self.refresh(&ctx, &src);
         self.settle_edits();
@@ -1055,8 +1066,9 @@ impl MapView {
         let mut act = None;
         let mut search_enter = false;
         let mut fit = false;
-        // Roughly what one row needs.
-        let narrow = ui.available_width() < 1100.0;
+        // What one row needs, as measured when last drawn as one.
+        let full = ui.available_width();
+        let narrow = full < self.row_need.max(1100.0);
         ui.horizontal(|ui| {
             // Narrower with text in it: room for the count and ×.
             let width = if self.search.is_empty() { 220.0 } else { 140.0 };
@@ -1170,6 +1182,8 @@ impl MapView {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     act = act.take().or(self.toolbar_end(ui, src, empty));
+                    // Zones touching Examples: two rows from the next frame.
+                    self.row_need = full - ui.available_width() + 16.0;
                 });
             }
         });

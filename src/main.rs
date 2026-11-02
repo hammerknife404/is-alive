@@ -261,8 +261,9 @@ impl App {
         self.export.poll();
         // A saved map opened in Config Export or dropped: the Map shows it.
         for (path, data) in self.export.take_saved_maps() {
-            if self.map.open_file(&path, &data) {
-                self.tab = Tab::Map;
+            match self.map.open_file(&path, &data) {
+                Ok(()) => self.tab = Tab::Map,
+                Err(e) => self.export.refused(&path, &e),
             }
         }
         if self.reloading && !self.export.is_running() {

@@ -23,10 +23,22 @@ struct Tab {
 enum TabEv {
     Rename(usize),
     Update(usize),
+    Replace(usize),
     Duplicate(usize),
     Export(usize),
     Delete(usize),
 }
+
+/// What the dialog over the map is asking before it's done.
+#[derive(Clone, Copy)]
+enum Ask {
+    Delete(usize),
+    /// Saved map `i` overwritten with the map showing.
+    Replace(usize),
+}
+
+/// Longest sub-tab label; the full name is in its tooltip.
+const LABEL_MAX: usize = 28;
 
 pub struct MapTabs {
     live: MapView,
@@ -39,10 +51,14 @@ pub struct MapTabs {
     dir: Option<PathBuf>,
     /// The sub-tab being renamed, with the name as typed so far.
     renaming: Option<(usize, String)>,
-    /// The sub-tab Delete asked about (the dialog is open).
-    deleting: Option<usize>,
+    /// What the dialog open over the map asks about (Delete, Replace).
+    asking: Option<Ask>,
     /// Open…'s file dialog, then the file read.
     opening: Option<Job<(PathBuf, Result<Snapshot, String>)>>,
+    /// Saved maps' files that couldn't be read, and why.
+    skipped: Vec<String>,
+    /// The Map tab has shown, so `skipped` was told once.
+    told: bool,
 }
 
 impl MapTabs {
@@ -55,28 +71,39 @@ impl MapTabs {
     }
 
     fn in_dir(live: MapView, dir: Option<PathBuf>) -> Self {
-        let (found, errs) = dir.as_deref().map(saved::list).unwrap_or_default();
-        if !errs.is_empty() {
-            widgets::toast(
-                format!(
-                    "Couldn't read {} saved map{}: {}",
-                    errs.len(),
-                    if errs.len() == 1 { "" } else { "s" },
-                    errs.join("; ")
-                ),
-                false,
-            );
-        }
+        let (found, skipped) = dir.as_deref().map(saved::list).unwrap_or_default();
         let saved: Vec<Tab> = found.into_iter().map(|(p, s)| tab(p, s)).collect();
         Self {
             live,
-            bar: !saved.is_empty(),
+            bar: !saved.is_empty() || !skipped.is_empty(),
             saved,
             shown: None,
             dir,
             renaming: None,
-            deleting: None,
+            asking: None,
             opening: None,
+            skipped,
+            told: false,
+        }
+    }
+
+    /// Saved maps that couldn't be read, said once the Map tab shows (and
+    /// kept in the bar after).
+    fn tell_skipped(&mut self) {
+        if self.told {
+            return;
+        }
+        self.told = true;
+        let n = self.skipped.len();
+        if n > 0 {
+            widgets::toast(
+                format!(
+                    "Couldn't read {n} saved map{}: {}",
+                    if n == 1 { "" } else { "s" },
+                    self.skipped.join("; ")
+                ),
+                false,
+            );
         }
     }
 
@@ -107,43 +134,54 @@ impl MapTabs {
     }
 
     /// A saved map handed over by Config Export (opened or dropped): kept
-    /// with the others and shown. False when it couldn't be read.
-    pub fn open_file(&mut self, path: &Path, data: &[u8]) -> bool {
+    /// with the others and shown. Why not, when it couldn't be.
+    pub fn open_file(&mut self, path: &Path, data: &[u8]) -> Result<(), String> {
         let name = crate::tools::export::file_name(path);
-        match saved::parse(data) {
-            Ok(s) => self.add(s, &name),
-            Err(e) => {
-                widgets::toast(format!("Couldn't open {name}: {e}"), false);
-                false
-            }
+        let r = saved::parse(data).and_then(|s| self.add(s, &name));
+        if let Err(e) = &r {
+            widgets::toast(format!("Couldn't open {name}: {e}"), false);
         }
+        r
     }
 
     /// Keep a map read from a file as a new saved map, and show it.
-    fn add(&mut self, mut s: Snapshot, from: &str) -> bool {
+    fn add(&mut self, mut s: Snapshot, from: &str) -> Result<(), String> {
         s.created = saved::now();
-        let ok = self.keep_new(s);
-        if ok {
-            widgets::toast(format!("Opened {from} as a saved map"), true);
-        }
-        ok
+        self.keep_new(s)?;
+        widgets::toast(format!("Opened {from} as a saved map"), true);
+        Ok(())
     }
 
-    /// Write `s` as a new saved map, add its sub-tab and show it.
-    fn keep_new(&mut self, s: Snapshot) -> bool {
+    /// Write `s` as a new saved map, add its sub-tab and show it. A name
+    /// another saved map has gets a number: "Acme (2)".
+    fn keep_new(&mut self, mut s: Snapshot) -> Result<(), String> {
         let Some(dir) = &self.dir else {
-            widgets::toast("No settings folder to keep saved maps in", false);
-            return false;
+            return Err("no settings folder to keep saved maps in".into());
         };
+        s.name = self.unique_name(&s.name, None);
         let path = saved::fresh_path(dir, &s.name);
-        if let Err(e) = saved::write(&path, &s) {
-            widgets::toast(format!("Couldn't save the map: {e}"), false);
-            return false;
-        }
+        saved::write(&path, &s).map_err(|e| format!("couldn't save the map: {e}"))?;
         self.saved.push(tab(path, s));
         self.shown = Some(self.saved.len() - 1);
         self.bar = true;
-        true
+        Ok(())
+    }
+
+    /// `name`, or with a number if another saved map (not `skip`) has it.
+    fn unique_name(&self, name: &str, skip: Option<usize>) -> String {
+        let taken = |n: &str| {
+            self.saved
+                .iter()
+                .enumerate()
+                .any(|(k, t)| Some(k) != skip && t.name == n)
+        };
+        (1..)
+            .map(|k| match k {
+                1 => name.to_string(),
+                k => format!("{name} ({k})"),
+            })
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| name.to_string())
     }
 
     /// The map showing, as a saved map called `name`. None when it's
@@ -178,12 +216,13 @@ impl MapTabs {
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         self.poll_open();
+        self.tell_skipped();
         if self.bar {
             egui::Panel::bottom("map_saved_bar")
                 .resizable(false)
                 .show(ui, |ui| self.bar_ui(ui, &src));
         }
-        self.delete_dialog(ui.ctx());
+        self.confirm_dialog(ui.ctx(), &src);
         let bar = self.bar;
         let saved = self.shown.is_some();
         let view = self.view();
@@ -255,8 +294,13 @@ impl MapTabs {
                     )
                     .on_disabled_hover_text(NOTHING_YET)
                     .clicked();
+                self.skipped_note(ui);
                 ui.separator();
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // The wheel scrolls the tabs sideways, and the bar
+                    // takes room of its own rather than covering them.
+                    ui.style_mut().always_scroll_the_only_direction = true;
+                    ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
                     egui::ScrollArea::horizontal()
                         .id_salt("map_saved_tabs")
                         .show(ui, |ui| {
@@ -267,26 +311,36 @@ impl MapTabs {
         });
         if save {
             let name = self.default_name();
-            if let Some(s) = self.snapshot_shown(src, &name, saved::now())
-                && self.keep_new(s)
-            {
-                widgets::toast(
-                    format!("Saved \"{name}\": right-click its tab to rename it"),
-                    true,
-                );
-                self.renaming = self.shown.map(|i| (i, self.saved[i].name.clone()));
+            if let Some(s) = self.snapshot_shown(src, &name, saved::now()) {
+                match self.keep_new(s) {
+                    Ok(()) => {
+                        let i = self.saved.len() - 1;
+                        widgets::toast(
+                            format!(
+                                "Saved \"{}\": right-click its tab to rename it",
+                                self.saved[i].name
+                            ),
+                            true,
+                        );
+                        self.renaming = Some((i, self.saved[i].name.clone()));
+                    }
+                    Err(e) => widgets::toast(format!("Couldn't save the map: {e}"), false),
+                }
             }
         }
         match ev {
             Some(TabEv::Rename(i)) => self.renaming = Some((i, self.saved[i].name.clone())),
-            Some(TabEv::Update(i)) => self.update(i, src),
+            Some(TabEv::Update(i)) => self.update(i),
+            Some(TabEv::Replace(i)) => self.asking = Some(Ask::Replace(i)),
             Some(TabEv::Duplicate(i)) => {
                 let t = &self.saved[i];
                 let name = format!("{} copy", t.name);
                 let full = t.view.frozen.as_deref().map(saved::copy_map);
                 if let Some(full) = full {
                     let s = t.view.snapshot(&name, saved::now(), full);
-                    self.keep_new(s);
+                    if let Err(e) = self.keep_new(s) {
+                        widgets::toast(format!("Couldn't copy the map: {e}"), false);
+                    }
                 }
             }
             Some(TabEv::Export(i)) => {
@@ -301,9 +355,27 @@ impl MapTabs {
                     );
                 }
             }
-            Some(TabEv::Delete(i)) => self.deleting = Some(i),
+            Some(TabEv::Delete(i)) => self.asking = Some(Ask::Delete(i)),
             None => {}
         }
+    }
+
+    /// Saved maps' files that couldn't be read: how many, and why on
+    /// hover.
+    fn skipped_note(&self, ui: &mut Ui) {
+        let n = self.skipped.len();
+        if n == 0 {
+            return;
+        }
+        ui.label(RichText::new(format!("⚠ {n} couldn't be read")).color(widgets::warn()))
+            .on_hover_text(format!(
+                "These files in {} aren't saved maps this version can open:\n{}",
+                self.dir
+                    .as_deref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default(),
+                self.skipped.join("\n")
+            ));
     }
 
     /// The sub-tabs; what one's menu asked for.
@@ -324,16 +396,21 @@ impl MapTabs {
             }
             let t = &self.saved[i];
             let changed = t.view.edits_differ(&t.saved);
-            let label = if changed {
-                format!("{} •", t.name)
-            } else {
-                t.name.clone()
-            };
-            let tip = if changed {
+            let mut label = short(&t.name);
+            if changed {
+                label.push_str(" •");
+            }
+            let what = if changed {
                 "Changed since it was saved: right-click › Update with current keeps the changes"
             } else {
                 "A saved map. Right-click to rename, update, duplicate, export or delete it"
             };
+            let tip = format!(
+                "{}\n{what}\n{} · saved {}",
+                t.name,
+                crate::tools::export::file_name(&t.path),
+                t.created.get(..10).unwrap_or(&t.created)
+            );
             let r = ui
                 .selectable_label(self.shown == Some(i), label)
                 .on_hover_text(tip);
@@ -341,7 +418,7 @@ impl MapTabs {
                 self.shown = Some(i);
             }
             r.context_menu(|ui| {
-                ev = tab_menu(ui, i, self.shown);
+                ev = tab_menu(ui, i, self.shown, changed);
             });
         }
         if self.saved.is_empty() {
@@ -366,6 +443,7 @@ impl MapTabs {
             let name = crate::input::line(name, saved::NAME_MAX);
             self.renaming = None;
             if keep && !name.is_empty() && name != self.saved[i].name {
+                let name = self.unique_name(&name, Some(i));
                 self.rename(i, name);
             }
         }
@@ -405,9 +483,27 @@ impl MapTabs {
         }
     }
 
-    /// Update with current: saved map `i` becomes the map showing (its own
-    /// changes, or Live's map, or another saved one).
-    fn update(&mut self, i: usize, src: &Sources) {
+    /// Update with current: saved map `i` keeps the changes made to it
+    /// since it was saved, shown or not. Its view (and its undo) carries
+    /// on.
+    fn update(&mut self, i: usize) {
+        let t = &self.saved[i];
+        let Some(full) = t.view.frozen.as_deref().map(saved::copy_map) else {
+            return;
+        };
+        let s = t.view.snapshot(&t.name, t.created.clone(), full);
+        if let Err(e) = saved::write(&t.path, &s) {
+            widgets::toast(format!("Couldn't save the map: {e}"), false);
+            return;
+        }
+        let t = &mut self.saved[i];
+        t.saved = s.edits;
+        widgets::toast(format!("Updated \"{}\"", t.name), true);
+    }
+
+    /// Replace with the map showing (asked first): saved map `i` becomes
+    /// Live's map or another saved one, its own map and undo gone.
+    fn replace(&mut self, i: usize, src: &Sources) {
         let (name, created) = (self.saved[i].name.clone(), self.saved[i].created.clone());
         let Some(s) = self.snapshot_shown(src, &name, created) else {
             widgets::toast("Nothing on the map to save", false);
@@ -417,35 +513,55 @@ impl MapTabs {
             widgets::toast(format!("Couldn't save the map: {e}"), false);
             return;
         }
-        let t = &mut self.saved[i];
-        if self.shown == Some(i) {
-            // Its own changes: the view (and its undo) carries on.
-            t.saved = s.edits;
-        } else {
-            let path = t.path.clone();
-            *t = tab(path, s);
-        }
-        widgets::toast(format!("Updated \"{name}\""), true);
+        let path = self.saved[i].path.clone();
+        self.saved[i] = tab(path, s);
+        widgets::toast(format!("Replaced \"{name}\""), true);
     }
 
-    /// Delete…: ask first, then take the map and its file away.
-    fn delete_dialog(&mut self, ctx: &egui::Context) {
-        let Some(i) = self.deleting.filter(|&i| i < self.saved.len()) else {
-            self.deleting = None;
+    /// Delete… and Replace…: ask first, then do it.
+    fn confirm_dialog(&mut self, ctx: &egui::Context, src: &Sources) {
+        let Some(ask) = self.asking else { return };
+        let (Ask::Delete(i) | Ask::Replace(i)) = ask;
+        if i >= self.saved.len() {
+            self.asking = None;
             return;
+        }
+        let t = &self.saved[i];
+        let (title, body, verb) = match ask {
+            Ask::Delete(_) => (
+                format!("Delete \"{}\"?", t.name),
+                "Its file is deleted too. This can't be undone.".to_string(),
+                "Delete",
+            ),
+            Ask::Replace(_) => (
+                format!("Replace \"{}\" with the map showing?", t.name),
+                format!(
+                    "Its file then holds {} instead{}. This can't be undone.",
+                    match self.shown {
+                        Some(k) => format!("\"{}\"", self.saved[k].name),
+                        None => "the live map".into(),
+                    },
+                    if t.view.edits_differ(&t.saved) {
+                        ", and its own unsaved changes are lost"
+                    } else {
+                        ""
+                    }
+                ),
+                "Replace",
+            ),
         };
-        let mut gone = false;
-        let r = egui::Modal::new(egui::Id::new("map_delete")).show(ctx, |ui| {
+        let mut yes = false;
+        let r = egui::Modal::new(egui::Id::new("map_confirm")).show(ctx, |ui| {
             ui.set_max_width(320.0);
-            ui.strong(format!("Delete \"{}\"?", self.saved[i].name));
-            ui.label("Its file is deleted too. This can't be undone.");
+            ui.strong(title);
+            ui.label(body);
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(RichText::new("Delete").color(widgets::bad()))
+                    .button(RichText::new(verb).color(widgets::bad()))
                     .clicked()
                 {
-                    gone = true;
+                    yes = true;
                     ui.close();
                 }
                 if ui.button("Cancel").clicked() {
@@ -453,11 +569,14 @@ impl MapTabs {
                 }
             });
         });
-        if gone {
-            self.delete(i);
+        if yes {
+            match ask {
+                Ask::Delete(i) => self.delete(i),
+                Ask::Replace(i) => self.replace(i, src),
+            }
         }
         if r.should_close() {
-            self.deleting = None;
+            self.asking = None;
         }
     }
 
@@ -474,7 +593,7 @@ impl MapTabs {
             k => k,
         };
         self.renaming = None;
-        self.deleting = None;
+        self.asking = None;
         widgets::toast(format!("Deleted \"{}\"", t.name), true);
     }
 
@@ -501,11 +620,8 @@ impl MapTabs {
         pump(&mut self.opening, |r| got = Some(r));
         if let Some((path, r)) = got {
             let name = crate::tools::export::file_name(&path);
-            match r {
-                Ok(s) => {
-                    self.add(s, &name);
-                }
-                Err(e) => widgets::toast(format!("Couldn't open {name}: {e}"), false),
+            if let Err(e) = r.and_then(|s| self.add(s, &name)) {
+                widgets::toast(format!("Couldn't open {name}: {e}"), false);
             }
         }
     }
@@ -522,52 +638,114 @@ fn tab(path: PathBuf, s: Snapshot) -> Tab {
     }
 }
 
-/// A sub-tab's right-click menu.
-fn tab_menu(ui: &mut Ui, i: usize, shown: Option<usize>) -> Option<TabEv> {
+/// A name cut to fit a sub-tab.
+fn short(name: &str) -> String {
+    if name.chars().count() <= LABEL_MAX {
+        return name.to_string();
+    }
+    let cut: String = name.chars().take(LABEL_MAX - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// A sub-tab's right-click menu. `changed`: it has changes not saved.
+fn tab_menu(ui: &mut Ui, i: usize, shown: Option<usize>, changed: bool) -> Option<TabEv> {
     let mut ev = None;
-    let mut item = |ui: &mut Ui, label: &str, tip: &str, e: TabEv| {
-        if ui.button(label).on_hover_text(tip).clicked() {
+    let mut item = |ui: &mut Ui, on: bool, label: &str, tip: &str, e: TabEv| {
+        if ui
+            .add_enabled(on, egui::Button::new(label))
+            .on_hover_text(tip)
+            .on_disabled_hover_text("No changes since it was saved")
+            .clicked()
+        {
             ev = Some(e);
             ui.close();
         }
     };
-    item(ui, "Rename", "Give it another name", TabEv::Rename(i));
-    let update_tip = match shown {
-        Some(k) if k == i => "Keep the changes made to it since it was saved",
-        Some(_) => "Replace it with the saved map showing now",
-        None => "Replace it with the live map as it is now",
-    };
-    item(ui, "Update with current", update_tip, TabEv::Update(i));
+    item(ui, true, "Rename", "Give it another name", TabEv::Rename(i));
     item(
         ui,
+        changed,
+        "Update with current",
+        "Keep the changes made to it since it was saved (marked •)",
+        TabEv::Update(i),
+    );
+    // Only from another map: on its own tab it would replace itself.
+    if shown != Some(i) {
+        let tip = match shown {
+            Some(_) => "Overwrite it with the saved map showing now (asks first)",
+            None => "Overwrite it with the live map as it is now (asks first)",
+        };
+        item(
+            ui,
+            true,
+            "Replace with the map showing…",
+            tip,
+            TabEv::Replace(i),
+        );
+    }
+    item(
+        ui,
+        true,
         "Duplicate",
         "A copy of it, as it is now, beside it",
         TabEv::Duplicate(i),
     );
     item(
         ui,
+        true,
         "Export JSON…",
         "Save it as a file to share: Open… here (or Config Export) reads it",
         TabEv::Export(i),
     );
     ui.separator();
-    item(ui, "Delete…", "Take it and its file away", TabEv::Delete(i));
+    item(
+        ui,
+        true,
+        "Delete…",
+        "Take it and its file away (asks first)",
+        TabEv::Delete(i),
+    );
     ev
 }
 
-/// How wide Saved maps is on the canvas, with its gap.
-pub const TOGGLE_W: f32 = 92.0;
+/// How wide Saved maps is on the canvas.
+const TOGGLE_W: f32 = 84.0;
+/// The zoom controls' room from the canvas's right edge, and the gap
+/// before Saved maps (see zoom_controls).
+const ZOOM_W: f32 = 10.0 + 208.0 + 12.0;
+
+/// Where Saved maps goes: left of the zoom controls, or above them on a
+/// canvas too narrow for both in a row. None with no room at all (the
+/// bar's own button and the empty map's link still reach it).
+fn toggle_rect(rect: Rect) -> Option<Rect> {
+    let right = rect.max.x - ZOOM_W;
+    if right - TOGGLE_W >= rect.min.x + 8.0 {
+        return Some(Rect::from_min_max(
+            pos2(right - TOGGLE_W, rect.max.y - 32.0),
+            pos2(right, rect.max.y - 10.0),
+        ));
+    }
+    let r = Rect::from_min_max(
+        pos2(rect.max.x - 10.0 - TOGGLE_W, rect.max.y - 60.0),
+        pos2(rect.max.x - 10.0, rect.max.y - 38.0),
+    );
+    (r.min.x >= rect.min.x + 8.0 && r.min.y >= rect.min.y + 40.0).then_some(r)
+}
+
+/// Where the controls along the canvas's bottom edge start: the legend
+/// stops short of it.
+pub fn corner_left(rect: Rect) -> f32 {
+    match toggle_rect(rect) {
+        Some(r) if r.max.y > rect.max.y - 30.0 => r.min.x,
+        _ => rect.max.x - ZOOM_W + 12.0,
+    }
+}
 
 impl MapView {
     /// Saved maps, beside the zoom controls in the canvas corner: shows or
     /// hides the bar along the bottom.
     pub(super) fn bar_toggle(&mut self, ui: &mut Ui, rect: Rect) {
-        // Left of − 100% + Center Fit (see zoom_controls).
-        let right = rect.max.x - 10.0 - 208.0 - 12.0;
-        let r = Rect::from_min_max(
-            pos2(right - (TOGGLE_W - 8.0), rect.max.y - 32.0),
-            pos2(right, rect.max.y - 10.0),
-        );
+        let Some(r) = toggle_rect(rect) else { return };
         if ui
             .put(
                 r,
@@ -608,8 +786,11 @@ mod tests {
         let dir = temp("persist");
         let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
         assert!(t.saved.is_empty() && !t.bar);
-        assert!(t.keep_new(sample("Head office", "2026-01-01T00:00:00Z")));
-        assert!(t.keep_new(sample("Branch", "2026-01-02T00:00:00Z")));
+        assert!(
+            t.keep_new(sample("Head office", "2026-01-01T00:00:00Z"))
+                .is_ok()
+        );
+        assert!(t.keep_new(sample("Branch", "2026-01-02T00:00:00Z")).is_ok());
         assert_eq!(t.shown, Some(1));
         assert!(t.bar);
         t.rename(0, "HQ main".into());
@@ -634,7 +815,7 @@ mod tests {
     fn a_saved_map_keeps_its_changes_once_updated() {
         let dir = temp("update");
         let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
-        t.keep_new(sample("Site", "2026-01-01T00:00:00Z"));
+        t.keep_new(sample("Site", "2026-01-01T00:00:00Z")).unwrap();
         let v = &mut t.saved[0].view;
         v.refresh_saved(&egui::Context::default());
         v.placed.insert("gw".into(), pos2(5.0, 5.0));
@@ -642,16 +823,10 @@ mod tests {
             t.saved[0].view.edits_differ(&t.saved[0].saved),
             "shown with a •"
         );
-        let info = HostInfo::default();
-        let (sweep, export) = (SweepTool::default(), ExportTool::default());
-        let src = Sources {
-            sweep: &sweep,
-            export: &export,
-            info: &info,
-            busy: false,
-            note: false,
-        };
-        t.update(0, &src);
+        // Live showing: Update with current still keeps the saved map's own
+        // changes, not the live map.
+        t.shown = None;
+        t.update(0);
         assert!(!t.saved[0].view.edits_differ(&t.saved[0].saved));
         let back = saved::read(&t.saved[0].path).unwrap();
         assert_eq!(back.edits.placed.get("gw"), Some(&pos2(5.0, 5.0)));
@@ -659,12 +834,62 @@ mod tests {
     }
 
     #[test]
+    fn saved_maps_stays_on_the_canvas_clear_of_the_legend() {
+        let wide = Rect::from_min_size(pos2(240.0, 0.0), vec2(800.0, 500.0));
+        let r = toggle_rect(wide).unwrap();
+        assert_eq!(r.max.x, wide.max.x - ZOOM_W);
+        assert_eq!(corner_left(wide), r.min.x);
+        // 250 px: above the zoom controls, inside the canvas.
+        let narrow = Rect::from_min_size(pos2(240.0, 0.0), vec2(250.0, 500.0));
+        let r = toggle_rect(narrow).unwrap();
+        assert!(r.min.x >= narrow.min.x && r.max.y < narrow.max.y - 32.0);
+        assert_eq!(corner_left(narrow), narrow.max.x - ZOOM_W + 12.0);
+        let tiny = Rect::from_min_size(pos2(240.0, 0.0), vec2(60.0, 500.0));
+        assert!(toggle_rect(tiny).is_none());
+    }
+
+    #[test]
     fn a_file_that_isnt_a_saved_map_is_refused() {
         let mut t = MapTabs::in_dir(MapView::new(None), None);
-        assert!(!t.open_file(Path::new("x.json"), b"{\"format\": \"other\"}"));
+        assert!(
+            t.open_file(Path::new("x.json"), b"{\"format\": \"other\"}")
+                .is_err()
+        );
         assert!(t.saved.is_empty());
         // No settings folder: nowhere to keep it.
         let good = saved::to_json(&saved::sample());
-        assert!(!t.open_file(Path::new("x.json"), good.as_bytes()));
+        assert!(t.open_file(Path::new("x.json"), good.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn maps_with_the_same_name_are_told_apart() {
+        let dir = temp("names");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        for _ in 0..3 {
+            t.keep_new(sample("Acme tree", "2026-01-01T00:00:00Z"))
+                .unwrap();
+        }
+        let names: Vec<&str> = t.saved.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Acme tree", "Acme tree (2)", "Acme tree (3)"]);
+        // Renamed to a name taken: a number too; its own name is free.
+        assert_eq!(t.unique_name("Acme tree", Some(1)), "Acme tree (2)");
+        assert_eq!(t.unique_name("Acme tree (3)", Some(2)), "Acme tree (3)");
+        assert_eq!(short("Short"), "Short");
+        let long = short(&"x".repeat(80));
+        assert_eq!(long.chars().count(), LABEL_MAX);
+        assert!(long.ends_with('…'));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_that_couldnt_be_read_are_kept_to_be_told() {
+        let dir = temp("skipped");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("garbage.json"), "not json").unwrap();
+        let t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        assert_eq!(t.skipped.len(), 1);
+        assert!(t.skipped[0].starts_with("garbage.json"));
+        assert!(t.bar && !t.told, "the bar shows the note");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

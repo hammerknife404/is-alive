@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::widgets;
 use crate::{mapnetwork, meraki, sonicwall, unifi};
 use eframe::egui::{self, Ui};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A converted config, by what the file turned out to be.
 enum Export {
@@ -403,6 +403,12 @@ impl ExportTool {
             self.pending = None;
         }
         running
+    }
+
+    /// A saved map the Map couldn't open: said here with the other files
+    /// that couldn't be read.
+    pub fn refused(&mut self, path: &Path, e: &str) {
+        add_err(&mut self.err, format!("{}: {e}", file_name(path)));
     }
 
     /// Saved maps opened or dropped since last asked, for the Map tab.

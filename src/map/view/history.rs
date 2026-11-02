@@ -290,7 +290,11 @@ impl MapView {
     /// Ctrl+Z undoes; Ctrl+Shift+Z and Ctrl+Y redo. Not while a text box
     /// has the keyboard: it has its own undo.
     pub(super) fn history_keys(&mut self, ctx: &egui::Context) {
-        if ctx.text_edit_focused() {
+        // A dialog or menu open over the map: the keys are its, not the
+        // map's underneath.
+        let covered =
+            egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer().is_some());
+        if ctx.text_edit_focused() || covered {
             return;
         }
         use egui::{Key, Modifiers};

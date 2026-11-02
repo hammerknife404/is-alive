@@ -225,7 +225,6 @@ fn node_json(n: &Node) -> Value {
             "port": port,
         })),
         "site": n.site,
-        "gone": n.gone,
     })
 }
 
@@ -446,7 +445,9 @@ fn node_of(v: &Value) -> Result<Node, String> {
             .and_then(Value::as_str)
             .map(|s| input::line(s, TEXT_MAX))
             .filter(|s| !s.is_empty()),
-        gone: v.get("gone").and_then(Value::as_bool).unwrap_or(false),
+        // Not read: a gone card is one a rebuild found missing, and a
+        // saved map is never rebuilt from data (a card marked gone in a
+        // file would be taken out as if let go, its children cut loose).
         id,
         ..Default::default()
     })
@@ -781,6 +782,24 @@ mod tests {
             .collect();
         s.map.findings.clear();
         assert!(from_json(&to_json(&s)).unwrap_err().contains("up to"));
+    }
+
+    #[test]
+    fn a_card_marked_gone_in_a_file_stays_with_its_children() {
+        // gw has sw and nas below it: taken out as gone, they'd hang off
+        // the wrong cards (or none).
+        let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
+        doc["map"]["nodes"][1]["gone"] = json!(true);
+        let s = from_json(&doc.to_string()).unwrap();
+        assert!(s.map.nodes.iter().all(|n| !n.gone));
+        let mut v = MapView::from_saved(s);
+        v.closed.clear();
+        let ctx = egui::Context::default();
+        v.refresh_saved(&ctx);
+        v.drop_released(&ctx);
+        assert_eq!(v.map.nodes.len(), 5);
+        let again = to_json(&v.snapshot("x", now(), copy_map(&v.map)));
+        assert!(!again.contains("\"gone\""));
     }
 
     #[test]
