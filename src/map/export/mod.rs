@@ -29,6 +29,9 @@ pub struct Drawn<'a> {
     /// The legend is shown on the canvas: the pictures (SVG, PNG) put it
     /// under the map.
     pub legend: bool,
+    /// What a saved map says it is when it isn't what was found (a plan,
+    /// a training map): said in the summary line, as above the canvas.
+    pub caption: Option<&'a str>,
 }
 
 impl Drawn<'_> {
@@ -91,6 +94,11 @@ impl Drawn<'_> {
             "" => "Network map",
             t => t,
         }
+    }
+
+    /// The line under the title: the map's summary and the version.
+    fn summary(&self) -> String {
+        format!("{} · is-alive {}", self.map.summary, crate::VERSION)
     }
 
     /// How many cards a box holds, as on screen: a collapsed site says how
@@ -313,6 +321,7 @@ pub(crate) mod tests {
             pos: &lay.pos,
             moved: &moved,
             legend: false,
+            caption: None,
         })
     }
 
@@ -331,6 +340,48 @@ pub(crate) mod tests {
             assert_eq!(d.title(), "Acme Distribution LLC — Multi-Site");
             assert!(d.cards().count() > 5);
         });
+    }
+
+    /// A plan or a training map's picture and diagram say what it is, so
+    /// neither is taken for what was found; a map as found says nothing.
+    #[test]
+    fn a_plan_or_training_map_says_so_in_its_picture_and_diagram() {
+        let look = Look::new(&eframe::egui::Visuals::dark(), false);
+        let said = "Training map — made up for practice, not discovered";
+        with_acme(Mode::Sites, |d| {
+            for f in [Format::Svg, Format::DrawIo] {
+                let text = f.text(d, look).expect("text");
+                assert!(!text.contains("not discovered"), "{f:?}");
+                let d = Drawn {
+                    caption: Some(said),
+                    ..*d
+                };
+                let text = f.text(&d, look).expect("text");
+                assert!(text.contains(said), "{f:?}");
+                assert!(text.contains(&d.summary()), "{f:?}");
+                parse_xml(&text);
+            }
+        });
+        // However narrow the map, the picture is wide enough for it.
+        let m = crate::map::Map {
+            nodes: vec![crate::map::Node {
+                id: "internet".into(),
+                zone: Zone::Internet,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let d = Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &[false],
+            legend: false,
+            caption: Some(said),
+        };
+        let w = scene::draw(&d, look).size.x;
+        assert!(w >= 7.0 * said.chars().count() as f32 + 64.0, "{w}");
     }
 
     #[test]
@@ -364,6 +415,7 @@ pub(crate) mod tests {
             pos: &lay.pos,
             moved: &moved,
             legend: false,
+            caption: None,
         };
         let look = Look::new(&eframe::egui::Visuals::dark(), false);
         for f in [Format::Svg, Format::DrawIo] {

@@ -64,7 +64,11 @@ pub fn write(d: &Drawn) -> String {
     text(
         &mut s,
         "summary",
-        &format!("{} · is-alive {}", d.map.summary, crate::VERSION),
+        &match d.caption {
+            // A plan or a training map says so first.
+            Some(c) => format!("{c} · {}", d.summary()),
+            None => d.summary(),
+        },
         &format!(
             "text;html=0;fontSize=11;align=left;verticalAlign=top;fontColor={WEAK};whiteSpace=wrap;"
         ),

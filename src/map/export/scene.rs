@@ -226,8 +226,17 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
     let leg = (!entries.is_empty()).then(|| legend_plan(&entries, b.width()));
     let leg_h = leg.as_ref().map_or(0.0, |l| l.height + 16.0);
     let off = vec2(m - b.min.x, m + head - b.min.y);
+    // A plan or a training map's caption (and the summary after it) is
+    // never cut off, however narrow the map: roughly 7 px a character of
+    // the 12 px semibold caption, 6.4 of the summary.
+    let cap_w = d.caption.map_or(0.0, |c| {
+        7.0 * (c.chars().count() + 3) as f32 + 6.4 * d.summary().chars().count() as f32
+    });
     let size = vec2(
-        b.width().max(leg.as_ref().map_or(0.0, |l| l.width)) + 2.0 * m,
+        b.width()
+            .max(leg.as_ref().map_or(0.0, |l| l.width))
+            .max(cap_w)
+            + 2.0 * m,
         b.height() + 2.0 * m + head + leg_h + foot,
     );
     let at = |p: Pos2| p + off;
@@ -247,11 +256,16 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
         pos2(m, m + 26.0),
         12.0,
         false,
-        run(
-            format!("{} · is-alive {}", map.summary, crate::VERSION),
-            ink.weak,
-            400,
-        ),
+        // A plan or a training map says so first: it isn't what was found.
+        d.caption
+            .map(|c| Run {
+                text: format!("{c} · "),
+                rgb: ink.text,
+                weight: 600,
+            })
+            .into_iter()
+            .chain(run(d.summary(), ink.weak, 400))
+            .collect(),
     ));
     boxes(d, &ink, &at, &mut items);
     lines(d, &drawn, &ink, &at, &mut items);

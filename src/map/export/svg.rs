@@ -180,6 +180,7 @@ mod tests {
                 pos: &lay.pos,
                 moved,
                 legend,
+                caption: None,
             },
             Look::new(&eframe::egui::Visuals::dark(), false),
         ))
