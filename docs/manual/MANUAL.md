@@ -689,31 +689,37 @@ A saved map doesn't change with the files: **Reload** and **Clients** are greyed
 
 ### The right-click menu
 
-Right-click a card for:
+Right-click a card, or click **☰** at the top of its section in the panel. Under the card's name (its role and IP in small text), the items come in groups:
 
 | Item | What it does |
 |---|---|
 | **Pin** / **Unpin** | A pinned card stays selected while you click others, and keeps its place in the panel |
-| **Select** / **Select only this** | Just this card (*Select* when nothing is selected yet) |
+| **Select** / **Select only this card** | Just this card (*Select* when nothing is selected yet) |
 | **Add to selection** (Ctrl+click) / **Remove from selection** | Add it to what's selected, or take it out if it's already in |
 | **Clear selection** (Esc) | (Several cards selected) Let go of them all; pinned cards stay |
 | **Select with its uplink** | This card and the one it hangs off |
 | **Select its path to the WAN** | This card and every uplink up to the internet |
 | **Select with its direct children** | This card and the cards straight under it |
 | **Select with everything below it** | This card and every card under it, all the way down |
-| **Collapse / Expand** *site* | (Sites layout) Fold the card's site into one card, or open it |
-| **Put back in the layout** | (A card you've dragged) Back where the layout had it |
+| **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
+| **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
+| **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
+| **Copy IP** / **Copy MAC** | (When it has one) The address, shown on the right of the item |
 | **Copy details** | Copy the card as text |
+| **Put back in the layout** | (A card you've dragged) Back where the layout had it |
+| **Collapse / Expand** *site* | (Sites layout, on a map with two or more sites) Fold the card's site into one card, or open it. A long site name is cut short; hover the item for all of it |
 
-Each item shows only when it applies, with how many cards it takes. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
+Each item shows only when it applies, with how many cards it takes, and a line sets each group apart. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
 
-**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths).
+**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the panel; a message says so and the panel scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
+
+**☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
 
 ### The panel (right)
 
 Each selected card gets a section, newest on top:
 
-- **The role and name**, with the 📌 pin button.
+- **The role and name**, with **☰** (the card's right-click menu, see above), the 📌 pin button and **×**.
 - **Action items:** the card's own warnings and the findings that name it.
 - **Details:** IP, MAC, open ports, what saw it (sweep, backup, map), then everything the source said about it.
 - **Connections:** its uplink and what hangs off it; click one to jump to that card.
@@ -1042,7 +1048,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Double-click a card | Map | Zoom to that card |
 | Click a card | Map | Select it and light its path to the internet |
 | Ctrl+click or Shift+click a card | Map | Add to or take out of the selection |
-| Right-click a card | Map | Pin, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
+| Right-click a card (or ☰ on it in the panel) | Map | Pin, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
 | Drag a card | Map | Move it (and the rest of the selection with it) |
 | Click a site's title | Map | Collapse or expand the site |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
