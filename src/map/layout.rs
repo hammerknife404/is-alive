@@ -7,7 +7,7 @@
 //! - **Zones**: one box per role, its cards in a grid inside.
 //! - **Sites**: one box per site, each holding its part of the tree.
 
-use super::{Link, Map, Node, Zone};
+use super::{Link, Map, Node, Zone, is_more};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
 use std::collections::BTreeMap;
 
@@ -205,11 +205,10 @@ fn sorted_kids(map: &Map, shown: &dyn Fn(usize) -> bool) -> Vec<Vec<usize>> {
         // A +N more card goes after the clients it follows on from.
         k.sort_by(|&a, &b| {
             let (x, y) = (&map.nodes[a], &map.nodes[b]);
-            let more = |n: &Node| n.id.starts_with("more:");
-            (zone_order(x.zone), x.client, more(x), &x.label).cmp(&(
+            (zone_order(x.zone), x.client, is_more(x), &x.label).cmp(&(
                 zone_order(y.zone),
                 y.client,
-                more(y),
+                is_more(y),
                 &y.label,
             ))
         });
@@ -444,12 +443,21 @@ fn grouped(
     let sort = |v: &mut Vec<usize>| {
         v.sort_by(|&a, &b| {
             let (x, y) = (&map.nodes[a], &map.nodes[b]);
-            (depths[a], zone_order(x.zone), x.client, &x.label).cmp(&(
-                depths[b],
-                zone_order(y.zone),
-                y.client,
-                &y.label,
-            ))
+            // A +N more card after the clients, as in the tree.
+            (
+                depths[a],
+                zone_order(x.zone),
+                x.client,
+                is_more(x),
+                &x.label,
+            )
+                .cmp(&(
+                    depths[b],
+                    zone_order(y.zone),
+                    y.client,
+                    is_more(y),
+                    &y.label,
+                ))
         })
     };
     let mut loose: Vec<usize> = Vec::new();
@@ -1068,6 +1076,29 @@ mod tests {
         let ys: std::collections::HashSet<i32> =
             (2..10).map(|i| l.pos[i].unwrap().y as i32).collect();
         assert_eq!(ys.len(), 1);
+    }
+
+    #[test]
+    fn a_more_card_comes_after_the_clients_in_every_mode() {
+        // internet → core → three clients and the +N more card ("+" sorts
+        // before letters).
+        let mut m = tree(&[None, Some(0), Some(1), Some(1), Some(1), Some(1)]);
+        for (k, n) in m.nodes[2..].iter_mut().enumerate() {
+            n.zone = Zone::Client;
+            n.client = true;
+            n.label = ["PC-1", "PC-2", "PC-3", "+5 more"][k].into();
+        }
+        m.nodes[5].id = "more:1".into();
+        for mode in Mode::ALL {
+            let l = layout_in(&m, &|_| true, mode);
+            let at = |i: usize| l.pos[i].unwrap();
+            // Last in reading order: below the others, or level and right.
+            let last = (2..5).all(|i| {
+                let (a, b) = (at(i), at(5));
+                a.y < b.y - 1.0 || ((a.y - b.y).abs() < 1.0 && a.x < b.x)
+            });
+            assert!(last, "{mode:?}: {:?}", l.pos);
+        }
     }
 
     #[test]

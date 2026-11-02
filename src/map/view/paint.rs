@@ -455,14 +455,11 @@ impl MapView {
             let small = FontId::proportional((13.0 * z).clamp(8.0, 11.0));
             let pad = (12.0 * z).clamp(3.0, 5.0);
             let inner = r.width() - pad * 2.0 - 2.0 * z;
-            if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size * 1.3 {
+            // A client's tile is about half a card high: it still gets
+            // its name while that fits at all.
+            if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size {
                 let g = text(&n.label, small, strong, 1, inner);
-                // Up top when the +N chip takes the bottom right corner.
-                let y = if self.chip_room(i) > 0.0 {
-                    r.min.y + 2.0
-                } else {
-                    r.center().y - g.size().y / 2.0
-                };
+                let y = r.center().y - g.size().y / 2.0;
                 p.galley(pos2(r.min.x + pad + 2.0 * z, y), g, strong);
             }
             if !n.flags.is_empty() {
@@ -525,19 +522,11 @@ impl MapView {
             p.galley(pos2(r.min.x + pad, y), g, weak);
             y += kind_h;
         }
-        // The +N and − chips sit in the bottom right corner: the bottom
-        // line stops short of them.
-        let chip_room = self.chip_room(i);
-        if chip_room > 0.0 && !show_sub && !show_chips {
-            let rows = label.rows.len();
-            label = text(&n.label, label_f, strong, rows, inner - badge - chip_room);
-        }
         let h = label.size().y;
         p.galley(pos2(r.min.x + pad, y), label, strong);
         y += h;
         if show_sub {
-            let room = if show_chips { 0.0 } else { chip_room };
-            let g = text(&n.sub, sub_f, accent.gamma_multiply(a), 1, inner - room);
+            let g = text(&n.sub, sub_f, accent.gamma_multiply(a), 1, inner);
             p.galley(pos2(r.min.x + pad, y), g, accent);
         }
         if show_chips {
@@ -546,7 +535,7 @@ impl MapView {
             for c in chips {
                 let g = text(c, chip_f.clone(), accent.gamma_multiply(a), 1, inner);
                 let w = g.size().x + 10.0;
-                if x + w > r.max.x - pad + 4.0 - chip_room {
+                if x + w > r.max.x - pad + 4.0 {
                     break;
                 }
                 let chip = Rect::from_min_max(pos2(x, cy - chip_h), pos2(x + w, cy));

@@ -299,6 +299,9 @@ impl MapView {
                         ui.label(RichText::new(c).small().weak());
                     }
                 });
+                if let Some((p, to)) = self.reveal_row(ui, i) {
+                    *ev = Some(PanelEv::Reveal(p, to));
+                }
 
                 // Action items: its own flags and the findings that name it.
                 let findings: Vec<&crate::map::Finding> = self
@@ -484,37 +487,6 @@ impl MapView {
                             ui.ctx()
                                 .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
                         }
-                    }
-                    // A +N more card shows its uplink's next few, or all of
-                    // them; a stepped uplink folds back.
-                    if n.id.starts_with("more:")
-                        && let Some(p) = n.parent()
-                        && let Some(&(shown, total)) = self.map.under.get(&self.map.nodes[p].id)
-                    {
-                        let next = super::super::more_of(shown, total);
-                        if next != usize::MAX
-                            && ui
-                                .small_button(format!("Show {} more", next - shown))
-                                .on_hover_text("Cards for the next few, best first")
-                                .clicked()
-                        {
-                            *ev = Some(PanelEv::Reveal(p, Some(next)));
-                        }
-                        if ui
-                            .small_button(format!("Show all {}", total - shown))
-                            .on_hover_text("A card for each of them")
-                            .clicked()
-                        {
-                            *ev = Some(PanelEv::Reveal(p, Some(usize::MAX)));
-                        }
-                    }
-                    if self.reveal.get(&n.id).is_some_and(|&s| s > 0)
-                        && ui
-                            .small_button("Fold clients")
-                            .on_hover_text("Back to what the Clients level shows")
-                            .clicked()
-                    {
-                        *ev = Some(PanelEv::Reveal(i, None));
                     }
                     if ui
                         .small_button("Copy")

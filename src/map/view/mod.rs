@@ -98,6 +98,8 @@ pub struct MapView {
     /// Uplinks stepped on their own (+N or − on the card, Show all): how
     /// many clients each shows, whatever the level.
     reveal: HashMap<String, usize>,
+    /// The uplink just stepped: kept still on screen through the rebuild.
+    hold: Option<String>,
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
@@ -435,6 +437,7 @@ impl MapView {
         (src.info.gateway, src.info.lan, src.info.wan).hash(&mut h);
         let key = h.finish();
         if key == self.key && !self.stale {
+            self.hold = None;
             return;
         }
         let mut s = std::collections::hash_map::DefaultHasher::new();
@@ -468,6 +471,7 @@ impl MapView {
         }
         self.map = map;
         self.relayout(ctx);
+        self.hold_still();
     }
 
     /// Start a new map's view: fitted whole, nothing moved, nothing but the

@@ -202,9 +202,11 @@ impl MapView {
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(icon);
         }
+        // A +N or − chip shows its own tooltip, not the card's.
         if let Some(i) = over
             && self.drag.is_none()
             && self.menu.is_none()
+            && !pointer.is_some_and(|p| self.on_chip(rect, p))
         {
             self.card_tip(resp, i);
         }

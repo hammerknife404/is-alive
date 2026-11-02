@@ -293,7 +293,8 @@ pub struct Map {
     pub findings: Vec<Finding>,
     /// What the map was built from, for under the title.
     pub summary: String,
-    /// Clients known but not drawn.
+    /// Clients known but not drawn as their own card: in a count on their
+    /// uplink, or in a +N more card.
     pub hidden: usize,
     /// Ids of the cards left out to keep the map readable (clients off, or
     /// past the per-uplink cap): still in the data, just not drawn.
@@ -1971,6 +1972,13 @@ pub fn fewer_of(stepped: Option<usize>, level: usize) -> Option<usize> {
     }
 }
 
+/// Whether a card stands in for clients not drawn one by one: this app's
+/// +N more card, or a /mapnetwork map's own "+7 more" that lists none of
+/// them by address.
+pub fn is_more(n: &Node) -> bool {
+    n.id.starts_with("more:") || import::is_overflow(n)
+}
+
 /// The chip on an uplink whose clients aren't drawn: "12 clients".
 fn count_chip(n: usize) -> String {
     match n {
@@ -2006,12 +2014,15 @@ fn known(name: Option<&str>, vendor: bool) -> u8 {
 /// The order clients show in under an uplink: something to say first (a
 /// warning, then a role such as a printer, camera or phone), then named,
 /// then a vendor, anonymous last; the most recently seen first in each.
+/// A card standing for more of them comes after them all.
 fn reveal_key(n: &Node) -> (u8, u8, u64) {
     let role = n.zone != Zone::Client
         || ["PHONE", "WINDOWS HOST"]
             .iter()
             .any(|k| n.kind.starts_with(k));
-    let tier = if !n.flags.is_empty() {
+    let tier = if is_more(n) {
+        3
+    } else if !n.flags.is_empty() {
         0
     } else if role {
         1
@@ -2099,6 +2110,7 @@ fn limit(b: B, input: &Input) -> Map {
             keep[i] = false;
             folded.insert(nodes[i].id.clone());
         }
+        hidden += rest.len();
         if wants_more(p, cap) && (fits || stepped[p].is_some()) {
             let mut more = Node {
                 id: format!("more:{}", nodes[p].id),
@@ -2108,6 +2120,8 @@ fn limit(b: B, input: &Input) -> Map {
                 sub: format!("via {}", nodes[p].label),
                 client: true,
                 up: Some((p, Link::Assumed, None)),
+                // In its uplink's site box, with the clients it follows on from.
+                site: nodes[p].site.clone(),
                 ..Default::default()
             };
             more.chips = vec!["collapsed".into(), format!("{} devices", rest.len())];
@@ -2129,7 +2143,6 @@ fn limit(b: B, input: &Input) -> Map {
             }
             extra.push(more);
         } else {
-            hidden += rest.len();
             nodes[p].chip(count_chip(kids.len()));
         }
     }
@@ -2663,7 +2676,9 @@ mod tests {
         assert_eq!(shown.len(), 8);
         assert!(shown.contains(&"pc39") && !shown.contains(&"pc31"));
         assert_eq!(by_label(&m, "+32 more").kind, "MORE CLIENTS");
-        assert_eq!(m.hidden, 0);
+        // The summary counts them as the chip does: 32 not drawn.
+        assert_eq!(m.hidden, 32);
+        assert!(m.summary.ends_with("32 clients not drawn"), "{}", m.summary);
         // Stepped to none under Some: a count again, no cards.
         let fold: HashMap<String, usize> = [(core.clone(), 0)].into();
         let m = build_with(Clients::Some, &fold);

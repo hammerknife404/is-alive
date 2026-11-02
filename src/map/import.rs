@@ -368,6 +368,11 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
             .push(format!("Also linked to {tl}{tail}"));
     }
 
+    // The map's own "+7 more" cards, one card for each device they list.
+    for &c in &card {
+        expand_overflow(&mut b, c, src.len() as u64);
+    }
+
     for a in &doc.actions {
         let sev = match s(a, "sev") {
             "high" | "critical" => Sev::High,
@@ -393,20 +398,29 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
             zone_text[card[i]] = format!("{} {}", s(z, "name"), s(z, "vlan"));
         }
     }
-    let hints = subnet_uplinks(&b, &zone_text);
     let cards = b.nodes.len();
     // A UniFi backup of the same site knows clients the map left out, and
     // the switch or AP each was last seen on.
-    let unifi = input
-        .unifi
-        .map(parse_unifi)
-        .filter(|u| join_unifi(&mut b, u, cards));
+    let mut unifi_at = Vec::new();
+    let unifi = input.unifi.map(parse_unifi).filter(|u| {
+        unifi_at = join_unifi(&mut b, u, cards);
+        !unifi_at.is_empty()
+    });
     // A sweep joins only when it found hardware the map knows by MAC: the
     // same network, not a look-alike 192.168.1.x.
-    let local = input
+    let sweep_at: Vec<usize> = input
         .sweep
         .iter()
-        .any(|h| h.mac.is_some_and(|m| b.by_mac.contains_key(&m)));
+        .filter_map(|h| b.by_mac.get(&h.mac?).copied())
+        .filter(|&i| i < cards)
+        .collect();
+    let local = !sweep_at.is_empty();
+    // Each source's hosts go by the subnets of the site(s) it was found at:
+    // two sites can both use 192.168.1.x.
+    let hints = Hints {
+        sweep: subnet_uplinks(&b, &zone_text, &sites_of(&b, &sweep_at)),
+        unifi: subnet_uplinks(&b, &zone_text, &sites_of(&b, &unifi_at)),
+    };
     let mut off_map = 0;
     let mut deferred = Vec::new();
     if local {
@@ -491,6 +505,96 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     map
 }
 
+/// Whether a /mapnetwork card is the map's own "+7 more": the clients
+/// past its 10 per uplink, one line of details each.
+pub(super) fn is_overflow(n: &Node) -> bool {
+    n.kind.contains("ADDITIONAL DEVICES")
+}
+
+/// Turn the overflow card `c` into a client card for each device it lists
+/// by address or MAC ("laptop-jsmith · 192.168.1.42"), under the same
+/// uplink, so the reveal steps through them like any other clients; its
+/// other lines (notes) go on each. The first device takes the card's
+/// place. Without such lines it stays one card, revealed last. `after`:
+/// past the rank of every card from the map.
+fn expand_overflow(b: &mut B, c: usize, after: u64) {
+    let n = &b.nodes[c];
+    if !is_overflow(n) {
+        return;
+    }
+    let (hosts, notes): (Vec<&String>, Vec<&String>) = n
+        .details
+        .iter()
+        .partition(|d| first_ip(d).is_some() || first_mac([d.as_str()]).is_some());
+    let label = n.label.clone();
+    let chips: Vec<String> = n
+        .chips
+        .iter()
+        .filter(|c| *c != "collapsed" && !c.ends_with(" devices"))
+        .cloned()
+        .collect();
+    let devices: Vec<Node> = hosts
+        .iter()
+        .enumerate()
+        .map(|(k, line)| {
+            let ip = first_ip(line);
+            let mac = first_mac([line.as_str()]);
+            let head = line.split('·').next().unwrap_or("").trim();
+            let name = Some(head)
+                .filter(|h| !h.is_empty() && first_ip(h).is_none() && first_mac([*h]).is_none());
+            let mut d = Node {
+                id: format!(
+                    "{}:{}",
+                    n.id,
+                    match (ip, mac) {
+                        (Some(ip), _) => ip.to_string(),
+                        (None, Some(m)) => mac::fmt(&m),
+                        _ => k.to_string(),
+                    }
+                ),
+                zone: Zone::Client,
+                kind: "CLIENT".into(),
+                label: match (name, ip, mac) {
+                    (Some(h), ..) => h.to_string(),
+                    (None, Some(ip), _) => format!("Host {ip}"),
+                    (None, None, Some(m)) => mac::fmt(&m),
+                    _ => line.to_string(),
+                },
+                sub: ip.map(|i| i.to_string()).unwrap_or_default(),
+                ip,
+                mac,
+                chips: chips.clone(),
+                client: true,
+                up: n.up.clone(),
+                site: n.site.clone(),
+                seen_by: n.seen_by.clone(),
+                // After the map's own clients, in the map's order.
+                rank: (2, after + k as u64),
+                ..Default::default()
+            };
+            d.details.push(line.to_string());
+            d.details.extend(notes.iter().map(|s| s.to_string()));
+            d.details
+                .push(format!("In \"{label}\" on the /mapnetwork map"));
+            d
+        })
+        .collect();
+    let mut devices = devices.into_iter();
+    let Some(first) = devices.next() else {
+        return;
+    };
+    b.nodes[c] = first;
+    if let Some(m) = b.nodes[c].mac {
+        b.by_mac.entry(m).or_insert(c);
+    }
+    if let Some(ip) = b.nodes[c].ip {
+        b.by_ip.entry(ip).or_insert(c);
+    }
+    for d in devices {
+        b.add(d);
+    }
+}
+
 /// The /24 of an address.
 fn net24(ip: Ipv4Addr) -> [u8; 3] {
     let o = ip.octets();
@@ -528,13 +632,35 @@ fn is_infra(z: Zone) -> bool {
     )
 }
 
+/// Where a /24's hosts most likely plug in, for the sweep's hosts and for
+/// the UniFi backup's clients.
+struct Hints {
+    sweep: HashMap<[u8; 3], usize>,
+    unifi: HashMap<[u8; 3], usize>,
+}
+
+/// The sites of the cards `at`.
+fn sites_of(b: &B, at: &[usize]) -> HashSet<Option<String>> {
+    at.iter().map(|&i| b.nodes[i].site.clone()).collect()
+}
+
 /// For each /24 the map shows, the card a host from it most likely hangs
 /// off: the gateway, switch or AP the map's own cards in that subnet hang
 /// off (by their address, or their zone's "VLAN 20 · 192.168.2.x"), else
-/// one in the subnet itself; on a tie, the one higher up the file.
-fn subnet_uplinks(b: &B, zone_text: &[String]) -> HashMap<[u8; 3], usize> {
+/// one in the subnet itself; on a tie, the one higher up the file. Only
+/// the map's own cards at `sites` count; all of them when that names no
+/// site.
+fn subnet_uplinks(
+    b: &B,
+    zone_text: &[String],
+    sites: &HashSet<Option<String>>,
+) -> HashMap<[u8; 3], usize> {
+    let any = sites.is_empty() || sites.contains(&None);
     let mut votes: HashMap<[u8; 3], HashMap<usize, usize>> = HashMap::new();
-    for (i, n) in b.nodes.iter().enumerate() {
+    for (i, n) in b.nodes.iter().enumerate().take(zone_text.len()) {
+        if !any && !sites.contains(&n.site) {
+            continue;
+        }
         let mut nets = nets_in(zone_text.get(i).map_or("", String::as_str));
         if let Some(ip) = n.ip
             && !nets.contains(&net24(ip))
@@ -567,17 +693,17 @@ fn subnet_uplinks(b: &B, zone_text: &[String]) -> HashMap<[u8; 3], usize> {
 }
 
 /// Link each UniFi device to its card on the map (by MAC, else by name,
-/// else by address), so its clients find their switch or AP. True when the
-/// backup is of this site: a device on the map by MAC or name. `cards`:
-/// how many cards came from the map.
-fn join_unifi(b: &mut B, u: &Unifi, cards: usize) -> bool {
+/// else by address), so its clients find their switch or AP. Returns the
+/// cards it found by MAC or name: none when the backup is of another site.
+/// `cards`: how many cards came from the map.
+fn join_unifi(b: &mut B, u: &Unifi, cards: usize) -> Vec<usize> {
     let mut links = Vec::new();
-    let mut same = false;
+    let mut same = Vec::new();
     for d in &u.devices {
         let by_name = || (0..cards).find(|&i| b.nodes[i].label.eq_ignore_ascii_case(&d.name));
         match b.by_mac.get(&d.mac).copied().or_else(by_name) {
             Some(i) => {
-                same = true;
+                same.push(i);
                 links.push((d.mac, i));
             }
             None => {
@@ -587,7 +713,7 @@ fn join_unifi(b: &mut B, u: &Unifi, cards: usize) -> bool {
             }
         }
     }
-    if same {
+    if !same.is_empty() {
         for (m, i) in links {
             b.by_mac.entry(m).or_insert(i);
         }
@@ -595,36 +721,46 @@ fn join_unifi(b: &mut B, u: &Unifi, cards: usize) -> bool {
     same
 }
 
-/// The cards from `first` on are hosts the map left out: make them
-/// clients, each under its UniFi uplink, else the card its subnet hangs
-/// off, else a "Not placed" card. Returns how many went there.
-fn place_added(b: &mut B, first: usize, hints: &HashMap<[u8; 3], usize>) -> usize {
+/// The cards from `first` on are hosts the map left out: hang each under
+/// its UniFi uplink, else the card its subnet hangs off at the site its
+/// source was found at, else a "Not placed" card, and put it at its
+/// uplink's site. Returns how many went under Not placed. Each stays a
+/// client or not as its own source says: a switch or NAS the sweep found
+/// is drawn whatever the Clients level.
+fn place_added(b: &mut B, first: usize, hints: &Hints) -> usize {
     let mut unplaced = Vec::new();
     for i in first..b.nodes.len() {
         let n = &mut b.nodes[i];
-        n.client = true;
+        let unifi = n.seen_by.contains(&"UniFi");
         n.chip("not on map");
         n.details.insert(
             0,
             format!(
                 "Not on the /mapnetwork map: added from {}",
-                if n.seen_by.contains(&"UniFi") {
+                if unifi {
                     "the UniFi backup"
                 } else {
                     "the sweep"
                 }
             ),
         );
-        if n.up.is_some() {
-            continue;
-        }
-        match n.ip.and_then(|ip| hints.get(&net24(ip))) {
-            Some(&p) => {
-                n.up = Some((p, Link::Assumed, None));
-                n.details
-                    .push("Uplink guessed from its subnet: other cards there hang off it".into());
+        if n.up.is_none() {
+            let hints = if unifi { &hints.unifi } else { &hints.sweep };
+            match n.ip.and_then(|ip| hints.get(&net24(ip))) {
+                Some(&p) => {
+                    n.up = Some((p, Link::Assumed, None));
+                    n.details.push(
+                        "Uplink guessed from its subnet: other cards there hang off it".into(),
+                    );
+                }
+                None => {
+                    unplaced.push(i);
+                    continue;
+                }
             }
-            None => unplaced.push(i),
+        }
+        if let Some(p) = b.nodes[i].parent() {
+            b.nodes[i].site = b.nodes[p].site.clone();
         }
     }
     if unplaced.is_empty() {
@@ -851,6 +987,132 @@ mod tests {
         assert!(off.nodes.iter().all(|n| !n.client));
         assert_eq!(off.under.get("fw"), Some(&(0, 1)));
         assert_eq!(off.under.get("mapnetwork:not-placed"), Some(&(0, 1)));
+    }
+
+    /// Two sites on the same 192.168.1.x, each with its firewall; the
+    /// branch's switch has the map's own "+3 more", HQ's one that lists
+    /// nobody.
+    const TWO: &str = r#"
+    this.SITES = { hq:{ name:'HQ' }, br:{ name:'Branch' } };
+    this.NODES = [
+      { id:'inet', kind:'WAN', label:'Internet' },
+      { id:'fwh', site:'hq', kind:'FIREWALL', label:'FW HQ', sub:'192.168.1.1', details:['MAC 00:00:00:00:00:0a'] },
+      { id:'swh', site:'hq', kind:'SWITCH', label:'SW HQ', sub:'192.168.1.2' },
+      { id:'aph', site:'hq', kind:'WIFI AP', label:'AP HQ', sub:'192.168.1.3' },
+      { id:'pc', site:'hq', kind:'WORKSTATION', label:'PC HQ', sub:'192.168.1.20' },
+      { id:'crowd', site:'hq', kind:'ADDITIONAL DEVICES', label:'+30 more', sub:'via SW HQ',
+        details:['About 30 wifi clients, not listed'] },
+      { id:'fwb', site:'br', kind:'FIREWALL', label:'FW Branch', sub:'192.168.1.1', details:['MAC 00:00:00:00:00:0b'] },
+      { id:'swb', site:'br', kind:'SWITCH', label:'SW Branch', sub:'192.168.1.4' },
+      { id:'swb_overflow', site:'br', kind:'ADDITIONAL DEVICES', label:'+3 more', sub:'via SW Branch',
+        chips:['collapsed','3 devices','VLAN 10'],
+        details:['laptop-a · 192.168.1.40', '192.168.1.41 · private MAC 4e:06:2d:b7:33:bc',
+                 'MAC 38:c6:ce:9d:a0:d0 · ARP only', 'Private MACs are per-network addresses'] },
+    ];
+    this.EDGES = [
+      { from:'inet', to:'fwh' }, { from:'inet', to:'fwb' }, { from:'fwh', to:'swh' },
+      { from:'swh', to:'aph' }, { from:'swh', to:'pc' }, { from:'swh', to:'crowd' },
+      { from:'fwb', to:'swb' }, { from:'swb', to:'swb_overflow' },
+    ];"#;
+
+    #[test]
+    fn a_sweep_at_one_site_places_hosts_there() {
+        let doc = crate::mapnetwork::parse(TWO.as_bytes()).unwrap();
+        let host = |last: u8, mac: Option<Mac>, open: Vec<u16>| Seen {
+            ip: [192, 168, 1, last].into(),
+            mac,
+            name: None,
+            rtt: Some(1.0),
+            open,
+        };
+        // Swept at the branch: its firewall answers by MAC.
+        let input = Input {
+            sweep: vec![
+                host(1, Some([0, 0, 0, 0, 0, 0x0b]), vec![]),
+                host(50, None, vec![]),
+                host(60, None, vec![23, 5000]),
+            ],
+            clients: Clients::All,
+            ..Default::default()
+        };
+        let m = build(&doc, &input);
+        let named = |l: &str| m.nodes.iter().find(|n| n.label == l).unwrap();
+        let parent = |n: &Node| m.nodes[n.parent().unwrap()].id.as_str();
+        let new = named("Host 192.168.1.50");
+        assert_eq!(parent(new), "swb", "under the branch's gear, not HQ's");
+        // In its uplink's site box, in Sites.
+        assert_eq!(new.site.as_deref(), Some("Branch"));
+        // Network gear the sweep found stays a full card, drawn at Off too.
+        let gear = m.nodes.iter().find(|n| n.open.contains(&23)).unwrap();
+        assert_eq!((gear.zone, gear.client), (Zone::Gear, false));
+        assert!(gear.chips.contains(&"not on map".to_string()));
+        let off = build(
+            &doc,
+            &Input {
+                clients: Clients::Off,
+                ..input
+            },
+        );
+        assert!(off.nodes.iter().any(|n| n.open.contains(&23)));
+        // A +N more card sits in its uplink's site.
+        let step: HashMap<String, usize> = [("swb".to_string(), 1)].into();
+        let m = build(
+            &doc,
+            &Input {
+                clients: Clients::Off,
+                reveal: Some(&step),
+                ..Default::default()
+            },
+        );
+        let more = m.nodes.iter().find(|n| n.id == "more:swb").unwrap();
+        assert_eq!(more.site.as_deref(), Some("Branch"));
+    }
+
+    #[test]
+    fn the_maps_own_more_card_becomes_its_devices() {
+        let doc = crate::mapnetwork::parse(TWO.as_bytes()).unwrap();
+        let m = build(
+            &doc,
+            &Input {
+                clients: Clients::All,
+                ..Default::default()
+            },
+        );
+        let under = |id: &str| -> Vec<&Node> {
+            m.nodes
+                .iter()
+                .filter(|n| n.parent().is_some_and(|p| m.nodes[p].id == id))
+                .collect()
+        };
+        // One client card per device it lists, by address or MAC; the
+        // note goes on each, the "collapsed" chips don't.
+        let devices = under("swb");
+        let labels: Vec<&str> = devices.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["laptop-a", "Host 192.168.1.41", "38:c6:ce:9d:a0:d0"]
+        );
+        let laptop = devices[0];
+        assert!(laptop.client && laptop.zone == Zone::Client);
+        assert_eq!(laptop.ip, Some([192, 168, 1, 40].into()));
+        assert_eq!(laptop.site.as_deref(), Some("Branch"));
+        assert_eq!(laptop.chips, ["Branch", "VLAN 10"]);
+        assert!(laptop.details.iter().any(|d| d.starts_with("Private MACs")));
+        assert!(devices[1].mac.is_some());
+        assert_eq!(m.under.get("swb"), Some(&(3, 3)));
+        // One that lists nobody stays one card, revealed after the real
+        // clients.
+        let m = build(
+            &doc,
+            &Input {
+                clients: Clients::Off,
+                reveal: Some(&[("swh".to_string(), 1)].into()),
+                ..Default::default()
+            },
+        );
+        assert!(m.nodes.iter().any(|n| n.label == "PC HQ"));
+        assert!(m.nodes.iter().all(|n| n.label != "+30 more"));
+        assert_eq!(by(&m, "more:swh").label, "+1 more");
     }
 
     #[test]
