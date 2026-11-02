@@ -318,31 +318,36 @@ fn lines(d: &Drawn, drawn: &[Line], ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items:
     }
 }
 
-/// A card: its role's bar, kind, name, address, chips and a flag mark.
+/// A card: its role's bar, kind, name, address, chips and a flag mark. A
+/// client is a tile: its name and address, nothing else.
 fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
     let accent = if n.gone { ink.gone } else { ink.role(n.zone) };
     let (x, y) = (p.x, p.y);
+    let size = layout::card_size(n);
+    let tile = size.y < CARD.y;
     // A pinned card missing from the latest data: dashed, in red.
-    let mut v = card_body(Rect::from_min_size(p, CARD), 7.0, accent, n.gone, ink);
-    v.push(text(
-        pos2(x + 12.0, y + 17.0),
-        9.5,
-        true,
-        run(&n.kind, ink.weak, 400),
-    ));
-    let label = wrap(&n.label, 26, 2);
+    let mut v = card_body(Rect::from_min_size(p, size), 7.0, accent, n.gone, ink);
+    if !tile {
+        v.push(text(
+            pos2(x + 12.0, y + 17.0),
+            9.5,
+            true,
+            run(&n.kind, ink.weak, 400),
+        ));
+    }
+    let (top, rows) = if tile { (y + 20.0, 1) } else { (y + 34.0, 2) };
+    let label = wrap(&n.label, 26, rows);
     for (k, l) in label.iter().enumerate() {
         v.push(text(
-            pos2(x + 12.0, y + 34.0 + k as f32 * 16.0),
+            pos2(x + 12.0, top + k as f32 * 16.0),
             13.0,
             false,
             run(l, ink.text, 600),
         ));
     }
     if !n.sub.is_empty() {
-        let rows = label.len().max(1);
         v.push(text(
-            pos2(x + 12.0, y + 34.0 + rows as f32 * 16.0),
+            pos2(x + 12.0, top + label.len().max(1) as f32 * 16.0),
             10.5,
             true,
             run(&n.sub, accent, 400),
@@ -354,19 +359,19 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
             .and_then(|u| u.2.as_deref())
             .into_iter()
             .chain(n.chips.iter().map(String::as_str))
-            .filter(|c| !(sites && n.site.as_deref() == Some(*c)));
+            .filter(|c| !(sites && n.site.as_deref() == Some(*c)) && !tile);
     let mut cx = x + 12.0;
     for c in chips {
         let cw = 10.0 + 5.6 * c.chars().count() as f32;
-        if cx + cw > x + CARD.x - 8.0 {
+        if cx + cw > x + size.x - 8.0 {
             break;
         }
         v.push(chip_pill(
-            Rect::from_min_size(pos2(cx, y + CARD.y - 22.0), vec2(cw, 15.0)),
+            Rect::from_min_size(pos2(cx, y + size.y - 22.0), vec2(cw, 15.0)),
             accent,
         ));
         v.push(text(
-            pos2(cx + 5.0, y + CARD.y - 11.0),
+            pos2(cx + 5.0, y + size.y - 11.0),
             9.5,
             false,
             run(c, accent, 400),
@@ -374,7 +379,7 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
         cx += cw + 4.0;
     }
     if !n.flags.is_empty() {
-        v.extend(warn_badge(pos2(x + CARD.x - 12.0, y + 12.0)));
+        v.extend(warn_badge(pos2(x + size.x - 12.0, y + 12.0)));
     }
     v
 }

@@ -299,6 +299,9 @@ impl MapView {
                         ui.label(RichText::new(c).small().weak());
                     }
                 });
+                if let Some((p, to)) = self.reveal_row(ui, i) {
+                    *ev = Some(PanelEv::Reveal(p, to));
+                }
 
                 // Action items: its own flags and the findings that name it.
                 let findings: Vec<&crate::map::Finding> = self
@@ -484,27 +487,6 @@ impl MapView {
                             ui.ctx()
                                 .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
                         }
-                    }
-                    // A +N more card opens its uplink up; an opened uplink folds back.
-                    // A saved map keeps the cards it was saved with.
-                    if n.id.starts_with("more:")
-                        && self.frozen.is_none()
-                        && let Some(p) = n.parent()
-                        && ui
-                            .small_button(format!("Show all {}", n.label.trim_start_matches('+')))
-                            .on_hover_text("A card for each of them")
-                            .clicked()
-                    {
-                        *ev = Some(PanelEv::Open(p, true));
-                    }
-                    if self.open.contains(&n.id)
-                        && self.frozen.is_none()
-                        && ui
-                            .small_button("Fold clients")
-                            .on_hover_text("Back to 10 cards and a +N more")
-                            .clicked()
-                    {
-                        *ev = Some(PanelEv::Open(i, false));
                     }
                     if ui
                         .small_button("Copy")

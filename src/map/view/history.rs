@@ -1,6 +1,7 @@
 //! Undo and redo for what the user changes by hand on a map: cards
 //! dragged or put back, Re-layout, the layout, Clients, pins, sites
-//! collapsed, roles faded out, a +N more card opened. Selecting cards
+//! collapsed, roles faded out, clients shown or hidden on a card (+N, −,
+//! Show all). Selecting cards
 //! isn't a step, as in most editors.
 //!
 //! Each step keeps the whole of that state as it was (a small struct), so
@@ -22,8 +23,9 @@ pub struct Edits {
     /// The layout picked (None: the map's default).
     pub mode: Option<Mode>,
     pub clients: Clients,
-    /// Uplinks whose clients are all shown.
-    pub open: HashSet<String>,
+    /// Uplinks stepped on their own (+N, −, Show all): how many clients
+    /// each shows, whatever the level.
+    pub reveal: HashMap<String, usize>,
     /// Sites collapsed to one card.
     pub closed: HashSet<String>,
     /// Roles faded out.
@@ -154,12 +156,24 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
             _ => "fade roles out".into(),
         };
     }
-    if a.open != b.open {
-        let shown: Vec<&String> = sorted(b.open.difference(&a.open));
-        return match shown.as_slice() {
-            [one] => format!("show all clients under {}", name(one)),
-            [] => "fold clients".into(),
-            _ => "show all clients".into(),
+    if a.reveal != b.reveal {
+        // How many clients a card shows by itself (0: as the level says).
+        let shown = |e: &Edits, k: &String| e.reveal.get(k).copied().unwrap_or(0);
+        let mut changed: Vec<&String> = sorted(
+            a.reveal
+                .keys()
+                .chain(b.reveal.keys())
+                .filter(|k| shown(a, k) != shown(b, k)),
+        );
+        changed.dedup();
+        let more = changed.iter().all(|k| shown(b, k) > shown(a, k));
+        let all = changed.iter().all(|k| shown(b, k) == usize::MAX);
+        return match (changed.as_slice(), more) {
+            ([one], true) if all => format!("show all clients under {}", name(one)),
+            ([one], true) => format!("show clients under {}", name(one)),
+            ([one], false) => format!("hide clients under {}", name(one)),
+            (_, true) => "show clients".into(),
+            _ => "hide clients".into(),
         };
     }
     if a.kept != b.kept {
@@ -204,7 +218,7 @@ impl MapView {
             placed: self.placed.clone(),
             mode: self.mode,
             clients: self.clients,
-            open: self.open.clone(),
+            reveal: self.reveal.clone(),
             closed: self.closed.clone(),
             hidden: self.hidden.clone(),
             kept: self.kept.clone(),
@@ -217,7 +231,7 @@ impl MapView {
         self.placed != e.placed
             || self.mode != e.mode
             || self.clients != e.clients
-            || self.open != e.open
+            || self.reveal != e.reveal
             || self.closed != e.closed
             || self.hidden != e.hidden
             || self.kept != e.kept
@@ -229,7 +243,7 @@ impl MapView {
         self.placed.clone_from(&e.placed);
         self.mode = e.mode;
         self.clients = e.clients;
-        self.open.clone_from(&e.open);
+        self.reveal.clone_from(&e.reveal);
         self.closed.clone_from(&e.closed);
         self.hidden.clone_from(&e.hidden);
         self.kept.clone_from(&e.kept);
@@ -421,6 +435,28 @@ mod tests {
         let mut z = a.clone();
         z.hidden.insert(Zone::Server);
         assert_eq!(describe(&a, &z, &name), "fade out Servers / NAS");
+        // Clients shown a few at a time on one card, then all, then hidden.
+        let mut r = a.clone();
+        r.reveal.insert("sw".into(), crate::map::STEP);
+        assert_eq!(describe(&a, &r, &name), "show clients under <sw>");
+        let mut all = a.clone();
+        all.reveal.insert("sw".into(), usize::MAX);
+        assert_eq!(describe(&r, &all, &name), "show all clients under <sw>");
+        assert_eq!(describe(&all, &a, &name), "hide clients under <sw>");
+    }
+
+    /// +N on a card is a step: undo puts the card back as it was.
+    #[test]
+    fn a_reveal_step_is_undone() {
+        let mut v = tree();
+        v.track_edits();
+        v.reveal_step(0, Some(crate::map::STEP));
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("show clients under Card 0"));
+        v.step(true);
+        assert!(v.reveal.is_empty());
+        v.step(false);
+        assert_eq!(v.reveal.get("n0"), Some(&crate::map::STEP));
     }
 
     fn tree() -> MapView {

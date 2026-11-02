@@ -29,7 +29,7 @@ impl MapView {
                 && self
                     .pos
                     .get(&self.map.nodes[i].id)
-                    .is_some_and(|p| Rect::from_min_size(*p, CARD).contains(w))
+                    .is_some_and(|p| layout::card_rect(&self.map.nodes[i], *p).contains(w))
         })
     }
 
@@ -205,9 +205,11 @@ impl MapView {
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(icon);
         }
+        // A +N or − chip shows its own tooltip, not the card's.
         if let Some(i) = over
             && self.drag.is_none()
             && self.menu.is_none()
+            && !pointer.is_some_and(|p| self.on_chip(rect, p))
         {
             self.card_tip(resp, i);
         }

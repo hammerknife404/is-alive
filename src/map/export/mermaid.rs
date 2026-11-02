@@ -196,8 +196,7 @@ mod tests {
                 .collect(),
             gateway: Some("10.0.0.1".parse().unwrap()),
             range: Some("10.0.0.0/22".into()),
-            clients: true,
-            all_clients: true,
+            clients: crate::map::Clients::All,
             ..Default::default()
         });
         let lay = crate::map::layout::layout_in(&m, &|_| true, Mode::Cluster);

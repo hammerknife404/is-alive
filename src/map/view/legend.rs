@@ -88,8 +88,11 @@ impl MapView {
         };
         let lift = ids
             .iter()
-            .filter_map(|id| self.pos.get(id))
-            .map(|&p| Rect::from_min_size(self.to_screen(rect, p), CARD * self.zoom))
+            .filter_map(|id| Some((self.index(id)?, self.pos.get(id)?)))
+            .map(|(i, &p)| {
+                let size = layout::card_size(&self.map.nodes[i]);
+                Rect::from_min_size(self.to_screen(rect, p), size * self.zoom)
+            })
             .filter(|r| {
                 let o = r.intersect(area);
                 o.is_positive() && o.area() > r.area() / 2.0

@@ -248,7 +248,7 @@ impl MapView {
         let mut pulse = false;
         for i in self.stack() {
             let Some(s) = at(i) else { continue };
-            let r = Rect::from_min_size(s, CARD * z);
+            let r = Rect::from_min_size(s, layout::card_size(&self.map.nodes[i]) * z);
             if !r.intersects(rect) {
                 continue;
             }
@@ -377,7 +377,9 @@ impl MapView {
             let small = FontId::proportional((13.0 * z).clamp(8.0, 11.0));
             let pad = (12.0 * z).clamp(3.0, 5.0);
             let inner = r.width() - pad * 2.0 - 2.0 * z;
-            if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size * 1.3 {
+            // A client's tile is about half a card high: it still gets
+            // its name while that fits at all.
+            if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size {
                 let g = text(&n.label, small, strong, 1, inner);
                 let y = r.center().y - g.size().y / 2.0;
                 p.galley(pos2(r.min.x + pad + 2.0 * z, y), g, strong);
@@ -411,10 +413,13 @@ impl MapView {
         let uplink = n.up.as_ref().and_then(|u| u.2.as_deref());
         // In Sites the box already names the site.
         let boxed = self.mode() == Mode::Sites;
+        // A +N chip on the card stands in for its count of clients.
+        let counted = self.has_more_chip(i);
         let chips: Vec<&str> = uplink
             .into_iter()
             .chain(n.chips.iter().map(String::as_str))
             .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
+            .filter(|c| !(counted && super::super::is_count_chip(c)))
             .collect();
         let chip_h = row(&chip_f) + 4.0;
         let show_chips = !chips.is_empty() && need + chip_h + 2.0 <= room;

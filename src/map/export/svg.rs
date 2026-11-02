@@ -288,6 +288,34 @@ mod tests {
     }
 
     #[test]
+    fn clients_export_as_tiles() {
+        let host = |ip: &str, name: &str| Seen {
+            ip: ip.parse().unwrap(),
+            mac: None,
+            name: Some(name.into()),
+            rtt: Some(1.0),
+            open: vec![],
+        };
+        let m = build(&Input {
+            sweep: vec![host("10.0.0.9", "laptop"), host("10.0.0.10", "desktop")],
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            clients: crate::map::Clients::All,
+            ..Default::default()
+        });
+        let l = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let s = render(&m, &l, &vec![false; m.nodes.len()]);
+        let tile = format!(
+            r#"width="{:.1}" height="{:.1}""#,
+            layout::TILE.x,
+            layout::TILE.y
+        );
+        // A tile each, with its name and address but no kind line.
+        assert_eq!(s.matches(&tile).count(), 2, "{s}");
+        assert!(s.contains(">laptop<") && s.contains(">10.0.0.9<"));
+        assert!(!s.contains(">HOST<"));
+    }
+
+    #[test]
     fn acme_svg_parses_with_a_group_per_card() {
         super::super::tests::with_acme(Mode::Sites, |d| {
             let s = write(&scene::draw(

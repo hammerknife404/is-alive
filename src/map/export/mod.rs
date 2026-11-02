@@ -45,6 +45,11 @@ impl Drawn<'_> {
         self.pos.get(i).copied().flatten()
     }
 
+    /// Where a shown card is drawn: a full card, or a client's tile.
+    fn rect(&self, i: usize) -> Option<Rect> {
+        Some(layout::card_rect(&self.map.nodes[i], self.at(i)?))
+    }
+
     /// The lines as the canvas draws them.
     fn lines(&self) -> Vec<Line> {
         layout::lines(self.map, self.lay, &|i| self.at(i), &|i| {
@@ -67,8 +72,8 @@ impl Drawn<'_> {
     /// What's drawn: every card and box.
     fn bounds(&self) -> Rect {
         let mut b = Rect::NOTHING;
-        for (_, _, p) in self.cards() {
-            b = b.union(Rect::from_min_size(p, CARD));
+        for (_, n, p) in self.cards() {
+            b = b.union(layout::card_rect(n, p));
         }
         for g in &self.lay.boxes {
             b = b.union(g.rect);
@@ -348,7 +353,7 @@ pub(crate) mod tests {
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             range: Some("10.0.0.0/24".into()),
-            clients: true,
+            clients: crate::map::Clients::All,
             ..Default::default()
         });
         let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);

@@ -5,6 +5,7 @@
 use super::{Drawn, ink};
 use crate::map::layout::CARD;
 use crate::map::{Link, Zone};
+use eframe::egui::{Pos2, Rect};
 use std::fmt::Write;
 
 /// A DOT string's inside: quotes and backslashes escaped (so `\N` and
@@ -55,8 +56,18 @@ pub fn write(d: &Drawn) -> String {
             label = format!("{label}\n! {}", n.flags.join(", "));
         }
         // Points, y up, at the card's middle: what neato -n2 reads.
-        let p = d.at(i).unwrap_or_default();
-        let (x, y) = (p.x + CARD.x / 2.0 - b.min.x, b.max.y - p.y - CARD.y / 2.0);
+        let r = d.rect(i).unwrap_or(Rect::from_min_size(Pos2::ZERO, CARD));
+        let (x, y) = (r.center().x - b.min.x, b.max.y - r.center().y);
+        // A client's tile is smaller than the default card.
+        let size = if r.size() == CARD {
+            String::new()
+        } else {
+            format!(
+                ", width={:.2}, height={:.2}",
+                r.width() / 72.0,
+                r.height() / 72.0
+            )
+        };
         let colour = if n.gone {
             "#c81e1e".into()
         } else {
@@ -69,7 +80,7 @@ pub fn write(d: &Drawn) -> String {
         };
         let _ = writeln!(
             s,
-            "{indent}n{i} [label=\"{}\", color=\"{colour}\", pos=\"{x:.0},{y:.0}!\"{style}];",
+            "{indent}n{i} [label=\"{}\", color=\"{colour}\", pos=\"{x:.0},{y:.0}!\"{size}{style}];",
             esc(&label)
         );
     };

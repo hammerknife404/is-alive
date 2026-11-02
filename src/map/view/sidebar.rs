@@ -71,8 +71,8 @@ impl MapView {
             Some(b) => b.rect,
             None => cards
                 .iter()
-                .filter_map(|&i| self.target(i))
-                .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD))),
+                .filter_map(|&i| Some(layout::card_rect(&self.map.nodes[i], self.target(i)?)))
+                .fold(Rect::NOTHING, |r, c| r.union(c)),
         };
         self.fit_to(self.settled(view), area);
         self.follow = false;

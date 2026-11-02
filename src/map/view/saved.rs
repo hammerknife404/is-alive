@@ -77,6 +77,8 @@ pub fn copy_map(m: &Map) -> Map {
         hidden: m.hidden,
         folded: m.folded.clone(),
         closed: m.closed.clone(),
+        under: m.under.clone(),
+        cap: m.cap,
     }
 }
 
@@ -148,6 +150,7 @@ fn clients_key(c: Clients) -> &'static str {
     match c {
         Clients::Off => "off",
         Clients::Some => "some",
+        Clients::More => "more",
         Clients::All => "all",
     }
 }
@@ -166,6 +169,12 @@ pub fn to_json(s: &Snapshot) -> String {
         .findings
         .iter()
         .map(|f| json!({"sev": f.sev.label(), "text": f.text, "nodes": f.nodes}))
+        .collect();
+    let mut reveal: Vec<(&String, &usize)> = s.edits.reveal.iter().collect();
+    reveal.sort();
+    let reveal: Obj<String, Value> = reveal
+        .into_iter()
+        .map(|(k, &n)| (k.clone(), json!(n)))
         .collect();
     let mut placed: Vec<(&String, &Pos2)> = s.edits.placed.iter().collect();
     placed.sort_by(|a, b| a.0.cmp(b.0));
@@ -199,7 +208,7 @@ pub fn to_json(s: &Snapshot) -> String {
             "pinned": s.edits.kept,
             "collapsed": sorted_strs(s.edits.closed.iter()),
             "faded": faded,
-            "open": sorted_strs(s.edits.open.iter()),
+            "reveal": reveal,
             "camera": camera,
         },
     });
@@ -330,6 +339,9 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         nodes,
         findings,
         closed: Default::default(),
+        // A saved map keeps the cards it was saved with: no steps.
+        under: Default::default(),
+        cap: 0,
     };
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -349,12 +361,22 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .and_then(Mode::from_key),
         clients: match view.get("clients").and_then(Value::as_str) {
             Some("some") => Clients::Some,
+            Some("more") => Clients::More,
             Some("all") => Clients::All,
             _ => Clients::Off,
         },
-        open: texts(&view, "open", NODES_MAX, ID_MAX)?
-            .into_iter()
-            .collect(),
+        reveal: match view.get("reveal") {
+            Some(Value::Object(o)) => o
+                .iter()
+                .filter(|(k, _)| ids.contains(k.as_str()))
+                .filter_map(|(k, n)| {
+                    let n = n.as_u64()?;
+                    Some((k.clone(), usize::try_from(n).unwrap_or(usize::MAX)))
+                })
+                .take(NODES_MAX)
+                .collect(),
+            _ => HashMap::new(),
+        },
         closed: texts(&view, "collapsed", NODES_MAX, TEXT_MAX)?
             .into_iter()
             .collect(),
@@ -689,6 +711,8 @@ pub(super) fn sample() -> Snapshot {
         hidden: 3,
         folded: ["c1".to_string()].into_iter().collect(),
         closed: Default::default(),
+        under: Default::default(),
+        cap: 0,
     };
     let mut edits = Edits {
         mode: Some(Mode::Tree),
@@ -699,7 +723,8 @@ pub(super) fn sample() -> Snapshot {
     edits.placed.insert("ap".into(), pos2(120.5, -40.0));
     edits.closed.insert("Branch".into());
     edits.hidden.insert(Zone::Server);
-    edits.open.insert("sw".into());
+    edits.reveal.insert("sw".into(), usize::MAX);
+    edits.reveal.insert("ap".into(), 8);
     Snapshot {
         name: "Head office".into(),
         created: "2026-11-01T10:00:00Z".into(),

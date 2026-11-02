@@ -5,7 +5,7 @@
 //! as Visio (.vsdx), PDF and the rest.
 
 use super::{Drawn, ink, xml};
-use crate::map::layout::{CARD, Line};
+use crate::map::layout::{self, Line};
 use crate::map::{Link, Node, Zone};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
 use std::fmt::Write;
@@ -82,7 +82,7 @@ pub fn write(d: &Drawn) -> String {
     let sites = d.lay.boxes.iter().any(|g| g.tree);
     for (i, n, p) in d.cards() {
         // In its box when it sits inside it (a card dragged out doesn't).
-        let card = Rect::from_min_size(p, CARD);
+        let card = layout::card_rect(n, p);
         let (parent, rel) = match d
             .group(i)
             .filter(|&g| d.lay.boxes[g].rect.contains_rect(card))
@@ -246,7 +246,7 @@ fn edge(s: &mut String, d: &Drawn, k: usize, line: &Line, off: Vec2) {
     let (Some(first), Some(last)) = (line.pts.first(), line.pts.last()) else {
         return;
     };
-    let Some(up) = d.at(line.up) else { return };
+    let Some(up) = d.rect(line.up) else { return };
     let map = d.map;
     let n = line
         .kids
@@ -259,8 +259,8 @@ fn edge(s: &mut String, d: &Drawn, k: usize, line: &Line, off: Vec2) {
         Some((g, b)) => (format!("box{g}"), b.rect),
         None => {
             let kid = line.kids[0];
-            let Some(p) = d.at(kid) else { return };
-            (format!("n{kid}"), Rect::from_min_size(p, CARD))
+            let Some(r) = d.rect(kid) else { return };
+            (format!("n{kid}"), r)
         }
     };
     let link = n.link().unwrap_or(Link::Wired);
@@ -276,7 +276,7 @@ fn edge(s: &mut String, d: &Drawn, k: usize, line: &Line, off: Vec2) {
         .pts
         .windows(2)
         .all(|p| (p[0].x - p[1].x).abs() < 0.5 || (p[0].y - p[1].y).abs() < 0.5);
-    let (ex, ey) = anchor(Rect::from_min_size(up, CARD), *first);
+    let (ex, ey) = anchor(up, *first);
     let (nx, ny) = anchor(to, *last);
     let label = match into {
         Some(_) if line.kids.len() > 1 => format!("×{}", line.kids.len()),

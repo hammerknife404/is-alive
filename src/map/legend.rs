@@ -222,18 +222,17 @@ pub fn entries(
             Some(internet),
         ));
     }
-    let folded = |prefix: &str| -> Vec<Ink> {
-        nodes
-            .iter()
-            .filter(|c| c.id.starts_with(prefix))
-            .map(accent)
-            .collect()
+    let folded = |is: &dyn Fn(&super::Node) -> bool| -> Vec<Ink> {
+        nodes.iter().filter(|c| is(c)).map(accent).collect()
     };
-    for (prefix, label) in [
-        ("site:", "Collapsed site"),
-        ("more:", "More clients, folded"),
+    let site = |c: &super::Node| c.id.starts_with("site:");
+    // A +N more card, or a /mapnetwork map's own "+7 more" listing nobody.
+    let more = |c: &super::Node| super::is_more(c);
+    for (is, label) in [
+        (&site as &dyn Fn(&super::Node) -> bool, "Collapsed site"),
+        (&more, "More clients, folded"),
     ] {
-        let inks = folded(prefix);
+        let inks = folded(is);
         if let Some(ink) = most(&inks) {
             out.push(Entry::new(
                 Section::Cards,
@@ -432,7 +431,11 @@ mod tests {
         build(
             &doc,
             &Input {
-                clients,
+                clients: if clients {
+                    crate::map::Clients::Some
+                } else {
+                    crate::map::Clients::Off
+                },
                 ..Default::default()
             },
         )
