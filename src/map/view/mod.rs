@@ -1,6 +1,7 @@
 //! The Map tab: pan (drag), zoom (wheel or pinch), drag a card to move it,
 //! click to trace its path to the internet, Ctrl+click to see what joins
-//! several cards, search, filter by role, and a findings band. It rebuilds
+//! several cards, search, filter by role, and a findings band. F fits, +
+//! and − zoom, 0 is 100% and the arrows pan from the keyboard. It rebuilds
 //! as the sweep finds hosts, so a scan can be watched filling in the map.
 
 mod interact;
@@ -124,7 +125,9 @@ pub struct Sources<'a> {
     pub note: bool,
 }
 
-const MIN_ZOOM: f32 = 0.15;
+/// Far enough out for Fit to show a wide Tree of a big map whole: its
+/// cards are colour tiles by then.
+const MIN_ZOOM: f32 = 0.07;
 const MAX_ZOOM: f32 = 2.5;
 
 #[derive(Default)]
@@ -1890,6 +1893,40 @@ mod tests {
         assert_eq!(v.hit(pos2(5.0, 5.0)), Some(0));
         v.select(None);
         assert_eq!(v.hit(pos2(5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn a_column_lit_together_takes_one_colour() {
+        // A gateway with three cards stacked in one column: two cameras
+        // and an unidentified one, all on assumed links.
+        let mut v = view(4);
+        v.map.nodes[0].zone = Zone::Gateway;
+        for (k, zone) in [(1, Zone::Device), (2, Zone::Device), (3, Zone::Unknown)] {
+            v.map.nodes[k].zone = zone;
+            v.map.nodes[k].up = Some((0, Link::Assumed, None));
+        }
+        v.lay.stacked = vec![false, true, true, true];
+        v.lay.pos = (0..4).map(|k| Some(pos2(0.0, k as f32 * 100.0))).collect();
+        let lines: Vec<layout::Line> = (1..4)
+            .map(|k| layout::Line {
+                up: 0,
+                kids: vec![k],
+                into: None,
+                quiet: false,
+                pts: Vec::new(),
+            })
+            .collect();
+        let set = |v: &[usize]| v.iter().copied().collect::<HashSet<usize>>();
+        // Lit together with a stranger: the gateway's colour, not the last
+        // card's.
+        let c = v.column_colours(&lines, &set(&[1, 2, 3]));
+        let gw = v.accent(&v.map.nodes[0]);
+        assert!([1, 2, 3].iter().all(|k| c[k] == gw));
+        // Both cameras only: their own colour.
+        let c = v.column_colours(&lines, &set(&[1, 2]));
+        assert_eq!(c[&1], v.accent(&v.map.nodes[1]));
+        // One card lit alone keeps its own colour (not in the table).
+        assert!(v.column_colours(&lines, &set(&[3])).is_empty());
     }
 
     #[test]

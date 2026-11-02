@@ -224,6 +224,7 @@ impl MapView {
             &|i| self.pos.get(&self.map.nodes[i].id).copied(),
             &|i| self.placed.contains_key(&self.map.nodes[i].id),
         );
+        let shared = self.column_colours(&lines, &lit_links);
         for line in lines {
             let on = line.kids.iter().any(|k| lit_links.contains(k));
             // Inside one box, links would cut across its grid: shown only
@@ -248,10 +249,14 @@ impl MapView {
             let link = first.link().unwrap_or(Link::Wired);
             let Some(g) = line.into.and_then(|g| self.lay.boxes.get(g)) else {
                 // The link's port or note is a chip on its card (see `card`).
+                let lit_colour = line.kids[..]
+                    .first()
+                    .and_then(|k| shared.get(k).copied())
+                    .unwrap_or_else(|| self.accent(first));
                 flows |= draw(
                     &pts,
                     colour(first, link),
-                    self.accent(first),
+                    lit_colour,
                     link,
                     width(link, on),
                     alpha,
@@ -297,6 +302,7 @@ impl MapView {
         // the ones dragged last on top. The cards an open menu acts on are
         // marked as if hovered.
         let menu: HashSet<usize> = self.menu_cards().into_iter().collect();
+        let raised: HashSet<&str> = self.raised.iter().map(String::as_str).collect();
         let mut pulse = false;
         for i in self.stack() {
             let Some(s) = at(i) else { continue };
@@ -305,6 +311,11 @@ impl MapView {
                 continue;
             }
             pulse |= !self.map.nodes[i].flags.is_empty();
+            // A dimmed card dropped on others hides them, rather than
+            // letting their text show through its own.
+            if fade(i) < 1.0 && raised.contains(self.map.nodes[i].id.as_str()) {
+                p.rect_filled(r, (7.0 * z) as u8, behind);
+            }
             self.card(
                 &p,
                 vis,
@@ -325,6 +336,44 @@ impl MapView {
                 crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
             }
         }
+    }
+
+    /// The colour a lit link takes when cards stacked in one column share
+    /// its line: lit together, the column takes their colour if they have
+    /// one, else their uplink's, rather than whichever card's link is drawn
+    /// last. Keyed by card; cards lit alone in their column aren't in it.
+    pub(super) fn column_colours(
+        &self,
+        lines: &[layout::Line],
+        lit_links: &HashSet<usize>,
+    ) -> HashMap<usize, Color32> {
+        let mut columns: HashMap<(usize, i32), Vec<usize>> = HashMap::new();
+        for line in lines {
+            if let [k] = line.kids[..]
+                && lit_links.contains(&k)
+                && self.lay.stacked.get(k).copied().unwrap_or(false)
+                && let Some(Some(at)) = self.lay.pos.get(k)
+            {
+                columns.entry((line.up, at.x as i32)).or_default().push(k);
+            }
+        }
+        let mut out = HashMap::new();
+        for ((up, _), kids) in columns {
+            if kids.len() < 2 {
+                continue;
+            }
+            let first = self.accent(&self.map.nodes[kids[0]]);
+            let c = if kids
+                .iter()
+                .all(|&k| self.accent(&self.map.nodes[k]) == first)
+            {
+                first
+            } else {
+                self.accent(&self.map.nodes[up])
+            };
+            out.extend(kids.into_iter().map(|k| (k, c)));
+        }
+        out
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -17,17 +17,17 @@ impl MapView {
                 .on_hover_text(tip)
                 .clicked()
         };
-        let fit = button(ui, 36.0, "Fit", "Show the whole map");
+        let fit = button(ui, 36.0, "Fit", "Show the whole map (F)");
         let center = button(
             ui,
             56.0,
             "Center",
             "Move the middle of the map to the middle of the view, at this zoom",
         );
-        let zoom_in = button(ui, 24.0, "+", "Zoom in");
+        let zoom_in = button(ui, 24.0, "+", "Zoom in (+)");
         let pct = format!("{:.0}%", self.zoom * 100.0);
-        let reset = button(ui, 48.0, &pct, "Back to 100%");
-        let zoom_out = button(ui, 24.0, "−", "Zoom out");
+        let reset = button(ui, 48.0, &pct, "Back to 100% (0)");
+        let zoom_out = button(ui, 24.0, "−", "Zoom out (−)");
         let target = if zoom_in {
             Some(self.zoom * 1.25)
         } else if zoom_out {
@@ -42,12 +42,16 @@ impl MapView {
         } else if center {
             self.center(rect);
         } else if let Some(z) = target {
-            // Zoom about the middle of the canvas.
-            let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
-            let mid = self.to_world(rect, rect.center());
-            self.aim = Some((rect.size() / 2.0 - mid.to_vec2() * z, z));
-            self.follow = false;
+            self.zoom_about_middle(rect, z);
         }
+    }
+
+    /// Ease to zoom `z`, about the middle of the canvas.
+    pub(super) fn zoom_about_middle(&mut self, rect: Rect, z: f32) {
+        let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
+        let mid = self.to_world(rect, rect.center());
+        self.aim = Some((rect.size() / 2.0 - mid.to_vec2() * z, z));
+        self.follow = false;
     }
 
     /// Select every card at `site` (its card, when collapsed), lighting
