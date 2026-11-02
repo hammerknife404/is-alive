@@ -806,7 +806,7 @@ fn main() -> eframe::Result {
             .with_icon(icon()),
         ..Default::default()
     };
-    eframe::run_native(
+    let r = eframe::run_native(
         "is-alive",
         options,
         Box::new(|cc| {
@@ -863,7 +863,12 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(app))
         }),
-    )
+    );
+    // A screenshot tour with a picture that isn't what it should be.
+    if shots::failed() {
+        std::process::exit(1);
+    }
+    r
 }
 
 #[cfg(test)]

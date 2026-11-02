@@ -254,6 +254,11 @@ impl AdvancedTool {
         self.job.is_some()
     }
 
+    /// Why the last run stopped short, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.err.as_deref()
+    }
+
     /// Check `domain` with the resolver and DKIM selectors as they are
     /// (the user manual's screenshot tour).
     pub fn run(&mut self, ctx: &egui::Context, domain: &str) {

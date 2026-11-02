@@ -12,6 +12,11 @@
 # with the release. On a patch version (x.y.z, z > 0) it refuses to touch
 # docs/manual/img; --out still renders a preview anywhere.
 #
+# The tour renders into <out>/.incoming first. Only when every scene's run
+# worked (a failed one is tried once more) and every picture the manual
+# links to was taken do they replace the ones in <out>; otherwise <out> is
+# left as it was, the script fails, and .incoming holds the run to look at.
+#
 # It builds the release binary and runs the app's manual tour
 # (IS_ALIVE_SHOTS_MANUAL, see src/shots.rs) under a virtual display, with a
 # settings file and notes of its own. In the default container mode
@@ -79,10 +84,13 @@ tour() {
 
     # Settings and notes of its own: the defaults (Dark) at the default
     # window size. Settings shows the folder, so the container names it
-    # like a technician's (MANUAL_SHOTS_HOME).
+    # like a technician's (MANUAL_SHOTS_HOME). The tour never looks up the
+    # public IP or checks for updates, so Settings shows both off and the
+    # footer agrees ("WAN not looked up").
     export XDG_CONFIG_HOME="${MANUAL_SHOTS_HOME:-$tmp/home}/.config"
     mkdir -p "$XDG_CONFIG_HOME/is-alive"
-    printf 'theme=dark\nsize=1120x720\n' >"$XDG_CONFIG_HOME/is-alive/settings"
+    printf 'theme=dark\nsize=1120x720\nwan_on_start=0\nupdates_on_start=0\n' \
+        >"$XDG_CONFIG_HOME/is-alive/settings"
     cat >"$XDG_CONFIG_HOME/is-alive/notes.md" <<'EOF'
 ## Site visit: Harbor Dental, front office
 
@@ -130,13 +138,24 @@ EOF
         export DISPLAY=:97
         sleep 2
     fi
+    # Into a folder of its own first: a failed run never replaces a good set.
+    local stage="$out/.incoming" want n ok=true
+    want=$(grep -o '](img/[a-z-]*\.png)' "$root/docs/manual/MANUAL.md" | sort -u | wc -l)
+    rm -rf "$stage"
+    mkdir -p "$stage"
     echo "manual-shots: is-alive $version, pictures to $out"
-    LIBGL_ALWAYS_SOFTWARE=1 IS_ALIVE_SHOTS="$out" IS_ALIVE_SHOTS_MANUAL=1 \
-        timeout 900 "$target/release/is-alive"
-    local n
-    n=$(find "$out" -maxdepth 1 -name '*.png' | wc -l)
+    LIBGL_ALWAYS_SOFTWARE=1 IS_ALIVE_SHOTS="$stage" IS_ALIVE_SHOTS_MANUAL=1 \
+        timeout 900 "$target/release/is-alive" || ok=false
+    n=$(find "$stage" -maxdepth 1 -name '*.png' | wc -l)
+    if [[ $ok != true || $n -ne $want ]]; then
+        echo "manual-shots: the tour failed ($n of $want pictures; why is above)." >&2
+        echo "$out is left as it was; this run's pictures are in ${stage#"$root"/}" >&2
+        echo "(delete it when you've looked)." >&2
+        return 1
+    fi
+    mv -f "$stage"/*.png "$out"/
+    rmdir "$stage"
     echo "manual-shots: $n pictures in $out"
-    ((n > 0))
 }
 
 case $here in

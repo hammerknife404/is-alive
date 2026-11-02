@@ -284,8 +284,21 @@ impl PingTool {
         self.launch(ctx, Mode::Icmp, count);
     }
 
+    /// `count` ICMP pings to `host` with the tab showing that count (the
+    /// user manual's screenshot tour).
+    pub fn run_shown(&mut self, ctx: &egui::Context, host: &str, count: u32) {
+        self.mode = Mode::Icmp;
+        self.count = count;
+        self.run(ctx, host, count);
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Why the last run stopped short, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.err.as_deref()
     }
 
     fn start(&mut self, ctx: &egui::Context) {

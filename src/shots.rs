@@ -2,12 +2,15 @@
 //! tab, saves `<dir>/NN-<tab>.png` of each, then closes. With
 //! `IS_ALIVE_SHOTS_MANUAL=1` as well it takes the user manual's pictures
 //! instead (see `MANUAL` and scripts/manual-shots.sh), each saved as
-//! `<dir>/<name>.png` once the run it shows has finished.
+//! `<dir>/<name>.png` once the run it shows has finished; a scene whose
+//! run failed is tried once more, and one that still failed, or was taken
+//! late, makes the app exit non-zero (see `failed`).
 //! Off (and free) unless the variable is set.
 
 use crate::{App, Tab, theme};
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Frames, and seconds, to let a tab settle (layout, fonts, the switch
 /// animation) before its picture is taken.
@@ -16,6 +19,30 @@ const SETTLE_SECS: f64 = 0.6;
 
 /// Seconds a manual scene may wait for its run before it's taken anyway.
 const PATIENCE: f64 = 120.0;
+
+/// Seconds before a manual scene whose run failed is run once more (a
+/// speed test refused with 429 often goes through a little later).
+const RETRY: f64 = 45.0;
+
+/// Set when a picture isn't what it should be: its run failed, it was
+/// taken before the run finished, or it couldn't be saved.
+static FAILED: AtomicBool = AtomicBool::new(false);
+
+/// True once any picture of this tour went wrong: the app then exits with
+/// status 1, so scripts/manual-shots.sh keeps the pictures it had.
+pub fn failed() -> bool {
+    FAILED.load(Ordering::Relaxed)
+}
+
+/// What a failed manual scene does this frame.
+enum Retry {
+    /// Waits for its second try.
+    Wait,
+    /// Runs again now.
+    Now,
+    /// Already had its second try: taken as it is, and reported.
+    GiveUp,
+}
 
 pub struct Shots {
     dir: PathBuf,
@@ -28,6 +55,12 @@ pub struct Shots {
     begun: Option<(usize, f64)>,
     /// When the current shot became ready.
     ready_at: Option<f64>,
+    /// When the current scene's failed run is tried again.
+    retry_at: Option<f64>,
+    /// The scene that has had its second try.
+    retried: Option<usize>,
+    /// The scene already reported as failed (once, not every frame).
+    reported: Option<usize>,
 }
 
 impl Shots {
@@ -42,6 +75,9 @@ impl Shots {
             manual: std::env::var_os("IS_ALIVE_SHOTS_MANUAL").is_some_and(|v| v != "0"),
             begun: None,
             ready_at: None,
+            retry_at: None,
+            retried: None,
+            reported: None,
         })
     }
 
@@ -77,7 +113,7 @@ impl Shots {
             .begun
             .is_some_and(|(i, t)| i == self.next && now - t > PATIENCE);
         if late && self.frames == 0 {
-            eprintln!("shots: {} didn't finish in time", names[self.next]);
+            self.fail(names[self.next], "didn't finish in time");
         }
         if ready || late {
             self.frames += 1;
@@ -101,6 +137,31 @@ impl Shots {
         true
     }
 
+    /// A failed run: wait RETRY seconds and run it once more, then give up.
+    fn retry(&mut self, i: usize, now: f64) -> Retry {
+        if self.retried == Some(i) {
+            return Retry::GiveUp;
+        }
+        let at = *self.retry_at.get_or_insert(now + RETRY);
+        if now < at {
+            return Retry::Wait;
+        }
+        self.retry_at = None;
+        self.retried = Some(i);
+        // PATIENCE counts from the second try.
+        self.begun = Some((i, now));
+        Retry::Now
+    }
+
+    /// Say what's wrong with the current picture (once) and remember it.
+    fn fail(&mut self, name: &str, why: &str) {
+        if self.reported != Some(self.next) {
+            eprintln!("shots: {name}: {why}");
+            self.reported = Some(self.next);
+        }
+        FAILED.store(true, Ordering::Relaxed);
+    }
+
     fn save(&self, img: &egui::ColorImage, name: &str) {
         let [w, h] = img.size;
         let raw: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
@@ -115,24 +176,42 @@ impl Shots {
             && let Err(e) = buf.save(&path)
         {
             eprintln!("shots: {}: {e}", path.display());
+            FAILED.store(true, Ordering::Relaxed);
         }
     }
 }
 
+/// Where a manual scene's run is.
+enum Ready {
+    Wait,
+    Yes,
+    /// Finished without what the picture is meant to show.
+    Failed(String),
+}
+
+/// A run that has finished, well or not.
+fn over(running: bool, err: Option<&str>) -> Ready {
+    match (running, err) {
+        (true, _) => Ready::Wait,
+        (false, None) => Ready::Yes,
+        (false, Some(e)) => Ready::Failed(e.to_string()),
+    }
+}
+
 /// One picture in the user manual: its file name, the tab it shows, what
-/// to do on its first frame, and (each frame) whether it's ready.
+/// to do on its first frame, and (each frame) whether its run is over.
 struct Scene {
     name: &'static str,
     tab: Tab,
     start: fn(&mut App, &egui::Context),
-    ready: fn(&mut App) -> bool,
+    ready: fn(&mut App) -> Ready,
 }
 
 const fn scene(
     name: &'static str,
     tab: Tab,
     start: fn(&mut App, &egui::Context),
-    ready: fn(&mut App) -> bool,
+    ready: fn(&mut App) -> Ready,
 ) -> Scene {
     Scene {
         name,
@@ -144,8 +223,8 @@ const fn scene(
 
 fn nothing(_: &mut App, _: &egui::Context) {}
 
-fn at_once(_: &mut App) -> bool {
-    true
+fn at_once(_: &mut App) -> Ready {
+    Ready::Yes
 }
 
 /// The manual's pictures, in order. Runs go to public test targets only
@@ -158,8 +237,8 @@ const MANUAL: &[Scene] = &[
     scene(
         "ping",
         Tab::Ping,
-        |a, ctx| a.ping.run(ctx, "1.1.1.1", 10),
-        |a| !a.ping.is_running(),
+        |a, ctx| a.ping.run_shown(ctx, "1.1.1.1", 10),
+        |a| over(a.ping.is_running(), a.ping.error()),
     ),
     scene(
         "port-check",
@@ -171,7 +250,7 @@ const MANUAL: &[Scene] = &[
                 .map_or_else(|| "127.0.0.1".into(), |(ip, _)| ip.to_string());
             a.ports.run(ctx, &me);
         },
-        |a| !a.ports.is_running(),
+        |a| over(a.ports.is_running(), a.ports.error()),
     ),
     scene("traceroute", Tab::Trace, nothing, at_once),
     scene("subnet-sweep", Tab::Sweep, nothing, at_once),
@@ -179,38 +258,38 @@ const MANUAL: &[Scene] = &[
         "dns-lookup",
         Tab::Dns,
         |a, ctx| a.dns.run(ctx, "example.com"),
-        |a| !a.dns.is_running(),
+        |a| over(a.dns.is_running(), a.dns.error()),
     ),
     scene(
         "advanced",
         Tab::Advanced,
         |a, ctx| a.advanced.run(ctx, "example.com"),
-        |a| !a.advanced.is_running(),
+        |a| over(a.advanced.is_running(), a.advanced.error()),
     ),
     scene("config-export-empty", Tab::Export, nothing, at_once),
     scene(
         "map",
         Tab::Map,
         |a, ctx| a.export.open_example(ctx, 0),
-        |a| !a.export.is_running(),
+        |a| over(a.export.is_running(), None),
     ),
     scene("config-export", Tab::Export, nothing, at_once),
     scene("map-selected", Tab::Map, nothing, |a| {
         a.map.select_for_shots();
-        true
+        Ready::Yes
     }),
     scene(
         "map-sites",
         Tab::Map,
         |a, ctx| a.export.open_example(ctx, 1),
-        |a| !a.export.is_running(),
+        |a| over(a.export.is_running(), None),
     ),
     scene("notes", Tab::Notes, |a, _| a.notes.show_split(), at_once),
     scene(
         "speed-test",
         Tab::Speed,
         |a, ctx| a.speed.run(ctx),
-        |a| !a.speed.is_running(),
+        |a| over(a.speed.is_running(), a.speed.error().as_deref()),
     ),
     scene("subnet-calc", Tab::Calc, nothing, at_once),
     scene("results", Tab::Results, nothing, at_once),
@@ -242,7 +321,8 @@ const MANUAL: &[Scene] = &[
 
 impl App {
     /// The manual's tour: each scene's setup once, then its picture once
-    /// its run has finished.
+    /// its run has finished. A run that failed gets a second try; if that
+    /// fails too, the picture is taken and the tour reported as failed.
     pub(crate) fn manual_shots_step(&mut self, ctx: &egui::Context) {
         let names: Vec<&str> = MANUAL.iter().map(|s| s.name).collect();
         let now = ctx.input(|i| i.time);
@@ -254,7 +334,24 @@ impl App {
                 if s.begin(i, now) {
                     (scene.start)(self, ctx);
                 }
-                (scene.ready)(self)
+                let state = (scene.ready)(self);
+                let Some(s) = &mut self.shots else { return };
+                match state {
+                    Ready::Wait => false,
+                    Ready::Yes => true,
+                    Ready::Failed(why) => match s.retry(i, now) {
+                        Retry::Wait => false,
+                        Retry::Now => {
+                            eprintln!("shots: {}: {why}; trying once more", scene.name);
+                            (scene.start)(self, ctx);
+                            false
+                        }
+                        Retry::GiveUp => {
+                            s.fail(scene.name, &why);
+                            true
+                        }
+                    },
+                }
             }
             None => true,
         };

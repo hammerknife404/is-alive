@@ -2,10 +2,13 @@
 Maintainers: the screenshots in img/ are made by scripts/manual-shots.sh and
 are updated only for full releases (x.y.0). See "Updating this manual" at the
 end. Until the first full release after this manual was written (0.25.0), the
-img/ folder is empty and the pictures below don't show yet.
+img/ folder is empty and the pictures below don't show yet: remove the note
+under the title when they're committed.
 -->
 
 # is-alive user manual
+
+> **The pictures arrive with is-alive 0.25.0.** Until that release, the places they go show only their descriptions.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
@@ -139,7 +142,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | `printer01`, `google.com` | The name |
 | `192.168.1.1`, `2606:4700::1111` | The address |
 | `fe80::1%eth0` | An IPv6 link-local address with its zone (the network interface) |
-| `[::1]:443`, `nas.local:5001` | The host; in Ping's **TCP** mode the port too |
+| `[::1]:443`, `nas.local:5001` | The host; in Ping's **TCP** mode the port too, and in Port Check the port replaces the **Ports** list |
 | `https://portal.example.com/login` | `portal.example.com` |
 | `bücher.de`, `пример.рф` | Names in any language (looked up in their DNS form) |
 
@@ -198,7 +201,7 @@ Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` 
 
 - **The status row** shows the address being pinged, **Sent** and **Received**, **Loss** (green at 0%, amber for some loss, red for 100%) and **Min / Avg / Max** round-trip time.
 - **The graph** draws each reply as a point on a green line; a red tick is a reply that never came back. The scale in the top left corner is the highest reply time on screen.
-- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
+- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (The picture above was taken on a made-up network that answers pings itself, so its replies say `ttl=255`; from a real network, `1.1.1.1` shows around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
 
 ### Example: is the internet connection healthy?
 
@@ -402,7 +405,7 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 
 - **"No hosts answered"** on a remote subnet: firewalls often drop ping, and ARP doesn't cross routers. Try Port Check on a device you know is there.
 - **Fewer devices than expected**: devices asleep, or on another VLAN. A sweep only sees what's reachable from where you're plugged in.
-- **Linux, no ARP-only devices or MACs**: the ARP part needs the `ip` command (iproute2), present on almost every distribution.
+- **Linux, no ARP-only devices**: finding devices that answer ARP but not ping needs the `ip` command (iproute2), present on almost every distribution. MACs come from `/proc/net/arp` and don't need it.
 
 **CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (`ping` or `arp`).
 
@@ -447,7 +450,7 @@ The line under the toolbar reminds you what the chosen resolver means. The statu
 
 1. Type the customer's website or mail name, say `mail.contoso.com`.
 2. Set **Type** to **A + AAAA** and **Resolver** to **Compare all**, press **Enter**.
-3. If the office's own DNS answers `192.168.1.10` and the public resolvers answer `203.0.113.25`, a yellow note appears: *System answers differently from …*. That's split DNS: inside users reach the server directly, outside users through the firewall. It's fine when it's deliberate, and the cause of "works for me, not for them" when it isn't.
+3. If the office's own DNS answers `192.168.1.10` and the public resolvers answer `203.0.113.25`, a yellow note appears for each public resolver: *Cloudflare 1.1.1.1 answers differently from System …*. That's split DNS: inside users reach the server directly, outside users through the firewall. It's fine when it's deliberate, and the cause of "works for me, not for them" when it isn't.
 
 Big websites behind CDNs (Google, Microsoft, Cloudflare) legitimately answer differently from place to place; the note says so. It matters for the customer's own names.
 
@@ -524,7 +527,8 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | DMARC **FAIL** *no DMARC record* | Forged mail from the domain is delivered | Start with `v=DMARC1; p=none; rua=mailto:dmarc@domain`, read the reports, then move to `quarantine` and `reject` |
 | DMARC **WARN** *policy none* | Monitoring only: forged mail still delivered | Move to `p=quarantine`, then `p=reject`, once the reports show all real mail passes |
 | DKIM **WARN** *no active DKIM key found* | The domain's current selector isn't one the app knows | Take the `s=` value from a received email's `DKIM-Signature` header and add it in **DKIM** |
-| DKIM **FAIL** *1024-bit key* or smaller | Weak signing key | Rotate to a 2048-bit key in the mail provider's admin |
+| DKIM **WARN** *1024-bit key* | Weaker than today's standard | Rotate to a 2048-bit key in the mail provider's admin |
+| DKIM **FAIL** under 1024 bits | Gmail and others ignore the key: the mail isn't signed as far as they're concerned | Rotate to a 2048-bit key in the mail provider's admin |
 | Blacklists **FAIL** | Mail from that address goes to junk or bounces | Find out why it's listed (a compromised account, an open relay), fix it, then ask the list to remove it |
 | SMTP **INFO** *probably blocks outbound port 25* | This network can't reach mail servers on port 25: common on office and home lines | Not a problem with the domain. Run it from another network to test SMTP |
 | Domain expiry **WARN/FAIL** | The domain is close to expiring, or on hold | Renew it, or check auto-renew and the registrar's contact details |
@@ -618,7 +622,7 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
 | **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings; a sweep of the same network marks which devices answered |
 
-A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Load a UniFi or SonicWall export…**, and links to the two example maps.
+A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps.
 
 ### The toolbar
 
@@ -627,7 +631,6 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **Search** | Find a card by name, IP, MAC or vendor; **Enter** selects the first match |
 | **Clients: Off / Some / All** | End devices: **Off** puts a count on each switch or AP; **Some** shows up to 10 under each and folds the rest into a **+N more** card; **All** gives every client its own card |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
-| **Fit** | Fit the whole map in view (or double-click the background) |
 | **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
@@ -647,6 +650,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
+- **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout** and **Export SVG…**.
 - **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
 
@@ -665,19 +669,21 @@ Right-click a card for:
 
 | Item | What it does |
 |---|---|
-| **📌 Pin (keep selected)** / **Unpin** | A pinned card stays selected while you click others, and keeps its place in the panel |
-| **Select only this** | Just this card |
-| **Add to selection (Ctrl+click)** | Add it to what's selected |
+| **Pin** / **Unpin** | A pinned card stays selected while you click others, and keeps its place in the panel |
+| **Select** / **Select only this** | Just this card (*Select* when nothing is selected yet) |
+| **Add to selection** (Ctrl+click) / **Remove from selection** | Add it to what's selected, or take it out if it's already in |
+| **Clear selection** (Esc) | (Several cards selected) Let go of them all; pinned cards stay |
 | **Select with its uplink** | This card and the one it hangs off |
-| **Select the path to the WAN** | This card and every uplink up to the internet |
+| **Select its path to the WAN** | This card and every uplink up to the internet |
 | **Select with its direct children** | This card and the cards straight under it |
-| **Select with everything below** | This card and every card under it, all the way down |
+| **Select with everything below it** | This card and every card under it, all the way down |
 | **Collapse / Expand** *site* | (Sites layout) Fold the card's site into one card, or open it |
+| **Put back in the layout** | (A card you've dragged) Back where the layout had it |
 | **Copy details** | Copy the card as text |
 
 Each item shows only when it applies, with how many cards it takes. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
 
-**Right-clicking one of several selected cards applies the item to all of them:** Pin pins them all, Copy details copies them all, and the Select items work from every selected card (for example, *Select the path to the WAN* on three selected access points selects all three paths).
+**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths).
 
 ### The panel (right)
 
@@ -705,7 +711,7 @@ With several cards selected, the panel's header says how many and offers **Copy 
 
 1. Open the **Map** tab, click **Examples ⏷**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
 2. Click the **SonicWall NSA 3700** card. The panel shows it's the primary of an HA pair with a high-priority action item (*WAN2 failover not recently tested*), and the line to the internet lights up.
-3. Right-click a server card and choose **Select the path to the WAN**: the switch, firewall and internet link it depends on light up. If that switch failed, everything under it would lose its connection.
+3. Right-click a server card and choose **Select its path to the WAN**: the switch, firewall and internet link it depends on light up. If that switch failed, everything under it would lose its connection.
 4. Switch to **Zones** to see the devices grouped by role, then back to **Cluster**.
 5. Open **Examples ⏷** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
 6. **Examples ⏷ → Close the example** goes back to this network's map.
@@ -733,7 +739,7 @@ With several cards selected, the panel's header says how many and offers **Copy 
 - **Time** inserts the date and time with the time zone and where this computer's clock syncs from (useful when comparing with device logs). **Host info** inserts this computer's name, domain, LAN, MAC, gateway and WAN.
 - **Font and size** (right end of the toolbar): Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
 
-**Emoji styles.** Emoji are drawn a size up in one of four styles: **Match theme** (monochrome; neon in the Miami and RGB themes), **Monochrome**, **Colour** (each emoji in its own colour: faces yellow, ✅ green, ❌ red) and **Miami neon**. The default style is set in **Settings**. The **Style** row at the top of the emoji menu picks the style for the emoji you insert from then on, so one note can mix styles: emoji already in the note keep theirs. Changing the app's theme doesn't change them.
+**Emoji styles.** Emoji are drawn a size up in one of four styles: **Match theme** (monochrome; neon in the Miami and RGB themes), **Monochrome**, **Colour** (each emoji in its own colour: faces yellow, ✅ green, ❌ red) and **Miami neon**. The **Style** row at the top of the emoji menu offers **Same as app** (follows Settings), **Monochrome**, **Colour** and **Miami neon**, for the emoji you insert from then on (with emoji selected, it restyles those too), so one note can mix styles. Emoji inserted in a style of their own keep it. Emoji inserted with **Same as app** follow the **Emoji** setting in Settings, so with *Match theme* they change with the theme.
 
 ### Getting it out
 
@@ -842,7 +848,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 - **A direction fails with a 403, or the test is blocked**: web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a preset server nearby, or wait a minute.
 - **"ICMP got no replies, so latency was measured with TCP connects to port 443"**: ping is blocked on the way; the test carried on with TCP, where loss is less reliable.
-- **"the test runs over IPv4 only"**: this network hands out IPv6 addresses but can't route IPv6. Worth fixing (devices will be slow to connect elsewhere too), and the test carries on over IPv4.
+- **"IPv6 to … didn't connect, so the test ran over IPv4"**: this network's IPv6 looks broken: it hands out IPv6 addresses but can't route IPv6. Worth fixing (devices will be slow to connect elsewhere too), and the test carries on over IPv4.
 - **A link to a download page rather than the file**: the test says so. Use the file's direct link.
 
 **CSV columns:** server, ip, phase (idle/download/upload), mbps, mb, seconds, streams, probe, probes, lost, latency_avg_ms, latency_min_ms, latency_max_ms, jitter_ms, loss_pct, added_ms, mos.
@@ -946,7 +952,7 @@ The dots beside each name are that theme's Map colours for each role.
 
 ![The Contoso Health example map in the Light theme](img/map-light.png)
 
-**Emoji style** sets how emoji in Notes are drawn by default: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Changing the theme doesn't change it, and Notes' emoji menu can still give individual emoji a different style (see [Notes](#12-notes)).
+**Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
 ### Miami backdrop
 
@@ -978,7 +984,7 @@ The bottom of Settings shows the folder:
 - **Windows:** `%APPDATA%\is-alive` (for example `C:\Users\you\AppData\Roaming\is-alive`)
 - **Linux:** `~/.config/is-alive`
 
-It holds `settings` (theme and the choices above, plain text) and `notes.md` (your notes, redacted). The window also reopens at the size you last closed it.
+It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep). The window also reopens at the size you last closed it.
 
 **Help wiki** at the top right of Settings opens the wiki.
 
@@ -1069,7 +1075,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. Links (Help, the update link, a card's Web button) open in your own browser.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file and `notes.md` (redacted, readable only by your user account). The Results log is in memory and gone when the app closes.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1 MB of text in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
@@ -1084,14 +1090,14 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 
 - **SmartScreen ("Windows protected your PC"):** click **More info → Run anyway** (see [Download and first start](#windows)).
 - **Nothing happens at all:** right-click `is-alive.exe` → **Properties**. If there's an **Unblock** tick box at the bottom of the General tab, tick it and click **OK**. Then check your antivirus hasn't quarantined it (port scanners sometimes get flagged); restore it or ask IT to allow it.
-- **An error box about graphics:** is-alive draws its window with OpenGL. If that can't start (a virtual machine, remote desktop, or an old or missing graphics driver), it tries Direct3D instead. If neither works, it shows an error box saying why and writes a `startup.log`; the box says where. Send that file with your problem report.
+- **An error box about graphics:** is-alive draws its window with OpenGL. If that can't start (a virtual machine, remote desktop, or an old or missing graphics driver), it tries Direct3D 12 instead (works without a graphics card) and keeps using it from then on. If neither works, it shows an error box saying why. Every start is written to `startup.log` in the settings folder (`%APPDATA%\is-alive\startup.log`): send that file with your problem report.
 - **To choose the renderer yourself**, start it from a command prompt with `--renderer=wgpu` (Direct3D, Vulkan or Metal) or `--renderer=glow` (OpenGL):
 
   ```bat
   is-alive.exe --renderer=wgpu
   ```
 
-  A shortcut works too: right-click it → **Properties** → add the option to the end of **Target**.
+  A shortcut works too: right-click it → **Properties** → add the option to the end of **Target**. `--renderer=wgpu` is remembered; start once with `--renderer=glow` to go back to OpenGL. The `IS_ALIVE_RENDERER` environment variable works too.
 
 ### The AppImage doesn't start (Linux)
 
@@ -1127,7 +1133,7 @@ is-alive opens links with the system's own launcher. If nothing happens, check a
 
 ### Reporting a problem
 
-Include the version (bottom right), what you ran, and what you saw. **Copy** on the tab, or the run's **Copy** in Results, gives the exact text. For a start-up problem on Windows, attach `startup.log`.
+Include the version (bottom right), what you ran, and what you saw. **Copy** on the tab, or the run's **Copy** in Results, gives the exact text. For a start-up problem on Windows, attach `startup.log` (`%APPDATA%\is-alive\startup.log`).
 
 ---
 
@@ -1191,7 +1197,9 @@ The text is updated with any release that changes what it describes. The **scree
 2. Run `scripts/manual-shots.sh`. It builds the release binary in the `isalive-dev` container and runs the app's manual tour (`IS_ALIVE_SHOTS_MANUAL`, in `src/shots.rs`) on a made-up network, writing `docs/manual/img/<name>.png`. On a patch version it refuses to touch `docs/manual/img` and says why; `scripts/manual-shots.sh --out <dir>` renders a preview anywhere, at any version.
 3. Look at every picture, then commit them with the release.
 
-The tour pings `1.1.1.1`, checks `example.com`, runs a 10-second download from Cloudflare and port-checks a few listeners on its own made-up address (`192.168.1.50`); it never sweeps, traces or looks up the public IP, so the pictures show no real network. If the Speed Test picture shows *http status: 429*, Cloudflare is rate-limiting your address after several runs: wait an hour and run the script again.
+The tour pings `1.1.1.1`, checks `example.com`, runs a 10-second download from Cloudflare and port-checks a few listeners on its own made-up address (`192.168.1.50`); it never sweeps, traces, looks up the public IP or checks for updates (its Settings has both turned off, so the footer's *WAN not looked up* matches), so the pictures show no real network. The made-up network answers pings itself, so the Ping picture's replies say `ttl=255`.
+
+The pictures are rendered into `docs/manual/img/.incoming` first. A run that fails (a lookup error, a speed test refused with *http status: 429*) is tried once more after 45 seconds; if it still fails, or a run doesn't finish in two minutes, the script says which picture and why, fails, and leaves `docs/manual/img` as it was, with this run's pictures in `.incoming` to look at. A 429 means Cloudflare is rate-limiting your address after several runs: wait an hour and run the script again.
 
 The names the tour writes are the ones this manual links to, and a test (`manual_shows_every_picture_the_tour_takes`) fails if the two lists differ. To add a picture, add a scene to `MANUAL` in `src/shots.rs` and link `img/<name>.png` here.
 
