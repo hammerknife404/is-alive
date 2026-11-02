@@ -99,16 +99,22 @@ fn accent(n: &super::Node) -> Ink {
     if n.gone { Ink::Gone } else { Ink::Role(n.zone) }
 }
 
-/// The one seen most, the first seen on a tie.
+/// The one seen most; on a tie, the one seen last (lines are painted in
+/// order, so of two as common the later is the one on top). Linear: there
+/// are only a handful of distinct values.
 fn most<T: Copy + PartialEq>(inks: &[T]) -> Option<T> {
-    let mut best: Option<(T, usize)> = None;
-    for &i in inks {
-        let n = inks.iter().filter(|&&k| k == i).count();
-        if best.is_none_or(|b| n > b.1) {
-            best = Some((i, n));
+    // Each value with how often it's seen and where it was seen last.
+    let mut tally: Vec<(T, usize, usize)> = Vec::new();
+    for (k, &i) in inks.iter().enumerate() {
+        match tally.iter_mut().find(|t| t.0 == i) {
+            Some(t) => {
+                t.1 += 1;
+                t.2 = k;
+            }
+            None => tally.push((i, 1, k)),
         }
     }
-    best.map(|b| b.0)
+    tally.into_iter().max_by_key(|t| (t.1, t.2)).map(|t| t.0)
 }
 
 /// A slot in the legend's columns: a section's heading or an entry (its
@@ -292,10 +298,16 @@ pub fn entries(
     // Links: each kind drawn, in the colour most of its lines have, with
     // how many cards hang off their uplink that way (a trunk is drawn as
     // its strongest link, so a kind only ever in trunks isn't listed).
+    // Which kinds and colours: from the lines the map shows, not the quiet
+    // ones inside a Zones box (drawn only while lit); the counts: every
+    // card's uplink.
+    let links: Vec<Link> = lines
+        .iter()
+        .flat_map(|l| l.kids.iter().filter_map(|&k| nodes[k].link()))
+        .collect();
     let mut kinds: Vec<(Link, Vec<Ink>)> = Vec::new();
-    let mut links: Vec<Link> = Vec::new();
     let mut trunks: Vec<(Link, Ink)> = Vec::new();
-    for line in lines {
+    for line in lines.iter().filter(|l| !l.quiet) {
         let link = drawn_link(map, line);
         let first = line
             .kids
@@ -314,7 +326,6 @@ pub fn entries(
             Some(k) => k.1.push(ink),
             None => kinds.push((link, vec![ink])),
         }
-        links.extend(line.kids.iter().filter_map(|&k| nodes[k].link()));
         if into.is_some() && line.kids.len() > 1 {
             trunks.push((link, ink));
         }
@@ -328,7 +339,8 @@ pub fn entries(
             Link::Assumed => "Assumed, not in the data",
         };
         // The internet's uplinks are the gateway's colour and assumed links
-        // grey wherever they don't run into a role's box: that, if any do.
+        // grey wherever they don't run into a role's box: that, if any
+        // shown are.
         let own = match link {
             Link::Backbone => Some(Ink::Role(Zone::Gateway)),
             Link::Assumed => Some(Ink::Weak),
@@ -380,7 +392,12 @@ pub fn entries(
             Section::Boxes,
             Swatch::Box,
             Ink::Weak,
-            "Site (click title to fold)",
+            // Only the canvas has a title to click.
+            if live {
+                "Site (click title to fold)"
+            } else {
+                "Site"
+            },
             Some(site_boxes),
         ));
     }
@@ -447,12 +464,39 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let drawn: BTreeSet<u8> = lines
-            .iter()
+        // Quiet lines (inside a Zones box) aren't drawn unless lit.
+        let shown = || lines.iter().filter(|l| !l.quiet);
+        let drawn: BTreeSet<u8> = shown()
             .map(|l| layout::strength(drawn_link(m, l)))
             .collect();
         assert_eq!(kinds.iter().copied().collect::<BTreeSet<_>>(), drawn);
         assert_eq!(kinds.len(), drawn.len(), "one entry per kind");
+        // Each kind's swatch in a colour one of its shown lines is drawn
+        // in: a box's for a line into one, else as the map colours it.
+        let ink = |l: &Line| {
+            let n = l
+                .kids
+                .iter()
+                .map(|&k| &m.nodes[k])
+                .max_by_key(|n| n.link().map_or(0, layout::strength))
+                .unwrap();
+            match (l.into.and_then(|g| lay.boxes[g].zone), drawn_link(m, l)) {
+                (Some(z), _) => Ink::Role(z),
+                (None, Link::Backbone) => Ink::Role(Zone::Gateway),
+                (None, Link::Assumed) => Ink::Weak,
+                (None, _) => accent(n),
+            }
+        };
+        for x in &e {
+            if let Swatch::Line(k) | Swatch::Trunk(k) = x.swatch {
+                assert!(
+                    shown().any(|l| drawn_link(m, l) == k && ink(l) == x.ink),
+                    "{mode:?}: {} drawn in {:?}, which no line of it is",
+                    x.label,
+                    x.ink
+                );
+            }
+        }
         // Trunks only where links fold into a box.
         let trunks = lines
             .iter()
@@ -566,6 +610,13 @@ mod tests {
         let sites = m.sites().len();
         let b = e.iter().find(|x| x.swatch == Swatch::Box).unwrap();
         assert_eq!((b.ink, b.count), (Ink::Weak, Some(sites)));
+        // A picture has no title to click; the canvas says it does.
+        assert_eq!(b.label, "Site");
+        let lay = layout_in(&m, &|_| true, Mode::Sites);
+        let lines = layout::lines(&m, &lay, &|i| lay.pos[i], &|_| false);
+        let live = entries(&m, &lay.boxes, &lines, true, 0, true);
+        let b = live.iter().find(|x| x.swatch == Swatch::Box).unwrap();
+        assert_eq!(b.label, "Site (click title to fold)");
         assert!(!has(&e, Swatch::Folded));
         // Collapse two sites: a Collapsed site entry counting them.
         let close: std::collections::HashSet<String> = m.sites().into_iter().take(2).collect();
@@ -576,6 +627,17 @@ mod tests {
         for mode in [Mode::Cluster, Mode::Tree, Mode::Zones] {
             check(&m, mode);
         }
+    }
+
+    #[test]
+    fn most_is_the_commonest_and_the_one_on_top_on_a_tie() {
+        assert_eq!(most::<u8>(&[]), None);
+        assert_eq!(most(&[1, 2, 2]), Some(2));
+        assert_eq!(most(&[2, 2, 1]), Some(2));
+        // A tie: the one seen (drawn) last.
+        assert_eq!(most(&[1, 2]), Some(2));
+        assert_eq!(most(&[1, 2, 2, 1]), Some(1));
+        assert_eq!(most(&[3, 1, 2, 2, 1]), Some(1));
     }
 
     #[test]

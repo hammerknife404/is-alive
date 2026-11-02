@@ -275,8 +275,8 @@ impl MapView {
                 self.aim = None;
             }
         }
-        if resp.drag_stopped() {
-            self.drag = None;
+        if resp.drag_stopped() && self.drag.take().is_some() {
+            self.clear_of_legend(rect, &self.raised.clone());
         }
     }
 

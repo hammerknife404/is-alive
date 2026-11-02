@@ -34,6 +34,8 @@ struct Plan {
     /// Each item's top-left, from the top-left of the rows' area.
     at: Vec<(Slot, Pos2)>,
     content: Vec2,
+    /// The rows don't all fit: a scroll bar shows.
+    scrolls: bool,
     /// Each entry's label and count laid out.
     labels: Vec<(
         std::sync::Arc<egui::Galley>,
@@ -67,6 +69,44 @@ impl MapView {
             pinned,
             true,
         )
+    }
+
+    /// The corner the legend took of the canvas `rect` last frame (as Fit
+    /// keeps clear of it), if it's shown.
+    fn legend_area(&self, rect: Rect) -> Option<Rect> {
+        (self.legend && self.legend_size != Vec2::ZERO).then(|| {
+            Rect::from_min_max(
+                pos2(rect.min.x + 10.0, rect.max.y - 10.0 - self.legend_size.y),
+                pos2(rect.min.x + 10.0 + self.legend_size.x, rect.max.y - 10.0),
+            )
+        })
+    }
+
+    /// Cards just dropped (`ids`), if one is mostly under the legend, where
+    /// it can't be grabbed again: they glide up together, just clear of it.
+    pub(super) fn clear_of_legend(&mut self, rect: Rect, ids: &[String]) {
+        let Some(area) = self.legend_area(rect) else {
+            return;
+        };
+        let lift = ids
+            .iter()
+            .filter_map(|id| self.pos.get(id))
+            .map(|&p| Rect::from_min_size(self.to_screen(rect, p), CARD * self.zoom))
+            .filter(|r| {
+                let o = r.intersect(area);
+                o.is_positive() && o.area() > r.area() / 2.0
+            })
+            .map(|r| r.max.y - (area.min.y - 8.0))
+            .fold(0.0, f32::max);
+        if lift <= 0.0 {
+            return;
+        }
+        for id in ids {
+            if let Some(&p) = self.pos.get(id) {
+                self.placed
+                    .insert(id.clone(), p - vec2(0.0, lift / self.zoom));
+            }
+        }
     }
 
     /// Lay the legend out for the canvas `rect`: bottom left, at most
@@ -108,8 +148,10 @@ impl MapView {
             }
             _ => 0.0,
         };
-        let max_h = (rect.height() * MAX_SHARE - TITLE - 2.0 * PAD).max(3.0 * ROW);
-        let fit_rows = ((max_h / ROW).floor() as usize).max(3);
+        // Whole rows: when they scroll, none is cut in half at the bottom.
+        let fit_rows =
+            (((rect.height() * MAX_SHARE - TITLE - 2.0 * PAD) / ROW).floor() as usize).max(3);
+        let max_h = fit_rows as f32 * ROW;
         let total = entries.len() + 4;
         // As many rows to a column as fit in `max_w`; more when the columns
         // would be too wide, and then the rows scroll.
@@ -181,6 +223,7 @@ impl MapView {
             body,
             at,
             content,
+            scrolls,
             labels,
         }
     }
@@ -200,7 +243,8 @@ impl MapView {
             rect.max.y - 10.0 - plan.panel.min.y,
         );
         let vis = ui.visuals().clone();
-        // The panel takes clicks and drags, so none reach the map under it.
+        // The panel takes clicks and drags, so none reach the map under it
+        // (a card dropped under it is moved out, see `drag_cards`).
         ui.interact(
             plan.panel,
             ui.id().with("map_legend"),
@@ -210,7 +254,7 @@ impl MapView {
         p.rect(
             plan.panel,
             8,
-            vis.window_fill.gamma_multiply(0.92),
+            vis.window_fill,
             Stroke::new(1.0, vis.widgets.noninteractive.bg_stroke.color),
             StrokeKind::Inside,
         );
@@ -243,6 +287,11 @@ impl MapView {
                 .max_rect(plan.body)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
+        // A scroll bar that's always there when rows are out of sight, not
+        // one that shows only under the pointer.
+        if plan.scrolls {
+            body.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();
+        }
         egui::ScrollArea::vertical()
             .id_salt("map_legend_rows")
             .max_height(plan.body.height())
@@ -334,10 +383,14 @@ fn tip(s: Swatch) -> &'static str {
         Swatch::Chip => "The uplink's port, or a note such as inferred, on the card it leads to",
         Swatch::Line(Link::Backbone) => "The internet to a firewall, in the gateway's colour",
         Swatch::Line(Link::Assumed) => {
-            "Placed here because it answered, not because the data shows the link"
+            "Placed here because it answered, not because the data shows the link \
+             (in a box's colour, for lines into one)"
         }
         Swatch::Line(_) => "In the colour of the card it leads to (a box's, for lines into one)",
-        Swatch::Trunk(_) => "Every link from one card into a box, folded into one line",
+        Swatch::Trunk(_) => {
+            "Every link from one card into a box, folded into one line in the colour \
+             of the box it runs into"
+        }
         Swatch::Lit => "Click a card: its path to the internet lights up, packets flowing",
         Swatch::Box => "A site's cards (click its title to fold it), or a role's in Zones",
     }
