@@ -173,7 +173,29 @@ pub struct ExportTool {
     failed: Vec<String>,
 }
 
+/// Largest SonicWall, Meraki or map file read; only a UniFi backup (whose
+/// database can run to hundreds of MB) may be bigger.
+const TEXT_MAX: usize = 256 << 20;
+
+/// Most files converted from one pick or drop: one of each kind is shown.
+const OPEN_MAX: usize = 16;
+
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
+    if data.len() > TEXT_MAX {
+        return unifi::convert(data, clients)
+            .map(Export::Unifi)
+            .map_err(|e| {
+                if e.starts_with("not a UniFi backup") {
+                    format!(
+                        "not a UniFi backup, and larger ({} MB) than any SonicWall, Meraki or map \
+file this reads",
+                        TEXT_MAX >> 20
+                    )
+                } else {
+                    e
+                }
+            });
+    }
     if mapnetwork::sniff(&data) {
         return mapnetwork::parse(&data).map(|d| Export::Map(Box::new(d)));
     }
@@ -426,7 +448,16 @@ impl ExportTool {
             }) else {
                 return;
             };
-            for path in paths {
+            if let Some(extra) = paths.get(OPEN_MAX) {
+                let more = paths.len() - OPEN_MAX;
+                tx.send(Ev::Done(
+                    extra.clone(),
+                    Box::new(Err(format!(
+                        "{more} file(s) from here on not opened: at most {OPEN_MAX} at a time"
+                    ))),
+                ));
+            }
+            for path in paths.into_iter().take(OPEN_MAX) {
                 tx.send(Ev::Picked(path.clone()));
                 let r = read_input(&path).and_then(|data| convert(data, clients));
                 tx.send(Ev::Done(path, Box::new(r)));

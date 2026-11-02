@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
@@ -154,6 +155,7 @@ impl SweepTool {
             enter |= widgets::field(
                 ui,
                 "Range",
+                Field::Range,
                 &mut self.range,
                 widgets::MAIN_W,
                 "10.0.0.0/24 or 10.0.0.1-254",

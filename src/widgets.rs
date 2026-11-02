@@ -1,5 +1,6 @@
 //! Small shared UI pieces.
 
+use crate::input::Field;
 use eframe::egui::{self, Color32, RichText, Ui};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -379,27 +380,77 @@ pub fn empty_state(
     hit
 }
 
-/// Most characters a field takes. A host, domain or search never needs
-/// more; a paste of a whole log into one is cut off, not carried around.
-pub const FIELD_MAX: usize = 255;
-/// A link (Speed Test's file).
-pub const URL_MAX: usize = 2048;
-/// Notes: about 1 MB of text, far beyond any site's notes.
-pub const NOTES_MAX: usize = 1_000_000;
-/// Known problems in the site bundle.
-pub const PROBLEMS_MAX: usize = 20_000;
-
 /// Single-line text field; returns true if Enter was pressed in it.
-pub fn field(ui: &mut Ui, label: &str, value: &mut String, width: f32, hint: &str) -> bool {
+pub fn field(
+    ui: &mut Ui,
+    label: &str,
+    kind: Field,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> bool {
     lead(ui, label);
+    let r = line(ui, kind, value, width, hint);
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// A single-line text box for `kind`: its length limit, hidden characters
+/// dropped as they're typed or pasted, and a right-click menu.
+pub fn line(
+    ui: &mut Ui,
+    kind: Field,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
     let r = add_text_edit(
         ui,
         egui::TextEdit::singleline(value)
-            .char_limit(FIELD_MAX)
+            .char_limit(kind.max())
             .desired_width(width)
             .hint_text(hint),
     );
-    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    tidy(ui.ctx(), &r, kind, value);
+    r
+}
+
+/// After text box `r` (holding a `kind`) changed: drop the characters it
+/// doesn't keep, leave the cursor where it was, and say so when a paste
+/// lost hidden characters or was cut at the box's limit.
+pub fn tidy(ctx: &egui::Context, r: &egui::Response, kind: Field, value: &mut String) {
+    if !r.changed() {
+        return;
+    }
+    let pasted = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+    let clean = kind.clean(value);
+    if clean != *value {
+        let dropped = kind.dropped(value);
+        if let Some(mut state) = egui::TextEdit::load_state(ctx, r.id)
+            && let Some(mut range) = state.cursor.char_range()
+        {
+            for c in [&mut range.primary, &mut range.secondary] {
+                c.index = egui::text::CharIndex(kind.kept_before(value, c.index.0));
+            }
+            state.cursor.set_char_range(Some(range));
+            state.store(ctx, r.id);
+        }
+        *value = clean;
+        if pasted && dropped > 0 {
+            toast(
+                format!(
+                    "Took out {dropped} hidden character{} (control or text-direction marks)",
+                    if dropped == 1 { "" } else { "s" }
+                ),
+                true,
+            );
+        }
+    }
+    if pasted && value.chars().count() >= kind.max() {
+        toast(
+            format!("Pasted text cut to {} characters", kind.max()),
+            false,
+        );
+    }
 }
 
 pub fn num<T: egui::emath::Numeric>(

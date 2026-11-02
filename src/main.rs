@@ -4,6 +4,7 @@ mod backdrop;
 mod bundle;
 mod chrome;
 mod fonts;
+mod input;
 mod job;
 mod log;
 mod map;
@@ -625,12 +626,12 @@ impl App {
         let mut clear = false;
         ui.horizontal(|ui| {
             widgets::lead(ui, "Filter");
-            crate::widgets::add_text_edit(
+            widgets::line(
                 ui,
-                egui::TextEdit::singleline(&mut self.filter)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(240.0)
-                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
+                input::Field::Text,
+                &mut self.filter,
+                240.0,
+                "tool or text, e.g. FAIL, 443, timeout",
             )
             .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
             if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {

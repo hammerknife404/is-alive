@@ -140,7 +140,9 @@ pub fn family(ctx: &egui::Context, name: &str) -> FontFamily {
     let Some((_, path)) = installed().iter().find(|(n, _)| *n == name) else {
         return FontFamily::Monospace;
     };
-    let Ok(bytes) = std::fs::read(path) else {
+    // A font, not a device or a pipe, and not absurdly big.
+    let font_file = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 64 << 20);
+    let Some(bytes) = font_file.then(|| std::fs::read(path).ok()).flatten() else {
         return FontFamily::Monospace;
     };
     let mut defs = FontDefinitions::default();

@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::ports::{PRESETS, parse_ports, service_name};
@@ -74,6 +75,7 @@ impl PortTool {
             enter |= widgets::field(
                 ui,
                 "Host",
+                Field::Host,
                 &mut self.host,
                 widgets::MAIN_W,
                 "hostname or IP",
@@ -88,6 +90,7 @@ impl PortTool {
             enter = widgets::field(
                 ui,
                 "Ports",
+                Field::Ports,
                 &mut self.ports,
                 ui.available_width() - widgets::LEAD_W - 90.0,
                 "22,80,443,8000-8100",
@@ -304,11 +307,10 @@ impl PortTool {
         self.target = None;
         self.results.clear();
         self.total = 0;
-        let host = self.host.trim().to_string();
-        if host.is_empty() {
-            self.err = Some("enter a host".into());
-            return;
-        }
+        let host = match crate::input::host(&self.host) {
+            Ok(t) => t.host,
+            Err(e) => return self.err = Some(e),
+        };
         let ports = match parse_ports(&self.ports) {
             Ok(p) => p,
             Err(e) => return self.err = Some(e),

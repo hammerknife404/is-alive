@@ -261,23 +261,23 @@ impl SpeedTool {
                     });
                 match self.pick {
                     Pick::File => {
-                        crate::widgets::add_text_edit(
+                        widgets::line(
                             ui,
-                            egui::TextEdit::singleline(&mut self.file_url)
-                                .char_limit(widgets::URL_MAX)
-                                .desired_width(240.0)
-                                .hint_text("https://host/100MB.bin"),
+                            crate::input::Field::Url,
+                            &mut self.file_url,
+                            240.0,
+                            "https://host/100MB.bin",
                         )
                         .on_hover_text("The file's direct link. 1 GB or more works best");
                         presets(ui, speed::DOWNLOADS, &mut self.file_url);
                     }
                     Pick::Upload => {
-                        crate::widgets::add_text_edit(
+                        widgets::line(
                             ui,
-                            egui::TextEdit::singleline(&mut self.upload_url)
-                                .char_limit(widgets::URL_MAX)
-                                .desired_width(240.0)
-                                .hint_text("https://host/backend/empty.php"),
+                            crate::input::Field::Url,
+                            &mut self.upload_url,
+                            240.0,
+                            "https://host/backend/empty.php",
                         )
                         .on_hover_text(
                             "Where to POST. It must answer 2xx and throw the data away; \

@@ -736,11 +736,13 @@ impl Settings {
                     s.notes_font = match v.trim() {
                         "sans" => crate::fonts::SANS.into(),
                         "mono" => crate::fonts::MONO.into(),
-                        name => name.into(),
+                        name => crate::input::line(name, 128),
                     }
                 }
                 "notes_split" => {
-                    if let Ok(f) = v.trim().parse::<f32>() {
+                    if let Ok(f) = v.trim().parse::<f32>()
+                        && f.is_finite()
+                    {
                         s.notes_split = f.clamp(0.2, 0.8);
                     }
                 }
@@ -760,12 +762,17 @@ impl Settings {
                         .trim()
                         .split_once('x')
                         .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                        // A size no screen has (or a typo) opens at the default.
+                        .filter(|&(w, h)| {
+                            (320..=16_384).contains(&w) && (240..=16_384).contains(&h)
+                        })
                 }
                 "backdrop" => {
                     s.backdrop = match v.trim() {
                         "none" => Source::None,
                         v => v
                             .strip_prefix("image:")
+                            .filter(|p| p.len() <= 4096 && !p.chars().any(char::is_control))
                             .map_or(Source::Scene, |p| Source::Image(p.into())),
                     }
                 }
@@ -997,7 +1004,7 @@ fn settings_path() -> Option<std::path::PathBuf> {
 /// Saved settings, or the defaults. A missing or unreadable file is not an error.
 pub fn load() -> Settings {
     settings_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|p| crate::input::read_capped(&p, 64 * 1024))
         .map(|t| Settings::parse(&t))
         .unwrap_or_default()
 }
@@ -1062,6 +1069,11 @@ mod tests {
             crate::fonts::SANS
         );
         assert_eq!(Settings::parse(""), Settings::default());
+        // Values edited by hand into nonsense fall back to the defaults.
+        let odd = Settings::parse("notes_split=NaN\nsize=0x99999\nnotes_font=a\u{202E}b\n");
+        assert_eq!(odd.notes_split, Settings::default().notes_split);
+        assert_eq!(odd.size, None);
+        assert_eq!(odd.notes_font, "ab");
         // A file from 0.10.0 had only the theme line.
         let old = Settings::parse("theme=miami\n");
         assert_eq!(

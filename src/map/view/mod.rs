@@ -821,12 +821,12 @@ impl MapView {
         };
         let narrow = ui.available_width() < need;
         ui.horizontal(|ui| {
-            let r = crate::widgets::add_text_edit(
+            let r = widgets::line(
                 ui,
-                egui::TextEdit::singleline(&mut self.search)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(220.0)
-                    .hint_text("Search name, IP, MAC, vendor"),
+                crate::input::Field::Text,
+                &mut self.search,
+                220.0,
+                "Search name, IP, MAC, vendor",
             );
             search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if !self.search.is_empty() {

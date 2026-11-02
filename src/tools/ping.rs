@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::icmp::{self, EchoStatus};
@@ -125,6 +126,7 @@ impl PingTool {
             enter |= widgets::field(
                 ui,
                 "Host",
+                Field::Host,
                 &mut self.host,
                 widgets::MAIN_W,
                 "hostname or IP",
@@ -299,11 +301,17 @@ impl PingTool {
         self.rows.clear();
         self.samples.clear();
         self.stats = Stats::default();
-        let host = self.host.trim().to_string();
-        if host.is_empty() {
-            self.err = Some("enter a host".into());
-            return;
+        let target = match crate::input::host(&self.host) {
+            Ok(t) => t,
+            Err(e) => return self.err = Some(e),
+        };
+        // A port typed with the host (host:8443, a link) is the one TCP times.
+        if let Some(p) = target.port
+            && mode == Mode::Tcp
+        {
+            self.port = p;
         }
+        let host = target.host;
         let (port, size, v6) = (self.port, self.size, self.prefer_v6);
         let interval = Duration::from_millis(self.interval_ms as u64);
         let timeout = self.timeout_ms;

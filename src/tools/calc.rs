@@ -2,6 +2,7 @@
 //! check whether an address is inside, split it into smaller blocks, or get
 //! the fewest CIDR blocks that cover a range. Nothing leaves the machine.
 
+use crate::input::Field;
 use crate::net::hostinfo::HostInfo;
 use crate::net::subnet::{self, Block, Info, Input};
 use crate::net::targets;
@@ -59,6 +60,7 @@ impl CalcTool {
             widgets::field(
                 ui,
                 "Subnet",
+                Field::Subnet,
                 &mut self.input,
                 300.0,
                 "10.0.0.0/22, 10.0.0.5 255.255.252.0, 2001:db8::/48 or 10.0.0.1-99",
@@ -141,12 +143,12 @@ impl CalcTool {
         ui.horizontal(|ui| {
             let h = ui.spacing().interact_size.y;
             cell(ui, KEY_W, h, RichText::new("Check address"));
-            crate::widgets::add_text_edit(
+            widgets::line(
                 ui,
-                egui::TextEdit::singleline(&mut self.check)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(220.0)
-                    .hint_text(if b.v6() { "2001:db8::1" } else { "10.0.3.7" }),
+                Field::Address,
+                &mut self.check,
+                220.0,
+                if b.v6() { "2001:db8::1" } else { "10.0.3.7" },
             )
             .on_hover_text("Is this address inside the block?");
             let c = self.check.trim();

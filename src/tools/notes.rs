@@ -105,6 +105,10 @@ fn path() -> Option<PathBuf> {
     Some(crate::theme::data_dir()?.join("notes.md"))
 }
 
+/// Most of the autosaved notes and keep-list files read back: four bytes
+/// for each character the editor takes.
+const NOTES_FILE_MAX: u64 = 4 * crate::input::Field::Notes.max() as u64;
+
 /// Values the technician said to keep, as a JSON list of strings.
 fn allow_path() -> Option<PathBuf> {
     Some(crate::theme::data_dir()?.join("notes-allow.json"))
@@ -112,14 +116,22 @@ fn allow_path() -> Option<PathBuf> {
 
 impl Default for NotesTool {
     fn default() -> Self {
+        // Read no more than the editor holds, without its hidden characters.
         let text = path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| crate::input::read_capped(&p, NOTES_FILE_MAX))
+            .map(|t| crate::input::Field::Notes.clean(&t))
             .unwrap_or_default();
         let ov = redact::Overrides {
             redact: Vec::new(),
             allow: allow_path()
-                .and_then(|p| std::fs::read_to_string(p).ok())
+                .and_then(|p| crate::input::read_capped(&p, NOTES_FILE_MAX))
                 .and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok())
+                .map(|v| {
+                    v.into_iter()
+                        .filter(|s| s.len() <= 4096)
+                        .take(10_000)
+                        .collect()
+                })
                 .unwrap_or_default(),
             known: Vec::new(),
         };
@@ -922,7 +934,7 @@ impl NotesTool {
                 let fill = ui.available_size();
                 egui::TextEdit::multiline(&mut self.text)
                     .id(id)
-                    .char_limit(widgets::NOTES_MAX)
+                    .char_limit(crate::input::Field::Notes.max())
                     .desired_width(f32::INFINITY)
                     .min_size(fill)
                     .lock_focus(true)
@@ -932,6 +944,12 @@ impl NotesTool {
             })
             .inner;
         if out.response.changed() {
+            widgets::tidy(
+                &ctx,
+                &out.response,
+                crate::input::Field::Notes,
+                &mut self.text,
+            );
             let now = ui.input(|i| i.time);
             self.changed(now);
             if ui.input(|i| i.key_pressed(Key::Enter)) {

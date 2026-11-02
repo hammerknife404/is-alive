@@ -146,12 +146,12 @@ impl BundleTool {
             .spacing([8.0, 6.0])
             .show(ui, |ui| {
                 ui.label("Site name");
-                crate::widgets::add_text_edit(
+                widgets::line(
                     ui,
-                    egui::TextEdit::singleline(&mut self.site)
-                        .char_limit(widgets::FIELD_MAX)
-                        .desired_width(380.0)
-                        .hint_text("Client or site name"),
+                    crate::input::Field::Text,
+                    &mut self.site,
+                    380.0,
+                    "Client or site name",
                 );
                 ui.end_row();
                 ui.label("Known problems");
@@ -176,12 +176,18 @@ impl BundleTool {
                     let keep = widgets::selection_before_right_click(ui.ctx(), id);
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
-                        .char_limit(widgets::PROBLEMS_MAX)
+                        .char_limit(crate::input::Field::Problems.max())
                         .desired_rows(2)
                         .desired_width(380.0)
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")
                         .layouter(&mut layouter)
                         .show(ui);
+                    widgets::tidy(
+                        ui.ctx(),
+                        &edit.response,
+                        crate::input::Field::Problems,
+                        &mut self.notes,
+                    );
                     widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
                     edit.response.context_menu(|ui| {
                         if widgets::text_edit_menu(ui, id, true) {
