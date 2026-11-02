@@ -1198,14 +1198,28 @@ mod examples {
     #[test]
     fn examples_build_in_every_client_mode_and_layout() {
         for (name, f) in crate::skills::EXAMPLES {
-            let doc = crate::mapnetwork::parse(crate::skills::file(f).unwrap()).unwrap();
+            let blank = f == crate::skills::BLANK;
+            let doc = crate::mapnetwork::parse(crate::skills::example_file(f).unwrap()).unwrap();
             for clients in Clients::ALL {
                 let input = Input {
                     clients,
                     ..Default::default()
                 };
                 let m = build(&doc, &input);
-                assert!(m.nodes.len() > 30, "{name}");
+                if blank {
+                    // The Internet and the gateway under it, at one site.
+                    assert_eq!(m.nodes.len(), 2, "{name}");
+                    assert_eq!(m.nodes[0].zone, Zone::Internet);
+                    assert_eq!(m.nodes[1].zone, Zone::Gateway);
+                    assert_eq!(
+                        m.nodes[1].up.as_ref().map(|u| (u.0, u.1)),
+                        Some((0, Link::Backbone))
+                    );
+                    assert_eq!(m.nodes[1].site.as_deref(), Some("Site"));
+                    assert!(m.findings.is_empty() && m.hidden == 0);
+                } else {
+                    assert!(m.nodes.len() > 30, "{name}");
+                }
                 for n in &m.nodes {
                     if let Some(up) = &n.up {
                         assert!(up.0 < m.nodes.len(), "{name}: {} hangs off nothing", n.id);

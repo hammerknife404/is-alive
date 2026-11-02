@@ -350,6 +350,9 @@ impl MapView {
             if !what.is_empty() {
                 ui.label(RichText::new(what.join(" · ")).small().weak());
             }
+            if let Some(d) = super::panel::drawn_note(n) {
+                ui.label(RichText::new(d).small().strong());
+            }
             for f in &n.flags {
                 widgets::warning(ui, f);
             }
