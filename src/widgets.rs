@@ -550,12 +550,27 @@ pub fn safe_path(path: std::path::PathBuf, exts: &[&str]) -> std::path::PathBuf 
 }
 
 pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
+    save_made(file_name, filter, exts, move || Ok(text.into_bytes()));
+}
+
+/// Like `save_file`, with the bytes made once a file is picked, off the
+/// UI thread (a big picture takes a moment).
+pub fn save_made(
+    file_name: String,
+    filter: &'static str,
+    exts: Vec<&'static str>,
+    make: impl FnOnce() -> Result<Vec<u8>, String> + Send + 'static,
+) {
     std::thread::spawn(move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&file_name)
-            .add_filter(filter, &exts)
-            .save_file()
-        else {
+        // Scripted runs (IS_ALIVE_SAVE_DIR=<dir>) save there, no dialog.
+        let picked = match std::env::var_os("IS_ALIVE_SAVE_DIR") {
+            Some(dir) => Some(std::path::PathBuf::from(dir).join(&file_name)),
+            None => rfd::FileDialog::new()
+                .set_file_name(&file_name)
+                .add_filter(filter, &exts)
+                .save_file(),
+        };
+        let Some(path) = picked else {
             return;
         };
         let path = safe_path(path, &exts);
@@ -563,7 +578,7 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        if let Err(e) = std::fs::write(&path, text) {
+        if let Err(e) = make().and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             toast(format!("Couldn't save {name}"), false);
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)

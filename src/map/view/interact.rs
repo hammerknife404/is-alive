@@ -579,14 +579,7 @@ impl MapView {
             ui.close();
         }
         ui.separator();
-        if ui
-            .button("Export SVG…")
-            .on_hover_text("Save the map as SVG")
-            .clicked()
-        {
-            self.export_svg(ui.visuals().dark_mode);
-            ui.close();
-        }
+        ui.menu_button("Export", |ui| self.export_items(ui));
     }
 
     /// Ease cards toward the layout and the view toward its aim.

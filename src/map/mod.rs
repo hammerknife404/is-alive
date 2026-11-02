@@ -5,10 +5,10 @@
 //! the data doesn't show (a sweep can't see switch ports) is drawn as
 //! assumed, never as fact.
 
+pub mod export;
 pub mod import;
 pub mod layout;
 pub mod runs;
-pub mod svg;
 pub mod view;
 
 use crate::net::mac::{self, Mac};
@@ -227,6 +227,8 @@ pub struct Finding {
 
 #[derive(Default)]
 pub struct Map {
+    /// The map's own title (a /mapnetwork map's); empty for the rest.
+    pub title: String,
     pub nodes: Vec<Node>,
     pub findings: Vec<Finding>,
     /// What the map was built from, for under the title.
@@ -1993,6 +1995,7 @@ fn limit(b: B, input: &Input) -> Map {
         .collect();
     findings.sort_by_key(|f| f.sev);
     Map {
+        title: String::new(),
         nodes: out,
         findings,
         summary: String::new(),

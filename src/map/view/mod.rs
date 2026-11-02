@@ -3,6 +3,7 @@
 //! several cards, search, filter by role, and a findings band. It rebuilds
 //! as the sweep finds hosts, so a scan can be watched filling in the map.
 
+mod export;
 mod interact;
 mod paint;
 mod panel;
@@ -1023,7 +1024,7 @@ impl MapView {
         act
     }
 
-    /// Search, clients, scan, fit and layout, and Export SVG.
+    /// Search, clients, scan, fit and layout, and Export.
     fn toolbar(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Toolbar {
         let ctx = ui.ctx().clone();
         let mut act = None;
@@ -1140,7 +1141,7 @@ impl MapView {
                 });
             }
         });
-        // A narrow window: the layouts, Examples and Export SVG on a row of
+        // A narrow window: the layouts, Examples and Export on a row of
         // their own rather than cut off at the window's edge.
         if narrow {
             ui.horizontal(|ui| {
@@ -1183,36 +1184,10 @@ impl MapView {
         picked
     }
 
-    /// The toolbar's right end, drawn right to left: Export SVG, Examples.
+    /// The toolbar's right end, drawn right to left: Export, Examples.
     fn toolbar_end(&self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
-        ui.add_enabled_ui(!empty, |ui| {
-            if ui
-                .button("Export SVG…")
-                .on_hover_text("Save the map as SVG")
-                .on_disabled_hover_text(NOTHING_YET)
-                .clicked()
-            {
-                self.export_svg(ui.visuals().dark_mode);
-            }
-        });
+        self.export_button(ui, empty);
         examples_menu(ui, src)
-    }
-
-    /// Ask where to save the map as SVG, as it's laid out now.
-    fn export_svg(&self, dark: bool) {
-        let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
-        let moved: Vec<bool> = self
-            .map
-            .nodes
-            .iter()
-            .map(|n| self.placed.contains_key(&n.id))
-            .collect();
-        widgets::save_file(
-            "is-alive-map.svg".into(),
-            "SVG",
-            vec!["svg"],
-            super::svg::render(&self.map, &pos, &self.lay, &moved, dark),
-        );
     }
 
     /// Under the toolbar: the map's summary, the accuracy note, and how far

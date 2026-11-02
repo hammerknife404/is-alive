@@ -1,0 +1,442 @@
+//! The map as a picture: boxes, lines, cards and the findings under them,
+//! as shapes and text runs that SVG and PNG both draw from, so the two
+//! always match.
+
+use super::Drawn;
+use crate::map::layout::{self, CARD};
+use crate::map::{Link, Sev, Zone};
+use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
+
+pub type Rgb = [u8; 3];
+
+/// The page: the theme's dark or light, or white whatever the theme.
+#[derive(Clone, Copy, Debug)]
+pub struct Look {
+    pub dark: bool,
+    pub white: bool,
+}
+
+pub struct Stroke {
+    pub rgb: Rgb,
+    pub alpha: f32,
+    pub width: f32,
+    /// Dash and gap lengths.
+    pub dash: Option<[f32; 2]>,
+}
+
+/// A run of text in one colour and weight (400 regular, 600 or 700 bold).
+pub struct Run {
+    pub text: String,
+    pub rgb: Rgb,
+    pub weight: u16,
+}
+
+pub enum Item {
+    Rect {
+        r: Rect,
+        round: f32,
+        fill: Option<(Rgb, f32)>,
+        stroke: Option<Stroke>,
+    },
+    Line {
+        pts: Vec<Pos2>,
+        stroke: Stroke,
+    },
+    Dot {
+        c: Pos2,
+        r: f32,
+        rgb: Rgb,
+    },
+    /// `at` is the baseline's start, or its middle when `middle`.
+    Text {
+        at: Pos2,
+        size: f32,
+        mono: bool,
+        middle: bool,
+        runs: Vec<Run>,
+    },
+    /// One card's shapes (an SVG group).
+    Card(Vec<Item>),
+}
+
+pub struct Scene {
+    pub size: Vec2,
+    pub items: Vec<Item>,
+}
+
+/// The page's colours.
+struct Ink {
+    bg: Rgb,
+    card: Rgb,
+    line: Rgb,
+    text: Rgb,
+    weak: Rgb,
+    gone: Rgb,
+    /// Roles in the light palette: white under a dark theme's neons.
+    light_roles: bool,
+}
+
+impl Ink {
+    fn new(look: Look) -> Self {
+        let mut ink = if look.dark && !look.white {
+            Ink {
+                bg: [0x16, 0x18, 0x1c],
+                card: [0x20, 0x23, 0x29],
+                line: [0x36, 0x3b, 0x44],
+                text: [0xe8, 0xea, 0xee],
+                weak: [0x8b, 0x91, 0x9c],
+                gone: [0xff, 0x40, 0x40],
+                light_roles: false,
+            }
+        } else {
+            Ink {
+                bg: [0xf6, 0xf7, 0xf9],
+                card: [0xff, 0xff, 0xff],
+                line: [0xd2, 0xd6, 0xdc],
+                text: [0x1d, 0x21, 0x28],
+                weak: [0x69, 0x70, 0x7c],
+                gone: [0xc8, 0x1e, 0x1e],
+                light_roles: false,
+            }
+        };
+        if look.white {
+            ink.bg = [0xff; 3];
+            ink.light_roles = !crate::theme::current().is_light();
+        }
+        ink
+    }
+
+    /// A role's colour in the theme in use, as on screen.
+    fn role(&self, z: Zone) -> Rgb {
+        if self.light_roles {
+            return z.rgb(false);
+        }
+        let c = z.colour_in(crate::theme::current());
+        [c.r(), c.g(), c.b()]
+    }
+}
+
+const AMBER: Rgb = [0xe8, 0xb8, 0x48];
+
+fn run(text: impl Into<String>, rgb: Rgb, weight: u16) -> Vec<Run> {
+    vec![Run {
+        text: text.into(),
+        rgb,
+        weight,
+    }]
+}
+
+fn text(at: Pos2, size: f32, mono: bool, runs: Vec<Run>) -> Item {
+    Item::Text {
+        at,
+        size,
+        mono,
+        middle: false,
+        runs,
+    }
+}
+
+/// Split into at most `rows` lines of about `width` characters, with an
+/// ellipsis when it doesn't fit.
+pub fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for word in s.split_whitespace() {
+        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur += word;
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.len() > rows {
+        lines.truncate(rows);
+        let last = lines.last_mut().expect("rows > 0");
+        last.push('…');
+    }
+    for l in &mut lines {
+        if l.chars().count() > width + 1 {
+            *l = l.chars().take(width).collect::<String>() + "…";
+        }
+    }
+    lines
+}
+
+/// The map as on screen, with a title line above and the findings below.
+pub fn draw(d: &Drawn, look: Look) -> Scene {
+    let ink = Ink::new(look);
+    let map = d.map;
+    let b = d.bounds();
+    let (m, head) = (32.0, 64.0);
+    let foot = 28.0 + 20.0 * map.findings.len().min(12) as f32;
+    let off = vec2(m - b.min.x, m + head - b.min.y);
+    let size = vec2(b.width() + 2.0 * m, b.height() + 2.0 * m + head + foot);
+    let at = |p: Pos2| p + off;
+    let mut items = vec![Item::Rect {
+        r: Rect::from_min_size(Pos2::ZERO, size),
+        round: 0.0,
+        fill: Some((ink.bg, 1.0)),
+        stroke: None,
+    }];
+    items.push(text(
+        pos2(m, m + 6.0),
+        20.0,
+        false,
+        run(d.title(), ink.text, 600),
+    ));
+    items.push(text(
+        pos2(m, m + 26.0),
+        12.0,
+        false,
+        run(
+            format!("{} · is-alive {}", map.summary, crate::VERSION),
+            ink.weak,
+            400,
+        ),
+    ));
+    boxes(d, &ink, &at, &mut items);
+    lines(d, &ink, &at, &mut items);
+    // In Sites the box already names the site.
+    let sites = d.lay.boxes.iter().any(|g| g.tree);
+    for (_, n, p) in d.cards() {
+        items.push(Item::Card(card(n, at(p), sites, &ink)));
+    }
+    findings(d, &ink, m, size.y - foot + 8.0, &mut items);
+    Scene { size, items }
+}
+
+/// Zones and Sites boxes, under the links and cards.
+fn boxes(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>) {
+    for g in &d.lay.boxes {
+        let r = Rect::from_min_size(at(g.rect.min), g.rect.size());
+        let colour = g.zone.map_or(ink.weak, |z| ink.role(z));
+        items.push(Item::Rect {
+            r,
+            round: 10.0,
+            fill: Some((colour, 0.07)),
+            stroke: Some(Stroke {
+                rgb: colour,
+                alpha: 0.5,
+                width: 1.0,
+                dash: None,
+            }),
+        });
+        items.push(text(
+            pos2(
+                r.min.x + layout::BOX_PAD,
+                r.min.y + layout::BOX_TITLE / 2.0 + 4.0,
+            ),
+            11.0,
+            false,
+            run(
+                format!("{} · {}", g.title.to_uppercase(), d.box_count(g)),
+                colour,
+                600,
+            ),
+        ));
+    }
+}
+
+/// Links and trunks, styled by the link they carry.
+fn lines(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>) {
+    let map = d.map;
+    for line in d.lines().iter().filter(|l| !l.quiet) {
+        let pts: Vec<Pos2> = line.pts.iter().map(|p| at(*p)).collect();
+        // A trunk carries its strongest link, in its box's colour.
+        let n = line
+            .kids
+            .iter()
+            .map(|&k| &map.nodes[k])
+            .max_by_key(|m| m.link().map_or(0, layout::strength))
+            .expect("a line carries a link");
+        let (rgb, width, dash) = match n.link().unwrap_or(Link::Wired) {
+            Link::Backbone => (ink.role(Zone::Gateway), 3.0, None),
+            Link::Wired => (ink.role(n.zone), 1.6, None),
+            Link::Wireless => (ink.role(n.zone), 1.6, Some([7.0, 5.0])),
+            Link::Assumed => (ink.weak, 1.4, Some([2.5, 4.0])),
+        };
+        let into = line.into.and_then(|g| d.lay.boxes.get(g));
+        let rgb = into.and_then(|g| g.zone).map_or(rgb, |z| ink.role(z));
+        let width = if into.is_some() { width + 0.6 } else { width };
+        let end = *pts.last().expect("route has points");
+        items.push(Item::Line {
+            pts,
+            stroke: Stroke {
+                rgb,
+                alpha: 0.75,
+                width,
+                dash,
+            },
+        });
+        if into.is_some() && line.kids.len() > 1 {
+            items.push(text(
+                pos2(end.x + 5.0, end.y - 4.0),
+                10.0,
+                false,
+                run(format!("×{}", line.kids.len()), ink.weak, 400),
+            ));
+        }
+    }
+}
+
+/// A card: its role's bar, kind, name, address, chips and a flag mark.
+fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
+    let accent = if n.gone { ink.gone } else { ink.role(n.zone) };
+    let (x, y) = (p.x, p.y);
+    let mut v = vec![
+        // A pinned card missing from the latest data: dashed, in red.
+        Item::Rect {
+            r: Rect::from_min_size(p, CARD),
+            round: 7.0,
+            fill: Some((ink.card, 1.0)),
+            stroke: Some(Stroke {
+                rgb: if n.gone { accent } else { ink.line },
+                alpha: 1.0,
+                width: 1.0,
+                dash: n.gone.then_some([6.0, 4.0]),
+            }),
+        },
+        Item::Rect {
+            r: Rect::from_min_size(p, vec2(4.0, CARD.y)),
+            round: 2.0,
+            fill: Some((accent, 1.0)),
+            stroke: None,
+        },
+        text(
+            pos2(x + 12.0, y + 17.0),
+            9.5,
+            true,
+            run(&n.kind, ink.weak, 400),
+        ),
+    ];
+    let label = wrap(&n.label, 26, 2);
+    for (k, l) in label.iter().enumerate() {
+        v.push(text(
+            pos2(x + 12.0, y + 34.0 + k as f32 * 16.0),
+            13.0,
+            false,
+            run(l, ink.text, 600),
+        ));
+    }
+    if !n.sub.is_empty() {
+        let rows = label.len().max(1);
+        v.push(text(
+            pos2(x + 12.0, y + 34.0 + rows as f32 * 16.0),
+            10.5,
+            true,
+            run(&n.sub, accent, 400),
+        ));
+    }
+    // The uplink's port or note rides on the card, as on screen.
+    let chips =
+        n.up.as_ref()
+            .and_then(|u| u.2.as_deref())
+            .into_iter()
+            .chain(n.chips.iter().map(String::as_str))
+            .filter(|c| !(sites && n.site.as_deref() == Some(*c)));
+    let mut cx = x + 12.0;
+    for c in chips {
+        let cw = 10.0 + 5.6 * c.chars().count() as f32;
+        if cx + cw > x + CARD.x - 8.0 {
+            break;
+        }
+        v.push(Item::Rect {
+            r: Rect::from_min_size(pos2(cx, y + CARD.y - 22.0), vec2(cw, 15.0)),
+            round: 7.5,
+            fill: Some((accent, 0.16)),
+            stroke: None,
+        });
+        v.push(text(
+            pos2(cx + 5.0, y + CARD.y - 11.0),
+            9.5,
+            false,
+            run(c, accent, 400),
+        ));
+        cx += cw + 4.0;
+    }
+    if !n.flags.is_empty() {
+        let c = pos2(x + CARD.x - 12.0, y + 12.0);
+        v.push(Item::Dot {
+            c,
+            r: 7.0,
+            rgb: AMBER,
+        });
+        v.push(Item::Text {
+            at: pos2(c.x, y + 16.0),
+            size: 11.0,
+            mono: false,
+            middle: true,
+            runs: run("!", [0; 3], 700),
+        });
+    }
+    v
+}
+
+/// The first dozen findings, worst first.
+fn findings(d: &Drawn, ink: &Ink, m: f32, mut y: f32, items: &mut Vec<Item>) {
+    if d.map.findings.is_empty() {
+        return;
+    }
+    items.push(text(
+        pos2(m, y),
+        13.0,
+        false,
+        run("Findings", ink.text, 600),
+    ));
+    for f in d.map.findings.iter().take(12) {
+        y += 20.0;
+        let c = match f.sev {
+            Sev::High => [0xeb, 0x5a, 0x5a],
+            Sev::Med => [0xe6, 0xb4, 0x3c],
+            Sev::Low => ink.weak,
+        };
+        items.push(text(
+            pos2(m, y),
+            11.5,
+            false,
+            vec![
+                Run {
+                    text: f.sev.label().to_uppercase(),
+                    rgb: c,
+                    weight: 600,
+                },
+                Run {
+                    text: format!(" {}", f.text),
+                    rgb: ink.text,
+                    weight: 400,
+                },
+            ],
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_clamps() {
+        assert_eq!(wrap("Core Closet - Top", 26, 2), ["Core Closet - Top"]);
+        let w = wrap(
+            "Student Worship - AP 2 - 1st Floor and more words here",
+            20,
+            2,
+        );
+        assert_eq!(w.len(), 2);
+        assert!(w[1].ends_with('…'));
+    }
+
+    #[test]
+    fn white_is_white_whatever_the_theme() {
+        let ink = Ink::new(Look {
+            dark: true,
+            white: true,
+        });
+        assert_eq!(ink.bg, [0xff; 3]);
+        assert_eq!(ink.text, [0x1d, 0x21, 0x28]);
+    }
+}
