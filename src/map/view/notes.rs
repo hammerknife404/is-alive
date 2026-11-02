@@ -16,13 +16,22 @@
 //! cards as it likes):
 //! - a saved map: in its file, on the card (an unsaved change until the
 //!   map is updated, like its other changes);
-//! - an example: on this computer, by the example and the card;
+//! - an example: on this computer, by the example and the card (its
+//!   cards are fictional, the same on every computer);
+//! - the blank example: only until is-alive closes or another map starts.
+//!   It's a start for any site, so its fixed cards are no one network;
 //! - the live map: on this computer, by the card's hardware address. A
 //!   vendor-assigned MAC is one device wherever it shows up, so its note
 //!   follows it and nothing else. A card without one (no MAC, a randomized
 //!   or shared one, this machine) keeps its note only until is-alive
-//!   closes or another map starts, and the panel says so: saving the map
-//!   keeps it.
+//!   closes or another map starts (a card known by its IP: or a sweep
+//!   runs again), and the panel says so: saving the map keeps it.
+//!
+//! A card's note stays with the device it was written for: when its card
+//! (`ip:10.0.0.1`) is another device after a rebuild, the note leaves the
+//! card, and stays kept for that device. Notes the store brings back and
+//! takes off as the map rebuilds aren't steps, and no undo takes them
+//! back.
 
 use super::*;
 use crate::input::Field;
@@ -41,6 +50,8 @@ pub enum Scope {
     Live,
     /// An example (its file's name): kept by example and card.
     Example(String),
+    /// The blank example: a start for any site, so kept only in memory.
+    Blank,
 }
 
 /// The live map's store's file in the profile folder.
@@ -57,15 +68,22 @@ const TIP_LINES: usize = 3;
 
 /// True for a MAC that is one device wherever it's seen: assigned by its
 /// vendor (not randomized or set by hand), not multicast, and not one of
-/// the shared addresses routers stand in for each other with (VRRP, HSRP,
-/// GLBP), which are the same at every site.
+/// the shared addresses that stand in for a pair of devices, which are the
+/// same at every site: routers' (VRRP, HSRP, GLBP) and firewall HA pairs'.
 pub fn device_mac(m: &crate::net::mac::Mac) -> bool {
     let vrrp = m[..4] == [0x00, 0x00, 0x5e, 0x00] && matches!(m[4], 0x01 | 0x02);
     let hsrp = m[..5] == [0x00, 0x00, 0x0c, 0x07, 0xac]
         || (m[..4] == [0x00, 0x00, 0x0c, 0x9f] && m[4] & 0xf0 == 0xf0);
     let glbp = m[..5] == [0x00, 0x07, 0xb4, 0x00, 0x01];
+    // FortiGate, Palo Alto and Juniper SRX clusters, by group number (0 at
+    // most sites); Check Point ClusterXL's are in its whole block, its
+    // appliances' own with them.
+    let ha = m[..4] == [0x00, 0x09, 0x0f, 0x09]
+        || m[..4] == [0x00, 0x1b, 0x17, 0x00]
+        || m[..4] == [0x00, 0x10, 0xdb, 0xff]
+        || m[..3] == [0x00, 0x1c, 0x7f];
     let zero = m[..5] == [0; 5];
-    !crate::net::mac::local_admin(m) && m[0] & 1 == 0 && !(vrrp || hsrp || glbp || zero)
+    !crate::net::mac::local_admin(m) && m[0] & 1 == 0 && !(vrrp || hsrp || glbp || ha || zero)
 }
 
 /// Where card `n`'s note is kept on this computer, or None when it isn't
@@ -73,7 +91,7 @@ pub fn device_mac(m: &crate::net::mac::Mac) -> bool {
 /// another visit).
 pub fn key(scope: &Scope, n: &Node) -> Option<String> {
     match scope {
-        Scope::Saved => None,
+        Scope::Saved | Scope::Blank => None,
         Scope::Example(f) => Some(format!("example:{f}/{}", n.id)),
         Scope::Live => n
             .mac
@@ -178,18 +196,19 @@ impl Store {
         self.notes.remove(key).is_some()
     }
 
-    /// At most `STORE_MAX`: the oldest go.
+    /// At most `STORE_MAX`: the oldest go, in one pass however many the
+    /// file held.
     fn trim(&mut self) {
-        while self.notes.len() > STORE_MAX {
-            let oldest = self
-                .notes
-                .iter()
-                .min_by(|a, b| (&a.1.1, a.0).cmp(&(&b.1.1, b.0)))
-                .map(|(k, _)| k.clone());
-            match oldest {
-                Some(k) => self.notes.remove(&k),
-                None => break,
-            };
+        let extra = self.notes.len().saturating_sub(STORE_MAX);
+        if extra == 0 {
+            return;
+        }
+        let mut by_age: Vec<(&String, &String)> =
+            self.notes.iter().map(|(k, (_, at))| (at, k)).collect();
+        by_age.select_nth_unstable(extra - 1);
+        let old: Vec<String> = by_age[..extra].iter().map(|(_, k)| (*k).clone()).collect();
+        for k in old {
+            self.notes.remove(&k);
         }
     }
 
@@ -224,13 +243,25 @@ impl Store {
     }
 }
 
-/// What was last written to the store: each card's key, and a hash of
-/// the notes and the redaction it was written with.
+/// What was last written to the store (a hash of the notes and the
+/// redaction it was written with), and each card's key as it was first
+/// known by: its note is kept under that key only, never moved to the
+/// next device that takes the card's place.
 #[derive(Default)]
 pub(super) struct Synced {
     hash: u64,
     redact: u64,
     keys: BTreeMap<String, String>,
+}
+
+impl Synced {
+    /// A card's id changed (a pinned card carried over): its key goes
+    /// with it.
+    pub(super) fn rename(&mut self, from: &str, to: &str) {
+        if let Some(k) = self.keys.remove(from) {
+            self.keys.insert(to.to_string(), k);
+        }
+    }
 }
 
 /// A note being written in a card's panel.
@@ -290,38 +321,148 @@ impl MapView {
         self.note_edit = None;
     }
 
-    /// After a rebuild: the notes the store keeps for cards now on the map.
-    /// Not a step to undo.
-    pub(super) fn refill_notes(&mut self) {
-        let Some(store) = &self.note_store else {
-            return;
-        };
-        for n in &self.map.nodes {
-            if self.notes.contains_key(&n.id) {
-                continue;
-            }
-            if let Some(k) = key(&self.note_scope, n)
-                && let Some(t) = store.get(&k)
-            {
-                self.notes.insert(n.id.clone(), t.to_string());
-                self.note_synced.keys.insert(n.id.clone(), k);
-            }
+    /// After a rebuild: what the notes now belong to, and `sweeps` (how
+    /// many sweeps have started). A new sweep may be another network:
+    /// notes on cards known only by their IP go. Then each card's note
+    /// follows its device (see `bind_notes`).
+    pub(super) fn notes_rebuilt(&mut self, scope: Scope, sweeps: u64) {
+        self.note_scope = scope;
+        if sweeps != self.note_sweeps {
+            self.note_sweeps = sweeps;
+            let by_ip: Vec<String> = self
+                .notes
+                .keys()
+                .filter(|id| id.starts_with("ip:") && !self.note_synced.keys.contains_key(*id))
+                .cloned()
+                .collect();
+            self.forget_notes(&by_ip);
         }
+        self.bind_notes();
+    }
+
+    /// Each card on the map with a key to be kept by: a card first known
+    /// by it gets the note the store keeps there; a card that's another
+    /// device now (another MAC, or none) loses the note it had, which
+    /// stays kept for its own device. Neither is a step to undo, nor
+    /// undone by one.
+    pub(super) fn bind_notes(&mut self) {
+        if self.note_store.is_none() {
+            return;
+        }
+        let mut gone = Vec::new();
+        let mut found = Vec::new();
+        for (i, now) in self.card_keys().into_iter().enumerate() {
+            let id = self.map.nodes[i].id.clone();
+            match self.note_synced.keys.get(&id) {
+                Some(b) if Some(b) == now.as_ref() => continue,
+                Some(_) => {
+                    self.note_synced.keys.remove(&id);
+                    self.notes.remove(&id);
+                    gone.push(id.clone());
+                }
+                None => {}
+            }
+            let Some(k) = now else { continue };
+            if !self.notes.contains_key(&id)
+                && let Some(t) = self.note_store.as_ref().and_then(|s| s.get(&k))
+            {
+                found.push((id.clone(), t.to_string()));
+            }
+            self.note_synced.keys.insert(id, k);
+        }
+        self.forget_notes(&gone);
+        for (id, t) in &found {
+            self.notes.insert(id.clone(), t.clone());
+        }
+        if !found.is_empty() {
+            self.history.patch(|e| {
+                for (id, t) in &found {
+                    e.notes.entry(id.clone()).or_insert_with(|| t.clone());
+                }
+            });
+        }
+    }
+
+    /// Take the notes off cards `ids`, in every step to undo or redo too
+    /// (not a step itself).
+    fn forget_notes(&mut self, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+        for id in ids {
+            self.notes.remove(id);
+        }
+        if self
+            .note_edit
+            .as_ref()
+            .is_some_and(|e| e.ids.iter().any(|i| ids.contains(i)))
+        {
+            self.note_edit = None;
+        }
+        self.history.patch(|e| {
+            for id in ids {
+                e.notes.remove(id);
+            }
+        });
+    }
+
+    /// Where card `i`'s note is kept on this computer: its `key`, unless
+    /// another card on the map shows the same MAC (a Wi-Fi extender or
+    /// proxy ARP answering for the devices behind it).
+    fn card_key(&self, i: usize) -> Option<String> {
+        let n = &self.map.nodes[i];
+        let k = key(&self.note_scope, n)?;
+        let shared = matches!(self.note_scope, Scope::Live)
+            && self
+                .map
+                .nodes
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != i && o.mac.is_some() && o.mac == n.mac);
+        (!shared).then_some(k)
+    }
+
+    /// `card_key` for every card, in one pass over them.
+    fn card_keys(&self) -> Vec<Option<String>> {
+        let mut seen: HashMap<crate::net::mac::Mac, usize> = HashMap::new();
+        for m in self.map.nodes.iter().filter_map(|n| n.mac) {
+            *seen.entry(m).or_default() += 1;
+        }
+        let live = matches!(self.note_scope, Scope::Live);
+        self.map
+            .nodes
+            .iter()
+            .map(|n| {
+                let shared = live && n.mac.is_some_and(|m| seen[&m] > 1);
+                key(&self.note_scope, n).filter(|_| !shared)
+            })
+            .collect()
     }
 
     /// Once a frame on the live map: notes written, changed or taken off
     /// go to the store, redacted. A change to the redaction (a value kept,
     /// a backup's secrets loaded) is written through to every note there.
     pub(super) fn sync_notes(&mut self) {
-        let Some(store) = &mut self.note_store else {
+        if self.note_store.is_none() {
             return;
-        };
+        }
         let red = hash_of(&self.ov);
         // After a rebuild too: a card may have a MAC to be kept by now.
         let h = hash_of(&(&self.notes, red, &self.note_scope, self.built));
         if h == self.note_synced.hash {
             return;
         }
+        // A card known by a key only now (no rebuild since) is kept by it.
+        let unbound: Vec<(String, String)> = self
+            .notes
+            .keys()
+            .filter(|id| !self.note_synced.keys.contains_key(*id))
+            .filter_map(|id| Some((id.clone(), self.card_key(self.index(id)?)?)))
+            .collect();
+        self.note_synced.keys.extend(unbound);
+        let Some(store) = &mut self.note_store else {
+            return;
+        };
         let mut changed = false;
         if red != self.note_synced.redact {
             for (n, _) in store.notes.values_mut() {
@@ -332,33 +473,25 @@ impl MapView {
                 }
             }
         }
-        let mut keys = BTreeMap::new();
+        let keys = &self.note_synced.keys;
+        let mut written = std::collections::HashSet::new();
         for (id, text) in &self.notes {
-            let k = self
-                .map
-                .nodes
-                .iter()
-                .find(|n| n.id == *id)
-                .and_then(|n| key(&self.note_scope, n))
-                .or_else(|| self.note_synced.keys.get(id).cloned());
-            if let Some(k) = k {
-                changed |= store.put(&k, clean(text, &self.ov));
-                keys.insert(id.clone(), k);
+            if let Some(k) = keys.get(id) {
+                changed |= store.put(k, clean(text, &self.ov));
+                written.insert(k);
             }
         }
-        for (id, k) in &self.note_synced.keys {
-            if !self.notes.contains_key(id) && !keys.values().any(|v| v == k) {
+        // Taken off (by hand, or by undoing the step that wrote it).
+        for (id, k) in keys {
+            if !self.notes.contains_key(id) && !written.contains(k) {
                 changed |= store.remove(k);
             }
         }
         if changed && let Err(e) = store.save() {
             widgets::toast(format!("Couldn't keep the card notes: {e}"), false);
         }
-        self.note_synced = Synced {
-            hash: h,
-            redact: red,
-            keys,
-        };
+        self.note_synced.hash = h;
+        self.note_synced.redact = red;
     }
 
     /// Every note's text this map holds, keeps or is being written (for
@@ -439,23 +572,32 @@ impl MapView {
 
     /// Where card `i`'s note is kept, in a line for its panel.
     pub(super) fn note_kept(&self, i: usize) -> &'static str {
+        let id = &self.map.nodes[i].id;
         match (&self.note_scope, self.note_store.is_some()) {
             (Scope::Saved, _) => {
                 "Kept in this saved map's file once you update it (right-click its tab)"
             }
             (_, false) => "Kept until is-alive closes",
+            (Scope::Blank, true) => {
+                "Kept only until is-alive closes or another map starts: the blank map is a \
+                 start for any site. Save the map (+ Save current) to keep its note"
+            }
             (Scope::Example(_), true) => "Kept on this computer, with this example",
-            (Scope::Live, true) => match key(&self.note_scope, &self.map.nodes[i]) {
-                Some(_) => {
-                    "Kept on this computer with this device (by its MAC), on any map that \
-                     shows it"
-                }
-                None => {
-                    "Kept only until is-alive closes or another map starts: this card has no \
-                     hardware address to know it by next time. Save the map (+ Save current) \
-                     to keep its note"
-                }
-            },
+            (Scope::Live, true)
+                if self.note_synced.keys.contains_key(id) || self.card_key(i).is_some() =>
+            {
+                "Kept on this computer with this device (by its MAC), on any map that shows it"
+            }
+            (Scope::Live, true) if id.starts_with("ip:") => {
+                "Kept only until is-alive closes, another map starts or a sweep runs again: \
+                 this card has no hardware address to know it by next time. Save the map \
+                 (+ Save current) to keep its note"
+            }
+            (Scope::Live, true) => {
+                "Kept only until is-alive closes or another map starts: this card has no \
+                 hardware address to know it by next time. Save the map (+ Save current) to \
+                 keep its note"
+            }
         }
     }
 
@@ -554,8 +696,8 @@ impl MapView {
             {
                 *ev = Some(NoteEv::Remove(i));
             }
-            hits_badge(ui, &hits);
         });
+        hits_badge(ui, &hits);
         ui.add(egui::Label::new(RichText::new(self.note_kept(i)).small().weak()).wrap());
     }
 
@@ -670,11 +812,12 @@ impl MapView {
             {
                 *ev = Some(NoteEv::Pick(p));
             }
-            if !hits_badge(ui, &hits) {
+            if hits.is_empty() {
                 let k = e.text.chars().count();
                 ui.weak(format!("{k} / {}", Field::CardNote.max()));
             }
         });
+        hits_badge(ui, &hits);
         let others = e.ids.len().saturating_sub(1);
         let noted = e
             .ids
@@ -738,33 +881,27 @@ impl MapView {
     }
 }
 
-/// "🔑 2 redacted: …" in the warning colour, when something is: hidden in
-/// whatever leaves the map. True when it showed.
-fn hits_badge(ui: &mut Ui, hits: &[Hit]) -> bool {
+/// "🔑 2 redacted: …" in the warning colour on a line of its own, when
+/// something is: hidden in whatever leaves the map. Cut short to the
+/// panel's width (all of it in the tooltip), so it never widens the panel.
+fn hits_badge(ui: &mut Ui, hits: &[Hit]) {
     if hits.is_empty() {
-        return false;
+        return;
     }
+    let text = format!("🔑 {}", redact::summary(hits));
     let warn = widgets::warn();
     egui::Frame::new()
         .fill(warn.gamma_multiply(0.12))
         .corner_radius(4)
         .inner_margin(egui::Margin::symmetric(5, 0))
         .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!("🔑 {}", redact::summary(hits)))
-                        .small()
-                        .color(warn),
-                )
-                .extend(),
-            )
+            ui.add(egui::Label::new(RichText::new(&text).small().color(warn)).truncate())
         })
         .response
-        .on_hover_text(
-            "Hidden in saved maps, the notes kept on this computer, copies, exports and the \
-             Site Bundle",
-        );
-    true
+        .on_hover_text(format!(
+            "{text}. Hidden in saved maps, the notes kept on this computer, copies, exports \
+             and the Site Bundle"
+        ));
 }
 
 #[cfg(test)]
@@ -825,6 +962,12 @@ mod tests {
             [0x00, 0x00, 0x0c, 0x07, 0xac, 0x0a],
             [0x00, 0x00, 0x0c, 0x9f, 0xf0, 0x01],
             [0x00, 0x07, 0xb4, 0x00, 0x01, 0x02],
+            // Firewall HA pairs: FortiGate, Palo Alto, Juniper SRX, Check
+            // Point.
+            [0x00, 0x09, 0x0f, 0x09, 0x00, 0x02],
+            [0x00, 0x1b, 0x17, 0x00, 0x01, 0x10],
+            [0x00, 0x10, 0xdb, 0xff, 0x10, 0x00],
+            [0x00, 0x1c, 0x7f, 0x00, 0x51, 0x02],
             [0; 6],
         ] {
             assert_eq!(k(&n("x", Some(m))), None, "{m:02x?}");
@@ -839,6 +982,294 @@ mod tests {
             Some("example:example-Acme.dc.html/fw")
         );
         assert_eq!(key(&Scope::Saved, &n("x", Some(DEV))), None);
+        // The blank map is a start for any site: its Gateway is no one's.
+        assert_eq!(key(&Scope::Blank, &n("gateway", None)), None);
+        assert_eq!(key(&Scope::Blank, &n("gateway", Some(DEV))), None);
+    }
+
+    /// A card that shows the same MAC as another (a Wi-Fi extender
+    /// answering for the devices behind it) isn't kept by it.
+    #[test]
+    fn a_mac_two_cards_show_keeps_no_note() {
+        let path = temp("shared");
+        let mut v = live(&path);
+        v.map.nodes[1].mac = Some(DEV);
+        v.notes
+            .insert("mac:sw".into(), "Behind the extender".into());
+        v.bind_notes();
+        v.sync_notes();
+        assert!(!path.exists());
+        assert!(v.note_kept(2).starts_with("Kept only until"));
+    }
+
+    /// `ip:10.0.0.1` is another device after a rebuild (another network,
+    /// or DHCP moved it): the note written on the first isn't on it, nor
+    /// kept for it; it stays kept for its own device. No undo brings it
+    /// back on the card.
+    #[test]
+    fn a_card_that_is_another_device_now_has_none_of_its_note() {
+        let path = temp("reused");
+        let mut v = live(&path);
+        const B: [u8; 6] = [0x00, 0x1b, 0x21, 0x99, 0x99, 0x99];
+        v.map.nodes[1].mac = Some(DEV);
+        v.map.nodes[2].mac = None;
+        v.bind_notes();
+        v.track_edits();
+        v.notes
+            .insert("ip:10.0.0.1".into(), "Customer A gateway: call Bob".into());
+        v.track_edits();
+        v.kept.push("mac:sw".into());
+        v.track_edits();
+        v.sync_notes();
+        // The next customer's 10.0.0.1.
+        v.map.nodes[1].mac = Some(B);
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 0);
+        v.settle_edits();
+        v.sync_notes();
+        v.stamp_notes();
+        assert!(v.notes.is_empty(), "{:?}", v.notes);
+        assert!(v.map.nodes[1].note.is_empty());
+        let kept = std::fs::read_to_string(&path).unwrap();
+        assert!(kept.contains("mac:00:1b:21:0a:0b:0c") && kept.contains("call Bob"));
+        assert!(!kept.contains("99:99:99"), "{kept}");
+        // Undoing the pin: the note doesn't come back on this card.
+        v.step(true);
+        assert!(v.notes.is_empty(), "{:?}", v.notes);
+        assert_eq!(v.history.undo_label(), None, "the note's step went with it");
+        v.sync_notes();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("99:99:99"));
+        // Its own device back at 10.0.0.1: its note is back.
+        v.map.nodes[1].mac = Some(DEV);
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 0);
+        assert_eq!(v.notes["ip:10.0.0.1"], "Customer A gateway: call Bob");
+    }
+
+    /// The device now at a card's address has a note of its own kept from
+    /// another visit: that's the one the card shows.
+    #[test]
+    fn a_card_that_is_another_device_now_shows_that_devices_note() {
+        let path = temp("reused-own");
+        let mut v = live(&path);
+        let b = "mac:00:1b:21:99:99:99";
+        v.note_store
+            .as_mut()
+            .unwrap()
+            .put(b, "Customer B router".into());
+        v.map.nodes[1].mac = Some(DEV);
+        v.map.nodes[2].mac = None;
+        v.notes
+            .insert("ip:10.0.0.1".into(), "Customer A gateway".into());
+        v.bind_notes();
+        v.sync_notes();
+        v.map.nodes[1].mac = Some([0x00, 0x1b, 0x21, 0x99, 0x99, 0x99]);
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 0);
+        v.sync_notes();
+        assert_eq!(v.notes["ip:10.0.0.1"], "Customer B router");
+        let s = v.note_store.as_ref().unwrap();
+        assert_eq!(s.get("mac:00:1b:21:0a:0b:0c"), Some("Customer A gateway"));
+        assert_eq!(s.get(b), Some("Customer B router"));
+    }
+
+    /// A note on a card known only by its IP stays through rebuilds, and
+    /// goes when another sweep starts (it may be another network).
+    #[test]
+    fn a_new_sweep_drops_the_notes_on_cards_known_by_ip() {
+        let path = temp("sweep");
+        let mut v = live(&path);
+        v.bind_notes();
+        v.track_edits();
+        v.notes.insert("ip:10.0.0.1".into(), "call Bob".into());
+        v.notes.insert("mac:sw".into(), "Port 7 loose".into());
+        v.track_edits();
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 0);
+        assert_eq!(v.notes.len(), 2);
+        assert!(v.note_kept(1).contains("a sweep runs again"));
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 1);
+        v.settle_edits();
+        assert_eq!(v.notes.keys().collect::<Vec<_>>(), ["mac:sw"]);
+        v.step(true);
+        v.step(false);
+        assert!(!v.notes.contains_key("ip:10.0.0.1"), "nor by redo");
+    }
+
+    /// Undoing another step (a pin) after the store brought a note back
+    /// leaves the note, on the card and on this computer.
+    #[test]
+    fn undoing_another_step_keeps_a_note_the_store_brought_back() {
+        let path = temp("refill");
+        let mut v = live(&path);
+        v.notes.insert("mac:sw".into(), "Port 7 loose".into());
+        v.sync_notes();
+        // The next visit: the switch has no MAC yet; it's pinned.
+        let mut v = live(&path);
+        v.map.nodes[2].mac = None;
+        v.bind_notes();
+        v.track_edits();
+        v.kept.push("mac:sw".into());
+        v.track_edits();
+        // The sweep finds its MAC: its note comes back.
+        v.map.nodes[2].mac = Some(DEV);
+        v.built += 1;
+        v.notes_rebuilt(Scope::Live, 0);
+        v.settle_edits();
+        v.sync_notes();
+        assert_eq!(v.notes["mac:sw"], "Port 7 loose");
+        v.step(true);
+        assert!(v.kept.is_empty());
+        assert_eq!(v.notes["mac:sw"], "Port 7 loose");
+        v.sync_notes();
+        let kept = std::fs::read_to_string(&path).unwrap();
+        assert!(kept.contains("Port 7 loose"));
+        v.step(false);
+        assert_eq!(v.notes["mac:sw"], "Port 7 loose");
+    }
+
+    /// The sources a map is built from: example `i` open, nothing swept.
+    struct Example {
+        sweep: crate::tools::sweep::SweepTool,
+        export: crate::tools::export::ExportTool,
+        info: HostInfo,
+        ov: redact::Overrides,
+    }
+
+    impl Example {
+        fn open(i: usize) -> Self {
+            Example {
+                sweep: Default::default(),
+                export: crate::tools::export::ExportTool::with_example(i),
+                info: Default::default(),
+                ov: Default::default(),
+            }
+        }
+
+        /// A frame with `act` as the user's input in it, in the order `ui`
+        /// runs them: an undo (before the rebuild), the rebuild, what the
+        /// user did on the map, then steps and the store.
+        fn frame(&self, ctx: &egui::Context, v: &mut MapView, act: impl FnOnce(&mut MapView)) {
+            let src = Sources {
+                sweep: &self.sweep,
+                export: &self.export,
+                info: &self.info,
+                busy: false,
+                note: false,
+                legend: true,
+                redact: &self.ov,
+            };
+            v.refresh(ctx, &src);
+            v.settle_edits();
+            v.stamp_notes();
+            act(v);
+            v.track_edits();
+            v.sync_notes();
+            v.stamp_notes();
+        }
+    }
+
+    /// On an example: adding a note and removing it are undone and redone
+    /// through the rebuild that follows, on the card and on this computer.
+    #[test]
+    fn a_note_step_is_undone_through_a_rebuild() {
+        let path = temp("example");
+        let ctx = egui::Context::default();
+        let ex = Example::open(0);
+        let mut v = MapView::new(None);
+        v.note_store = Some(Store::at(Some(path.clone())));
+        let idle = |_: &mut MapView| {};
+        ex.frame(&ctx, &mut v, idle);
+        assert!(matches!(v.note_scope, Scope::Example(_)));
+        let i = 1;
+        let kept = || std::fs::read_to_string(&path).unwrap_or_default();
+        ex.frame(&ctx, &mut v, |v| {
+            v.open_note(&[i]);
+            v.note_edit.as_mut().unwrap().text = "single".into();
+            v.save_note();
+        });
+        assert!(kept().contains("single"));
+        assert!(
+            v.history
+                .undo_label()
+                .is_some_and(|l| l.starts_with("note on"))
+        );
+        v.step(true);
+        ex.frame(&ctx, &mut v, idle);
+        ex.frame(&ctx, &mut v, idle);
+        assert!(v.notes.is_empty(), "{:?}", v.notes);
+        assert!(v.map.nodes[i].note.is_empty());
+        assert!(!path.exists(), "{}", kept());
+        assert!(
+            v.history
+                .redo_label()
+                .is_some_and(|l| l.starts_with("note on"))
+        );
+        v.step(false);
+        ex.frame(&ctx, &mut v, idle);
+        assert!(kept().contains("single") && v.note_of(i).is_some());
+        // Removed, undone, redone.
+        ex.frame(&ctx, &mut v, |v| v.remove_notes(&[i]));
+        assert!(!path.exists());
+        v.step(true);
+        ex.frame(&ctx, &mut v, idle);
+        assert!(kept().contains("single") && v.note_of(i).is_some());
+        v.step(false);
+        ex.frame(&ctx, &mut v, idle);
+        ex.frame(&ctx, &mut v, idle);
+        assert!(!path.exists() && v.note_of(i).is_none());
+    }
+
+    /// The blank example's notes stay in memory: the next site planned
+    /// from it gets none of them.
+    #[test]
+    fn the_blank_maps_notes_are_kept_only_in_memory() {
+        let path = temp("blank");
+        let ctx = egui::Context::default();
+        let ex = Example::open(crate::skills::EXAMPLES.len() - 1);
+        let mut v = MapView::new(None);
+        v.note_store = Some(Store::at(Some(path.clone())));
+        ex.frame(&ctx, &mut v, |_| {});
+        assert_eq!(v.note_scope, Scope::Blank);
+        let gw = v.index("gateway").expect("its Gateway");
+        ex.frame(&ctx, &mut v, |v| {
+            v.open_note(&[gw]);
+            v.note_edit.as_mut().unwrap().text = "Customer Smith Dental: fw admin via 8443".into();
+            v.save_note();
+        });
+        assert!(v.note_of(gw).is_some());
+        assert!(!path.exists(), "nothing kept on this computer");
+        assert!(v.note_kept(gw).contains("blank map"));
+        // Opened again later: no note.
+        let mut v = MapView::new(None);
+        v.note_store = Some(Store::at(Some(path.clone())));
+        ex.frame(&ctx, &mut v, |_| {});
+        assert!(v.notes.is_empty());
+    }
+
+    /// A store far over the cap (a damaged or planted file) loads in one
+    /// pass, keeping the newest.
+    #[test]
+    fn a_huge_store_loads_quickly() {
+        let path = temp("huge");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let notes: Obj<String, Value> = (0..40_000)
+            .map(|k| {
+                (
+                    format!("mac:{k:06}"),
+                    json!({"note": "x", "at": format!("{k:06}")}),
+                )
+            })
+            .collect();
+        let doc = json!({"format": STORE_FORMAT, "version": 1, "notes": notes});
+        std::fs::write(&path, doc.to_string()).unwrap();
+        let t = std::time::Instant::now();
+        let s = Store::at(Some(path));
+        assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+        assert_eq!(s.notes.len(), STORE_MAX);
+        assert!(s.get("mac:039999").is_some() && s.get("mac:034999").is_none());
+        assert!(s.get("mac:035000").is_some());
     }
 
     /// The same IP at the next customer gets none of this one's notes; the
@@ -854,9 +1285,9 @@ mod tests {
         let kept = std::fs::read_to_string(&path).unwrap();
         assert!(kept.contains("Port 7 loose") && kept.contains("mac:00:1b:21:0a:0b:0c"));
         assert!(!kept.contains("call Bob"), "an IP card's note isn't kept");
-        assert_eq!(
-            v.note_kept(1).split(':').next(),
-            Some("Kept only until is-alive closes or another map starts")
+        assert!(
+            v.note_kept(1)
+                .starts_with("Kept only until is-alive closes")
         );
 
         // Another network: a new map starts; its 10.0.0.1 has no note.
@@ -865,7 +1296,7 @@ mod tests {
             card("internet", "", None, None),
             card("ip:10.0.0.1", "10.0.0.1", None, Some(0)),
         ];
-        v.refill_notes();
+        v.bind_notes();
         assert!(v.notes.is_empty(), "{:?}", v.notes);
         v.sync_notes();
         assert!(
@@ -877,7 +1308,7 @@ mod tests {
         // After a restart, the switch (found under another id) has its note.
         let mut v = live(&path);
         v.map.nodes[2].id = "ip:10.0.0.2".into();
-        v.refill_notes();
+        v.bind_notes();
         assert_eq!(
             v.notes.get("ip:10.0.0.2").map(String::as_str),
             Some("Port 7 loose")

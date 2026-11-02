@@ -742,11 +742,11 @@ A card with a note has a small folded sheet on its top edge, at every zoom, and 
 
 **Where a note is kept**, so it never shows up on another customer's card with the same address (`10.0.0.1` is everywhere):
 
-- **A saved map** keeps its notes in its file, like its other changes: **Update with current** saves them.
-- **An example** keeps them on this computer, with that example.
-- **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. A card with no MAC to go by (known only by IP, a randomized or shared address, this computer) keeps its note only until is-alive closes or another map starts; its panel says so. **+ Save current** keeps them all in a saved map.
+- **A saved map** keeps its notes in its file, like its other changes: **Update with current** saves them. A value redacted later (by hand, or a backup's secret loaded) is redacted in the file at once, as in `notes.md`; a map opened from a file is kept redacted the same way.
+- **An example** keeps them on this computer, with that example. **The blank map** doesn't: it's a start for any site, so its notes last only until is-alive closes or another map starts. Save the map to keep them.
+- **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. When a card's address is another device's after a rebuild (another network, or DHCP moved it), the note leaves that card and stays with its own device. A card with no MAC to go by (known only by IP, a randomized address, a shared one such as a router pair's or a firewall HA pair's, a MAC two cards show, this computer) keeps its note only until is-alive closes or another map starts, and a card known only by IP until another sweep starts; its panel says so. **+ Save current** keeps them all in a saved map.
 
-Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`).
+Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`; not an example's).
 
 ### The left panel and findings
 

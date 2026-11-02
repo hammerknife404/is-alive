@@ -103,6 +103,38 @@ impl<T> History<T> {
         self.redo.last().map(|s| s.1.as_str())
     }
 
+    /// Change every step, to undo or redo, and the state now alike: what
+    /// the map changed by itself, which no step should take back. A step
+    /// that no longer changes anything goes.
+    pub fn patch(&mut self, f: impl Fn(&mut T))
+    where
+        T: PartialEq,
+    {
+        for (t, _) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            f(t);
+        }
+        f(&mut self.now);
+        // Undo steps go from each state to the next one (the last to now).
+        let mut i = 0;
+        while i < self.undo.len() {
+            let next = self.undo.get(i + 1).map_or(&self.now, |s| &s.0);
+            if self.undo[i].0 == *next {
+                self.undo.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        // Redo steps go from the one above each (now for the top) to it.
+        let mut j = self.redo.len();
+        while j > 0 {
+            j -= 1;
+            let before = self.redo.get(j + 1).map_or(&self.now, |s| &s.0);
+            if self.redo[j].0 == *before {
+                self.redo.remove(j);
+            }
+        }
+    }
+
     /// Forget every step (another map).
     pub fn clear(&mut self) {
         self.undo.clear();

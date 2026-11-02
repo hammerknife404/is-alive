@@ -246,6 +246,9 @@ pub struct MapView {
     /// or nowhere to keep them).
     note_store: Option<notes::Store>,
     note_synced: notes::Synced,
+    /// How many sweeps had started when the notes were last bound to
+    /// cards: a new one drops the notes on cards known only by IP.
+    note_sweeps: u64,
     /// What the cards' notes were last put on them with (see `stamp_notes`).
     stamped: u64,
     /// Counts the map's rebuilds.
@@ -448,6 +451,7 @@ impl MapView {
         if let Some(t) = self.notes.remove(from) {
             self.notes.insert(to.to_string(), t);
         }
+        self.note_synced.rename(from, to);
         self.runs.rename(from, to);
     }
 
@@ -549,13 +553,16 @@ impl MapView {
         }
         self.map = map;
         self.built += 1;
-        self.note_scope = match src.export.mapnetwork() {
+        let scope = match src.export.mapnetwork() {
+            // The blank map is a start for any site: its cards are no one
+            // network.
+            Some((p, _)) if crate::skills::is_blank(p) => notes::Scope::Blank,
             Some((p, _)) if crate::skills::example(p).is_some() => {
                 notes::Scope::Example(crate::tools::export::file_name(p))
             }
             _ => notes::Scope::Live,
         };
-        self.refill_notes();
+        self.notes_rebuilt(scope, src.sweep.runs());
         self.relayout(ctx);
         self.hold_still();
     }

@@ -431,6 +431,18 @@ impl ExportTool {
         true
     }
 
+    /// For tests elsewhere: example `i` open, as Map → Examples opens it.
+    #[cfg(test)]
+    pub fn with_example(i: usize) -> Self {
+        let mut t = Self::default();
+        let path = crate::skills::example_path(i);
+        let data = crate::skills::example(&path).expect("example").to_vec();
+        let export = convert(data, t.clients).expect("example converts");
+        t.shown = land(&mut t.slots, path, export);
+        t.generation += 1;
+        t
+    }
+
     /// An example map is open.
     pub fn example_open(&self) -> bool {
         self.slots
