@@ -541,7 +541,7 @@ impl MapView {
     }
 
     /// The right-click menu on the empty canvas: the view, the selection,
-    /// the layout, export.
+    /// the layout, the legend, export.
     fn background_menu(&mut self, ui: &mut Ui, rect: Rect) {
         if ui
             .add(egui::Button::new("Fit").shortcut_text("Double-click"))
@@ -576,6 +576,14 @@ impl MapView {
         {
             self.placed.clear();
             self.fit_view(rect);
+            ui.close();
+        }
+        if ui
+            .add(egui::Button::selectable(self.legend, "Legend").shortcut_text("L"))
+            .on_hover_text("Show or hide what the colours, lines and badges mean")
+            .clicked()
+        {
+            self.legend = !self.legend;
             ui.close();
         }
         ui.separator();

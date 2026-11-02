@@ -1,5 +1,5 @@
-//! The controls drawn over the map: zoom buttons, the sidebar of sites,
-//! roles and filters, and the legend.
+//! The controls drawn over the map: zoom buttons, and the sidebar of
+//! sites, roles and filters (the legend is in `legend`).
 
 use super::*;
 
@@ -335,68 +335,6 @@ impl MapView {
             && !self.hidden.remove(&z)
         {
             self.hidden.insert(z);
-        }
-    }
-
-    /// Role legend in the canvas corner; click a role to fade it out.
-    pub(super) fn legend(&mut self, ui: &mut Ui, rect: Rect) {
-        let mut counts: Vec<(Zone, usize)> = Zone::ALL
-            .iter()
-            .map(|&z| (z, self.map.nodes.iter().filter(|n| n.zone == z).count()))
-            .filter(|c| c.1 > 0 && c.0 != Zone::Internet)
-            .collect();
-        if self.map.hidden > 0 {
-            counts.retain(|c| c.1 > 0);
-        }
-        let font = FontId::proportional(11.5);
-        let mut x = rect.min.x + 10.0;
-        let y = rect.max.y - 10.0;
-        let bg = ui.visuals().window_fill.gamma_multiply(0.92);
-        for (zone, n) in counts {
-            let label = format!("{}  {n}", zone.name());
-            let g = ui
-                .painter()
-                .layout_no_wrap(label, font.clone(), ui.visuals().text_color());
-            let r = Rect::from_min_size(
-                pos2(x, y - g.size().y - 8.0),
-                vec2(g.size().x + 26.0, g.size().y + 8.0),
-            );
-            // Room left for the zoom controls.
-            if r.max.x > rect.max.x - 180.0 {
-                break;
-            }
-            let resp = ui
-                .interact(r, ui.id().with(("legend", zone)), Sense::click())
-                .on_hover_text("Click to fade this role out or back in");
-            if resp.clicked() && !self.hidden.remove(&zone) {
-                self.hidden.insert(zone);
-            }
-            let off = self.hidden.contains(&zone);
-            let p = ui.painter();
-            p.rect(
-                r,
-                9,
-                bg,
-                Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-                StrokeKind::Inside,
-            );
-            let c = zone_colour(zone);
-            let dot = pos2(r.min.x + 11.0, r.center().y);
-            if off {
-                p.circle_stroke(dot, 4.0, Stroke::new(1.5, c));
-            } else {
-                p.circle_filled(dot, 4.5, c);
-            }
-            let tc = if off {
-                ui.visuals().weak_text_color()
-            } else {
-                ui.visuals().text_color()
-            };
-            p.galley(pos2(r.min.x + 20.0, r.min.y + 4.0), g, tc);
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            x = r.max.x + 6.0;
         }
     }
 }

@@ -3,8 +3,19 @@
 use super::*;
 
 impl MapView {
-    /// Draw the map; `hover` is the card under the pointer.
-    pub(super) fn paint(&self, ui: &Ui, rect: Rect, hover: Option<usize>) {
+    /// Every line on the map as drawn now (see `layout::lines`).
+    pub(super) fn lines_now(&self) -> Vec<layout::Line> {
+        layout::lines(
+            &self.map,
+            &self.lay,
+            &|i| self.pos.get(&self.map.nodes[i].id).copied(),
+            &|i| self.placed.contains_key(&self.map.nodes[i].id),
+        )
+    }
+
+    /// Draw the map with its `lines` (`lines_now`); `hover` is the card
+    /// under the pointer.
+    pub(super) fn paint(&self, ui: &Ui, rect: Rect, hover: Option<usize>, lines: &[layout::Line]) {
         let p = ui.painter_at(rect);
         let vis = ui.visuals();
         let z = self.zoom;
@@ -75,13 +86,7 @@ impl MapView {
             } else {
                 1.0
             };
-            p.rect(
-                r,
-                (10.0 * z) as u8,
-                c.gamma_multiply(0.07 * a),
-                Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
-                StrokeKind::Inside,
-            );
+            draw_box(&p, r, z, c, a);
             // A site's title folds it: brighter under the pointer.
             let hot = b.tree && hot_site.as_deref() == Some(b.title.as_str());
             if title_above(z) {
@@ -135,8 +140,7 @@ impl MapView {
         // Links.
         let glow = glow_strength(vis);
         let mut flows = false;
-        // One link's line: halo, stroke, the flow when lit, and a label at
-        // its end. True while it flows.
+        // One link's line, and a label at its end. True while it flows.
         let draw = |pts: &[Pos2],
                     base: Color32,
                     lit_colour: Color32,
@@ -146,56 +150,7 @@ impl MapView {
                     on: bool,
                     label: Option<(Pos2, egui::Align2, &str)>|
          -> bool {
-            // Lit, an assumed link takes its card's colour rather than grey,
-            // so the whole path reads as one.
-            let base = if on && link == Link::Assumed {
-                lit_colour
-            } else {
-                base
-            };
-            let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
-            // A soft halo in the link's colour under it (not under the
-            // grey assumed ones, which should stay quiet unless lit).
-            if (glow > 0.0 || on) && (link != Link::Assumed || on) {
-                let halo = Stroke::new(
-                    w + 5.0 * z.clamp(0.6, 1.4),
-                    base.gamma_multiply(glow.max(0.12) * alpha * if on { 1.6 } else { 1.0 }),
-                );
-                if link == Link::Wireless {
-                    p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
-                } else {
-                    p.add(Shape::line(pts.to_vec(), halo));
-                }
-            }
-            let stroke = Stroke::new(w, c);
-            match link {
-                Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
-                // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
-                // dots beat against the pixel grid and the line seems to break.
-                Link::Assumed => p.extend(Shape::dashed_line(
-                    pts,
-                    Stroke::new(stroke.width.max(1.5), stroke.color),
-                    (2.5 * z).max(2.0).round(),
-                    (4.0 * z).max(3.0).round(),
-                )),
-                _ => {
-                    p.add(Shape::line(pts.to_vec(), stroke));
-                }
-            }
-            if on {
-                // Packets flowing away from the internet: glowing dots in a
-                // light tint of the link's colour, moving downstream.
-                let gap = 36.0 * z.max(0.6);
-                let off = (now as f32 * 60.0 * z.max(0.6)).rem_euclid(gap);
-                let core = base
-                    .lerp_to_gamma(Color32::WHITE, 0.6)
-                    .gamma_multiply(alpha);
-                let r = (w * 0.75).max(1.6);
-                for at in along(pts, off, gap) {
-                    p.circle_filled(at, r * 2.4, base.gamma_multiply(0.22 * alpha));
-                    p.circle_filled(at, r, core);
-                }
-            }
+            draw_link(&p, pts, base, lit_colour, link, w, alpha, on, z, glow, now);
             if let Some((pos, align, l)) = label
                 && alpha > 0.3
             {
@@ -203,27 +158,14 @@ impl MapView {
                     pos,
                     align,
                     l,
-                    FontId::proportional((10.0 * z).clamp(9.5, 12.0)),
+                    trunk_font(z),
                     vis.weak_text_color().gamma_multiply(alpha),
                 );
             }
             on
         };
-        let width = |link: Link, on: bool| {
-            let base = if link == Link::Backbone { 3.2 } else { 2.0 };
-            base * z.clamp(0.6, 1.4) + if on { 0.8 } else { 0.0 }
-        };
-        let colour = |n: &Node, link: Link| match link {
-            Link::Backbone => zone_colour(Zone::Gateway),
-            Link::Assumed => vis.weak_text_color(),
-            _ => self.accent(n),
-        };
-        let lines = layout::lines(
-            &self.map,
-            &self.lay,
-            &|i| self.pos.get(&self.map.nodes[i].id).copied(),
-            &|i| self.placed.contains_key(&self.map.nodes[i].id),
-        );
+        let width = |link: Link, on: bool| link_width(link, z, on);
+        let colour = |n: &Node, link: Link| link_colour(vis, link, self.accent(n));
         for line in lines {
             let on = line.kids.iter().any(|k| lit_links.contains(k));
             // Inside one box, links would cut across its grid: shown only
@@ -341,77 +283,8 @@ impl MapView {
     ) {
         let n = &self.map.nodes[i];
         let z = self.zoom;
-        let dark = vis.dark_mode;
         let accent = self.accent(n);
-        let round = (7.0 * z) as u8;
-        let fill = if dark && vis.panel_fill.a() == 255 {
-            vis.panel_fill.lerp_to_gamma(Color32::WHITE, 0.06)
-        } else {
-            vis.window_fill
-        }
-        // Tinted with its role's colour, so the map reads by colour at a glance.
-        .lerp_to_gamma(accent, if dark { 0.13 } else { 0.07 });
-        let glow = glow_strength(vis);
-        if glow > 0.0 && !selected && !hovered {
-            let halo = egui::Shadow {
-                offset: [0, 0],
-                blur: (12.0 * z) as u8,
-                spread: 0,
-                color: accent.gamma_multiply(glow * 0.8 * a),
-            };
-            p.add(halo.as_shape(r, round));
-        }
-        if selected || hovered {
-            let shadow = egui::Shadow {
-                offset: [0, (4.0 * z) as i8],
-                blur: (14.0 * z) as u8,
-                spread: 0,
-                color: if selected {
-                    accent.gamma_multiply(0.35 * a)
-                } else {
-                    Color32::from_black_alpha((60.0 * a) as u8)
-                },
-            };
-            p.add(shadow.as_shape(r, round));
-        }
-        let border = if selected {
-            Stroke::new(2.0, accent.gamma_multiply(a))
-        } else if hovered {
-            Stroke::new(1.5, accent.gamma_multiply(0.8 * a))
-        } else {
-            Stroke::new(1.0, accent.gamma_multiply(0.5 * a))
-        };
-        if n.gone {
-            // Dashed: it isn't in the data any more.
-            p.rect_filled(r, round, fill.gamma_multiply(a));
-            let q = r.shrink(1.0);
-            let outline = [
-                q.left_top(),
-                q.right_top(),
-                q.right_bottom(),
-                q.left_bottom(),
-                q.left_top(),
-            ];
-            p.extend(Shape::dashed_line(
-                &outline,
-                Stroke::new(border.width.max(1.5), accent.gamma_multiply(a)),
-                6.0 * z,
-                4.0 * z,
-            ));
-        } else {
-            p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
-        }
-        let bar = Rect::from_min_max(r.min, pos2(r.min.x + 4.0 * z, r.max.y));
-        p.rect_filled(
-            bar,
-            CornerRadius {
-                nw: round,
-                sw: round,
-                ne: 0,
-                se: 0,
-            },
-            accent.gamma_multiply(a),
-        );
+        card_frame(p, vis, r, z, accent, a, selected, hovered, n.gone);
         let text = |s: &str, font: FontId, colour: Color32, rows: usize, width: f32| {
             let mut job =
                 LayoutJob::single_section(s.to_string(), egui::TextFormat::simple(font, colour));
@@ -428,12 +301,12 @@ impl MapView {
         // Pinned in the selection: the thumbtack, left of any warning badge.
         if self.is_kept(i) {
             let shift = if n.flags.is_empty() { 0.0 } else { 20.0 * z };
-            p.text(
+            pin(
+                p,
+                vis,
                 pos2(r.max.x - 12.0 * z - shift, r.min.y + 12.0 * z),
-                egui::Align2::CENTER_CENTER,
-                "📌",
-                FontId::proportional((13.0 * z).max(9.0)),
-                crate::theme::emoji_colour('📌', vis.strong_text_color()).gamma_multiply(a),
+                z,
+                a,
             );
         }
         // Text never shrinks past a readable size: a card too small for all
@@ -461,11 +334,7 @@ impl MapView {
                 p.galley(pos2(r.min.x + pad + 2.0 * z, y), g, strong);
             }
             if !n.flags.is_empty() {
-                p.circle_filled(
-                    pos2(r.max.x - 4.0, r.min.y + 4.0),
-                    3.0,
-                    widgets::warn().gamma_multiply(a),
-                );
+                warn_dot(p, r, a);
             }
             return;
         }
@@ -534,42 +403,19 @@ impl MapView {
                     break;
                 }
                 let chip = Rect::from_min_max(pos2(x, cy - chip_h), pos2(x + w, cy));
-                p.rect_filled(
-                    chip,
-                    (chip.height() / 2.0) as u8,
-                    accent.gamma_multiply(0.16 * a),
-                );
+                chip_pill(p, chip, accent, a);
                 p.galley(pos2(x + 5.0, chip.center().y - g.size().y / 2.0), g, accent);
                 x += w + 4.0;
             }
         }
         if !full_badge {
             if !n.flags.is_empty() {
-                p.circle_filled(
-                    pos2(r.max.x - 4.0, r.min.y + 4.0),
-                    3.0,
-                    widgets::warn().gamma_multiply(a),
-                );
+                warn_dot(p, r, a);
             }
             return;
         }
         if !n.flags.is_empty() {
-            let c = pos2(r.max.x - 12.0 * z, r.min.y + 12.0 * z);
-            let warn = widgets::warn();
-            let t = ((now * 0.8).fract()) as f32;
-            p.circle_stroke(
-                c,
-                (7.0 + 7.0 * t) * z,
-                Stroke::new(1.5, warn.gamma_multiply((1.0 - t) * 0.6 * a)),
-            );
-            p.circle_filled(c, 7.0 * z, warn.gamma_multiply(a));
-            p.text(
-                c,
-                egui::Align2::CENTER_CENTER,
-                "!",
-                FontId::proportional(11.0 * z),
-                Color32::BLACK.gamma_multiply(a),
-            );
+            warn_badge(p, pos2(r.max.x - 12.0 * z, r.min.y + 12.0 * z), z, a, now);
         }
     }
 }
@@ -577,4 +423,243 @@ impl MapView {
 /// Height of one line of text in `font`, as laid out in a card.
 fn ui_row_height(font: &FontId) -> f32 {
     font.size * 1.25
+}
+
+// The pieces the map is drawn with, shared with the legend so its swatches
+// are the map's own drawing.
+
+/// A site's or a role's box at zoom `z`, in colour `c`, `a` its opacity.
+pub(super) fn draw_box(p: &Painter, r: Rect, z: f32, c: Color32, a: f32) {
+    p.rect(
+        r,
+        (10.0 * z) as u8,
+        c.gamma_multiply(0.07 * a),
+        Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
+        StrokeKind::Inside,
+    );
+}
+
+/// How wide a link is drawn at zoom `z`: the internet's uplink wider, a
+/// lit one a little more.
+pub(super) fn link_width(link: Link, z: f32, on: bool) -> f32 {
+    let base = if link == Link::Backbone { 3.2 } else { 2.0 };
+    base * z.clamp(0.6, 1.4) + if on { 0.8 } else { 0.0 }
+}
+
+/// A link's colour: the internet's uplink in the gateway's, an assumed one
+/// grey, the rest in their card's colour (`accent`).
+pub(super) fn link_colour(vis: &egui::Visuals, link: Link, accent: Color32) -> Color32 {
+    match link {
+        Link::Backbone => zone_colour(Zone::Gateway),
+        Link::Assumed => vis.weak_text_color(),
+        _ => accent,
+    }
+}
+
+/// The font of a trunk's ×count at zoom `z`.
+pub(super) fn trunk_font(z: f32) -> FontId {
+    FontId::proportional((10.0 * z).clamp(9.5, 12.0))
+}
+
+/// One link's line at zoom `z`: halo, stroke, and while lit (`on`) the
+/// packets flowing along it. Lit, an assumed link takes its card's colour
+/// (`lit_colour`) rather than grey, so the whole path reads as one.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_link(
+    p: &Painter,
+    pts: &[Pos2],
+    base: Color32,
+    lit_colour: Color32,
+    link: Link,
+    w: f32,
+    alpha: f32,
+    on: bool,
+    z: f32,
+    glow: f32,
+    now: f64,
+) {
+    let base = if on && link == Link::Assumed {
+        lit_colour
+    } else {
+        base
+    };
+    let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
+    // A soft halo in the link's colour under it (not under the grey
+    // assumed ones, which should stay quiet unless lit).
+    if (glow > 0.0 || on) && (link != Link::Assumed || on) {
+        let halo = Stroke::new(
+            w + 5.0 * z.clamp(0.6, 1.4),
+            base.gamma_multiply(glow.max(0.12) * alpha * if on { 1.6 } else { 1.0 }),
+        );
+        if link == Link::Wireless {
+            p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
+        } else {
+            p.add(Shape::line(pts.to_vec(), halo));
+        }
+    }
+    let stroke = Stroke::new(w, c);
+    match link {
+        Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
+        // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
+        // dots beat against the pixel grid and the line seems to break.
+        Link::Assumed => p.extend(Shape::dashed_line(
+            pts,
+            Stroke::new(stroke.width.max(1.5), stroke.color),
+            (2.5 * z).max(2.0).round(),
+            (4.0 * z).max(3.0).round(),
+        )),
+        _ => {
+            p.add(Shape::line(pts.to_vec(), stroke));
+        }
+    }
+    if on {
+        // Packets flowing away from the internet: glowing dots in a light
+        // tint of the link's colour, moving downstream.
+        let gap = 36.0 * z.max(0.6);
+        let off = (now as f32 * 60.0 * z.max(0.6)).rem_euclid(gap);
+        let core = base
+            .lerp_to_gamma(Color32::WHITE, 0.6)
+            .gamma_multiply(alpha);
+        let r = (w * 0.75).max(1.6);
+        for at in along(pts, off, gap) {
+            p.circle_filled(at, r * 2.4, base.gamma_multiply(0.22 * alpha));
+            p.circle_filled(at, r, core);
+        }
+    }
+}
+
+/// A card's body at zoom `z`: halo or shadow, fill tinted with its colour
+/// (`accent`), border (dashed when `gone`) and the colour bar down its
+/// left side. `a` is its opacity.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn card_frame(
+    p: &Painter,
+    vis: &egui::Visuals,
+    r: Rect,
+    z: f32,
+    accent: Color32,
+    a: f32,
+    selected: bool,
+    hovered: bool,
+    gone: bool,
+) {
+    let dark = vis.dark_mode;
+    let round = (7.0 * z) as u8;
+    let fill = if dark && vis.panel_fill.a() == 255 {
+        vis.panel_fill.lerp_to_gamma(Color32::WHITE, 0.06)
+    } else {
+        vis.window_fill
+    }
+    // Tinted with its role's colour, so the map reads by colour at a glance.
+    .lerp_to_gamma(accent, if dark { 0.13 } else { 0.07 });
+    let glow = glow_strength(vis);
+    if glow > 0.0 && !selected && !hovered {
+        let halo = egui::Shadow {
+            offset: [0, 0],
+            blur: (12.0 * z) as u8,
+            spread: 0,
+            color: accent.gamma_multiply(glow * 0.8 * a),
+        };
+        p.add(halo.as_shape(r, round));
+    }
+    if selected || hovered {
+        let shadow = egui::Shadow {
+            offset: [0, (4.0 * z) as i8],
+            blur: (14.0 * z) as u8,
+            spread: 0,
+            color: if selected {
+                accent.gamma_multiply(0.35 * a)
+            } else {
+                Color32::from_black_alpha((60.0 * a) as u8)
+            },
+        };
+        p.add(shadow.as_shape(r, round));
+    }
+    let border = if selected {
+        Stroke::new(2.0, accent.gamma_multiply(a))
+    } else if hovered {
+        Stroke::new(1.5, accent.gamma_multiply(0.8 * a))
+    } else {
+        Stroke::new(1.0, accent.gamma_multiply(0.5 * a))
+    };
+    if gone {
+        // Dashed: it isn't in the data any more.
+        p.rect_filled(r, round, fill.gamma_multiply(a));
+        let q = r.shrink(1.0);
+        let outline = [
+            q.left_top(),
+            q.right_top(),
+            q.right_bottom(),
+            q.left_bottom(),
+            q.left_top(),
+        ];
+        p.extend(Shape::dashed_line(
+            &outline,
+            Stroke::new(border.width.max(1.5), accent.gamma_multiply(a)),
+            6.0 * z,
+            4.0 * z,
+        ));
+    } else {
+        p.rect(r, round, fill.gamma_multiply(a), border, StrokeKind::Inside);
+    }
+    let bar = Rect::from_min_max(r.min, pos2(r.min.x + 4.0 * z, r.max.y));
+    p.rect_filled(
+        bar,
+        CornerRadius {
+            nw: round,
+            sw: round,
+            ne: 0,
+            se: 0,
+        },
+        accent.gamma_multiply(a),
+    );
+}
+
+/// A chip's pill on a card (its text drawn over it).
+pub(super) fn chip_pill(p: &Painter, chip: Rect, accent: Color32, a: f32) {
+    p.rect_filled(
+        chip,
+        (chip.height() / 2.0) as u8,
+        accent.gamma_multiply(0.16 * a),
+    );
+}
+
+/// The thumbtack on a pinned card, centred at `at`.
+pub(super) fn pin(p: &Painter, vis: &egui::Visuals, at: Pos2, z: f32, a: f32) {
+    p.text(
+        at,
+        egui::Align2::CENTER_CENTER,
+        "📌",
+        FontId::proportional((13.0 * z).max(9.0)),
+        crate::theme::emoji_colour('📌', vis.strong_text_color()).gamma_multiply(a),
+    );
+}
+
+/// A card's warning badge centred at `c`: "!" on amber, with a ring
+/// pulsing out of it.
+pub(super) fn warn_badge(p: &Painter, c: Pos2, z: f32, a: f32, now: f64) {
+    let warn = widgets::warn();
+    let t = ((now * 0.8).fract()) as f32;
+    p.circle_stroke(
+        c,
+        (7.0 + 7.0 * t) * z,
+        Stroke::new(1.5, warn.gamma_multiply((1.0 - t) * 0.6 * a)),
+    );
+    p.circle_filled(c, 7.0 * z, warn.gamma_multiply(a));
+    p.text(
+        c,
+        egui::Align2::CENTER_CENTER,
+        "!",
+        FontId::proportional(11.0 * z),
+        Color32::BLACK.gamma_multiply(a),
+    );
+}
+
+/// A card too small for the badge: an amber dot in its corner.
+pub(super) fn warn_dot(p: &Painter, r: Rect, a: f32) {
+    p.circle_filled(
+        pos2(r.max.x - 4.0, r.min.y + 4.0),
+        3.0,
+        widgets::warn().gamma_multiply(a),
+    );
 }
