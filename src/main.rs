@@ -810,6 +810,7 @@ fn main() {
             .with_drag_and_drop(true)
             .with_icon(icon()),
         renderer: plan.renderer,
+        wgpu_options: startup::wgpu_options(),
         ..Default::default()
     };
     startup::begin(&plan);
@@ -818,6 +819,7 @@ fn main() {
         "is-alive",
         options,
         Box::new(|cc| {
+            startup::created(cc);
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();

@@ -8,9 +8,10 @@
 //! process, because winit allows one event loop per process.) wgpu, once it
 //! has opened the window, is kept for the next start. A start that dies
 //! without a word (a driver crash) is noticed on the next one, which uses
-//! the other renderer. Whatever still stops it (both failing, a bug) is
-//! shown in a message box and written to startup.log in the settings
-//! folder, with what was tried.
+//! the other renderer; another copy still opening its window at the same
+//! time (several files opened at once) isn't taken for one that died.
+//! Whatever still stops it (both failing, a bug) is shown in a message box
+//! and written to startup.log in the settings folder, with what was tried.
 //!
 //! `--renderer=glow` or `--renderer=wgpu` (or IS_ALIVE_RENDERER) picks one.
 
@@ -18,7 +19,7 @@ use crate::theme;
 use eframe::Renderer;
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -84,6 +85,9 @@ struct State {
     renderer: Renderer,
     why: Why,
     open: bool,
+    /// What draws, as the renderer reports it (the GPU or software
+    /// renderer, and its driver), for the log.
+    device: Option<String>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -164,7 +168,11 @@ pub fn plan(saved: Option<Renderer>) -> Result<Plan, String> {
         _ => None,
     };
     let fallback = std::env::var(FALLBACK_ENV).ok();
-    let died = marker().and_then(|p| std::fs::read_to_string(p).ok()?.trim().parse().ok());
+    // Only looked at (and cleared) when it can decide.
+    let died = match (flag, env) {
+        (None, None) => theme::data_dir().and_then(|d| died(&d, std::process::id(), alive)),
+        _ => None,
+    };
     let (renderer, why) = choose(flag, env, fallback, died, saved);
     Ok(Plan {
         renderer,
@@ -173,15 +181,93 @@ pub fn plan(saved: Option<Renderer>) -> Result<Plan, String> {
     })
 }
 
-/// Present from just before the window opens until its first frame is
-/// drawn: still there at the next start means this one died on the way.
+/// This start's marker, `starting-<pid>` holding its renderer: present from
+/// just before the window opens until its first frame is drawn. Each copy
+/// has its own, so one opening at the same time as another neither reads
+/// the other's as a death nor clears it.
 fn marker() -> Option<PathBuf> {
-    Some(theme::data_dir()?.join("starting"))
+    Some(theme::data_dir()?.join(format!("{MARKER}{}", std::process::id())))
+}
+
+const MARKER: &str = "starting-";
+
+/// The renderer of the newest start that died before its window opened: a
+/// marker in `dir` whose process is gone. Those markers are removed; those
+/// of copies still running (still opening their windows) are left alone.
+fn died(dir: &Path, me: u32, alive: impl Fn(u32) -> bool) -> Option<Renderer> {
+    let mut dead = Vec::new();
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(MARKER))
+            .and_then(|p| p.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == me || alive(pid) {
+            continue;
+        }
+        let when = e.metadata().and_then(|m| m.modified()).ok();
+        let renderer = std::fs::read_to_string(e.path())
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        let _ = std::fs::remove_file(e.path());
+        if let Some(r) = renderer {
+            dead.push((when, r));
+        }
+    }
+    dead.into_iter()
+        .max_by_key(|(when, _)| *when)
+        .map(|(_, r)| r)
+}
+
+/// Whether process `pid` is still running. A pid reused by another program
+/// counts as running: the marker then waits for a later start.
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: plain calls on a handle that's checked, then closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(windows))]
+fn alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Where the startup log is; shown in the message box and the README.
 pub fn log_path() -> Option<PathBuf> {
     Some(theme::data_dir()?.join("startup.log"))
+}
+
+/// wgpu's setup. Direct3D 12 compiles its shaders with FXC, which comes
+/// with Windows (WGPU_DX12_COMPILER can still pick another): left to itself
+/// wgpu loads the first dxcompiler.dll on the search path (an SDK's, another
+/// app's), and one too old to work stops wgpu from starting.
+pub fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut c = eframe::egui_wgpu::WgpuConfiguration::default();
+    #[cfg(windows)]
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(s) = &mut c.wgpu_setup
+        && eframe::wgpu::Dx12Compiler::from_env().is_none()
+    {
+        s.instance_descriptor.backend_options.dx12.shader_compiler =
+            eframe::wgpu::Dx12Compiler::Fxc;
+    }
+    c
 }
 
 /// Call just before `run_native`.
@@ -204,7 +290,56 @@ pub fn begin(plan: &Plan) {
             renderer: plan.renderer,
             why: plan.why.clone(),
             open: false,
+            device: None,
         });
+    }
+}
+
+/// Call from the app creator: note what draws, for the "window open" line
+/// (on a virtual machine, whether it's WARP or a virtual GPU's driver).
+pub fn created(cc: &eframe::CreationContext<'_>) {
+    let device = if let Some(w) = &cc.wgpu_render_state {
+        let i = w.adapter.get_info();
+        let driver = [i.driver.as_str(), i.driver_info.as_str()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some(format!(
+            "{} ({:?}, {:?}{})",
+            i.name,
+            i.device_type,
+            i.backend,
+            if driver.is_empty() {
+                String::new()
+            } else {
+                format!(", driver {driver}")
+            }
+        ))
+    } else if let Some(gl) = &cc.gl {
+        use eframe::glow::HasContext;
+        // SAFETY: the context is current while the app is created.
+        let (r, v) = unsafe {
+            (
+                gl.get_parameter_string(eframe::glow::RENDERER),
+                gl.get_parameter_string(eframe::glow::VERSION),
+            )
+        };
+        // OpenGL ES names itself; desktop OpenGL gives just the number.
+        let gl = if v.starts_with("OpenGL") {
+            ""
+        } else {
+            "OpenGL "
+        };
+        Some(format!("{r}, {gl}{v}"))
+    } else {
+        None
+    };
+    if let Ok(mut s) = STATE.lock()
+        && let Some(s) = s.as_mut()
+    {
+        s.device = device.map(|d| one_line(&d));
     }
 }
 
@@ -223,10 +358,10 @@ pub fn running(ctx: &eframe::egui::Context, look: &mut theme::Settings) {
     if let Some(p) = marker() {
         let _ = std::fs::remove_file(p);
     }
-    let Some(renderer) = STATE.lock().ok().and_then(|mut s| {
+    let Some((renderer, device)) = STATE.lock().ok().and_then(|mut s| {
         let s = s.as_mut()?;
         s.open = true;
-        Some(s.renderer)
+        Some((s.renderer, s.device.take()))
     }) else {
         return;
     };
@@ -234,6 +369,9 @@ pub fn running(ctx: &eframe::egui::Context, look: &mut theme::Settings) {
     // OpenGL opening goes back to the default.
     let remember = (renderer == Renderer::Wgpu).then_some(renderer);
     let mut line = format!("window open with {}", name(renderer));
+    if let Some(d) = device {
+        line += &format!(" on {d}");
+    }
     if remember != look.renderer {
         look.renderer = remember;
         theme::save(look);
@@ -303,11 +441,12 @@ fn try_other(renderer: Renderer, error: &str) {
         name(renderer),
         name(next)
     ));
-    // In an AppImage this program lives on a mount that goes away when it
-    // exits: start the AppImage itself.
-    let exe = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok());
+    let appdir = std::env::var_os("APPDIR").map(|d| std::fs::canonicalize(&d).unwrap_or(d.into()));
+    let exe = relaunch_path(
+        std::env::current_exe().ok(),
+        std::env::var_os("APPIMAGE"),
+        appdir,
+    );
     let started = exe.is_some_and(|exe| {
         std::process::Command::new(exe)
             .args(std::env::args_os().skip(1))
@@ -317,9 +456,30 @@ fn try_other(renderer: Renderer, error: &str) {
             .is_ok()
     });
     if started {
+        // Not a silent death: the next start shouldn't count it as one.
+        if let Some(p) = marker() {
+            let _ = std::fs::remove_file(p);
+        }
         std::process::exit(0);
     }
     log("could not start this program again");
+}
+
+/// What to start again: in an AppImage this program lives on a mount that
+/// goes away when it exits, so the AppImage itself. APPIMAGE is handed down
+/// to everything an AppImage starts (a terminal, a file manager), so it's
+/// only this program's when this program is inside APPDIR.
+fn relaunch_path(
+    exe: Option<PathBuf>,
+    appimage: Option<OsString>,
+    appdir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    match (appimage, appdir) {
+        (Some(image), Some(dir)) if exe.as_ref().is_some_and(|e| e.starts_with(&dir)) => {
+            Some(image.into())
+        }
+        _ => exe,
+    }
 }
 
 /// The message box when no renderer could open the window.
@@ -616,6 +776,56 @@ mod tests {
             pick(Some(Glow), Some(Wgpu), Some("x"), Some(Glow), Some(Wgpu)),
             (Glow, Why::Asked)
         );
+    }
+
+    #[test]
+    fn only_a_start_that_is_gone_counts_as_died() {
+        let dir = std::env::temp_dir().join(format!("is-alive-starting-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let put = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+        let has = |name: &str| dir.join(name).exists();
+        // 10 is running (another copy opening its window), 7 is this one.
+        let running = |pid| pid == 10;
+        put("starting-10", "glow");
+        put("starting-7", "glow");
+        put("starting", "glow");
+        put("starting-x", "glow");
+        assert_eq!(died(&dir, 7, running), None);
+        assert!(has("starting-10") && has("starting-7"));
+        // 11 is gone: its renderer died, and its marker is cleared.
+        put("starting-11", "wgpu");
+        assert_eq!(died(&dir, 7, running), Some(Renderer::Wgpu));
+        assert!(!has("starting-11") && has("starting-10"));
+        assert_eq!(died(&dir, 7, running), None);
+        // 10 has gone too.
+        assert_eq!(died(&dir, 7, |_| false), Some(Renderer::Glow));
+        assert!(!has("starting-10"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn this_process_is_alive() {
+        assert!(alive(std::process::id()));
+        assert!(!alive(u32::MAX - 1));
+    }
+
+    #[test]
+    fn appimage_only_when_running_from_it() {
+        let exe = Some(PathBuf::from("/tmp/.mount_isaXYZ/usr/bin/is-alive"));
+        let image = || Some(OsString::from("/home/u/is-alive.AppImage"));
+        assert_eq!(
+            relaunch_path(exe.clone(), image(), Some("/tmp/.mount_isaXYZ".into())),
+            Some("/home/u/is-alive.AppImage".into())
+        );
+        // Started from another AppImage's terminal: its APPIMAGE and APPDIR.
+        let built = Some(PathBuf::from("/home/u/is-alive/target/release/is-alive"));
+        assert_eq!(
+            relaunch_path(built.clone(), image(), Some("/tmp/.mount_termAB".into())),
+            built
+        );
+        assert_eq!(relaunch_path(built.clone(), image(), None), built);
+        assert_eq!(relaunch_path(exe.clone(), None, None), exe);
     }
 
     #[test]
