@@ -135,6 +135,11 @@ struct App {
     update_asked: bool,
     /// The sweep was running last frame (to see one start).
     was_sweeping: bool,
+    /// The tabs whose full-scan run is still going: when the last ends,
+    /// the Map tab calls for attention. A run started there by hand after
+    /// the scan's own ended doesn't count.
+    scanning: Vec<Tab>,
+    map_call: chrome::MapCall,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
     /// ((filter, log stamp), matching entries) for the last frame.
@@ -162,6 +167,9 @@ impl eframe::App for App {
         if self.tab != self.shown_tab {
             self.shown_tab = self.tab;
             self.tab_since = now;
+        }
+        if self.tab == Tab::Map {
+            self.map_call.seen();
         }
         self.size = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         self.poll_all(ui.ctx(), now);
@@ -273,6 +281,15 @@ impl App {
                     ),
                     false,
                 );
+            }
+        }
+        // The full scan is done: what its sweep found is on the Map now.
+        if !self.scanning.is_empty() {
+            let mut left = std::mem::take(&mut self.scanning);
+            left.retain(|t| self.tab_running(*t));
+            self.scanning = left;
+            if self.scanning.is_empty() && self.sweep.finished().is_some_and(|(_, n)| n > 0) {
+                self.map_call.start(now, self.tab == Tab::Map);
             }
         }
         self.notes.set_known(self.export.secrets(), now);
@@ -528,14 +545,21 @@ impl App {
 
         let gw = local.gateway.map(|g| g.to_string());
         self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
+        self.scanning = vec![Tab::Ping, Tab::Trace, Tab::Dns];
         if let Some(gw) = &gw {
             self.ports.run(ctx, gw);
+            self.scanning.push(Tab::Ports);
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
+            self.scanning.push(Tab::Sweep);
+        } else {
+            // Only the sweep puts anything on the Map.
+            self.scanning.clear();
         }
+        self.map_call.seen();
         self.tab = Tab::Results;
         // Show the new runs: a leftover filter could hide them, and the
         // view may be scrolled up on older ones.
@@ -824,6 +848,7 @@ fn main() {
         options,
         Box::new(|cc| {
             startup::created(cc);
+            cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
@@ -849,6 +874,8 @@ fn main() {
                 info_job: None,
                 wan_asked: false,
                 was_sweeping: false,
+                scanning: Vec::new(),
+                map_call: Default::default(),
                 update_job: None,
                 update: None,
                 update_asked: false,
@@ -930,8 +957,8 @@ mod tests {
     /// for both proportional and monospace text, or it shows as a box.
     #[test]
     fn every_glyph_in_the_source_renders() {
-        use eframe::egui::{FontDefinitions, FontFamily};
-        let defs = FontDefinitions::default();
+        use eframe::egui::FontFamily;
+        let defs = crate::fonts::definitions();
         let covers = |fam: &FontFamily, c: char| {
             defs.families[fam]
                 .iter()

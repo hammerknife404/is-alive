@@ -263,7 +263,7 @@ fn natural(c: char) -> Option<Color32> {
     let rgb = |r, g, b| Some(Color32::from_rgb(r, g, b));
     const YELLOW: (u8, u8, u8) = (250, 200, 50);
     match c {
-        '✅' | '✔' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
+        '✅' | '✔' | '☑' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
         '❌' | '✖' | '❗' | '⛔' | '🚫' | '🔴' | '📌' | '📍' | '❤' | '💔' | '📅' | '📆' | '⏰'
         | '🚨' | '💯' | '🍎' => rgb(230, 70, 70),
         '❓' | '❔' | '❕' | '➖' => rgb(230, 90, 90),
@@ -271,14 +271,19 @@ fn natural(c: char) -> Option<Color32> {
             rgb(YELLOW.0, YELLOW.1, YELLOW.2)
         }
         '🔥' | '🚧' | '🎃' => rgb(250, 130, 40),
-        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' => rgb(70, 150, 240),
-        '💜' | '🔮' => rgb(170, 110, 240),
-        '📦' | '🗄' => rgb(190, 130, 70),
-        '📝' | '📄' | '📃' | '📋' | '☁' | '⚪' => rgb(225, 225, 225),
-        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' => rgb(150, 165, 185),
-        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' => {
-            rgb(120, 175, 230)
+        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' | '🔄' | '🆗' => {
+            rgb(70, 150, 240)
         }
+        '☁' => rgb(150, 190, 230),
+        '💜' | '🔮' => rgb(170, 110, 240),
+        '🎉' => rgb(240, 110, 180),
+        '📦' => rgb(190, 130, 70),
+        '📝' | '📄' | '📃' | '⚪' => rgb(225, 225, 225),
+        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' | '🗑' | '🔍' | '🛡' | '💬' | '📋' => {
+            rgb(150, 165, 185)
+        }
+        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' | '🗄' | '🛜' | '🖧'
+        | '🖶' | '📹' | '💾' | '🖴' => rgb(120, 175, 230),
         '⏳' | '⌛' => rgb(210, 170, 100),
         _ => match c as u32 {
             // Faces and hands.
@@ -787,7 +792,8 @@ pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub theme: Theme,
-    /// Miami backdrop and sunset rule move; ignored by the other themes.
+    /// Miami backdrop and sunset rule move (other themes have neither),
+    /// and the Map tab pulses after a full scan rather than lighting up still.
     pub animate: bool,
     /// A soft glow on the bright parts of the Miami backdrop.
     pub glow: bool,
@@ -1051,6 +1057,23 @@ pub fn appearance(
         });
         ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
+        let tip = if gpu {
+            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
+             line under the tabs drift (10 frames a second on the GPU, paused while the window \
+             isn't focused). Off, everything holds still."
+        } else {
+            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
+             line under the tabs drift (10 frames a second, no usable GPU, paused while the \
+             window isn't focused). Off, everything holds still."
+        };
+        if ui
+            .checkbox(&mut s.animate, "Animate")
+            .on_hover_text(tip)
+            .changed()
+        {
+            act = Some(MenuAction::Changed);
+        }
+        ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
             ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
@@ -1082,18 +1105,6 @@ pub fn appearance(
             if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
             {
                 s.backdrop = Source::None;
-                act = Some(MenuAction::Changed);
-            }
-            let tip = if gpu {
-                "10 frames a second on the GPU, paused while the window isn't focused"
-            } else {
-                "10 frames a second (no usable GPU), paused while the window isn't focused"
-            };
-            if ui
-                .checkbox(&mut s.animate, "Animate")
-                .on_hover_text(tip)
-                .changed()
-            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
@@ -1198,6 +1209,17 @@ mod tests {
             [10.0, 10.0 * EMOJI_SCALE, 10.0, 10.0 * EMOJI_SCALE, 10.0]
         );
         assert!(is_emoji('🔑') && is_emoji('⭐') && !is_emoji('\u{2192}') && !is_emoji('a'));
+    }
+
+    /// Colour style gives every picker emoji a colour of its own, and the
+    /// app sizes each one as an emoji.
+    #[test]
+    fn picker_emoji_are_emoji_with_a_natural_colour() {
+        for (e, code, _) in crate::markdown::shortcodes() {
+            let c = e.chars().next().unwrap();
+            assert!(is_emoji(c), ":{code}: isn't sized as an emoji");
+            assert!(natural(c).is_some(), ":{code}: has no natural colour");
+        }
     }
 
     #[test]

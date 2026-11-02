@@ -167,6 +167,8 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
+When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
+
 ### Dropping files
 
 Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` map onto the window from any tab. The window darkens to say where it will go, and dropping it opens it in [Config Export](#10-config-export).
@@ -731,7 +733,7 @@ With several cards selected, the panel's header says how many and offers **Copy 
 - **Edit / Split / Preview**: the editor only (default), the editor and the formatted preview side by side, or the preview only. In Split, drag the divider (double-click it for half and half).
 - **B**, ***I***, **</>** make the selection bold, italic or code (**Ctrl+B**, **Ctrl+I**); **H** makes the line a heading, **•** a bullet, **☐** a task box you can tick in the preview.
 - **Lists continue**: press **Enter** at the end of a list item and the next one starts; Enter on an empty item ends the list.
-- **☺** opens the emoji menu. Hover an emoji to see what it's for and its shortcode (`:white_check_mark:`, `:fire:`); typing the shortcode works too, and Preview draws it as the emoji.
+- **☺** opens the emoji menu, grouped into Status, People, Notes and Tech (a server rack, Wi-Fi, network, firewall, printer, camera, disk and more). Hover an emoji to see what it's for and its shortcode (`:white_check_mark:`, `:fire:`, `:wireless:`); typing the shortcode works too, and Preview draws it as the emoji. The server rack is the file cabinet emoji (🗄, `:file_cabinet:`): Unicode has no server, so other apps show a cabinet.
 - **Time** inserts the date and time with the time zone and where this computer's clock syncs from (useful when comparing with device logs). **Host info** inserts this computer's name, domain, LAN, MAC, gateway and WAN.
 - **Font and size** (right end of the toolbar): Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
 
@@ -792,7 +794,7 @@ Select `Sunny-Harbor-2026` and press **Ctrl+R**: the line becomes `Guest Wi-Fi p
 | Control | What it does |
 |---|---|
 | **Server** | **Download a file** (default): Cloudflare's 25 MB test file, or any large file's direct link. **speed.cloudflare.com**: Cloudflare's full test, download and upload, and it names the data centre and ISP. **Upload to a URL**: posts data to a server that accepts and discards it, such as your own or a LibreSpeed server's `…/backend/empty.php` |
-| **Presets** | Free public test servers by region (US East, Central, West, Canada, Europe) from Cloudflare, Hetzner, Vultr, OVH, ThinkBroadband and LibreSpeed hosts |
+| **Servers ⏷** | Next to the URL for **Download a file** and **Upload to a URL**: free public test servers by region (US East, Central, West, Canada, Europe) from Cloudflare, Hetzner, Vultr, OVH, ThinkBroadband and LibreSpeed hosts. Picking one fills in the URL; the one in use is highlighted, and hovering **Servers** names it |
 | **Duration** | Seconds per direction (5–60, default 10) |
 | **Streams** | Parallel connections (1–16, default 4; 4 suits most lines) |
 | **Download / Upload** | Which directions to test (a file can only be downloaded; an upload URL only uploaded) |
@@ -842,7 +844,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ### Common problems
 
-- **A direction fails with a 403, or the test is blocked**: web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a preset server nearby, or wait a minute.
+- **A direction fails with a 403, or the test is blocked**: web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a nearby server from **Servers**, or wait a minute.
 - **"ICMP got no replies, so latency was measured with TCP connects to port 443"**: ping is blocked on the way; the test carried on with TCP, where loss is less reliable.
 - **"IPv6 to … didn't connect, so the test ran over IPv4"**: this network's IPv6 looks broken: it hands out IPv6 addresses but can't route IPv6. Worth fixing (devices will be slow to connect elsewhere too), and the test carries on over IPv4.
 - **A link to a download page rather than the file**: the test says so. Use the file's direct link.
@@ -950,11 +952,13 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
+**Animate** (on by default) lets things move: the Map tab pulses after a Full scan, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Off, the Map tab lights up still instead and the rest holds still. Turn it off on battery or if motion bothers you.
+
 ### Miami backdrop
 
 With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
 
-- **Animate** moves the scene (10 frames a second, paused when the window isn't in front). Turn it off on battery.
+- With **Animate** on (above), the scene moves at 10 frames a second, paused when the window isn't in front.
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 
@@ -1118,7 +1122,7 @@ sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 | Sweep finds few devices on a remote subnet | Only ping counts past a router, and firewalls drop it |
 | Advanced: SMTP says port 25 is probably blocked | The ISP or office firewall blocks outbound mail: normal, not the domain's fault |
 | Advanced: blacklists *couldn't check* | Those lists refuse public resolvers: set **Resolver** to the office's DNS |
-| Speed Test blocked or 403 | Web filtering, or Cloudflare rate-limiting: use **Download a file** with a preset |
+| Speed Test blocked or 403 | Web filtering, or Cloudflare rate-limiting: use **Download a file** with a server from **Servers** |
 | Map empty | Nothing seen yet: **Scan this network**, or open a backup in Config Export |
 | Footer WAN says *unknown* | No internet, or OpenDNS blocked; *not looked up* means it's turned off in Settings |
 | Security software alerts during a scan | Expected: agree scans with the site and use the **Gentle** speed |

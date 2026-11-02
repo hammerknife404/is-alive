@@ -269,7 +269,7 @@ impl SpeedTool {
                             "https://host/100MB.bin",
                         )
                         .on_hover_text("The file's direct link. 1 GB or more works best");
-                        presets(ui, speed::DOWNLOADS, &mut self.file_url);
+                        servers(ui, "speed_downloads", speed::DOWNLOADS, &mut self.file_url);
                     }
                     Pick::Upload => {
                         widgets::line(
@@ -283,7 +283,7 @@ impl SpeedTool {
                             "Where to POST. It must answer 2xx and throw the data away; \
                              about 25 MB goes per request, repeated for the test's duration",
                         );
-                        presets(ui, speed::UPLOADS, &mut self.upload_url);
+                        servers(ui, "speed_uploads", speed::UPLOADS, &mut self.upload_url);
                     }
                     Pick::Cloudflare => {}
                 }
@@ -908,34 +908,60 @@ impl Prober {
     }
 }
 
-/// A menu of public servers by region; picking one fills in `url`.
-fn presets(ui: &mut Ui, list: &[speed::Preset], url: &mut String) {
-    ui.menu_button("Presets", |ui| {
-        ui.set_min_width(240.0);
-        let mut region = "";
-        for p in list {
-            if p.region != region {
-                if !region.is_empty() {
-                    ui.separator();
+/// The Servers drop-down: public servers by region; picking one fills in
+/// `url`. The one in use is highlighted, and hovering names it.
+fn servers(ui: &mut Ui, id: &str, list: &[speed::Preset], url: &mut String) {
+    let current = list.iter().find(|p| url.trim() == p.url);
+    let tip = match current {
+        Some(p) => format!(
+            "Public servers to test against, by region\n\nNow: {} · {}",
+            p.place, p.who
+        ),
+        None => "Public servers to test against, by region".to_string(),
+    };
+    let combo = egui::ComboBox::from_id_salt(id)
+        .selected_text("Servers")
+        .height(f32::INFINITY);
+    widgets::tall_popups(ui, |ui| {
+        combo.show_ui(ui, |ui| {
+            ui.set_width(260.0);
+            let mut region = "";
+            for p in list {
+                if p.region != region {
+                    if !region.is_empty() {
+                        ui.separator();
+                    }
+                    ui.label(RichText::new(p.region).small().strong());
+                    region = p.region;
                 }
-                ui.label(RichText::new(p.region).small().strong());
-                region = p.region;
+                let on = url.trim() == p.url;
+                if ui
+                    .selectable_label(on, format!("{} · {}", p.place, p.who))
+                    .on_hover_text(p.url)
+                    .clicked()
+                {
+                    *url = p.url.into();
+                }
             }
-            let on = url.trim() == p.url;
-            if ui
-                .selectable_label(on, format!("{} · {}", p.place, p.who))
-                .on_hover_text(p.url)
-                .clicked()
-            {
-                *url = p.url.into();
-                ui.close();
-            }
-        }
-        ui.separator();
-        ui.weak("Free public servers, best effort. If one fails or is slow, try another nearby.");
+            ui.separator();
+            // Left-aligned: the list's layout would justify it.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_max_width(ui.available_width() - 8.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Free public servers, best effort. If one fails or is slow, try \
+                             another nearby.",
+                        )
+                        .weak(),
+                    )
+                    .wrap(),
+                );
+            });
+        })
     })
     .response
-    .on_hover_text("Public servers to test against, by region");
+    .on_hover_text(tip);
 }
 
 fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {
