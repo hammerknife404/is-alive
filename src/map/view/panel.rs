@@ -101,7 +101,9 @@ impl MapView {
         ev: &mut Option<PanelEv>,
     ) -> Option<Action> {
         let mut act = None;
-        if sel.is_empty() {
+        // Sliding shut: the last card shown, without the header.
+        let closing = sel.is_empty();
+        if closing {
             sel.extend(self.shown.as_deref().and_then(|s| self.index(s)));
         }
         egui::ScrollArea::vertical()
@@ -111,9 +113,10 @@ impl MapView {
                 ui.add_space(4.0);
                 // A card clicked on its own already lights its path to the
                 // internet: Trace to WAN is for cards picked together
-                // (Ctrl+click, the right-click menu, a site, a finding),
-                // which light only what joins them.
-                if sel.len() > 1 || !self.traced {
+                // (Ctrl+click, the right-click menu, a site, a finding) and
+                // pinned cards left on their own, which light only what
+                // joins them.
+                if !closing && self.joins_only() {
                     ui.horizontal(|ui| self.panel_header(ui, &sel, ev));
                 }
                 ui.add_space(4.0);

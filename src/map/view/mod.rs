@@ -181,6 +181,12 @@ pub struct MapView {
     /// The canvas as it was with no card selected: what the map fits to
     /// while the panel is open.
     wide: Option<Rect>,
+    /// How wide the detail panel is this frame (it slides), and open.
+    panel_now: f32,
+    panel_full: f32,
+    /// The files the map is drawn from: another set (an example picked, a
+    /// file loaded or cleared) is another map, shown whole.
+    source: u64,
     drag: Option<String>,
     /// The cards dragged last (the one dragged, or the selection it brought
     /// along): drawn over the rest.
@@ -220,6 +226,10 @@ enum Menu {
     /// The empty canvas.
     Background,
 }
+
+/// The detail panel's id, and its width until it's dragged.
+const PANEL: &str = "map_detail";
+const PANEL_SIZE: f32 = 320.0;
 
 /// Why a control is greyed out on an empty map.
 const NOTHING_YET: &str = "Nothing on the map yet";
@@ -463,6 +473,9 @@ impl MapView {
         if key == self.key && !self.stale {
             return;
         }
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        src.export.map_sources().hash(&mut s);
+        let source = s.finish();
         // A sweep adds hosts every frame: rebuild a few times a second.
         let now = ctx.input(|i| i.time);
         if src.sweep.is_running() && now - self.built_at < 0.25 {
@@ -482,8 +495,26 @@ impl MapView {
         for (from, to) in self.carry_gone(&self.map, &mut map) {
             self.rename(&from, &to);
         }
+        // Another map, or one after none: show all of it, not the last
+        // map's zoom and spot. Reload (the same files) and a sweep filling
+        // the map in keep the view.
+        if source != self.source || self.map.nodes.is_empty() {
+            self.source = source;
+            self.new_map();
+        }
         self.map = map;
         self.relayout(ctx);
+    }
+
+    /// Start a new map's view: fitted whole, nothing moved, nothing but the
+    /// pinned cards selected.
+    fn new_map(&mut self) {
+        self.follow = true;
+        self.aim = None;
+        self.placed.clear();
+        self.raised.clear();
+        self.undo = None;
+        self.select(None);
     }
 
     fn relayout(&mut self, ctx: &egui::Context) {
@@ -526,20 +557,31 @@ impl MapView {
     }
 
     /// Every selected card: pinned ones, Ctrl+clicked ones, the one clicked last.
+    /// One pass over the cards, however many are selected: a big map with
+    /// every card selected asks for this several times a frame.
     fn selection(&self) -> Vec<usize> {
-        let mut v: Vec<usize> = Vec::new();
-        for i in self
+        let ids: Vec<&str> = self
             .kept
             .iter()
             .chain(&self.also)
             .chain(&self.selected)
-            .filter_map(|s| self.index(s))
-        {
-            if !v.contains(&i) {
-                v.push(i);
+            .map(String::as_str)
+            .collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let want: HashSet<&str> = ids.iter().copied().collect();
+        let mut at: HashMap<&str, usize> = HashMap::new();
+        for (i, n) in self.map.nodes.iter().enumerate() {
+            if want.contains(n.id.as_str()) {
+                at.entry(n.id.as_str()).or_insert(i);
             }
         }
-        v
+        let mut seen = HashSet::new();
+        ids.iter()
+            .filter_map(|s| at.get(s).copied())
+            .filter(|&i| seen.insert(i))
+            .collect()
     }
 
     /// Pin a card in the selection, or let it go. A pinned card holds the
@@ -569,19 +611,24 @@ impl MapView {
     fn ordered(&mut self) -> Vec<usize> {
         let sel = self.selection();
         let ids: Vec<String> = sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
+        let picked: HashSet<&String> = ids.iter().collect();
         self.slots.retain(|s, _| self.kept.contains(s));
         let mut free: Vec<String> = self
             .order
             .iter()
-            .filter(|s| ids.contains(s) && !self.slots.contains_key(*s))
+            .filter(|s| picked.contains(s) && !self.slots.contains_key(*s))
             .cloned()
             .collect();
         // Selection runs oldest to newest, so the newest lands on top.
-        for id in &ids {
-            if !self.slots.contains_key(id) && !free.contains(id) {
-                free.insert(0, id.clone());
-            }
-        }
+        let mut listed: HashSet<String> = free.iter().cloned().collect();
+        let mut new: Vec<String> = ids
+            .iter()
+            .filter(|id| !self.slots.contains_key(*id) && listed.insert((*id).clone()))
+            .cloned()
+            .collect();
+        new.reverse();
+        new.append(&mut free);
+        let mut free = new;
         // Pinned cards go back in their slots, lowest first so each insert
         // leaves the ones above it alone. A slot past the end shows last but
         // is kept, so the card returns to it as the panel fills up again.
@@ -641,7 +688,9 @@ impl MapView {
     fn select(&mut self, i: Option<usize>) {
         self.selected = i.map(|i| self.map.nodes[i].id.clone());
         self.also.clear();
-        self.traced = true;
+        // Pinned cards left on their own weren't clicked: they light only
+        // what joins them, and the panel offers Trace to WAN.
+        self.traced = i.is_some();
     }
 
     /// Select card `i` with `others` (the right-click menu's "Select
@@ -685,18 +734,19 @@ impl MapView {
     /// uplink, path, children or everything below), nearest first.
     fn grow(&self, group: &[usize], more: Grow) -> Vec<usize> {
         let mut out: Vec<usize> = group.to_vec();
+        let mut seen: HashSet<usize> = group.iter().copied().collect();
+        let kids = match more {
+            Grow::Children | Grow::Below => self.map.children(),
+            Grow::Uplink | Grow::Path => Vec::new(),
+        };
         for &g in group {
             let add: Vec<usize> = match more {
                 Grow::Uplink => self.map.nodes[g].parent().into_iter().collect(),
                 Grow::Path => self.map.path(g).into_iter().rev().collect(),
-                Grow::Children => self.map.children()[g].clone(),
-                Grow::Below => self.below(g),
+                Grow::Children => kids[g].clone(),
+                Grow::Below => below_in(&kids, g),
             };
-            for k in add {
-                if !out.contains(&k) {
-                    out.push(k);
-                }
-            }
+            out.extend(add.into_iter().filter(|&k| seen.insert(k)));
         }
         out
     }
@@ -715,11 +765,7 @@ impl MapView {
             return (cards, links);
         }
         let parent = |i: usize| self.map.nodes[i].parent();
-        let shown = self
-            .selected
-            .as_deref()
-            .and_then(|s| self.index(s))
-            .filter(|_| self.traced);
+        let shown = self.tracing();
         let traced: Vec<usize> = if self.trace_wan {
             sel.to_vec()
         } else {
@@ -778,33 +824,13 @@ impl MapView {
         (cards, links)
     }
 
-    /// Every card below `i`, nearest first.
-    fn below(&self, i: usize) -> Vec<usize> {
-        let kids = self.map.children();
-        let mut out = Vec::new();
-        let mut next = vec![i];
-        let mut seen = vec![false; kids.len()];
-        seen[i] = true;
-        while !next.is_empty() {
-            let mut level = Vec::new();
-            for p in next {
-                for &c in &kids[p] {
-                    if !seen[c] {
-                        seen[c] = true;
-                        level.push(c);
-                    }
-                }
-            }
-            out.extend(&level);
-            next = level;
-        }
-        out
-    }
-
     /// Ctrl+click: add the card to the selection, or take it out (pinned too).
-    /// Only what joins the cards lights from then on.
+    /// Adding one makes a selection picked together: only what joins the
+    /// cards lights from then on. Taking one out leaves a card clicked on
+    /// its own lit as it was, its path to the internet and all, unless it's
+    /// the one taken out.
     fn toggle(&mut self, i: usize) {
-        self.traced = false;
+        let was = self.selected.clone();
         let id = self.map.nodes[i].id.clone();
         if let Some(k) = self.kept.iter().position(|s| *s == id) {
             self.kept.remove(k);
@@ -821,6 +847,24 @@ impl MapView {
             self.also.extend(self.selected.take());
             self.selected = Some(id);
         }
+        if self.selected != was {
+            self.traced = false;
+        }
+    }
+
+    /// The card lit with its whole path to the internet: the one shown,
+    /// when it was picked on its own.
+    fn tracing(&self) -> Option<usize> {
+        self.selected
+            .as_deref()
+            .and_then(|s| self.index(s))
+            .filter(|_| self.traced)
+    }
+
+    /// The selection lights only what joins its cards, so Trace to WAN has
+    /// paths to add (a card clicked on its own shows its path already).
+    fn joins_only(&self) -> bool {
+        self.selection().len() > 1 || self.tracing().is_none()
     }
 
     fn target(&self, i: usize) -> Option<Pos2> {
@@ -863,6 +907,7 @@ impl MapView {
     /// the whole map in the view as it is now, panel or not, and kept in
     /// view as it grows.
     fn fit_view(&mut self, view: Rect) {
+        let view = self.settled(view);
         self.follow = true;
         self.wide = Some(view);
         self.fit(view);
@@ -888,10 +933,25 @@ impl MapView {
                     .iter()
                     .filter_map(|&i| self.target(i))
                     .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD)));
-                self.fit_to(view, area);
+                self.fit_to(self.settled(view), area);
                 self.follow = false;
             }
         }
+    }
+
+    /// The canvas `rect` as it will be once the detail panel has slid open
+    /// (anything selected) or shut: a fit asked for now frames that, not
+    /// the canvas mid-slide, nor the canvas before a selection made this
+    /// frame opens the panel.
+    fn settled(&self, rect: Rect) -> Rect {
+        let end = if self.selection().is_empty() {
+            0.0
+        } else {
+            self.panel_full
+        };
+        let mut r = rect;
+        r.max.x = (r.max.x + self.panel_now - end).max(r.min.x + 100.0);
+        r
     }
 
     /// Ease the view so the middle of the map sits in the middle of `view`,
@@ -921,6 +981,7 @@ impl MapView {
     }
 
     fn focus(&mut self, view: Rect, i: usize) {
+        let view = self.settled(view);
         if let Some(p) = self.target(i) {
             let zoom = self.zoom.max(0.85);
             let c = p + CARD / 2.0;
@@ -1194,13 +1255,17 @@ impl MapView {
         let mut open = !self.selection().is_empty();
         let mut ev: Option<PanelEv> = None;
         let stack = self.ordered();
-        egui::Panel::right("map_detail")
+        let right = ui.available_rect_before_wrap().right();
+        egui::Panel::right(PANEL)
             .resizable(true)
-            .default_size(320.0)
+            .default_size(PANEL_SIZE)
             .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
                 act = self.detail(ui, stack, src.busy, pick, &mut ev);
             });
+        self.panel_now = right - ui.available_rect_before_wrap().right();
+        self.panel_full = egui::PanelState::load(ui.ctx(), egui::Id::new(PANEL))
+            .map_or(PANEL_SIZE, |p| p.size().x);
         if !open {
             self.select(None);
         }
@@ -1366,6 +1431,28 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
         });
     ui.add_space(2.0);
     act
+}
+
+/// Every card below `i` in the child table `kids`, nearest first.
+fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut next = vec![i];
+    let mut seen = vec![false; kids.len()];
+    seen[i] = true;
+    while !next.is_empty() {
+        let mut level = Vec::new();
+        for p in next {
+            for &c in &kids[p] {
+                if !seen[c] {
+                    seen[c] = true;
+                    level.push(c);
+                }
+            }
+        }
+        out.extend(&level);
+        next = level;
+    }
+    out
 }
 
 /// Where Fit puts the map in `view`: a margin all round, more at the
@@ -1592,6 +1679,99 @@ mod tests {
     }
 
     #[test]
+    fn taking_another_card_out_leaves_a_clicked_card_its_path() {
+        let mut v = tree8();
+        v.select(Some(4));
+        v.keep(4);
+        v.select(Some(7));
+        // × on the pinned card (or Ctrl+click on it): 7 was clicked on its
+        // own and still lights its way to the internet.
+        v.toggle(4);
+        assert_eq!(v.selection(), [7]);
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0));
+        assert!(!v.joins_only(), "no Trace to WAN header for a clicked card");
+        // Taking out the clicked card leaves the pinned one, not traced.
+        v.select(Some(4));
+        v.keep(4);
+        v.select(Some(7));
+        v.toggle(7);
+        assert_eq!(v.selection(), [4]);
+        let (cards, _) = v.lit(&v.selection());
+        assert!(!cards.contains(&0));
+        assert!(v.joins_only());
+    }
+
+    #[test]
+    fn a_pinned_card_left_alone_offers_trace_to_wan() {
+        let mut v = tree8();
+        v.select(Some(7));
+        v.keep(7);
+        // A click on the background or Esc: the pin stays, untraced, and
+        // the panel's header (with Trace to WAN) is there to bring it back.
+        v.select(None);
+        assert_eq!(v.selection(), [7]);
+        assert!(v.joins_only());
+        let (cards, _) = v.lit(&v.selection());
+        assert!(!cards.contains(&0));
+        v.trace_wan = true;
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0));
+    }
+
+    #[test]
+    fn a_search_miss_on_the_lit_path_can_be_clicked() {
+        let mut v = tree8();
+        for (k, n) in v.map.nodes.iter_mut().enumerate() {
+            n.label = format!("dev{k}");
+        }
+        for k in 0..8 {
+            let p = v.lay.pos[k].unwrap();
+            v.pos.insert(format!("n{k}"), p);
+        }
+        let mid = |v: &MapView, k: usize| v.lay.pos[k].unwrap() + CARD / 2.0;
+        v.select(Some(7));
+        v.search = "dev7".into();
+        // 5 is on 7's path, drawn in sight: it can be picked.
+        assert_eq!(v.hit(mid(&v, 5)), Some(5));
+        // 4 is off the path, faded out: it can't.
+        assert_eq!(v.hit(mid(&v, 4)), None);
+    }
+
+    #[test]
+    fn fits_frame_the_canvas_the_panel_leaves() {
+        let mut v = tree8();
+        v.panel_full = 320.0;
+        let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
+        // Nothing selected, the panel shut: the whole canvas.
+        assert_eq!(v.settled(full), full);
+        // A finding selects cards this frame: the panel will open over the
+        // right of the canvas.
+        v.show_cards(full, &[5, 6]);
+        assert_eq!(v.settled(full).right(), 680.0);
+        // A double-click puts the selection back while the panel is half
+        // shut: the fit is to the canvas with it open again.
+        v.panel_now = 150.0;
+        let mid = Rect::from_min_size(pos2(0.0, 0.0), vec2(850.0, 600.0));
+        v.fit_view(mid);
+        assert_eq!(v.wide.map(|w| w.right()), Some(680.0));
+        // Sliding shut: the canvas it will have, the whole width.
+        v.select(None);
+        assert_eq!(v.settled(mid).right(), 1000.0);
+    }
+
+    #[test]
+    fn a_dragged_card_pushes_the_map_only_near_the_edge() {
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert_eq!(interact::edge_push(r, pos2(400.0, 300.0)), Vec2::ZERO);
+        assert_eq!(interact::edge_push(r, pos2(790.0, 300.0)).y, 0.0);
+        assert!(interact::edge_push(r, pos2(790.0, 300.0)).x < 0.0);
+        assert_eq!(interact::edge_push(r, pos2(810.0, 300.0)).x, -1.0);
+        // Well past it (over the panel, out of the window): nothing.
+        assert_eq!(interact::edge_push(r, pos2(880.0, 300.0)), Vec2::ZERO);
+    }
+
+    #[test]
     fn ctrl_clicking_two_cards_lights_only_what_joins_them() {
         let mut v = tree8();
         v.select(Some(7));
@@ -1653,8 +1833,8 @@ mod tests {
             v.map.nodes[c].up = Some((p, crate::map::Link::Wired, None));
         }
         v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
-        assert_eq!(v.below(2), [3, 4, 5]);
-        assert_eq!(v.below(5), Vec::<usize>::new());
+        assert_eq!(below_in(&v.map.children(), 2), [3, 4, 5]);
+        assert_eq!(below_in(&v.map.children(), 5), Vec::<usize>::new());
         let path = v.map.path(5);
         v.select_group(5, &path);
         assert_eq!(v.selected.as_deref(), Some("n5"));
@@ -1665,7 +1845,7 @@ mod tests {
         assert_eq!(v.ordered(), [2, 3, 4]);
         // A card the layout doesn't show (a folded site) stays out.
         v.lay.pos[4] = None;
-        v.select_group(2, &v.below(2));
+        v.select_group(2, &below_in(&v.map.children(), 2));
         assert_eq!(v.also, ["n3", "n5"]);
     }
 

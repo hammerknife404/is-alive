@@ -651,6 +651,83 @@ pub fn route_free(parent: Pos2, child: Pos2) -> Vec<Pos2> {
     }
 }
 
+/// A line from a grid card in Zones box `bx` to a card placed outside it:
+/// out of the side facing that card into the gap beside it, along the gap
+/// and out of the box (its bottom, or its top for a card above it), then
+/// round to the card. A straight line would cut across the grid's cards.
+pub fn route_out(inner: Pos2, outer: Pos2, bx: Rect) -> Vec<Pos2> {
+    let p = Rect::from_min_size(inner, CARD);
+    let c = Rect::from_min_size(outer, CARD);
+    let (from, x) = if c.center().x < p.center().x {
+        (p.left_center(), p.left() - GAP_X / 2.0)
+    } else {
+        (p.right_center(), p.right() + GAP_X / 2.0)
+    };
+    let y = if c.bottom() < bx.top() {
+        bx.top() - BOX_PAD / 2.0
+    } else {
+        bx.bottom() + BOX_PAD / 2.0
+    };
+    let mut pts = vec![from, pos2(x, from.y), pos2(x, y)];
+    let cx = c.center().x;
+    if c.top() > y {
+        pts.extend([pos2(cx, y), pos2(cx, c.top())]);
+    } else if c.bottom() < y {
+        pts.extend([pos2(cx, y), pos2(cx, c.bottom())]);
+    } else {
+        pts.push(pos2(if cx < x { c.right() } else { c.left() }, y));
+    }
+    pts
+}
+
+/// The line from `up` to `i` when either was dragged by hand: straight
+/// across (`route_free`), unless that crosses other cards in the Zones grid
+/// one end sits in; then out of the grid along its gaps (`route_out`).
+fn route_placed(
+    lay: &Layout,
+    at: &dyn Fn(usize) -> Option<Pos2>,
+    up: usize,
+    i: usize,
+) -> Vec<Pos2> {
+    let (Some(a), Some(b)) = (at(up), at(i)) else {
+        return Vec::new();
+    };
+    let direct = route_free(a, b);
+    // The grid box card `k` sits inside, if any.
+    let grid = |k: usize| {
+        let g = lay.group.get(k).copied().flatten()?;
+        let bx = lay.boxes.get(g).filter(|bx| !bx.tree)?;
+        let r = Rect::from_min_size(at(k)?, CARD);
+        bx.rect.contains_rect(r).then_some((g, bx.rect))
+    };
+    let crosses = |pts: &[Pos2], g: usize| {
+        let cards: Vec<Rect> = (0..lay.group.len())
+            .filter(|&k| k != up && k != i && lay.group[k] == Some(g))
+            .filter_map(|k| at(k).map(|p| Rect::from_min_size(p, CARD).shrink(1.0)))
+            .collect();
+        pts.windows(2).any(|s| {
+            let seg = Rect::from_two_pos(s[0], s[1]);
+            cards.iter().any(|r| r.intersects(seg))
+        })
+    };
+    let outside = |r: Rect, p: Pos2| !r.intersects(Rect::from_min_size(p, CARD));
+    if let Some((g, r)) = grid(up)
+        && outside(r, b)
+        && crosses(&direct, g)
+    {
+        return route_out(a, b, r);
+    }
+    if let Some((g, r)) = grid(i)
+        && outside(r, a)
+        && crosses(&direct, g)
+    {
+        let mut pts = route_out(b, a, r);
+        pts.reverse();
+        return pts;
+    }
+    direct
+}
+
 /// How solid a link is drawn, weakest first: the order links are drawn in.
 pub fn strength(l: Link) -> u8 {
     match l {
@@ -712,7 +789,7 @@ pub fn lines(
             continue;
         };
         let pts = if free {
-            route_free(a, b)
+            route_placed(lay, at, up, i)
         } else {
             route(
                 a,
@@ -817,6 +894,47 @@ mod tests {
         assert_eq!(own.pts, route_free(at(2).unwrap(), at(3).unwrap()));
         let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
         assert_eq!(trunk.map(|t| t.kids.len()), Some(2));
+    }
+
+    #[test]
+    fn a_card_dragged_out_of_a_zones_grid_is_joined_round_it() {
+        // internet → gw → core → 6 switches, each with an AP.
+        let mut p = vec![None, Some(0), Some(1)];
+        p.extend(std::iter::repeat_n(Some(2), 6));
+        p.extend((3..9).map(Some));
+        let mut m = tree(&p);
+        m.nodes[1].zone = Zone::Gateway;
+        for n in &mut m.nodes[9..] {
+            n.zone = Zone::Wireless;
+        }
+        let l = layout_in(&m, &|_| true, Mode::Zones);
+        let g = l.group[3].unwrap();
+        let bx = l.boxes[g].rect;
+        // The AP under the grid's last switch, dragged left of the box.
+        let (sw, ap) = (8, 14);
+        assert_eq!(l.group[sw], Some(g));
+        let left = pos2(bx.left() - CARD.x - 60.0, l.pos[sw].unwrap().y);
+        let at = |k: usize| if k == ap { Some(left) } else { l.pos[k] };
+        let moved = |k: usize| k == ap;
+        let cards: Vec<Rect> = (3..9)
+            .filter(|&k| k != sw)
+            .map(|k| Rect::from_min_size(l.pos[k].unwrap(), CARD).shrink(1.0))
+            .collect();
+        let cuts = |pts: &[Pos2]| {
+            pts.windows(2).any(|s| {
+                let seg = Rect::from_two_pos(s[0], s[1]);
+                cards.iter().any(|r| r.intersects(seg))
+            })
+        };
+        // Straight across, it would cut through the switches beside it.
+        assert!(cuts(&route_free(at(sw).unwrap(), left)));
+        let lines = lines(&m, &l, &at, &moved);
+        let own = lines.iter().find(|x| x.kids == [ap]).expect("its own line");
+        assert!(!cuts(&own.pts), "{:?}", own.pts);
+        assert_eq!(
+            own.pts.first(),
+            Some(&Rect::from_min_size(l.pos[sw].unwrap(), CARD).left_center())
+        );
     }
 
     #[test]

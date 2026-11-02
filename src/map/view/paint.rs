@@ -35,11 +35,13 @@ impl MapView {
 
         let sel = self.selection();
         let (lit, lit_links) = self.lit(&sel);
+        let picked: HashSet<usize> = sel.iter().copied().collect();
         let fade = |i: usize| -> f32 {
             let n = &self.map.nodes[i];
             let mut a: f32 = 1.0;
-            // A search miss on the selection's path stays in sight, dimmed.
-            if self.hidden.contains(&n.zone) || (!self.matches(n) && !lit.contains(&i)) {
+            // A search miss on the selection's path stays in sight, dimmed
+            // (and can be clicked, see `hit`).
+            if self.faded(i, &lit) {
                 a = 0.15;
             } else if !sel.is_empty() && (!lit.contains(&i) || !self.matches(n)) {
                 a = 0.45;
@@ -59,6 +61,9 @@ impl MapView {
         } else {
             None
         };
+        // Titles written above their boxes sit in the gap the links run
+        // through: drawn after the links, on a patch of the canvas.
+        let mut above = Vec::new();
         for b in &self.lay.boxes {
             let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
             if !r.intersects(rect) {
@@ -100,7 +105,7 @@ impl MapView {
                 };
                 let g = p.layout_job(job);
                 let at = pos2(r.min.x + 2.0, r.min.y - g.size().y - 1.0);
-                p.with_clip_rect(rect).galley(at, g, c);
+                above.push((at, g, c));
             } else {
                 let mid = r.min.y + layout::BOX_TITLE * z / 2.0;
                 let mut x = r.min.x + layout::BOX_PAD * z;
@@ -277,10 +282,21 @@ impl MapView {
             );
         }
 
+        let behind = if vis.panel_fill.a() == 255 {
+            vis.panel_fill
+        } else {
+            vis.extreme_bg_color
+        };
+        for (at, g, c) in above {
+            let back = Rect::from_min_size(at, g.size()).expand2(vec2(2.0, 0.5));
+            p.rect_filled(back, 2, behind);
+            p.with_clip_rect(rect).galley(at, g, c);
+        }
+
         // Cards: infrastructure over clients, selected ones over the rest,
         // the ones dragged last on top. The cards an open menu acts on are
         // marked as if hovered.
-        let menu = self.menu_cards();
+        let menu: HashSet<usize> = self.menu_cards().into_iter().collect();
         let mut pulse = false;
         for i in self.stack() {
             let Some(s) = at(i) else { continue };
@@ -295,7 +311,7 @@ impl MapView {
                 i,
                 r,
                 fade(i),
-                sel.contains(&i),
+                picked.contains(&i),
                 hover == Some(i) || menu.contains(&i),
                 now,
             );

@@ -13,12 +13,19 @@ impl MapView {
     }
 
     /// The card under the world point `w`: the one drawn on top. Cards
-    /// faded out (a hidden role, a search miss) can't be picked unless
-    /// they're selected.
+    /// faded out (a hidden role, a search miss off the selection's path)
+    /// can't be picked unless they're selected; a search miss on the path
+    /// is drawn in sight, so it can be.
     pub(super) fn hit(&self, w: Pos2) -> Option<usize> {
-        let sel = self.selection();
+        let picked = self.selection();
+        let lit = if self.search.trim().is_empty() {
+            HashSet::new()
+        } else {
+            self.lit(&picked).0
+        };
+        let sel: HashSet<usize> = picked.into_iter().collect();
         self.stack().into_iter().rev().find(|&i| {
-            (sel.contains(&i) || !self.faded(i))
+            (sel.contains(&i) || !self.faded(i, &lit))
                 && self
                     .pos
                     .get(&self.map.nodes[i].id)
@@ -26,21 +33,23 @@ impl MapView {
         })
     }
 
-    /// Faded out by the role filter or the search.
-    pub(super) fn faded(&self, i: usize) -> bool {
+    /// Faded out, as `paint` draws it: a hidden role, or a search miss
+    /// that isn't on the selection's path (`lit`).
+    pub(super) fn faded(&self, i: usize, lit: &HashSet<usize>) -> bool {
         let n = &self.map.nodes[i];
-        self.hidden.contains(&n.zone) || !self.matches(n)
+        self.hidden.contains(&n.zone) || (!self.matches(n) && !lit.contains(&i))
     }
 
     /// The order cards are drawn in, bottom first: the rest, then the
     /// selected ones and those an open menu is for, then the ones dragged
     /// last, so a card dropped on another stays on top.
     pub(super) fn stack(&self) -> Vec<usize> {
-        let sel = self.selection();
-        let menu = self.menu_cards();
+        let sel: HashSet<usize> = self.selection().into_iter().collect();
+        let menu: HashSet<usize> = self.menu_cards().into_iter().collect();
+        let raised: HashSet<&str> = self.raised.iter().map(String::as_str).collect();
         let mut v: Vec<usize> = (0..self.map.nodes.len()).collect();
         v.sort_by_key(|&i| {
-            if self.raised.contains(&self.map.nodes[i].id) {
+            if raised.contains(self.map.nodes[i].id.as_str()) {
                 2
             } else if sel.contains(&i) || menu.contains(&i) {
                 1
@@ -239,6 +248,11 @@ impl MapView {
             let mut d = resp.drag_delta();
             if self.drag.is_some() {
                 let at = ui.input(|i| i.pointer.latest_pos());
+                // The cards follow the pointer only as far as the canvas
+                // edge: never under the detail panel or out of the window.
+                if let Some(p) = at {
+                    d = rect.clamp(p) - rect.clamp(p - d);
+                }
                 let push = at.map_or(Vec2::ZERO, |p| edge_push(rect, p));
                 if push != Vec2::ZERO {
                     // The map scrolls under the pointer; the cards stay
@@ -331,11 +345,21 @@ impl MapView {
             ui.close();
         }
         let sel = self.selection();
+        // Select only this card lets go of the others, but not of pinned
+        // ones: shown only when there's one to let go of.
+        let others = sel.iter().filter(|&&k| k != i);
+        let loose = others.clone().any(|&k| !self.is_kept(k));
+        let only_tip = if others.clone().any(|&k| self.is_kept(k)) {
+            "Let go of the others; pinned cards stay"
+        } else {
+            "Let go of the others"
+        };
         if many {
-            if ui
-                .button("Select only this card")
-                .on_hover_text("Let go of the others")
-                .clicked()
+            if loose
+                && ui
+                    .button("Select only this card")
+                    .on_hover_text(only_tip)
+                    .clicked()
             {
                 self.select_group(i, &[]);
                 ui.close();
@@ -357,12 +381,12 @@ impl MapView {
                 ui.close();
             }
         } else {
-            let only = if sel.is_empty() {
-                "Select"
+            let only = if loose {
+                ui.button("Select only this card").on_hover_text(only_tip)
             } else {
-                "Select only this"
+                ui.button("Select")
             };
-            if ui.button(only).clicked() {
+            if only.clicked() {
                 self.select_group(i, &[]);
                 ui.close();
             }
@@ -620,9 +644,13 @@ pub(super) fn title_above(zoom: f32) -> bool {
 }
 
 /// How hard a card dragged near the canvas edge pushes the map, each way
-/// (-1 to 1): nothing more than 24 px in.
-fn edge_push(rect: Rect, p: Pos2) -> Vec2 {
+/// (-1 to 1): nothing more than 24 px in, nor once the pointer is well past
+/// the edge (over the detail panel, or out of the window).
+pub(super) fn edge_push(rect: Rect, p: Pos2) -> Vec2 {
     const EDGE: f32 = 24.0;
+    if !rect.expand(EDGE).contains(p) {
+        return Vec2::ZERO;
+    }
     let axis = |at: f32, lo: f32, hi: f32| {
         if at < lo + EDGE {
             ((lo + EDGE - at) / EDGE).min(1.0)

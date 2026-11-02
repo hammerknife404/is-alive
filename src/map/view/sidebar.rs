@@ -70,7 +70,7 @@ impl MapView {
                 .filter_map(|&i| self.target(i))
                 .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD))),
         };
-        self.fit_to(view, area);
+        self.fit_to(self.settled(view), area);
         self.follow = false;
     }
 
