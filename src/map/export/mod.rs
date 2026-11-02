@@ -199,6 +199,15 @@ impl Format {
             Format::Csv => csv::write(d),
         })
     }
+
+    /// A caution to show as `text` is saved: a Mermaid chart too big for
+    /// the viewers the hint names.
+    pub fn warning(self, text: &str) -> Option<&'static str> {
+        (self == Format::Mermaid && mermaid::too_big(text)).then_some(
+            "This map is too big for most Mermaid viewers (GitHub's among them): \
+             draw.io or Graphviz DOT handle it, or set Clients to Off",
+        )
+    }
 }
 
 /// The map drawn, ready to turn into pixels (off the UI thread: a big map
@@ -246,8 +255,8 @@ fn hex(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
-/// Escape for XML text and attribute values. Control characters XML can't
-/// hold are dropped, a line break kept as one.
+/// Escape for XML text and attribute values. Characters XML can't hold
+/// (controls, U+FFFE and U+FFFF) are dropped, a line break kept as one.
 fn xml(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -258,7 +267,7 @@ fn xml(s: &str) -> String {
             '"' => o += "&quot;",
             '\'' => o += "&apos;",
             '\n' => o += "&#10;",
-            c if c.is_control() => {}
+            c if c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}') => {}
             c => o.push(c),
         }
     }
@@ -318,5 +327,39 @@ pub(crate) mod tests {
     #[test]
     fn xml_escapes_and_drops_controls() {
         assert_eq!(xml("a<b>&\"'\u{7}\nc"), "a&lt;b&gt;&amp;&quot;&apos;&#10;c");
+    }
+
+    /// A name XML can't hold, as a hostile hostname might carry: SVG and
+    /// draw.io still open.
+    #[test]
+    fn svg_and_drawio_stay_xml_with_noncharacters() {
+        assert_eq!(xml("a\u{FFFE}b\u{FFFF}c\u{1F5A5}"), "abc\u{1F5A5}");
+        let m = crate::map::build(&crate::map::Input {
+            sweep: vec![crate::map::Seen {
+                ip: "10.0.0.9".parse().unwrap(),
+                mac: None,
+                name: Some("host\u{FFFE}x\u{FFFF}".into()),
+                rtt: Some(1.0),
+                open: vec![],
+            }],
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            range: Some("10.0.0.0/24".into()),
+            clients: true,
+            ..Default::default()
+        });
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let moved = vec![false; m.nodes.len()];
+        let d = Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &moved,
+        };
+        let look = Look::new(&eframe::egui::Visuals::dark(), false);
+        for f in [Format::Svg, Format::DrawIo] {
+            let text = f.text(&d, look).expect("text");
+            assert!(text.contains("hostx"), "{f:?}");
+            parse_xml(&text);
+        }
     }
 }

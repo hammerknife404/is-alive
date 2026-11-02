@@ -161,11 +161,6 @@ mod tests {
     use crate::map::layout::{self, Mode};
     use crate::map::{Input, Link, Map, Seen, Zone, build};
 
-    const DARK: Look = Look {
-        dark: true,
-        white: false,
-    };
-
     fn render(m: &Map, lay: &layout::Layout, moved: &[bool]) -> String {
         write(&scene::draw(
             &Drawn {
@@ -174,7 +169,7 @@ mod tests {
                 pos: &lay.pos,
                 moved,
             },
-            DARK,
+            Look::new(&eframe::egui::Visuals::dark(), false),
         ))
     }
 
@@ -244,7 +239,10 @@ mod tests {
     #[test]
     fn acme_svg_parses_with_a_group_per_card() {
         super::super::tests::with_acme(Mode::Sites, |d| {
-            let s = write(&scene::draw(d, DARK));
+            let s = write(&scene::draw(
+                d,
+                Look::new(&eframe::egui::Visuals::dark(), false),
+            ));
             super::super::tests::parse_xml(&s);
             assert_eq!(s.matches("<g>").count(), d.cards().count());
             assert!(s.contains("Acme Distribution LLC — Multi-Site"));

@@ -23,10 +23,10 @@ impl MapView {
 
     /// One entry per format; PNG opens its sizes and backgrounds.
     pub(super) fn export_items(&self, ui: &mut Ui) {
-        let dark = ui.visuals().dark_mode;
+        let vis = ui.visuals().clone();
         for f in Format::MENU {
             if let Format::Png { .. } = f {
-                ui.menu_button(f.name(), |ui| self.png_items(ui, dark))
+                ui.menu_button(f.name(), |ui| self.png_items(ui, &vis))
                     .response
                     .on_hover_text(f.hint());
                 continue;
@@ -36,14 +36,14 @@ impl MapView {
                 .on_hover_text(f.hint())
                 .clicked()
             {
-                self.export(f, dark);
+                self.export(f, &vis);
                 ui.close();
             }
         }
     }
 
     /// 1× or 2×, on the theme's background or on white.
-    fn png_items(&self, ui: &mut Ui, dark: bool) {
+    fn png_items(&self, ui: &mut Ui, vis: &egui::Visuals) {
         egui::Grid::new("map_png").num_columns(3).show(ui, |ui| {
             for (row, white) in [("Theme background", false), ("White background", true)] {
                 ui.label(row);
@@ -53,7 +53,7 @@ impl MapView {
                         _ => "Twice the size: sharper on big screens and in print",
                     };
                     if ui.button(format!("{scale}×…")).on_hover_text(tip).clicked() {
-                        self.export(Format::Png { scale, white }, dark);
+                        self.export(Format::Png { scale, white }, vis);
                         ui.close();
                     }
                 }
@@ -63,7 +63,7 @@ impl MapView {
     }
 
     /// Ask where to save the map in `f`, as it's laid out now.
-    fn export(&self, f: Format, dark: bool) {
+    fn export(&self, f: Format, vis: &egui::Visuals) {
         let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
         let moved: Vec<bool> = self
             .map
@@ -78,7 +78,7 @@ impl MapView {
             moved: &moved,
         };
         let white = matches!(f, Format::Png { white: true, .. });
-        let look = Look { dark, white };
+        let look = Look::new(vis, white);
         let name = export::file_name(&self.map.title, f.ext());
         match f {
             Format::Png { scale, .. } => {
@@ -89,6 +89,9 @@ impl MapView {
             }
             _ => {
                 let text = f.text(&d, look).unwrap_or_default();
+                if let Some(w) = f.warning(&text) {
+                    widgets::toast(w, false);
+                }
                 widgets::save_file(name, f.name(), vec![f.ext()], text);
             }
         }

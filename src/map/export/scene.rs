@@ -5,15 +5,55 @@
 use super::Drawn;
 use crate::map::layout::{self, CARD};
 use crate::map::{Link, Sev, Zone};
-use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
+use eframe::egui::{Color32, Pos2, Rect, Vec2, Visuals, pos2, vec2};
 
 pub type Rgb = [u8; 3];
 
-/// The page: the theme's dark or light, or white whatever the theme.
+/// The page: the theme's own colours, as the Map tab draws them, or white
+/// whatever the theme.
 #[derive(Clone, Copy, Debug)]
 pub struct Look {
-    pub dark: bool,
-    pub white: bool,
+    bg: Rgb,
+    card: Rgb,
+    line: Rgb,
+    text: Rgb,
+    weak: Rgb,
+    dark: bool,
+    white: bool,
+}
+
+impl Look {
+    /// The page under the theme `vis` draws, or a white one.
+    pub fn new(vis: &Visuals, white: bool) -> Self {
+        // Miami's panels let the backdrop through; the page is solid.
+        let bg = solid(vis.panel_fill);
+        // A card as on the canvas, without its role's tint.
+        let card = if vis.dark_mode && vis.panel_fill.a() == 255 {
+            bg.lerp_to_gamma(Color32::WHITE, 0.06)
+        } else {
+            solid(vis.window_fill)
+        };
+        let on = |c: Color32| rgb(card.blend(c));
+        Look {
+            bg: rgb(bg),
+            card: rgb(card),
+            line: on(vis.widgets.noninteractive.bg_stroke.color),
+            text: on(vis.strong_text_color()),
+            weak: on(vis.weak_text_color()),
+            dark: vis.dark_mode,
+            white,
+        }
+    }
+}
+
+fn rgb(c: Color32) -> Rgb {
+    [c.r(), c.g(), c.b()]
+}
+
+/// The colour without its see-through.
+fn solid(c: Color32) -> Color32 {
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    Color32::from_rgb(r, g, b)
 }
 
 pub struct Stroke {
@@ -78,32 +118,30 @@ struct Ink {
 
 impl Ink {
     fn new(look: Look) -> Self {
-        let mut ink = if look.dark && !look.white {
-            Ink {
-                bg: [0x16, 0x18, 0x1c],
-                card: [0x20, 0x23, 0x29],
-                line: [0x36, 0x3b, 0x44],
-                text: [0xe8, 0xea, 0xee],
-                weak: [0x8b, 0x91, 0x9c],
-                gone: [0xff, 0x40, 0x40],
-                light_roles: false,
-            }
-        } else {
-            Ink {
-                bg: [0xf6, 0xf7, 0xf9],
-                card: [0xff, 0xff, 0xff],
+        if look.white {
+            return Ink {
+                bg: [0xff; 3],
+                card: [0xff; 3],
                 line: [0xd2, 0xd6, 0xdc],
                 text: [0x1d, 0x21, 0x28],
                 weak: [0x69, 0x70, 0x7c],
                 gone: [0xc8, 0x1e, 0x1e],
-                light_roles: false,
-            }
-        };
-        if look.white {
-            ink.bg = [0xff; 3];
-            ink.light_roles = !crate::theme::current().is_light();
+                light_roles: !crate::theme::current().is_light(),
+            };
         }
-        ink
+        Ink {
+            bg: look.bg,
+            card: look.card,
+            line: look.line,
+            text: look.text,
+            weak: look.weak,
+            gone: if look.dark {
+                [0xff, 0x40, 0x40]
+            } else {
+                [0xc8, 0x1e, 0x1e]
+            },
+            light_roles: false,
+        }
     }
 
     /// A role's colour in the theme in use, as on screen.
@@ -432,11 +470,28 @@ mod tests {
 
     #[test]
     fn white_is_white_whatever_the_theme() {
-        let ink = Ink::new(Look {
-            dark: true,
-            white: true,
-        });
+        let ink = Ink::new(Look::new(&Visuals::dark(), true));
         assert_eq!(ink.bg, [0xff; 3]);
         assert_eq!(ink.text, [0x1d, 0x21, 0x28]);
+    }
+
+    /// Blueprint's drafting blue, not a stock dark grey; cards and text
+    /// from the same theme.
+    #[test]
+    fn the_theme_background_is_the_themes_own() {
+        let mut vis = Visuals::dark();
+        vis.panel_fill = Color32::from_rgb(0x0c, 0x24, 0x43);
+        vis.override_text_color = Some(Color32::from_rgb(0xdf, 0xea, 0xfa));
+        vis.weak_text_color = Some(Color32::from_rgb(0x8f, 0xb0, 0xd6));
+        let ink = Ink::new(Look::new(&vis, false));
+        assert_eq!(ink.bg, [0x0c, 0x24, 0x43]);
+        assert_eq!(ink.weak, [0x8f, 0xb0, 0xd6]);
+        assert!(ink.card[2] > ink.card[0], "a blue card: {:?}", ink.card);
+        // A see-through panel (Miami) still gives a solid page.
+        vis.panel_fill = Color32::from_rgba_unmultiplied(22, 14, 44, 184);
+        assert_eq!(Ink::new(Look::new(&vis, false)).bg, [22, 14, 44]);
+        // A light theme's page is light, its text dark.
+        let ink = Ink::new(Look::new(&Visuals::light(), false));
+        assert!(ink.bg[0] > 200 && ink.text[0] < 80);
     }
 }

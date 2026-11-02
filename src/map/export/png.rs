@@ -311,13 +311,22 @@ mod tests {
     fn acme_png_decodes_at_the_size_asked() {
         super::super::tests::with_acme(Mode::Sites, |d| {
             for (scale, white) in [(1.0, false), (2.0, true)] {
-                let s = scene::draw(d, Look { dark: true, white });
+                let vis = eframe::egui::Visuals::dark();
+                let s = scene::draw(d, Look::new(&vis, white));
                 let img = decode(&write(&s, scale).expect("png"));
                 assert_eq!(img.width(), (s.size.x * scale).ceil() as u32);
                 assert_eq!(img.height(), (s.size.y * scale).ceil() as u32);
                 // The page's colour in the corner; something drawn on it.
                 let corner = img.get_pixel(1, 1).0;
-                assert_eq!(corner, if white { [255; 3] } else { [0x16, 0x18, 0x1c] });
+                let bg = vis.panel_fill;
+                assert_eq!(
+                    corner,
+                    if white {
+                        [255; 3]
+                    } else {
+                        [bg.r(), bg.g(), bg.b()]
+                    }
+                );
                 assert!(img.pixels().any(|p| p.0 != corner));
             }
         });
@@ -326,13 +335,7 @@ mod tests {
     #[test]
     fn png_is_the_same_every_time() {
         super::super::tests::with_acme(Mode::Cluster, |d| {
-            let s = scene::draw(
-                d,
-                Look {
-                    dark: false,
-                    white: false,
-                },
-            );
+            let s = scene::draw(d, Look::new(&eframe::egui::Visuals::light(), false));
             assert_eq!(write(&s, 1.0).unwrap(), write(&s, 1.0).unwrap());
         });
     }

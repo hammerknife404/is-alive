@@ -37,6 +37,22 @@ fn class(z: Zone) -> &'static str {
     }
 }
 
+/// Past these, Mermaid's default settings (GitHub, GitLab and most
+/// viewers) refuse the chart: "Maximum text size in diagram exceeded".
+const MAX_TEXT: usize = 50_000;
+const MAX_LINKS: usize = 500;
+
+/// Leads a chart too big for Mermaid's defaults, so whoever opens the file
+/// sees why it doesn't draw.
+const TOO_BIG: &str = "%% Too big for Mermaid's default limits (50,000 characters, 500 \
+                       links): GitHub and most viewers won't draw it. Export draw.io or \
+                       Graphviz DOT instead, or set Clients to Off.";
+
+/// Whether `write` found the chart too big for Mermaid's defaults.
+pub fn too_big(s: &str) -> bool {
+    s.contains(TOO_BIG)
+}
+
 pub fn write(d: &Drawn) -> String {
     let mut s = String::new();
     // The title in front matter, a YAML string.
@@ -106,6 +122,10 @@ pub fn write(d: &Drawn) -> String {
             assumed.join(",")
         );
     }
+    if s.len() > MAX_TEXT || count > MAX_LINKS {
+        let at = s.find("flowchart TB\n").expect("written above") + "flowchart TB\n".len();
+        s.insert_str(at, &format!("  {TOO_BIG}\n"));
+    }
     s
 }
 
@@ -158,5 +178,40 @@ mod tests {
                 assert!(body.iter().all(|l| l.matches('"').count() % 2 == 0));
             });
         }
+    }
+
+    /// Hundreds of hosts: a note in the file, and the menu's warning.
+    #[test]
+    fn a_big_map_says_so() {
+        with_acme(Mode::Sites, |d| assert!(!too_big(&write(d))));
+        let m = crate::map::build(&crate::map::Input {
+            sweep: (1..=600u32)
+                .map(|k| crate::map::Seen {
+                    ip: std::net::Ipv4Addr::from(0x0a00_0000 + k),
+                    mac: None,
+                    name: None,
+                    rtt: Some(1.0),
+                    open: vec![],
+                })
+                .collect(),
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            range: Some("10.0.0.0/22".into()),
+            clients: true,
+            all_clients: true,
+            ..Default::default()
+        });
+        let lay = crate::map::layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let moved = vec![false; m.nodes.len()];
+        let s = write(&Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &moved,
+        });
+        assert!(too_big(&s));
+        let body: Vec<&str> = s.lines().skip(3).collect();
+        assert_eq!(body[0], "flowchart TB");
+        assert!(body[1].trim_start().starts_with("%% "));
+        assert!(super::super::Format::Mermaid.warning(&s).is_some());
     }
 }
