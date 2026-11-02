@@ -361,8 +361,8 @@ impl MapView {
                 pos2(x, y - g.size().y - 8.0),
                 vec2(g.size().x + 26.0, g.size().y + 8.0),
             );
-            // Room left for the zoom controls.
-            if r.max.x > rect.max.x - 180.0 {
+            // Room left for the zoom controls and Saved maps.
+            if r.max.x > rect.max.x - 180.0 - super::tabs::TOGGLE_W {
                 break;
             }
             let resp = ui

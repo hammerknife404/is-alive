@@ -3,10 +3,13 @@
 //! several cards, search, filter by role, and a findings band. It rebuilds
 //! as the sweep finds hosts, so a scan can be watched filling in the map.
 
+mod history;
 mod interact;
 mod paint;
 mod panel;
+pub(crate) mod saved;
 mod sidebar;
+mod tabs;
 
 use super::layout::{self, CARD, Layout, Mode};
 use super::runs::{CardRuns, Out, Run, State, Tool};
@@ -22,6 +25,7 @@ use interact::title_above;
 use panel::card_text;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+pub use tabs::MapTabs;
 
 /// What the tab asks the app to do.
 pub enum Action {
@@ -216,6 +220,15 @@ pub struct MapView {
     flipped_at: f64,
     /// The sidebar's starting state was picked for the window's width.
     sized: bool,
+    /// Steps to undo and redo on this map.
+    history: history::History<history::Edits>,
+    /// A saved map: drawn from this (every site open) rather than from the
+    /// sweep and files.
+    frozen: Option<Box<Map>>,
+    /// The saved maps bar is showing (the toolbar's toggle), and the
+    /// toggle was clicked.
+    bar: bool,
+    bar_flip: bool,
 }
 
 /// What a right-click menu was opened on.
@@ -452,6 +465,9 @@ impl MapView {
     /// Rebuild when anything feeding the map changed.
     fn refresh(&mut self, ctx: &egui::Context, src: &Sources) {
         self.drop_released(ctx);
+        if self.frozen.is_some() {
+            return self.refresh_saved(ctx);
+        }
         let mut h = std::collections::hash_map::DefaultHasher::new();
         src.sweep.generation().hash(&mut h);
         src.export.generation().hash(&mut h);
@@ -514,6 +530,7 @@ impl MapView {
         self.placed.clear();
         self.raised.clear();
         self.undo = None;
+        self.history.clear();
         self.select(None);
     }
 
@@ -992,7 +1009,10 @@ impl MapView {
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let ctx = ui.ctx().clone();
+        let mode = self.mode;
+        self.history_keys(&ctx);
         self.refresh(&ctx, &src);
+        self.settle_edits();
         let empty = self.map.nodes.is_empty();
         let bar = self.toolbar(ui, &src, empty);
         // The first thing asked for wins: a toolbar click isn't lost to
@@ -1001,6 +1021,7 @@ impl MapView {
         act = act.or(self.notices(ui, &src, empty));
         if empty {
             ui.separator();
+            self.track_edits();
             return act.or(empty_state(ui, src.info));
         }
         // A narrow window starts with the sidebar shut: the map needs the
@@ -1020,7 +1041,12 @@ impl MapView {
         self.canvas(ui, bar.fit, focus);
         // Esc next frame closes a menu or leaves a text box: not the map's.
         self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
-        act
+        self.track_edits();
+        // An undone or redone layout is the one remembered, as if picked.
+        match self.mode {
+            Some(m) if self.mode != mode && act.is_none() => Some(Action::Layout(m)),
+            _ => act,
+        }
     }
 
     /// Search, clients, scan, fit and layout, and Export SVG.
@@ -1030,7 +1056,7 @@ impl MapView {
         let mut search_enter = false;
         let mut fit = false;
         // Roughly what one row needs.
-        let narrow = ui.available_width() < 1030.0;
+        let narrow = ui.available_width() < 1100.0;
         ui.horizontal(|ui| {
             // Narrower with text in it: room for the count and ×.
             let width = if self.search.is_empty() { 220.0 } else { 140.0 };
@@ -1053,15 +1079,17 @@ impl MapView {
             // A map with no end devices at all (an infrastructure-only
             // /mapnetwork map) has nothing for the switch to show or hide.
             let any = empty || self.map.hidden > 0 || self.map.nodes.iter().any(|n| n.client);
-            ui.add_enabled_ui(any, |ui| {
+            ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
                 ui.label("Clients");
                 for c in Clients::ALL {
                     if ui
                         .selectable_label(self.clients == c, c.name())
                         .on_hover_text(c.tip())
-                        .on_disabled_hover_text(
-                            "This map has no end devices: it was drawn with infrastructure only",
-                        )
+                        .on_disabled_hover_text(if self.frozen.is_some() {
+                            "A saved map keeps the clients it was saved with"
+                        } else {
+                            "This map has no end devices: it was drawn with infrastructure only"
+                        })
                         .clicked()
                     {
                         self.clients = c;
@@ -1117,18 +1145,23 @@ impl MapView {
                     fit = true;
                 }
                 if ui
-                    .button("⟲ Reload")
+                    .add_enabled(self.frozen.is_none(), egui::Button::new("⟲ Reload"))
                     .on_hover_text(
                         "Read the map's files again and rebuild it, keeping pins and the \
                          selection. (It already updates by itself as a sweep finds hosts or a \
                          file is loaded.)",
                     )
-                    .on_disabled_hover_text(NOTHING_YET)
+                    .on_disabled_hover_text(if empty {
+                        NOTHING_YET
+                    } else {
+                        "A saved map doesn't change with the files: Live has the map they make"
+                    })
                     .clicked()
                 {
                     act = Some(Action::Reload);
                 }
             });
+            self.history_buttons(ui);
             if !narrow {
                 ui.separator();
                 if let Some(m) = self.layout_buttons(ui, &ctx, empty) {
@@ -1222,7 +1255,7 @@ impl MapView {
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
         }
-        if !empty && src.note && src.export.mapnetwork().is_none() {
+        if !empty && src.note && src.export.mapnetwork().is_none() && self.frozen.is_none() {
             act = accuracy_note(ui);
         }
         // A sweep fills the map in as it runs: show how far along it is.
@@ -1384,6 +1417,7 @@ impl MapView {
             self.legend(ui, rect);
         }
         self.zoom_controls(ui, rect);
+        self.bar_toggle(ui, rect);
     }
 }
 
