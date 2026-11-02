@@ -91,7 +91,8 @@ impl MapView {
 
     /// The detail panel: every selected card, stacked, the one clicked last
     /// on top. Each has /mapnetwork's sections: action items, details and
-    /// connections, then what can be run against it.
+    /// connections, then what can be run against it. `menus` gets each
+    /// card's ☰ button, for `card_menus` to open the right-click menu from.
     pub(super) fn detail(
         &self,
         ui: &mut Ui,
@@ -99,6 +100,7 @@ impl MapView {
         busy: bool,
         pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
+        menus: &mut Vec<(usize, egui::Response)>,
     ) -> Option<Action> {
         let mut act = None;
         // Sliding shut: the last card shown, without the header.
@@ -129,8 +131,9 @@ impl MapView {
                     }
                     let layer = ui.layer_id();
                     let first = ui.ctx().graphics(|g| g.get(layer).map(|l| l.next_idx()));
-                    let (a, frame) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev);
+                    let (a, frame, menu) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev);
                     act = act.take().or(a);
+                    menus.extend(menu.map(|m| (i, m)));
                     // A card whose place in the stack changed (moved, or
                     // pushed down by a new one) glides there.
                     let at = frame.rect.top() - origin;
@@ -168,6 +171,26 @@ impl MapView {
         act
     }
 
+    /// Each card's ☰ in the panel: the card's right-click menu, the very
+    /// same one (on one of several selected cards it acts on them all, and
+    /// they're outlined on the canvas while it's open).
+    pub(super) fn card_menus(&mut self, menus: Vec<(usize, egui::Response)>) {
+        let mut open = None;
+        for (i, button) in menus {
+            if egui::Popup::menu(&button)
+                .show(|ui| self.card_menu(ui, i))
+                .is_some()
+            {
+                open = Some(i);
+            }
+        }
+        match open {
+            Some(i) => self.menu = Some(Menu::Panel(self.map.nodes[i].id.clone())),
+            None if matches!(self.menu, Some(Menu::Panel(_))) => self.menu = None,
+            None => {}
+        }
+    }
+
     /// Over the stack: how many are selected, Trace to WAN, Copy all.
     fn panel_header(&self, ui: &mut Ui, sel: &[usize], ev: &mut Option<PanelEv>) {
         if sel.len() > 1 {
@@ -202,7 +225,8 @@ impl MapView {
         }
     }
 
-    /// One card's section in the detail panel, `at` from the top.
+    /// One card's section in the detail panel, `at` from the top; with its
+    /// ☰ button.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn card_panel(
         &self,
@@ -213,8 +237,9 @@ impl MapView {
         stacked: bool,
         pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
-    ) -> (Option<Action>, egui::Response) {
+    ) -> (Option<Action>, egui::Response, Option<egui::Response>) {
         let mut act = None;
+        let mut menu = None;
         let n = &self.map.nodes[i];
         let accent = self.accent(n);
         // Every section: a small caps title, then body-size text, keys in a
@@ -235,7 +260,8 @@ impl MapView {
             .inner_margin(8)
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                // Header: a grip to drag it up or down, the kind, then pin and ×.
+                // Header: a grip to drag it up or down, the kind, then ☰,
+                // pin and ×.
                 ui.horizontal(|ui| {
                     if stacked {
                         ui.dnd_drag_source(ui.id().with(("map_grip", i)), at, |ui| {
@@ -274,17 +300,31 @@ impl MapView {
                         }
                         let pin = RichText::new("📌")
                             .color(crate::theme::emoji_colour('📌', ui.visuals().text_color()));
-                        if ui
+                        let pin = ui
                             .add(egui::Button::new(pin).small().selected(kept))
                             .on_hover_text(if kept {
                                 "Pinned: stays selected and keeps its place here. Click to unpin"
                             } else {
                                 "Pin: keep it selected and in this place in the panel"
-                            })
-                            .clicked()
-                        {
+                            });
+                        if pin.clicked() {
                             *ev = Some(PanelEv::Keep(i));
                         }
+                        // ☰ the size of the pin, its three lines drawn: the
+                        // font's ☰ is a blur at this size.
+                        let b = ui.add(egui::Button::new("").small().min_size(pin.rect.size()));
+                        let open =
+                            egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&b));
+                        let stroke = if open {
+                            Stroke::new(1.5, crate::theme::accent())
+                        } else {
+                            Stroke::new(1.5, ui.style().interact(&b).fg_stroke.color)
+                        };
+                        let c = b.rect.center();
+                        for dy in [-3.5, 0.0, 3.5] {
+                            ui.painter().hline(c.x - 5.0..=c.x + 5.0, c.y + dy, stroke);
+                        }
+                        menu = Some(b.on_hover_text("Menu (same as right-clicking the card)"));
                     });
                 });
                 ui.label(RichText::new(&n.label).size(17.0).strong());
@@ -545,7 +585,7 @@ impl MapView {
                     });
                 }
             });
-        (act, frame.response)
+        (act, frame.response, menu)
     }
 }
 

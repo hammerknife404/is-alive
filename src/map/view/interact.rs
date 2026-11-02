@@ -60,10 +60,10 @@ impl MapView {
         v
     }
 
-    /// The cards the open right-click menu acts on.
+    /// The cards the open right-click menu (or ☰ menu) acts on.
     pub(super) fn menu_cards(&self) -> Vec<usize> {
         match &self.menu {
-            Some(Menu::Card(id)) => self.index(id).map(|i| self.menu_group(i)),
+            Some(Menu::Card(id) | Menu::Panel(id)) => self.index(id).map(|i| self.menu_group(i)),
             _ => None,
         }
         .unwrap_or_default()
@@ -140,9 +140,12 @@ impl MapView {
                 None => Menu::Background,
             });
         }
-        if let Some(menu) = self.menu.clone() {
+        // A ☰ menu open in the detail panel is the panel's to show.
+        if let Some(menu) = self.menu.clone()
+            && !matches!(menu, Menu::Panel(_))
+        {
             let shown = resp.context_menu(|ui| match &menu {
-                Menu::Card(id) => match self.index(id) {
+                Menu::Card(id) | Menu::Panel(id) => match self.index(id) {
                     Some(i) => self.card_menu(ui, i),
                     // Gone in a rebuild: nothing left to act on.
                     None => ui.close(),
@@ -311,8 +314,9 @@ impl MapView {
     }
 
     /// The right-click menu on card `i`: on one of several selected cards,
-    /// every item acts on all of them.
-    fn card_menu(&mut self, ui: &mut Ui, i: usize) {
+    /// every item acts on all of them. A card's ☰ in the detail panel opens
+    /// this same menu.
+    pub(super) fn card_menu(&mut self, ui: &mut Ui, i: usize) {
         let group = self.menu_group(i);
         let n = group.len();
         let many = n > 1;

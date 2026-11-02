@@ -154,7 +154,7 @@ pub struct MapView {
     slots: HashMap<String, usize>,
     /// The detail panel's order, top first; dragged by hand.
     order: Vec<String>,
-    /// What the open right-click menu is for.
+    /// What the open right-click menu (or a panel card's ☰) is for.
     menu: Option<Menu>,
     /// What the last plain click on a card replaced, and when: a
     /// double-click puts it back, so zooming to one card of a group keeps
@@ -223,6 +223,8 @@ pub struct MapView {
 enum Menu {
     /// A card, by id (the map can rebuild while the menu is open).
     Card(String),
+    /// The same menu from a card's ☰ in the detail panel.
+    Panel(String),
     /// The empty canvas.
     Background,
 }
@@ -1254,6 +1256,7 @@ impl MapView {
         }
         let mut open = !self.selection().is_empty();
         let mut ev: Option<PanelEv> = None;
+        let mut menus = Vec::new();
         let stack = self.ordered();
         let right = ui.available_rect_before_wrap().right();
         egui::Panel::right(PANEL)
@@ -1261,8 +1264,9 @@ impl MapView {
             .default_size(PANEL_SIZE)
             .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
-                act = self.detail(ui, stack, src.busy, pick, &mut ev);
+                act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus);
             });
+        self.card_menus(menus);
         self.panel_now = right - ui.available_rect_before_wrap().right();
         self.panel_full = egui::PanelState::load(ui.ctx(), egui::Id::new(PANEL))
             .map_or(PANEL_SIZE, |p| p.size().x);
@@ -2250,5 +2254,176 @@ mod tests {
         assert_eq!(v.ordered(), [2, 1]);
         v.toggle(0);
         assert_eq!(v.ordered(), [0, 2, 1]);
+    }
+
+    /// What one frame of the map in a test showed: the text on the canvas's
+    /// right-click menu, on the open ☰ menu in the panel, and where each
+    /// card's ☰ button is.
+    #[derive(Default)]
+    struct Shown {
+        canvas: Vec<(String, Rect)>,
+        panel: Vec<(String, Rect)>,
+        buttons: HashMap<usize, Rect>,
+    }
+
+    /// One frame as the tab draws it: the panel and its ☰ menus, then the
+    /// canvas (cards where `v.pos` has them, at zoom 1).
+    fn frame(ctx: &egui::Context, v: &mut MapView, events: Vec<egui::Event>) -> Shown {
+        use egui::{LayerId, Order, Popup, UiBuilder};
+        fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
+            match s {
+                Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+                Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
+        let on = |ctx: &egui::Context, id: egui::Id| {
+            let mut out = Vec::new();
+            ctx.graphics(|g| {
+                if let Some(l) = g.get(LayerId::new(Order::Foreground, id)) {
+                    l.all_entries().for_each(|c| texts(&c.shape, &mut out));
+                }
+            });
+            out
+        };
+        let mut shown = Shown::default();
+        // A tenth of a second apart: a press and release are a click, and
+        // `click` takes long enough that no two make a double-click.
+        let input = egui::RawInput {
+            events,
+            time: Some(ctx.input(|i| i.time) + 0.1),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let (mut pick, mut ev, mut menus) = (None, None, Vec::new());
+            let panel = Rect::from_min_size(pos2(820.0, 0.0), vec2(320.0, 900.0));
+            let stack = v.ordered();
+            ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
+                v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus);
+            });
+            let popups: Vec<egui::Id> = menus
+                .iter()
+                .map(|(_, b)| Popup::default_response_id(b))
+                .collect();
+            shown.buttons = menus.iter().map(|(i, b)| (*i, b.rect)).collect();
+            v.card_menus(menus);
+            let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 500.0));
+            let resp = ui.interact(canvas, egui::Id::new("canvas"), Sense::click_and_drag());
+            v.interact(ui, canvas, &resp);
+            shown.canvas = on(ui.ctx(), Popup::default_response_id(&resp));
+            for id in popups {
+                shown.panel.extend(on(ui.ctx(), id));
+            }
+        });
+        out.textures_delta.clear();
+        // As the tab does at the end of each frame.
+        v.keys_busy = egui::Popup::is_any_open(ctx);
+        shown
+    }
+
+    /// A click with `button` at `at`, and frames after it for a menu it
+    /// opens to be drawn.
+    fn click(ctx: &egui::Context, v: &mut MapView, at: Pos2, button: egui::PointerButton) -> Shown {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(ctx, v, vec![egui::Event::PointerMoved(at)]);
+        frame(ctx, v, vec![press(true)]);
+        frame(ctx, v, vec![press(false)]);
+        frame(ctx, v, vec![]);
+        frame(ctx, v, vec![])
+    }
+
+    fn words(t: &[(String, Rect)]) -> Vec<String> {
+        t.iter().map(|(s, _)| s.clone()).collect()
+    }
+
+    fn item(t: &[(String, Rect)], label: &str) -> Pos2 {
+        t.iter()
+            .find(|(s, _)| s == label)
+            .unwrap_or_else(|| panic!("no {label:?} in {:?}", words(t)))
+            .1
+            .center()
+    }
+
+    #[test]
+    fn a_cards_menu_button_in_the_panel_is_its_right_click_menu() {
+        let ctx = egui::Context::default();
+        let mut v = tree8();
+        v.zoom = 1.0;
+        for (i, n) in v.map.nodes.iter_mut().enumerate() {
+            n.label = format!("card {i}");
+            let at = pos2(10.0 + (i % 3) as f32 * 260.0, 10.0 + (i / 3) as f32 * 130.0);
+            v.pos.insert(n.id.clone(), at);
+        }
+        let middle = |v: &MapView, i: usize| v.pos[&v.map.nodes[i].id] + CARD / 2.0;
+        let (right, left) = (egui::PointerButton::Secondary, egui::PointerButton::Primary);
+
+        // Two cards picked: right-click one of them on the canvas.
+        v.select(Some(7));
+        v.toggle(4);
+        let at = middle(&v, 4);
+        let rc = click(&ctx, &mut v, at, right);
+        assert!(words(&rc.canvas).contains(&"2 selected cards".to_string()));
+        assert_eq!(v.menu_cards(), [4, 7], "both outlined");
+        // Esc closes it and keeps the selection.
+        frame(&ctx, &mut v, vec![]);
+        let esc = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut v, vec![esc.clone()]);
+        let shown = frame(&ctx, &mut v, vec![]);
+        assert!(shown.canvas.is_empty() && v.menu.is_none());
+        assert_eq!(set(&v.selection()), set(&[4, 7]));
+
+        // The same card's ☰ in the panel: the very same items.
+        let menu = click(&ctx, &mut v, shown.buttons[&4].center(), left);
+        assert!(menu.canvas.is_empty());
+        assert_eq!(words(&menu.panel), words(&rc.canvas));
+        assert_eq!(v.menu_cards(), [4, 7], "both outlined");
+        assert_eq!(v.menu, Some(Menu::Panel("n4".into())));
+        // Esc closes it too, the selection kept.
+        frame(&ctx, &mut v, vec![esc]);
+        let shown = frame(&ctx, &mut v, vec![]);
+        assert!(shown.panel.is_empty() && v.menu.is_none());
+        assert_eq!(set(&v.selection()), set(&[4, 7]));
+
+        // An item picked there acts on both cards, and closes the menu.
+        let menu = click(&ctx, &mut v, shown.buttons[&4].center(), left);
+        click(&ctx, &mut v, item(&menu.panel, "Pin all 2"), left);
+        assert!(v.is_kept(4) && v.is_kept(7));
+        let shown = frame(&ctx, &mut v, vec![]);
+        assert!(shown.panel.is_empty() && v.menu.is_none());
+        assert!(v.menu_cards().is_empty());
+
+        // On a card alone: that card's items, the same both ways.
+        for k in [4, 7] {
+            v.keep(k);
+        }
+        v.select(Some(5));
+        let shown = frame(&ctx, &mut v, vec![]);
+        let menu = click(&ctx, &mut v, shown.buttons[&5].center(), left);
+        assert_eq!(words(&menu.panel)[0], "card 5");
+        frame(&ctx, &mut v, vec![]);
+        click(
+            &ctx,
+            &mut v,
+            item(&menu.panel, "Select its path to the WAN"),
+            left,
+        );
+        assert_eq!(set(&v.selection()), set(&[0, 1, 2, 3, 5]));
+        let at = middle(&v, 5);
+        let rc = click(&ctx, &mut v, at, right);
+        assert!(words(&rc.canvas).contains(&"5 selected cards".to_string()));
+        let at = frame(&ctx, &mut v, vec![]).buttons[&5].center();
+        let menu = click(&ctx, &mut v, at, left);
+        assert_eq!(words(&menu.panel), words(&rc.canvas));
     }
 }

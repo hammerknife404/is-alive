@@ -661,7 +661,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 ### The right-click menu
 
-Right-click a card for:
+Right-click a card, or click **☰** at the top of its section in the panel, for:
 
 | Item | What it does |
 |---|---|
@@ -681,11 +681,13 @@ Each item shows only when it applies, with how many cards it takes. Selections m
 
 **Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths).
 
+**☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). While either menu is open, the cards it acts on are outlined on the map. Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
+
 ### The panel (right)
 
 Each selected card gets a section, newest on top:
 
-- **The role and name**, with the 📌 pin button.
+- **The role and name**, with **☰** (the card's right-click menu, see above), the 📌 pin button and **×**.
 - **Action items:** the card's own warnings and the findings that name it.
 - **Details:** IP, MAC, open ports, what saw it (sweep, backup, map), then everything the source said about it.
 - **Connections:** its uplink and what hangs off it; click one to jump to that card.
@@ -1012,7 +1014,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Double-click a card | Map | Zoom to that card |
 | Click a card | Map | Select it and light its path to the internet |
 | Ctrl+click or Shift+click a card | Map | Add to or take out of the selection |
-| Right-click a card | Map | Pin, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
+| Right-click a card (or ☰ on it in the panel) | Map | Pin, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
 | Drag a card | Map | Move it (and the rest of the selection with it) |
 | Click a site's title | Map | Collapse or expand the site |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
