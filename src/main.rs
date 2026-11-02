@@ -15,6 +15,7 @@ mod redact;
 mod shots;
 mod skills;
 mod sonicwall;
+mod startup;
 mod theme;
 mod tools;
 mod unifi;
@@ -153,6 +154,7 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        startup::running(ui.ctx(), &mut self.look);
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
         let now = ui.input(|i| i.time);
@@ -785,10 +787,16 @@ fn close_inherited_fds_on_exec() {
     }
 }
 
-fn main() -> eframe::Result {
+fn main() {
+    // First, so nothing after it can end the app without a word.
+    startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
     let look = theme::load();
+    let plan = match startup::plan(look.renderer) {
+        Ok(p) => p,
+        Err(e) => startup::bad_arguments(&e),
+    };
     theme::set_emoji_style(look.emoji);
     let size = look
         .size
@@ -801,9 +809,12 @@ fn main() -> eframe::Result {
             .with_min_inner_size([620.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(icon()),
+        renderer: plan.renderer,
         ..Default::default()
     };
-    eframe::run_native(
+    startup::begin(&plan);
+    let files = plan.files;
+    let run = eframe::run_native(
         "is-alive",
         options,
         Box::new(|cc| {
@@ -852,15 +863,16 @@ fn main() -> eframe::Result {
                 app.check_updates(&cc.egui_ctx, false);
             }
             // Files named on the command line ("Open with") go to Config Export.
-            let files: Vec<std::path::PathBuf> =
-                std::env::args_os().skip(1).map(Into::into).collect();
             if !files.is_empty() {
                 app.tab = Tab::Export;
                 app.export.open(&cc.egui_ctx, files);
             }
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let Err(e) = run {
+        startup::failed(&e);
+    }
 }
 
 #[cfg(test)]

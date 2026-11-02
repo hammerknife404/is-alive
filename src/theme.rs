@@ -683,6 +683,9 @@ pub struct Settings {
     pub emoji: EmojiStyle,
     /// Map layout picked (Cluster, Tree, Zones, Sites); None until one is.
     pub map_layout: Option<crate::map::layout::Mode>,
+    /// What draws the window: wgpu once it has opened it here (after
+    /// OpenGL failed, or when asked for); None means OpenGL. See `startup`.
+    pub renderer: Option<eframe::Renderer>,
 }
 
 /// Whether the public IP is looked up at start unless the user says.
@@ -711,6 +714,7 @@ impl Default for Settings {
             emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
             map_layout: None,
+            renderer: None,
         }
     }
 }
@@ -731,6 +735,7 @@ impl Settings {
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
+                "renderer" => s.renderer = v.trim().parse().ok(),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
                     s.notes_font = match v.trim() {
@@ -816,6 +821,9 @@ impl Settings {
         }
         if let Some(m) = self.map_layout {
             s += &format!("map_layout={}\n", m.key());
+        }
+        if let Some(r) = self.renderer {
+            s += &format!("renderer={r}\n");
         }
         s
     }
@@ -1055,8 +1063,10 @@ mod tests {
             notes_split: 0.625,
             emoji: EmojiStyle::Color,
             map_layout: Some(crate::map::layout::Mode::Zones),
+            renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);
+        assert_eq!(Settings::parse("renderer=vulkan\n").renderer, None);
         assert_eq!(
             Settings::parse("notes_font=sans\n").notes_font,
             crate::fonts::SANS
