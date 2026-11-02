@@ -22,7 +22,8 @@ fn main() {
             // Windows 10/11, per-monitor DPI, long paths, current-style
             // dialogs, and no administrator prompt.
             .set_manifest_file("packaging/windows/is-alive.manifest");
-        res.compile().expect("failed to embed Windows icon and manifest");
+        res.compile()
+            .expect("failed to embed Windows icon and manifest");
     }
     skills();
 }
