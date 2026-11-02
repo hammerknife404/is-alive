@@ -273,12 +273,13 @@ impl AdvancedTool {
         self.err = None;
         self.took = None;
         self.checks.clear();
-        let d = domain::normalize(&self.domain);
-        if let Some(why) = domain::invalid(&d) {
+        let shown = domain::normalize(&self.domain);
+        if let Some(why) = domain::invalid(&shown) {
             self.err = Some(why.into());
             return;
         }
-        let d = match crate::input::dns_name(&d) {
+        // The box keeps the name as typed (bücher.de); the run uses its xn-- form.
+        let d = match crate::input::dns_name(&shown) {
             Ok(d) => d,
             Err(e) => return self.err = Some(e),
         };
@@ -295,7 +296,7 @@ impl AdvancedTool {
             self.err = Some(format!("resolver must be an IP address, got '{res}'"));
             return;
         };
-        self.domain = d.clone();
+        self.domain = shown;
         self.ran = (d.clone(), server.ip().to_string());
         self.checks = vec![None; NAMES.len()];
         self.run_started = Some(log::now());

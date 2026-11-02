@@ -59,8 +59,11 @@ pub fn init(ctx: &egui::Context) {
 }
 
 pub fn toast(text: impl Into<String>, ok: bool) {
+    let text = text.into();
     if let Ok(mut t) = TOASTS.lock() {
-        t.push((text.into(), ok, Instant::now()));
+        // The same message again (a paste repeated) shows once, afresh.
+        t.retain(|x| x.0 != text || x.1 != ok);
+        t.push((text, ok, Instant::now()));
         t.retain(|x| x.2.elapsed().as_secs_f32() < TOAST_FOR);
         let n = t.len();
         if n > 3 {
@@ -406,7 +409,7 @@ pub fn line(
     let r = add_text_edit(
         ui,
         egui::TextEdit::singleline(value)
-            .char_limit(kind.max())
+            .char_limit(kind.room())
             .desired_width(width)
             .hint_text(hint),
     );
@@ -414,38 +417,48 @@ pub fn line(
     r
 }
 
-/// After text box `r` (holding a `kind`) changed: drop the characters it
-/// doesn't keep, leave the cursor where it was, and say so when a paste
-/// lost hidden characters or was cut at the box's limit.
+/// After text box `r` (holding a `kind`, told it takes `kind.room()`)
+/// changed: drop the characters it doesn't keep, cut it to `kind.max()`
+/// just before the cursor, as the box would have, leave the cursor where it
+/// was, and say so when a paste lost hidden characters or was cut.
 pub fn tidy(ctx: &egui::Context, r: &egui::Response, kind: Field, value: &mut String) {
     if !r.changed() {
         return;
     }
     let pasted = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
-    let clean = kind.clean(value);
-    if clean != *value {
-        let dropped = kind.dropped(value);
-        if let Some(mut state) = egui::TextEdit::load_state(ctx, r.id)
-            && let Some(mut range) = state.cursor.char_range()
-        {
-            for c in [&mut range.primary, &mut range.secondary] {
-                c.index = egui::text::CharIndex(kind.kept_before(value, c.index.0));
-            }
-            state.cursor.set_char_range(Some(range));
-            state.store(ctx, r.id);
-        }
-        *value = clean;
-        if pasted && dropped > 0 {
-            toast(
-                format!(
-                    "Took out {dropped} hidden character{} (control or text-direction marks)",
-                    if dropped == 1 { "" } else { "s" }
-                ),
-                true,
-            );
-        }
+    let state = egui::TextEdit::load_state(ctx, r.id);
+    let range = state.as_ref().and_then(|s| s.cursor.char_range());
+    let at = range.map_or(usize::MAX, |c| kind.kept_before(value, c.primary.index.0));
+    let (clean, cut) = kind.fit(value, at);
+    if clean == *value {
+        return;
     }
-    if pasted && value.chars().count() >= kind.max() {
+    let dropped = kind.dropped(value);
+    // The box itself stopped the paste at its room: more was lost.
+    let full = value.chars().count() >= kind.room();
+    if let (Some(mut state), Some(mut range)) = (state, range) {
+        for c in [&mut range.primary, &mut range.secondary] {
+            let k = kind.kept_before(value, c.index.0);
+            c.index = egui::text::CharIndex(if k >= cut.end {
+                k - cut.len()
+            } else {
+                k.min(cut.start)
+            });
+        }
+        state.cursor.set_char_range(Some(range));
+        state.store(ctx, r.id);
+    }
+    *value = clean;
+    if pasted && dropped > 0 {
+        toast(
+            format!(
+                "Took out {dropped} invisible or control character{}",
+                if dropped == 1 { "" } else { "s" }
+            ),
+            true,
+        );
+    }
+    if pasted && (!cut.is_empty() || full) {
         toast(
             format!("Pasted text cut to {} characters", kind.max()),
             false,

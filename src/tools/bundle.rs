@@ -124,7 +124,8 @@ impl BundleTool {
             && let Some((_, r)) = src.export.unifi()
             && let Some(name) = r.sites.first()
         {
-            self.site = name.clone();
+            // From the backup: cleaned and cut like a typed name.
+            self.site = crate::input::line(name, crate::input::Field::Text.max());
         }
         let mut open = self.open;
         widgets::compact_title(ctx, || {
@@ -176,7 +177,7 @@ impl BundleTool {
                     let keep = widgets::selection_before_right_click(ui.ctx(), id);
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
-                        .char_limit(crate::input::Field::Problems.max())
+                        .char_limit(crate::input::Field::Problems.room())
                         .desired_rows(2)
                         .desired_width(380.0)
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")

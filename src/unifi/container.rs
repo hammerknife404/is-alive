@@ -140,6 +140,8 @@ pub const MAX_UNPACKED: usize = 2 << 30;
 const FIND_MAX: usize = 64 << 20;
 /// Most all the files `zip_all` reads unpack to together.
 const ALL_MAX: usize = 512 << 20;
+/// Most a backup's `version` entry may be; a real one is a line.
+const VERSION_MAX: usize = 4096;
 
 /// Read to the end, but no further than MAX_UNPACKED.
 fn read_capped(r: impl Read, what: &str) -> Result<Vec<u8>, String> {
@@ -158,8 +160,10 @@ fn read_upto(r: impl Read, what: &str, max: usize) -> Result<Vec<u8>, String> {
                 "{what} unpacks to more than {} GB: not a UniFi backup",
                 max >> 30
             )
-        } else {
+        } else if max >= 1 << 20 {
             format!("{what} unpacks to more than {} MB", max >> 20)
+        } else {
+            format!("{what} unpacks to more than {max} bytes")
         });
     }
     Ok(out)
@@ -297,7 +301,10 @@ fn zip_read_upto(b: &[u8], e: &ZipEntry, max: usize) -> Result<Vec<u8>, String> 
     let start = e.local + 30 + u16le(h, 26) + u16le(h, 28);
     let raw = b.get(start..start + e.size).ok_or_else(bad)?;
     match e.method {
-        0 if raw.len() > max => Err(format!("zip: {} is more than {} MB", e.name, max >> 20)),
+        0 if raw.len() > max && max >= 1 << 20 => {
+            Err(format!("zip: {} is more than {} MB", e.name, max >> 20))
+        }
+        0 if raw.len() > max => Err(format!("zip: {} is more than {max} bytes", e.name)),
         0 => Ok(raw.to_vec()),
         8 => read_upto(DeflateDecoder::new(raw), &format!("zip: {}", e.name), max),
         m => Err(format!("zip: {} uses unsupported compression {m}", e.name)),
@@ -346,12 +353,13 @@ pub fn zip_all(
 
 fn from_zip(b: &[u8], d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
     let entries = zip_entries(b)?;
-    // Version first so it's known even when the dump sits in a nested backup.
+    // Version first so it's known even when the dump sits in a nested
+    // backup; only these and skipped entries are left, so it's a line at most.
     for e in entries
         .iter()
         .filter(|e| !matches!(want(&e.name), Want::Dump | Want::Nested))
     {
-        take_entry(&e.name, || zip_read(b, e), d, depth)?;
+        take_entry(&e.name, || zip_read_upto(b, e, VERSION_MAX), d, depth)?;
     }
     let mut dumps: Vec<_> = entries
         .iter()
@@ -427,6 +435,11 @@ fn from_tar(mut r: impl Read, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String
             Want::Nested => true,
             Want::Skip => false,
         };
+        if file && take && matches!(want(&name), Want::Version) && size > VERSION_MAX {
+            return Err(format!(
+                "tar: version entry of {size} bytes: not a UniFi backup"
+            ));
+        }
         if file && take {
             if let Some(bson) = take_entry(&name, || read_body(&mut r), d, depth)? {
                 return Ok(bson);
@@ -606,5 +619,14 @@ pub mod tests {
             false,
         );
         assert_eq!(open(z).unwrap().version.as_deref(), Some("9.0.114 [2J"));
+    }
+
+    #[test]
+    fn a_huge_version_is_not_read() {
+        let big = vec![b'9'; VERSION_MAX + 1];
+        let z = zip(&[("version", &big), ("db.gz", &gz(BSON))], false);
+        assert!(open(z).err().unwrap().contains("version"));
+        let t = tar(&[("network/version", &big), ("network/db.gz", &gz(BSON))]);
+        assert!(open(unifi(gz(&t))).err().unwrap().contains("version"));
     }
 }

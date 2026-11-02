@@ -3,10 +3,13 @@
 //! with a plain message when it can't.
 //!
 //! Characters dropped everywhere: control characters (a single-line box
-//! turns tabs and line breaks into spaces) and the invisible marks that
+//! turns tabs and line breaks into spaces), the invisible controls that
 //! flip the direction text is drawn in, which can make `moc.elpmaxe` read
-//! as `example.com`. Zero-width characters go too, except the joiners that
-//! some scripts and emoji need, which free text keeps.
+//! as `example.com`, and other invisible characters, such as the tag
+//! characters that can hide whole sentences. Names drop zero-width
+//! characters and direction marks too; free text keeps the ones real
+//! writing uses (joiners for emoji and Indic and Arabic scripts, word
+//! breaks for Thai, the left-to-right and right-to-left marks).
 
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -62,73 +65,142 @@ impl Field {
         }
     }
 
+    /// What the text box itself is told it takes: room for the hidden
+    /// characters a paste brings, so they don't use up `max` before `fit`
+    /// takes them out and cuts what's left to `max`.
+    pub const fn room(self) -> usize {
+        self.max() * 4
+    }
+
     fn multiline(self) -> bool {
         matches!(self, Field::Notes | Field::Problems)
     }
 
-    /// Free text keeps the zero-width joiners (emoji, Indic and Arabic
-    /// scripts); a name or number never needs one.
+    /// Free text keeps the zero-width characters and direction marks real
+    /// writing uses; a name or number never needs one.
     fn free(self) -> bool {
         matches!(self, Field::Text | Field::Notes | Field::Problems)
     }
 
-    /// What `c` becomes in this box: itself, a space, or nothing.
+    /// What `c` becomes in this box: itself, a space or line break, or nothing.
     fn map(self, c: char) -> Option<char> {
         match c {
             '\n' | '\t' if self.multiline() => Some(c),
-            '\n' | '\t' | '\r' if !self.multiline() => Some(' '),
-            '\u{200C}' | '\u{200D}' if self.free() => Some(c),
+            '\u{2028}' | '\u{2029}' if self.multiline() => Some('\n'),
+            '\n' | '\t' | '\r' | '\u{2028}' | '\u{2029}' if !self.multiline() => Some(' '),
+            // Zero-width space and joiners, left-to-right and right-to-left marks.
+            '\u{200B}'..='\u{200F}' if self.free() => Some(c),
             c if hidden(c) => None,
             c => Some(c),
         }
     }
 
-    /// `s` with the characters this box drops taken out, cut to `max`.
-    pub fn clean(self, s: &str) -> String {
-        s.chars()
-            .filter_map(|c| self.map(c))
-            .take(self.max())
-            .collect()
+    /// What each character of `s` becomes in this box. Free text keeps the
+    /// tag characters of a flag like Scotland's (🏴, a short lower-case
+    /// tag, the cancel tag); tag characters anywhere else go.
+    fn each(self, s: &str) -> impl Iterator<Item = Option<char>> + '_ {
+        let mut flag = 0;
+        let mut prev = '\0';
+        s.char_indices().map(move |(i, c)| {
+            if flag == 0 && prev == '\u{1F3F4}' && self.free() {
+                flag = flag_tags(&s[i..]);
+            }
+            prev = c;
+            if flag > 0 {
+                flag -= 1;
+                Some(c)
+            } else {
+                self.map(c)
+            }
+        })
     }
 
-    /// How many characters of `clean(s)` come from the first `n` of `s`:
-    /// where a cursor at `n` lands once `s` is cleaned.
+    /// `s` with the characters this box drops taken out, cut to `max`.
+    pub fn clean(self, s: &str) -> String {
+        self.each(s).flatten().take(self.max()).collect()
+    }
+
+    /// How many characters of `s`, cleaned and not yet cut, come from the
+    /// first `n` of `s`: where a cursor at `n` lands once `s` is cleaned.
     pub fn kept_before(self, s: &str, n: usize) -> usize {
-        s.chars()
-            .take(n)
-            .filter_map(|c| self.map(c))
-            .count()
-            .min(self.max())
+        self.each(s).take(n).flatten().count()
     }
 
     /// How many characters of `s` this box drops that someone would want
     /// told about: a line break's carriage return (Windows) goes quietly.
     pub fn dropped(self, s: &str) -> usize {
         s.chars()
-            .filter(|&c| c != '\r' && self.map(c).is_none())
+            .zip(self.each(s))
+            .filter(|&(c, m)| c != '\r' && m.is_none())
             .count()
+    }
+
+    /// `s` as the box keeps it after an edit that left the cursor at `at`
+    /// of the cleaned text: cleaned, and when that's over `max`, cut just
+    /// before the cursor (the end of what was typed or pasted, as the box
+    /// itself would), or at the end when there isn't that much before it.
+    /// Also gives the part of the cleaned text that was cut.
+    pub fn fit(self, s: &str, at: usize) -> (String, std::ops::Range<usize>) {
+        let mut cs: Vec<char> = self.each(s).flatten().collect();
+        let n = cs.len();
+        let over = n.saturating_sub(self.max());
+        let cut = if over == 0 {
+            n..n
+        } else if (over..=n).contains(&at) {
+            at - over..at
+        } else {
+            self.max()..n
+        };
+        cs.drain(cut.clone());
+        (cs.into_iter().collect(), cut)
     }
 }
 
-/// Characters no box keeps: controls, direction marks and overrides,
-/// zero-width spaces and joiners, and the byte-order mark.
+/// How many characters at the start of `s` are a flag's tag: two to seven
+/// lower-case letters or digits as tag characters, then the cancel tag.
+/// 0 when they aren't one.
+fn flag_tags(s: &str) -> usize {
+    let n = s
+        .chars()
+        .take_while(|c| matches!(c, '\u{E0030}'..='\u{E0039}' | '\u{E0061}'..='\u{E007A}'))
+        .count();
+    let cancel = s.chars().nth(n) == Some('\u{E007F}');
+    if (2..=7).contains(&n) && cancel {
+        n + 1
+    } else {
+        0
+    }
+}
+
+/// Characters no box keeps (free text keeps a few, see `Field::map`):
+/// controls, direction marks, embeddings, overrides and isolates,
+/// zero-width spaces and joiners, invisible fillers and format characters,
+/// line and paragraph separators, tag characters, and the byte-order mark.
 pub fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
                 | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{E0000}'..='\u{E007F}'
         )
 }
 
 /// One line of text read from a file or the network, safe to show: hidden
 /// characters dropped, at most `max` characters.
 pub fn line(s: &str, max: usize) -> String {
-    s.chars()
-        .filter_map(|c| Field::Text.map(c))
+    Field::Text
+        .each(s)
+        .flatten()
         .take(max)
         .collect::<String>()
         .trim()
@@ -159,7 +231,7 @@ pub struct Target {
 /// Read a host the way people paste one: `example.com`, `10.0.0.1`,
 /// `fe80::1%eth0`, `[::1]:443`, `host:8443` or a whole link
 /// (`https://user@host:8443/path`). Unicode names are turned into the
-/// `xn--` form DNS uses.
+/// `xn--` form DNS uses; a trailing dot stays.
 pub fn host(s: &str) -> Result<Target, String> {
     let s = s.trim();
     if s.is_empty() {
@@ -223,7 +295,7 @@ pub fn selectors(s: &str) -> Result<Vec<String>, String> {
             });
         if !ok {
             return Err(format!(
-                "'{}' isn't a DKIM selector: letters, digits, '-' and '_' only",
+                "'{}' isn't a DKIM selector: letters, digits, '-', '_' and '.' only",
                 short(sel)
             ));
         }
@@ -289,19 +361,43 @@ fn ip_literal(s: &str) -> Option<String> {
 }
 
 /// A host (`dns` false) or DNS name, checked part by part and returned
-/// lower-case in ASCII. A trailing dot is dropped. An error says what's
-/// wrong with it ("it has a space").
+/// lower-case in ASCII. A host keeps a trailing dot (an absolute name, no
+/// search domains added); a DNS name drops it. A host's ASCII parts are
+/// letters, digits, '-' and '_'; a DNS name's may hold any printable ASCII
+/// but '.', as DNS itself allows (`0/26.2.0.192.in-addr.arpa`, `Office
+/// Printer._ipp._tcp.local`). An error says what's wrong ("it has a space").
 fn name(s: &str, dns: bool) -> Result<String, String> {
-    let s = s.strip_suffix('.').unwrap_or(s);
+    // Fullwidth letters and ideographic full stops, as an IME types them,
+    // read as ASCII the way IDNA maps them; lower-casing the whole name
+    // turns a Kelvin sign into a plain k.
+    let s: String = s
+        .chars()
+        .map(|c| match c {
+            '\u{3002}' | '\u{FF0E}' | '\u{FF61}' => '.',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            c => c,
+        })
+        .collect::<String>()
+        .to_lowercase();
+    let (s, absolute) = match s.strip_suffix('.') {
+        Some(s) => (s, true),
+        None => (s.as_str(), false),
+    };
     if s.is_empty() {
         return Err("it's empty".into());
     }
-    if let Some(c) = s
-        .chars()
-        .find(|&c| !(c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '*')))
-    {
+    let ok = |c: char| {
+        if c.is_ascii() {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '.' | '-' | '_' | '*')
+                || (dns && (' '..='~').contains(&c))
+        } else {
+            !c.is_whitespace() && !hidden(c)
+        }
+    };
+    if let Some(c) = s.chars().find(|&c| !ok(c)) {
         return Err(match c {
-            ' ' => "it has a space".into(),
+            c if c.is_whitespace() => "it has a space".into(),
             c => format!("it has '{c}' in it"),
         });
     }
@@ -313,14 +409,24 @@ fn name(s: &str, dns: bool) -> Result<String, String> {
         if label.contains('*') && !(dns && i == 0 && label == "*") {
             return Err("'*' can only be a whole first part (*.example.com)".into());
         }
-        if label.starts_with('-') || label.ends_with('-') {
+        if !dns && (label.starts_with('-') || label.ends_with('-')) {
             return Err("a part starts or ends with '-'".into());
         }
         let ascii = if label.is_ascii() {
-            label.to_ascii_lowercase()
+            label.to_string()
         } else {
-            let low = label.to_lowercase();
-            punycode(&low)
+            // An accent pasted as its own character after the letter (as
+            // macOS can) would be written in DNS as a different name.
+            let mut prev = ' ';
+            for c in label.chars() {
+                if prev.is_ascii_alphabetic() && ('\u{0300}'..='\u{036F}').contains(&c) {
+                    return Err(format!(
+                        "the accent on '{prev}' is a separate character: retype the letter with its accent"
+                    ));
+                }
+                prev = c;
+            }
+            punycode(label)
                 .map(|p| format!("xn--{p}"))
                 .ok_or("it can't be written in DNS")?
         };
@@ -329,9 +435,12 @@ fn name(s: &str, dns: bool) -> Result<String, String> {
         }
         out.push(ascii);
     }
-    let joined = out.join(".");
+    let mut joined = out.join(".");
     if joined.len() > NAME_MAX {
         return Err(format!("it's longer than {NAME_MAX} characters"));
+    }
+    if absolute && !dns {
+        joined.push('.');
     }
     Ok(joined)
 }
@@ -427,7 +536,10 @@ mod tests {
     #[test]
     fn hosts_people_type_are_read() {
         assert_eq!(host(" 10.0.0.1 "), Ok(t("10.0.0.1", None)));
-        assert_eq!(host("Example.COM."), Ok(t("example.com", None)));
+        assert_eq!(host("Example.COM"), Ok(t("example.com", None)));
+        // A trailing dot keeps the name absolute: no search domains.
+        assert_eq!(host("nas."), Ok(t("nas.", None)));
+        assert_eq!(host("Example.COM."), Ok(t("example.com.", None)));
         assert_eq!(host("fe80::1%eth0"), Ok(t("fe80::1%eth0", None)));
         assert_eq!(host("2001:db8::1"), Ok(t("2001:db8::1", None)));
         assert_eq!(host("[::1]"), Ok(t("::1", None)));
@@ -443,6 +555,26 @@ mod tests {
         assert_eq!(host("printer_2.lan"), Ok(t("printer_2.lan", None)));
         assert_eq!(host("xn--bcher-kva.de"), Ok(t("xn--bcher-kva.de", None)));
         assert_eq!(host("Bücher.de"), Ok(t("xn--bcher-kva.de", None)));
+    }
+
+    #[test]
+    fn unicode_names_are_mapped_like_idna() {
+        // Combining marks (the virama) belong to many scripts' names.
+        assert_eq!(
+            host(
+                "\u{0939}\u{093F}\u{0928}\u{094D}\u{0926}\u{0940}.\u{092D}\u{093E}\u{0930}\u{0924}"
+            ),
+            Ok(t("xn--j2bd4cyah0f.xn--h2brj9c", None))
+        );
+        // A Kelvin sign lower-cases to a plain k: no xn-- for ASCII.
+        assert_eq!(host("\u{212A}elvin.com"), Ok(t("kelvin.com", None)));
+        // Fullwidth letters and an ideographic full stop, as an IME types them.
+        assert_eq!(
+            host("\u{FF25}\u{FF38}\u{FF21}\u{FF2D}\u{FF30}\u{FF2C}\u{FF25}\u{3002}com"),
+            Ok(t("example.com", None))
+        );
+        // A decomposed ü (as macOS can paste it) would be a different name.
+        assert!(host("bu\u{308}cher.de").unwrap_err().contains("accent"));
     }
 
     #[test]
@@ -490,7 +622,25 @@ mod tests {
         );
         assert!(dns_name("a.*.example.com").is_err());
         assert!(dns_name("").is_err());
-        assert!(dns_name("<script>").is_err());
+        assert!(dns_name("a..b").is_err());
+        assert_eq!(dns_name("nas."), Ok("nas".into()));
+    }
+
+    #[test]
+    fn dns_names_take_what_dns_carries() {
+        // RFC 2317 classless reverse zones and DNS-SD instance names.
+        assert_eq!(
+            dns_name("0/26.2.0.192.in-addr.arpa"),
+            Ok("0/26.2.0.192.in-addr.arpa".into())
+        );
+        assert_eq!(
+            dns_name("Office Printer._ipp._tcp.example.com"),
+            Ok("office printer._ipp._tcp.example.com".into())
+        );
+        assert_eq!(dns_name("-x-.example.com"), Ok("-x-.example.com".into()));
+        // A host is stricter.
+        assert!(host("0/26.example.com").is_err());
+        assert!(host("<script>").is_err());
     }
 
     #[test]
@@ -517,6 +667,7 @@ mod tests {
         assert_eq!(selectors("k1.2024"), Ok(vec!["k1.2024".into()]));
         assert!(selectors("bad/one").is_err());
         assert!(selectors("ä").is_err());
+        assert!(selectors("k1.2024/x").unwrap_err().contains("'.'"));
         let many: Vec<String> = (0..21).map(|i| format!("s{i}")).collect();
         assert!(selectors(&many.join(",")).unwrap_err().contains("20"));
     }
@@ -536,6 +687,35 @@ mod tests {
         assert_eq!(Field::Text.clean("👩\u{200D}💻"), "👩\u{200D}💻");
         assert_eq!(Field::Host.clean("a\u{200D}b"), "ab");
         assert_eq!(Field::Notes.clean("a\r\n\tb\x1b[31m\u{202E}"), "a\n\tb[31m");
+        // The marks and word breaks real writing uses stay in free text.
+        let rtl = "c\u{200F}\u{05E2}\u{05D1}\u{200E}x";
+        assert_eq!(Field::Notes.clean(rtl), rtl);
+        assert_eq!(Field::Text.clean("a\u{200B}b"), "a\u{200B}b");
+        assert_eq!(Field::Host.clean("a\u{200F}b"), "ab");
+        // Other invisible characters, and tags that can hide a sentence.
+        for c in [
+            '\u{061C}',
+            '\u{00AD}',
+            '\u{180E}',
+            '\u{034F}',
+            '\u{3164}',
+            '\u{FFF9}',
+            '\u{E0001}',
+            '\u{E0041}',
+            '\u{E007F}',
+        ] {
+            assert_eq!(Field::Text.clean(&format!("a{c}b")), "ab", "{c:?}");
+            assert_eq!(Field::Notes.clean(&format!("a{c}b")), "ab", "{c:?}");
+        }
+        // Scotland's flag keeps its tags; a black flag doesn't excuse others.
+        let scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+        assert_eq!(Field::Notes.clean(scotland), scotland);
+        let smuggled = "\u{1F3F4}\u{E0049}\u{E0020}\u{E0061}\u{E007F}";
+        assert_eq!(Field::Notes.clean(smuggled), "\u{1F3F4}");
+        assert_eq!(Field::Host.clean(scotland), "\u{1F3F4}");
+        // Line and paragraph separators.
+        assert_eq!(Field::Text.clean("a\u{2028}b"), "a b");
+        assert_eq!(Field::Notes.clean("a\u{2029}b"), "a\nb");
     }
 
     #[test]
@@ -544,7 +724,23 @@ mod tests {
         assert_eq!(Field::Host.clean(&s).chars().count(), 255);
         assert_eq!(Field::Url.clean(&s).chars().count(), 2048);
         assert_eq!(Field::Ports.clean(&s).chars().count(), 1024);
-        assert_eq!(Field::Host.kept_before(&s, 4000), 255);
+        assert_eq!(Field::Host.kept_before(&s, 4000), 4000);
+    }
+
+    #[test]
+    fn fit_cuts_what_was_just_added() {
+        // Hidden characters don't use up the limit: 20 go, all 255 fit.
+        let paste = format!("{}{}", "\u{200B}".repeat(20), "y".repeat(255));
+        let (s, cut) = Field::Host.fit(&paste, 255);
+        assert_eq!((s.len(), cut), (255, 255..255));
+        // Over the limit: what's before the cursor goes, what's after stays.
+        let (s, cut) = Field::Host.fit(&format!("{}abcEND", "x".repeat(253)), 256);
+        assert_eq!(cut, 252..256);
+        assert!(s.ends_with("xEND"));
+        assert_eq!(s.chars().count(), 255);
+        // No room before the cursor: cut at the end.
+        let (s, cut) = Field::Host.fit(&"z".repeat(300), 3);
+        assert_eq!((s.len(), cut), (255, 255..300));
     }
 
     #[test]

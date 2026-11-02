@@ -148,6 +148,8 @@ impl Slot {
 enum Ev {
     Picked(PathBuf),
     Done(PathBuf, Box<Result<Export, String>>),
+    /// A problem with no one file to name.
+    Failed(String),
 }
 
 #[derive(Default)]
@@ -179,6 +181,14 @@ const TEXT_MAX: usize = 256 << 20;
 
 /// Most files converted from one pick or drop: one of each kind is shown.
 const OPEN_MAX: usize = 16;
+
+/// Add a line to the errors shown.
+fn add_err(err: &mut Option<String>, e: String) {
+    *err = Some(match err.take() {
+        Some(prev) => format!("{prev}\n{e}"),
+        None => e,
+    });
+}
 
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
     if data.len() > TEXT_MAX {
@@ -375,13 +385,10 @@ impl ExportTool {
                 }
                 Err(e) => {
                     self.failed.push(file_name(&path));
-                    let e = format!("{}: {e}", file_name(&path));
-                    self.err = Some(match self.err.take() {
-                        Some(prev) => format!("{prev}\n{e}"),
-                        None => e,
-                    });
+                    add_err(&mut self.err, format!("{}: {e}", file_name(&path)));
                 }
             },
+            Ev::Failed(e) => add_err(&mut self.err, e),
         });
         if loaded {
             self.gather_secrets();
@@ -448,19 +455,17 @@ impl ExportTool {
             }) else {
                 return;
             };
-            if let Some(extra) = paths.get(OPEN_MAX) {
-                let more = paths.len() - OPEN_MAX;
-                tx.send(Ev::Done(
-                    extra.clone(),
-                    Box::new(Err(format!(
-                        "{more} file(s) from here on not opened: at most {OPEN_MAX} at a time"
-                    ))),
-                ));
-            }
+            let more = paths.len().saturating_sub(OPEN_MAX);
             for path in paths.into_iter().take(OPEN_MAX) {
                 tx.send(Ev::Picked(path.clone()));
                 let r = read_input(&path).and_then(|data| convert(data, clients));
                 tx.send(Ev::Done(path, Box::new(r)));
+            }
+            if more > 0 {
+                tx.send(Ev::Failed(format!(
+                    "{more} more file{} not opened: at most {OPEN_MAX} at a time",
+                    if more == 1 { "" } else { "s" }
+                )));
             }
         }));
     }

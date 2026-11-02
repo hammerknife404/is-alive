@@ -308,7 +308,13 @@ impl PortTool {
         self.results.clear();
         self.total = 0;
         let host = match crate::input::host(&self.host) {
-            Ok(t) => t.host,
+            Ok(t) => {
+                // A port typed with the host (nas:5001, a link) is the one checked.
+                if let Some(p) = t.port {
+                    self.ports = p.to_string();
+                }
+                t.host
+            }
             Err(e) => return self.err = Some(e),
         };
         let ports = match parse_ports(&self.ports) {

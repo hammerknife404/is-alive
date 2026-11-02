@@ -934,7 +934,7 @@ impl NotesTool {
                 let fill = ui.available_size();
                 egui::TextEdit::multiline(&mut self.text)
                     .id(id)
-                    .char_limit(crate::input::Field::Notes.max())
+                    .char_limit(crate::input::Field::Notes.room())
                     .desired_width(f32::INFINITY)
                     .min_size(fill)
                     .lock_focus(true)
