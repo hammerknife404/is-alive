@@ -485,7 +485,8 @@ impl BundleTool {
                 skill: "/mapnetwork",
                 what: NOTES_WHAT,
                 summary: json!({ "lines": clean.lines().count(), "redacted": hits.len() }),
-                data: clean,
+                // Without the emoji style marks, like Copy and Save.
+                data: crate::theme::strip_emoji_styles(&clean),
             });
         }
         let b = Bundle {
