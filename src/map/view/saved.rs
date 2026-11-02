@@ -18,12 +18,13 @@
 //!   found.
 //! - `"drawn": true` on a card: drawn by a person, not discovered. A
 //!   card's link up is kept on the card (`"up"`), so `"up": {"drawn":
-//!   true}` is a drawn link. Left out when false.
+//!   true}` is a drawn link. Left out when false; anything but true or
+//!   false refuses the file rather than calling the card discovered.
 //! - `"faults"`: a training map's answer key, a list of `{"card": id or
 //!   null, "title", "detail"}`, at most 200. Never shown on the map (only
-//!   how many). On any other purpose the file is refused: an answer key
-//!   says it's a training map, and one labelled as found would pass its
-//!   planted faults off as evidence.
+//!   how many). On any other purpose, or with no purpose, the file is
+//!   refused: an answer key says it's a training map, and one labelled as
+//!   found would pass its planted faults off as evidence.
 
 use super::history::Edits;
 use super::*;
@@ -384,16 +385,24 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
              update is-alive to open it"
         ));
     }
-    let purpose = match doc.get("purpose") {
-        None => Purpose::AsFound,
-        Some(p) => p.as_str().and_then(Purpose::of).ok_or_else(|| {
+    // None: the file doesn't say (as found, but an answer key is refused
+    // as being on a map that doesn't say it's a training map).
+    let stated = match doc.get("purpose") {
+        None => None,
+        Some(p) => Some(p.as_str().and_then(Purpose::of).ok_or_else(|| {
+            // Only a word could be a purpose a newer is-alive knows.
+            let newer = if p.as_str().is_some_and(|s| !s.trim().is_empty()) {
+                " (a newer is-alive may open it)"
+            } else {
+                ""
+            };
             format!(
-                "made for a purpose this is-alive doesn't know: {} (a newer is-alive may \
-                 open it)",
+                "made for a purpose this is-alive doesn't know: {}{newer}",
                 input::line(&p.to_string(), 60)
             )
-        })?,
+        })?),
     };
+    let purpose = stated.unwrap_or(Purpose::AsFound);
     let m = doc.get("map").ok_or("no map in the file")?;
     let nodes = m
         .get("nodes")
@@ -488,7 +497,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .contains(&zoom)
             .then_some((pan.to_vec2(), zoom))
     });
-    let faults = faults_of(&doc, purpose, &ids)?;
+    let faults = faults_of(&doc, stated, &ids)?;
     let name = text(&doc, "name", NAME_MAX);
     Ok(Snapshot {
         name: if name.is_empty() {
@@ -506,8 +515,13 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
 }
 
 /// A training map's answer key: at most `FAULTS_MAX`, each cleaned and
-/// cut, a card that isn't on the map forgotten. On any other map, refused.
-fn faults_of(doc: &Value, purpose: Purpose, ids: &HashSet<&str>) -> Result<Vec<Fault>, String> {
+/// cut, a card that isn't on the map forgotten. On any other map, or one
+/// that doesn't say what it is (`stated` is None), refused.
+fn faults_of(
+    doc: &Value,
+    stated: Option<Purpose>,
+    ids: &HashSet<&str>,
+) -> Result<Vec<Fault>, String> {
     let list = match doc.get("faults") {
         None | Some(Value::Null) => return Ok(Vec::new()),
         Some(Value::Array(a)) => a,
@@ -516,14 +530,14 @@ fn faults_of(doc: &Value, purpose: Purpose, ids: &HashSet<&str>) -> Result<Vec<F
     if list.is_empty() {
         return Ok(Vec::new());
     }
-    if purpose != Purpose::Training {
+    if stated != Some(Purpose::Training) {
+        let says = match stated {
+            Some(Purpose::Plan) => "says it's a plan",
+            Some(_) => "says it's as found",
+            None => "doesn't say it's a training map (no \"purpose\")",
+        };
         return Err(format!(
-            "an answer key (\"faults\") on a map that says it's {}: only a training map \
-             has one",
-            match purpose {
-                Purpose::Plan => "a plan",
-                _ => "as found",
-            }
+            "an answer key (\"faults\") on a map that {says}: only a training map has one"
         ));
     }
     if list.len() > FAULTS_MAX {
@@ -561,11 +575,20 @@ fn node_of(v: &Value) -> Result<Node, String> {
     if id.is_empty() {
         return Err("a card with no id".into());
     }
-    let drawn_up = v
-        .get("up")
-        .and_then(|u| u.get("drawn"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // Drawn by hand: true, false or left out, nothing else. Anything
+    // else refuses the file rather than calling the card discovered.
+    let flag = |v: &Value, what: &str| match v.get("drawn") {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(format!(
+            "card {id}: {what}\"drawn\" should be true or false"
+        )),
+    };
+    let drawn = flag(v, "")?;
+    let drawn_up = match v.get("up") {
+        Some(u) if u.is_object() => flag(u, "the link's ")?,
+        _ => false,
+    };
     let up = match v.get("up") {
         Some(u) if u.is_object() => Some((
             u.get("parent")
@@ -618,7 +641,7 @@ fn node_of(v: &Value) -> Result<Node, String> {
             .and_then(Value::as_str)
             .map(|s| input::line(s, TEXT_MAX))
             .filter(|s| !s.is_empty()),
-        drawn: v.get("drawn").and_then(Value::as_bool).unwrap_or(false),
+        drawn,
         drawn_up,
         // Not read: a gone card is one a rebuild found missing, and a
         // saved map is never rebuilt from data (a card marked gone in a
@@ -1094,6 +1117,13 @@ mod tests {
                 e.starts_with("made for a purpose this is-alive doesn't know: "),
                 "{bad}: {e}"
             );
+            // Only a word might be a newer purpose; null or 3 never is.
+            let word = bad.as_str().is_some_and(|s| !s.is_empty());
+            assert_eq!(
+                e.contains("a newer is-alive may open it"),
+                word,
+                "{bad}: {e}"
+            );
         }
         // Shown cleaned and cut.
         let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
@@ -1103,6 +1133,39 @@ mod tests {
             e.contains("\"ab") && !e.contains('\u{202E}') && e.len() < 200,
             "{e}"
         );
+    }
+
+    #[test]
+    fn drawn_that_isnt_true_or_false_is_refused_not_taken_as_discovered() {
+        let base: Value = serde_json::from_str(&to_json(&training())).unwrap();
+        for bad in [
+            json!("yes"),
+            json!(1),
+            json!("true"),
+            json!(null),
+            json!({}),
+        ] {
+            let mut d = base.clone();
+            d["map"]["nodes"][2]["drawn"] = bad.clone();
+            let e = from_json(&d.to_string()).unwrap_err();
+            assert!(
+                e.contains("\"drawn\" should be true or false"),
+                "{bad}: {e}"
+            );
+            let mut d = base.clone();
+            d["map"]["nodes"][4]["up"]["drawn"] = bad.clone();
+            let e = from_json(&d.to_string()).unwrap_err();
+            assert!(
+                e.contains("the link's \"drawn\" should be true or false"),
+                "{bad}: {e}"
+            );
+        }
+        // false is fine, and left out when written again.
+        let mut d = base.clone();
+        d["map"]["nodes"][2]["drawn"] = json!(false);
+        d["map"]["nodes"][4]["up"]["drawn"] = json!(false);
+        let r = from_json(&d.to_string()).unwrap();
+        assert!(!r.map.nodes[2].drawn && !r.map.nodes[4].drawn_up);
     }
 
     #[test]
@@ -1119,6 +1182,14 @@ mod tests {
             let e = from_json(&doc(one.clone(), p)).unwrap_err();
             assert!(e.contains("only a training map"), "{e}");
         }
+        // A file that doesn't say what it is isn't said to be as found.
+        let mut d: Value = serde_json::from_str(&doc(one.clone(), "training")).unwrap();
+        d.as_object_mut().unwrap().remove("purpose");
+        let e = from_json(&d.to_string()).unwrap_err();
+        assert!(
+            e.contains("doesn't say it's a training map") && !e.contains("as found"),
+            "{e}"
+        );
         // An empty one is no answer key.
         assert!(from_json(&doc(json!([]), "as-found")).is_ok());
         // Too many.
