@@ -3,7 +3,8 @@
 use super::*;
 
 impl MapView {
-    pub(super) fn paint(&self, ui: &Ui, rect: Rect) {
+    /// Draw the map; `hover` is the card under the pointer.
+    pub(super) fn paint(&self, ui: &Ui, rect: Rect, hover: Option<usize>) {
         let p = ui.painter_at(rect);
         let vis = ui.visuals();
         let z = self.zoom;
@@ -34,12 +35,15 @@ impl MapView {
 
         let sel = self.selection();
         let (lit, lit_links) = self.lit(&sel);
+        let picked: HashSet<usize> = sel.iter().copied().collect();
         let fade = |i: usize| -> f32 {
             let n = &self.map.nodes[i];
             let mut a: f32 = 1.0;
-            if self.hidden.contains(&n.zone) || !self.matches(n) {
+            // A search miss on the selection's path stays in sight, dimmed
+            // (and can be clicked, see `hit`).
+            if self.faded(i, &lit) {
                 a = 0.15;
-            } else if !sel.is_empty() && !lit.contains(&i) {
+            } else if !sel.is_empty() && (!lit.contains(&i) || !self.matches(n)) {
                 a = 0.45;
             }
             let age = (now - self.born.get(&n.id).copied().unwrap_or(0.0)) as f32;
@@ -52,6 +56,14 @@ impl MapView {
         };
 
         // Boxes (Zones and Sites modes), under everything else.
+        let hot_site = if hover.is_none() {
+            self.site_title_at(rect, ui.input(|i| i.pointer.hover_pos()))
+        } else {
+            None
+        };
+        // Titles written above their boxes sit in the gap the links run
+        // through: drawn after the links, on a patch of the canvas.
+        let mut above = Vec::new();
         for b in &self.lay.boxes {
             let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
             if !r.intersects(rect) {
@@ -70,7 +82,9 @@ impl MapView {
                 Stroke::new(1.2, c.gamma_multiply(0.5 * a)),
                 StrokeKind::Inside,
             );
-            if z < 0.25 {
+            // A site's title folds it: brighter under the pointer.
+            let hot = b.tree && hot_site.as_deref() == Some(b.title.as_str());
+            if title_above(z) {
                 // Too short a title strip to write in: the name sits just
                 // above the box, small, in the gap between boxes.
                 let title = if b.tree && self.map.closed.contains_key(&b.title) {
@@ -78,9 +92,10 @@ impl MapView {
                 } else {
                     b.title.to_uppercase()
                 };
+                let tc = if hot { vis.strong_text_color() } else { c };
                 let mut job = LayoutJob::single_section(
                     title,
-                    egui::TextFormat::simple(FontId::proportional(8.0), c.gamma_multiply(a)),
+                    egui::TextFormat::simple(FontId::proportional(8.0), tc.gamma_multiply(a)),
                 );
                 job.wrap = egui::text::TextWrapping {
                     max_width: r.width().max(20.0),
@@ -90,7 +105,7 @@ impl MapView {
                 };
                 let g = p.layout_job(job);
                 let at = pos2(r.min.x + 2.0, r.min.y - g.size().y - 1.0);
-                p.with_clip_rect(rect).galley(at, g, c);
+                above.push((at, g, c));
             } else {
                 let mid = r.min.y + layout::BOX_TITLE * z / 2.0;
                 let mut x = r.min.x + layout::BOX_PAD * z;
@@ -98,10 +113,6 @@ impl MapView {
                 // A site's title folds it: a chevron says which way.
                 if b.tree {
                     let closed = self.map.closed.get(&b.title);
-                    let hot = self
-                        .site_title_at(rect, ui.input(|i| i.pointer.hover_pos()))
-                        .as_deref()
-                        == Some(b.title.as_str());
                     let tc = if hot { vis.strong_text_color() } else { c };
                     chevron(&p, pos2(x + 5.0 * z, mid), 4.5 * z, closed.is_none(), tc);
                     x += 14.0 * z;
@@ -207,131 +218,87 @@ impl MapView {
             Link::Assumed => vis.weak_text_color(),
             _ => self.accent(n),
         };
-        let group = |i: usize| self.lay.group.get(i).copied().flatten();
-        // Links from one card into another box fold into one trunk:
-        // (parent, box) → (children, any lit, brightest).
-        let mut trunks: std::collections::BTreeMap<(usize, usize), (Vec<usize>, bool, f32)> =
-            Default::default();
-        // Weakest first: cards stacked under one uplink share its line, so a
-        // solid link drawn last covers the dashes of an assumed one there
-        // instead of beading it.
-        let mut order: Vec<usize> = (0..self.map.nodes.len()).collect();
-        order.sort_by_key(|&i| self.map.nodes[i].link().map_or(0, strength));
-        for i in order {
-            let n = &self.map.nodes[i];
-            let Some((up, link, _)) = &n.up else {
-                continue;
-            };
-            let alpha = fade(i).min(fade(*up));
-            let on = lit_links.contains(&i);
-            if let Some(g) = group(i)
-                && group(*up) != Some(g)
-            {
-                let t = trunks.entry((*up, g)).or_default();
-                t.0.push(i);
-                t.1 |= on;
-                t.2 = t.2.max(alpha);
-                continue;
-            }
+        let lines = layout::lines(
+            &self.map,
+            &self.lay,
+            &|i| self.pos.get(&self.map.nodes[i].id).copied(),
+            &|i| self.placed.contains_key(&self.map.nodes[i].id),
+        );
+        for line in lines {
+            let on = line.kids.iter().any(|k| lit_links.contains(k));
             // Inside one box, links would cut across its grid: shown only
-            // while one end is selected.
-            // (Sites boxes hold a tree, so theirs are drawn.)
-            let tree = group(i)
-                .and_then(|g| self.lay.boxes.get(g))
-                .is_some_and(|b| b.tree);
-            if group(i).is_some() && group(i) == group(*up) && !on && !tree {
+            // while lit.
+            if line.quiet && !on {
                 continue;
             }
-            let (Some(a), Some(b)) = (self.pos.get(&self.map.nodes[*up].id), self.pos.get(&n.id))
-            else {
-                continue;
-            };
-            // Dragged by hand (either end): joined on the sides facing each
-            // other, as they sit now, rather than the layout's route.
-            let moved = self.placed.contains_key(&n.id)
-                || self.placed.contains_key(&self.map.nodes[*up].id);
-            let world = if moved {
-                layout::route_free(*a, *b)
-            } else {
-                layout::route(*a, *b, self.lay.stacked[i], self.lay.trunk[i])
-            };
-            let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
-            // The link's port or note is a chip on its card (see `card`).
-            flows |= draw(
-                &pts,
-                colour(n, *link),
-                self.accent(n),
-                *link,
-                width(*link, on),
-                alpha,
-                on,
-                None,
-            );
-        }
-        for ((up, g), (kids, on, alpha)) in &trunks {
-            let (Some(a), Some(b)) = (
-                self.pos.get(&self.map.nodes[*up].id),
-                self.lay.boxes.get(*g),
-            ) else {
-                continue;
-            };
-            let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
-            let world: Vec<Pos2> = if b.rect.top() > from.y + 8.0 {
-                // Below: into the middle of the box's top edge.
-                let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
-                layout::route(*a, into, false, None)
-            } else {
-                // Beside it (same row): under both boxes and up into its
-                // bottom, rather than along the cards' edges.
-                let own = group(*up).and_then(|g| self.lay.boxes.get(g));
-                let floor =
-                    own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom()) + layout::BOX_PAD;
-                let x = b.rect.center().x;
-                vec![
-                    from,
-                    pos2(from.x, floor),
-                    pos2(x, floor),
-                    pos2(x, b.rect.bottom()),
-                ]
-            };
-            let pts: Vec<Pos2> = world.into_iter().map(|w| self.to_screen(rect, w)).collect();
-            // The trunk carries its strongest link: one solid uplink makes
+            let alpha = line
+                .kids
+                .iter()
+                .map(|&k| fade(k).min(fade(line.up)))
+                .fold(0.0, f32::max);
+            let pts: Vec<Pos2> = line.pts.iter().map(|w| self.to_screen(rect, *w)).collect();
+            // A trunk carries its strongest link: one solid uplink makes
             // the shared line solid.
-            let first = kids
+            let first = line
+                .kids
                 .iter()
                 .map(|&k| &self.map.nodes[k])
-                .max_by_key(|m| m.link().map_or(0, strength))
-                .expect("a trunk has cards");
+                .max_by_key(|m| m.link().map_or(0, layout::strength))
+                .expect("a line carries a link");
             let link = first.link().unwrap_or(Link::Wired);
-            let count = format!("×{}", kids.len());
+            let Some(g) = line.into.and_then(|g| self.lay.boxes.get(g)) else {
+                // The link's port or note is a chip on its card (see `card`).
+                flows |= draw(
+                    &pts,
+                    colour(first, link),
+                    self.accent(first),
+                    link,
+                    width(link, on),
+                    alpha,
+                    on,
+                    None,
+                );
+                continue;
+            };
+            let count = format!("×{}", line.kids.len());
             let end = *pts.last().expect("route has points");
-            let label = (kids.len() > 1).then(|| {
+            let label = (line.kids.len() > 1).then(|| {
                 (
                     end + vec2(5.0, -4.0),
                     egui::Align2::LEFT_BOTTOM,
                     count.as_str(),
                 )
             });
-            let base = b.zone.map_or_else(|| colour(first, link), zone_colour);
+            let base = g.zone.map_or_else(|| colour(first, link), zone_colour);
             flows |= draw(
                 &pts,
                 base,
                 self.accent(first),
                 link,
-                width(link, *on) + 0.6,
-                *alpha,
-                *on,
+                width(link, on) + 0.6,
+                alpha,
+                on,
                 label,
             );
         }
 
-        // Cards: infrastructure over clients.
-        let hover = ui
-            .input(|i| i.pointer.hover_pos())
-            .filter(|h| rect.contains(*h))
-            .and_then(|h| self.hit(self.to_world(rect, h)));
+        let behind = if vis.panel_fill.a() == 255 {
+            vis.panel_fill
+        } else {
+            vis.extreme_bg_color
+        };
+        for (at, g, c) in above {
+            let back = Rect::from_min_size(at, g.size()).expand2(vec2(2.0, 0.5));
+            p.rect_filled(back, 2, behind);
+            p.with_clip_rect(rect).galley(at, g, c);
+        }
+
+        // Cards: infrastructure over clients, selected ones over the rest,
+        // the ones dragged last on top. The cards an open menu acts on are
+        // marked as if hovered.
+        let menu: HashSet<usize> = self.menu_cards().into_iter().collect();
         let mut pulse = false;
-        for i in 0..self.map.nodes.len() {
+        for i in self.stack() {
             let Some(s) = at(i) else { continue };
             let r = Rect::from_min_size(s, CARD * z);
             if !r.intersects(rect) {
@@ -344,8 +311,8 @@ impl MapView {
                 i,
                 r,
                 fade(i),
-                sel.contains(&i),
-                hover == Some(i),
+                picked.contains(&i),
+                hover == Some(i) || menu.contains(&i),
                 now,
             );
         }
@@ -610,14 +577,4 @@ impl MapView {
 /// Height of one line of text in `font`, as laid out in a card.
 fn ui_row_height(font: &FontId) -> f32 {
     font.size * 1.25
-}
-
-/// How solid a link is drawn, weakest first: the order links are painted in.
-fn strength(l: Link) -> u8 {
-    match l {
-        Link::Assumed => 0,
-        Link::Wireless => 1,
-        Link::Wired => 2,
-        Link::Backbone => 3,
-    }
 }

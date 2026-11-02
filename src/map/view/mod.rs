@@ -1,7 +1,7 @@
 //! The Map tab: pan (drag), zoom (wheel or pinch), drag a card to move it,
-//! click to trace its path to the internet, search, filter by role, and a
-//! findings band. It rebuilds as the sweep finds hosts, so a scan can be
-//! watched filling in the map.
+//! click to trace its path to the internet, Ctrl+click to see what joins
+//! several cards, search, filter by role, and a findings band. It rebuilds
+//! as the sweep finds hosts, so a scan can be watched filling in the map.
 
 mod interact;
 mod paint;
@@ -18,6 +18,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontId, Painter, Pos2, Rect, RichText, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2, pos2, text::LayoutJob, vec2,
 };
+use interact::title_above;
 use panel::card_text;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -83,6 +84,15 @@ impl Clients {
     }
 }
 
+/// What a right-click menu item adds to the cards it acts on.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Grow {
+    Uplink,
+    Path,
+    Children,
+    Below,
+}
+
 /// What the detail panel asked for.
 enum PanelEv {
     /// Show every client under this uplink, or fold them back.
@@ -127,6 +137,11 @@ pub struct MapView {
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
+    /// The shown card was picked on its own (a plain click, search, a
+    /// finding, a panel link): its whole path to the internet lights, and
+    /// its children's links. Off for Ctrl+click and right-click menu
+    /// selections, which light only what joins their cards.
+    traced: bool,
     /// Light each selected card's whole path to the internet, not only
     /// the links between the selected cards.
     trace_wan: bool,
@@ -139,8 +154,15 @@ pub struct MapView {
     slots: HashMap<String, usize>,
     /// The detail panel's order, top first; dragged by hand.
     order: Vec<String>,
-    /// The card a right-click opened the menu for.
-    menu_for: Option<usize>,
+    /// What the open right-click menu is for.
+    menu: Option<Menu>,
+    /// What the last plain click on a card replaced, and when: a
+    /// double-click puts it back, so zooming to one card of a group keeps
+    /// the group.
+    undo: Option<interact::Undo>,
+    /// A text box had the keyboard or a menu was open last frame: Esc
+    /// there was theirs, not the map's.
+    keys_busy: bool,
     /// What the detail panel shows while it slides shut.
     shown: Option<String>,
     hidden: HashSet<Zone>,
@@ -159,7 +181,16 @@ pub struct MapView {
     /// The canvas as it was with no card selected: what the map fits to
     /// while the panel is open.
     wide: Option<Rect>,
+    /// How wide the detail panel is this frame (it slides), and open.
+    panel_now: f32,
+    panel_full: f32,
+    /// The files the map is drawn from: another set (an example picked, a
+    /// file loaded or cleared) is another map, shown whole.
+    source: u64,
     drag: Option<String>,
+    /// The cards dragged last (the one dragged, or the selection it brought
+    /// along): drawn over the rest.
+    raised: Vec<String>,
     /// When the map was last rebuilt, to pace rebuilds during a sweep.
     built_at: f64,
     /// The left sidebar is open (closed: a › button on the canvas).
@@ -177,10 +208,31 @@ pub struct MapView {
     /// Reload or a new sweep starts from an empty map), so a site back in
     /// the data comes back collapsed.
     closed: HashSet<String>,
-    /// A site's title was clicked (or its row in the sidebar): collapse or
-    /// expand it.
-    flip_site: Option<String>,
+    /// Sites whose title was clicked (or their row in the sidebar, or the
+    /// menu): collapse or expand them.
+    flip_sites: Vec<String>,
+    /// When a site's title on the canvas was last clicked: the second click
+    /// of a double-click there is ignored (the boxes have moved under it).
+    flipped_at: f64,
+    /// The sidebar's starting state was picked for the window's width.
+    sized: bool,
 }
+
+/// What a right-click menu was opened on.
+#[derive(Clone, PartialEq, Debug)]
+enum Menu {
+    /// A card, by id (the map can rebuild while the menu is open).
+    Card(String),
+    /// The empty canvas.
+    Background,
+}
+
+/// The detail panel's id, and its width until it's dragged.
+const PANEL: &str = "map_detail";
+const PANEL_SIZE: f32 = 320.0;
+
+/// Why a control is greyed out on an empty map.
+const NOTHING_YET: &str = "Nothing on the map yet";
 
 /// Flag on a pinned card that's missing from the latest data.
 pub const GONE_FLAG: &str =
@@ -200,8 +252,9 @@ struct Focus {
     on: Option<Vec<usize>>,
     /// A site title clicked in the sidebar.
     site: Option<String>,
-    /// A card named in the panel (an uplink, a child).
-    pick: Option<usize>,
+    /// A card named in the panel (an uplink, a child); true with Ctrl
+    /// held, to add it to the selection.
+    pick: Option<(usize, bool)>,
     /// Enter in the search box: the first match.
     search: bool,
 }
@@ -420,6 +473,9 @@ impl MapView {
         if key == self.key && !self.stale {
             return;
         }
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        src.export.map_sources().hash(&mut s);
+        let source = s.finish();
         // A sweep adds hosts every frame: rebuild a few times a second.
         let now = ctx.input(|i| i.time);
         if src.sweep.is_running() && now - self.built_at < 0.25 {
@@ -439,8 +495,26 @@ impl MapView {
         for (from, to) in self.carry_gone(&self.map, &mut map) {
             self.rename(&from, &to);
         }
+        // Another map, or one after none: show all of it, not the last
+        // map's zoom and spot. Reload (the same files) and a sweep filling
+        // the map in keep the view.
+        if source != self.source || self.map.nodes.is_empty() {
+            self.source = source;
+            self.new_map();
+        }
         self.map = map;
         self.relayout(ctx);
+    }
+
+    /// Start a new map's view: fitted whole, nothing moved, nothing but the
+    /// pinned cards selected.
+    fn new_map(&mut self) {
+        self.follow = true;
+        self.aim = None;
+        self.placed.clear();
+        self.raised.clear();
+        self.undo = None;
+        self.select(None);
     }
 
     fn relayout(&mut self, ctx: &egui::Context) {
@@ -464,6 +538,7 @@ impl MapView {
         self.pos.retain(|k, _| ids.contains(k.as_str()));
         self.born.retain(|k, _| ids.contains(k.as_str()));
         self.also.retain(|s| ids.contains(s.as_str()));
+        self.raised.retain(|s| ids.contains(s.as_str()));
         // A pinned card inside a collapsed site keeps its pin for when the
         // site opens again.
         let map = &self.map;
@@ -482,20 +557,31 @@ impl MapView {
     }
 
     /// Every selected card: pinned ones, Ctrl+clicked ones, the one clicked last.
+    /// One pass over the cards, however many are selected: a big map with
+    /// every card selected asks for this several times a frame.
     fn selection(&self) -> Vec<usize> {
-        let mut v: Vec<usize> = Vec::new();
-        for i in self
+        let ids: Vec<&str> = self
             .kept
             .iter()
             .chain(&self.also)
             .chain(&self.selected)
-            .filter_map(|s| self.index(s))
-        {
-            if !v.contains(&i) {
-                v.push(i);
+            .map(String::as_str)
+            .collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let want: HashSet<&str> = ids.iter().copied().collect();
+        let mut at: HashMap<&str, usize> = HashMap::new();
+        for (i, n) in self.map.nodes.iter().enumerate() {
+            if want.contains(n.id.as_str()) {
+                at.entry(n.id.as_str()).or_insert(i);
             }
         }
-        v
+        let mut seen = HashSet::new();
+        ids.iter()
+            .filter_map(|s| at.get(s).copied())
+            .filter(|&i| seen.insert(i))
+            .collect()
     }
 
     /// Pin a card in the selection, or let it go. A pinned card holds the
@@ -525,19 +611,24 @@ impl MapView {
     fn ordered(&mut self) -> Vec<usize> {
         let sel = self.selection();
         let ids: Vec<String> = sel.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
+        let picked: HashSet<&String> = ids.iter().collect();
         self.slots.retain(|s, _| self.kept.contains(s));
         let mut free: Vec<String> = self
             .order
             .iter()
-            .filter(|s| ids.contains(s) && !self.slots.contains_key(*s))
+            .filter(|s| picked.contains(s) && !self.slots.contains_key(*s))
             .cloned()
             .collect();
         // Selection runs oldest to newest, so the newest lands on top.
-        for id in &ids {
-            if !self.slots.contains_key(id) && !free.contains(id) {
-                free.insert(0, id.clone());
-            }
-        }
+        let mut listed: HashSet<String> = free.iter().cloned().collect();
+        let mut new: Vec<String> = ids
+            .iter()
+            .filter(|id| !self.slots.contains_key(*id) && listed.insert((*id).clone()))
+            .cloned()
+            .collect();
+        new.reverse();
+        new.append(&mut free);
+        let mut free = new;
         // Pinned cards go back in their slots, lowest first so each insert
         // leaves the ones above it alone. A slot past the end shows last but
         // is kept, so the card returns to it as the panel fills up again.
@@ -592,29 +683,80 @@ impl MapView {
         }
     }
 
+    /// A plain click: this card alone (pinned ones stay), lit with its
+    /// whole path to the internet. None lets go of all but the pinned.
     fn select(&mut self, i: Option<usize>) {
         self.selected = i.map(|i| self.map.nodes[i].id.clone());
         self.also.clear();
+        // Pinned cards left on their own weren't clicked: they light only
+        // what joins them, and the panel offers Trace to WAN.
+        self.traced = i.is_some();
     }
 
     /// Select card `i` with `others` (the right-click menu's "Select
-    /// children" and the like): `i` stays the one shown first, the rest
-    /// join it. Cards a folded site hides are left out.
-    fn select_with(&mut self, i: usize, others: &[usize]) {
+    /// children" and the like, a site, a finding): `i` is shown first and
+    /// the rest join it, in their order, under it in the panel. Only what
+    /// joins them lights. Cards a folded site hides are left out.
+    fn select_group(&mut self, i: usize, others: &[usize]) {
         self.select(Some(i));
+        self.traced = false;
+        let mut added = vec![self.map.nodes[i].id.clone()];
         for &c in others {
             let shown = self.lay.pos.get(c).is_some_and(Option::is_some);
             let id = &self.map.nodes[c].id;
-            if c != i && shown && !self.also.contains(id) {
-                self.also.push(id.clone());
+            if c != i && shown && !added.contains(id) {
+                added.push(id.clone());
+                if !self.kept.contains(id) {
+                    self.also.push(id.clone());
+                }
             }
+        }
+        // The panel: this card on top, the ones it brought under it.
+        self.order.retain(|s| !added.contains(s));
+        self.order.splice(0..0, added);
+    }
+
+    /// What the right-click menu on card `i` acts on: the whole selection
+    /// when `i` is one of several selected cards, else `i` alone.
+    fn menu_group(&self, i: usize) -> Vec<usize> {
+        let sel = self.selection();
+        if sel.len() > 1 && sel.contains(&i) {
+            // The card right-clicked first, the rest as selected.
+            let mut g = vec![i];
+            g.extend(sel.into_iter().filter(|&k| k != i));
+            g
+        } else {
+            vec![i]
         }
     }
 
-    /// What a selection lights: (cards, links by their lower card). One
-    /// card: its uplink and its children's links. More: only the part of
-    /// the tree that joins them, so nothing past the topmost selected card
-    /// lights up. With Trace to WAN, each card's path to the internet too.
+    /// The cards a right-click menu item adds to `group` (each card's
+    /// uplink, path, children or everything below), nearest first.
+    fn grow(&self, group: &[usize], more: Grow) -> Vec<usize> {
+        let mut out: Vec<usize> = group.to_vec();
+        let mut seen: HashSet<usize> = group.iter().copied().collect();
+        let kids = match more {
+            Grow::Children | Grow::Below => self.map.children(),
+            Grow::Uplink | Grow::Path => Vec::new(),
+        };
+        for &g in group {
+            let add: Vec<usize> = match more {
+                Grow::Uplink => self.map.nodes[g].parent().into_iter().collect(),
+                Grow::Path => self.map.path(g).into_iter().rev().collect(),
+                Grow::Children => kids[g].clone(),
+                Grow::Below => below_in(&kids, g),
+            };
+            out.extend(add.into_iter().filter(|&k| seen.insert(k)));
+        }
+        out
+    }
+
+    /// What a selection lights: (cards, links by their lower card). A card
+    /// picked on its own (a plain click): its whole path to the internet
+    /// and its children's links. One card picked otherwise: its uplink and
+    /// its children's links. More: only the part of the tree that joins
+    /// them, so nothing past the topmost selected card lights up. With
+    /// Trace to WAN, each card's path to the internet too.
     fn lit(&self, sel: &[usize]) -> (HashSet<usize>, HashSet<usize>) {
         let n = self.map.nodes.len();
         let mut cards: HashSet<usize> = sel.iter().copied().filter(|&i| i < n).collect();
@@ -623,11 +765,23 @@ impl MapView {
             return (cards, links);
         }
         let parent = |i: usize| self.map.nodes[i].parent();
-        if self.trace_wan {
-            for &s in sel {
-                let path = self.map.path(s);
-                links.extend(path.iter().skip(1).copied());
-                cards.extend(path);
+        let shown = self.tracing();
+        let traced: Vec<usize> = if self.trace_wan {
+            sel.to_vec()
+        } else {
+            shown.into_iter().collect()
+        };
+        for s in traced {
+            let path = self.map.path(s);
+            links.extend(path.iter().skip(1).copied());
+            cards.extend(path);
+        }
+        if let Some(s) = shown {
+            for (k, node) in self.map.nodes.iter().enumerate() {
+                if node.parent() == Some(s) {
+                    cards.insert(k);
+                    links.insert(k);
+                }
             }
         }
         if sel.len() == 1 {
@@ -670,31 +824,13 @@ impl MapView {
         (cards, links)
     }
 
-    /// Every card below `i`, nearest first.
-    fn below(&self, i: usize) -> Vec<usize> {
-        let kids = self.map.children();
-        let mut out = Vec::new();
-        let mut next = vec![i];
-        let mut seen = vec![false; kids.len()];
-        seen[i] = true;
-        while !next.is_empty() {
-            let mut level = Vec::new();
-            for p in next {
-                for &c in &kids[p] {
-                    if !seen[c] {
-                        seen[c] = true;
-                        level.push(c);
-                    }
-                }
-            }
-            out.extend(&level);
-            next = level;
-        }
-        out
-    }
-
     /// Ctrl+click: add the card to the selection, or take it out (pinned too).
+    /// Adding one makes a selection picked together: only what joins the
+    /// cards lights from then on. Taking one out leaves a card clicked on
+    /// its own lit as it was, its path to the internet and all, unless it's
+    /// the one taken out.
     fn toggle(&mut self, i: usize) {
+        let was = self.selected.clone();
         let id = self.map.nodes[i].id.clone();
         if let Some(k) = self.kept.iter().position(|s| *s == id) {
             self.kept.remove(k);
@@ -711,6 +847,24 @@ impl MapView {
             self.also.extend(self.selected.take());
             self.selected = Some(id);
         }
+        if self.selected != was {
+            self.traced = false;
+        }
+    }
+
+    /// The card lit with its whole path to the internet: the one shown,
+    /// when it was picked on its own.
+    fn tracing(&self) -> Option<usize> {
+        self.selected
+            .as_deref()
+            .and_then(|s| self.index(s))
+            .filter(|_| self.traced)
+    }
+
+    /// The selection lights only what joins its cards, so Trace to WAN has
+    /// paths to add (a card clicked on its own shows its path already).
+    fn joins_only(&self) -> bool {
+        self.selection().len() > 1 || self.tracing().is_none()
     }
 
     fn target(&self, i: usize) -> Option<Pos2> {
@@ -749,6 +903,57 @@ impl MapView {
         self.fit_to(view, self.bounds());
     }
 
+    /// Fit asked for (the Fit button, a double-click on the background):
+    /// the whole map in the view as it is now, panel or not, and kept in
+    /// view as it grows.
+    fn fit_view(&mut self, view: Rect) {
+        let view = self.settled(view);
+        self.follow = true;
+        self.wide = Some(view);
+        self.fit(view);
+    }
+
+    /// Select the cards a finding names, lighting what joins them, and
+    /// bring them into view (one card: centred, close enough to read).
+    fn show_cards(&mut self, view: Rect, cards: &[usize]) {
+        let cards: Vec<usize> = cards
+            .iter()
+            .copied()
+            .filter(|&i| i < self.map.nodes.len())
+            .collect();
+        match cards.as_slice() {
+            [] => {}
+            [one] => {
+                self.select(Some(*one));
+                self.focus(view, *one);
+            }
+            [first, ..] => {
+                self.select_group(*first, &cards);
+                let area = cards
+                    .iter()
+                    .filter_map(|&i| self.target(i))
+                    .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD)));
+                self.fit_to(self.settled(view), area);
+                self.follow = false;
+            }
+        }
+    }
+
+    /// The canvas `rect` as it will be once the detail panel has slid open
+    /// (anything selected) or shut: a fit asked for now frames that, not
+    /// the canvas mid-slide, nor the canvas before a selection made this
+    /// frame opens the panel.
+    fn settled(&self, rect: Rect) -> Rect {
+        let end = if self.selection().is_empty() {
+            0.0
+        } else {
+            self.panel_full
+        };
+        let mut r = rect;
+        r.max.x = (r.max.x + self.panel_now - end).max(r.min.x + 100.0);
+        r
+    }
+
     /// Ease the view so the middle of the map sits in the middle of `view`,
     /// keeping the zoom.
     fn center(&mut self, view: Rect) {
@@ -761,19 +966,22 @@ impl MapView {
         self.follow = false;
     }
 
-    /// Ease the view to show the world rect `b`.
+    /// Ease the view to show the world rect `b`, clear of the zoom
+    /// controls and legend along the bottom.
     fn fit_to(&mut self, view: Rect, b: Rect) {
         if !b.is_positive() {
             return;
         }
-        let zoom = ((view.width() - 60.0) / b.width())
-            .min((view.height() - 60.0) / b.height())
+        let room = fit_room(view);
+        let zoom = (room.width() / b.width())
+            .min(room.height() / b.height())
             .clamp(MIN_ZOOM, 1.0);
-        let pan = view.size() / 2.0 - b.center().to_vec2() * zoom;
+        let pan = room.center() - view.min - b.center().to_vec2() * zoom;
         self.aim = Some((pan, zoom));
     }
 
     fn focus(&mut self, view: Rect, i: usize) {
+        let view = self.settled(view);
         if let Some(p) = self.target(i) {
             let zoom = self.zoom.max(0.85);
             let c = p + CARD / 2.0;
@@ -795,6 +1003,12 @@ impl MapView {
             ui.separator();
             return act.or(empty_state(ui, src.info));
         }
+        // A narrow window starts with the sidebar shut: the map needs the
+        // room more (the › button and the legend stand in for it).
+        if !self.sized {
+            self.sized = true;
+            self.side &= ui.available_width() >= 900.0;
+        }
         let mut focus = Focus {
             search: bar.search_enter,
             ..Default::default()
@@ -804,6 +1018,8 @@ impl MapView {
         // Left: roles and action items, as /mapnetwork's sidebar has them.
         self.sidebar(ui, &mut focus.on, &mut focus.site);
         self.canvas(ui, bar.fit, focus);
+        // Esc next frame closes a menu or leaves a text box: not the map's.
+        self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
         act
     }
 
@@ -813,19 +1029,16 @@ impl MapView {
         let mut act = None;
         let mut search_enter = false;
         let mut fit = false;
-        // Roughly what one row needs (Re-layout adds a button).
-        let need = if self.placed.is_empty() {
-            990.0
-        } else {
-            1070.0
-        };
-        let narrow = ui.available_width() < need;
+        // Roughly what one row needs.
+        let narrow = ui.available_width() < 1030.0;
         ui.horizontal(|ui| {
+            // Narrower with text in it: room for the count and ×.
+            let width = if self.search.is_empty() { 220.0 } else { 140.0 };
             let r = widgets::line(
                 ui,
                 crate::input::Field::Text,
                 &mut self.search,
-                220.0,
+                width,
                 "Search name, IP, MAC, vendor",
             );
             search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -861,13 +1074,19 @@ impl MapView {
                 .lan
                 .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
             if !empty {
-                let tip = format!(
-                    "Sweep {} again and update the map as hosts answer",
-                    subnet.as_deref().unwrap_or("this machine's subnet")
-                );
+                let subnet = subnet.as_deref().unwrap_or("this machine's subnet");
+                let tip = if src.export.example_open() {
+                    format!(
+                        "Close the example and sweep {subnet}, filling in the map as hosts answer"
+                    )
+                } else if src.sweep.finished().is_some() {
+                    format!("Sweep {subnet} again and update the map as hosts answer")
+                } else {
+                    format!("Sweep {subnet} and add what answers to the map")
+                };
                 if ui
                     .add_enabled(
-                        subnet.is_some() && !src.sweep.is_running(),
+                        src.info.lan.is_some() && !src.sweep.is_running(),
                         egui::Button::new("Scan"),
                     )
                     .on_hover_text(&tip)
@@ -882,19 +1101,17 @@ impl MapView {
                 }
             }
             ui.add_enabled_ui(!empty, |ui| {
+                // Always there, so the buttons after it never move; it
+                // has something to do once a card was dragged.
                 if ui
-                    .button("Fit")
-                    .on_hover_text("Fit the map (or double-click the background)")
+                    .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
+                    .on_hover_text("Put dragged cards back where the layout had them")
+                    .on_disabled_hover_text(if empty {
+                        NOTHING_YET
+                    } else {
+                        "Puts dragged cards back where the layout had them: no card was dragged"
+                    })
                     .clicked()
-                {
-                    fit = true;
-                }
-                // Only once a card was dragged: room for the rest.
-                if !self.placed.is_empty()
-                    && ui
-                        .button("Re-layout")
-                        .on_hover_text("Put dragged cards back where the layout had them")
-                        .clicked()
                 {
                     self.placed.clear();
                     fit = true;
@@ -906,37 +1123,31 @@ impl MapView {
                          selection. (It already updates by itself as a sweep finds hosts or a \
                          file is loaded.)",
                     )
+                    .on_disabled_hover_text(NOTHING_YET)
                     .clicked()
                 {
                     act = Some(Action::Reload);
                 }
-                ui.separator();
-                let now = self.mode();
-                for m in Mode::ALL {
-                    if ui
-                        .selectable_label(now == m, m.name())
-                        .on_hover_text(m.tip())
-                        .clicked()
-                        && now != m
-                    {
-                        self.mode = Some(m);
-                        self.placed.clear();
-                        self.relayout(&ctx);
-                        fit = true;
-                        act = Some(Action::Layout(m));
-                    }
-                }
             });
             if !narrow {
+                ui.separator();
+                if let Some(m) = self.layout_buttons(ui, &ctx, empty) {
+                    fit = true;
+                    act = Some(Action::Layout(m));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     act = act.take().or(self.toolbar_end(ui, src, empty));
                 });
             }
         });
-        // A narrow window: Examples and Export SVG on a row of their own
-        // rather than over the layout buttons.
+        // A narrow window: the layouts, Examples and Export SVG on a row of
+        // their own rather than cut off at the window's edge.
         if narrow {
             ui.horizontal(|ui| {
+                if let Some(m) = self.layout_buttons(ui, &ctx, empty) {
+                    fit = true;
+                    act = Some(Action::Layout(m));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     act = act.take().or(self.toolbar_end(ui, src, empty));
                 });
@@ -949,32 +1160,59 @@ impl MapView {
         }
     }
 
+    /// Sites, Cluster, Tree, Zones; the one picked, if it changed.
+    fn layout_buttons(&mut self, ui: &mut Ui, ctx: &egui::Context, empty: bool) -> Option<Mode> {
+        let mut picked = None;
+        ui.add_enabled_ui(!empty, |ui| {
+            let now = self.mode();
+            for m in Mode::ALL {
+                if ui
+                    .selectable_label(now == m, m.name())
+                    .on_hover_text(m.tip())
+                    .on_disabled_hover_text(NOTHING_YET)
+                    .clicked()
+                    && now != m
+                {
+                    self.mode = Some(m);
+                    self.placed.clear();
+                    self.relayout(ctx);
+                    picked = Some(m);
+                }
+            }
+        });
+        picked
+    }
+
     /// The toolbar's right end, drawn right to left: Export SVG, Examples.
     fn toolbar_end(&self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
         ui.add_enabled_ui(!empty, |ui| {
             if ui
                 .button("Export SVG…")
                 .on_hover_text("Save the map as SVG")
+                .on_disabled_hover_text(NOTHING_YET)
                 .clicked()
             {
-                let pos: Vec<Option<Pos2>> =
-                    (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
-                widgets::save_file(
-                    "is-alive-map.svg".into(),
-                    "SVG",
-                    vec!["svg"],
-                    super::svg::render(
-                        &self.map,
-                        &pos,
-                        &self.lay.stacked,
-                        &self.lay.trunk,
-                        &self.lay.boxes,
-                        ui.visuals().dark_mode,
-                    ),
-                );
+                self.export_svg(ui.visuals().dark_mode);
             }
         });
         examples_menu(ui, src)
+    }
+
+    /// Ask where to save the map as SVG, as it's laid out now.
+    fn export_svg(&self, dark: bool) {
+        let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
+        let moved: Vec<bool> = self
+            .map
+            .nodes
+            .iter()
+            .map(|n| self.placed.contains_key(&n.id))
+            .collect();
+        widgets::save_file(
+            "is-alive-map.svg".into(),
+            "SVG",
+            vec!["svg"],
+            super::svg::render(&self.map, &pos, &self.lay, &moved, dark),
+        );
     }
 
     /// Under the toolbar: the map's summary, the accuracy note, and how far
@@ -1008,7 +1246,7 @@ impl MapView {
         &mut self,
         ui: &mut Ui,
         src: &Sources,
-        pick: &mut Option<usize>,
+        pick: &mut Option<(usize, bool)>,
     ) -> Option<Action> {
         let mut act = None;
         if self.selected.is_some() {
@@ -1017,13 +1255,17 @@ impl MapView {
         let mut open = !self.selection().is_empty();
         let mut ev: Option<PanelEv> = None;
         let stack = self.ordered();
-        egui::Panel::right("map_detail")
+        let right = ui.available_rect_before_wrap().right();
+        egui::Panel::right(PANEL)
             .resizable(true)
-            .default_size(320.0)
+            .default_size(PANEL_SIZE)
             .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
                 act = self.detail(ui, stack, src.busy, pick, &mut ev);
             });
+        self.panel_now = right - ui.available_rect_before_wrap().right();
+        self.panel_full = egui::PanelState::load(ui.ctx(), egui::Id::new(PANEL))
+            .map_or(PANEL_SIZE, |p| p.size().x);
         if !open {
             self.select(None);
         }
@@ -1082,8 +1324,7 @@ impl MapView {
         }
         let wide = self.wide.map_or(rect, |w| w.union(rect));
         if fit {
-            self.follow = true;
-            self.fit(rect);
+            self.fit_view(rect);
         } else if self.follow && self.drag.is_none() {
             self.fit(wide);
             if let (Some(i), Some((pan, zoom))) = (selected, self.aim)
@@ -1096,13 +1337,22 @@ impl MapView {
                 }
             }
         }
-        if let Some(&first) = focus_on.as_ref().and_then(|ids| ids.first()) {
-            self.select(Some(first));
-            self.focus(rect, first);
+        if let Some(cards) = focus_on {
+            self.show_cards(rect, &cards);
         }
-        if let Some(i) = pick {
-            self.select(Some(i));
-            self.focus(rect, i);
+        match pick {
+            // Ctrl+click on a name in the panel adds that card.
+            Some((i, true)) => {
+                if !self.selection().contains(&i) {
+                    self.toggle(i);
+                }
+                self.focus(rect, i);
+            }
+            Some((i, false)) => {
+                self.select(Some(i));
+                self.focus(rect, i);
+            }
+            None => {}
         }
         if search_enter && let Some(i) = self.map.nodes.iter().position(|n| self.matches(n)) {
             self.select(Some(i));
@@ -1111,13 +1361,13 @@ impl MapView {
         if let Some(site) = focus_site {
             self.show_site(rect, &site);
         }
-        self.interact(ui, rect, &resp);
-        if let Some(site) = self.flip_site.take() {
+        let hover = self.interact(ui, rect, &resp);
+        for site in std::mem::take(&mut self.flip_sites) {
             self.flip(&site);
             ctx.request_repaint();
         }
         self.animate(&ctx);
-        self.paint(ui, rect);
+        self.paint(ui, rect, hover);
         // With the sidebar shut, the roles go back on the canvas, beside a
         // button that opens it again.
         if !self.side {
@@ -1183,6 +1433,34 @@ For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
     act
 }
 
+/// Every card below `i` in the child table `kids`, nearest first.
+fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut next = vec![i];
+    let mut seen = vec![false; kids.len()];
+    seen[i] = true;
+    while !next.is_empty() {
+        let mut level = Vec::new();
+        for p in next {
+            for &c in &kids[p] {
+                if !seen[c] {
+                    seen[c] = true;
+                    level.push(c);
+                }
+            }
+        }
+        out.extend(&level);
+        next = level;
+    }
+    out
+}
+
+/// Where Fit puts the map in `view`: a margin all round, more at the
+/// bottom, where the zoom controls and the legend sit.
+fn fit_room(view: Rect) -> Rect {
+    Rect::from_min_max(view.min + vec2(30.0, 24.0), view.max - vec2(30.0, 44.0))
+}
+
 /// A small filled chevron: pointing down when `open`, right when not.
 fn chevron(p: &egui::Painter, c: Pos2, r: f32, open: bool, colour: Color32) {
     let pts = if open {
@@ -1242,42 +1520,36 @@ fn glow_strength(vis: &egui::Visuals) -> f32 {
     }
 }
 
+/// Before anything is mapped: what the map is built from, the first
+/// steps, and the example maps.
 fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
-    let mut act = None;
+    let subnet = info
+        .lan
+        .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
+    let scan_tip = match &subnet {
+        Some(s) => format!("Sweep {s} and watch the map fill in"),
+        None => "No LAN address on this machine".to_string(),
+    };
+    let hit = widgets::empty_state(
+        ui,
+        "Nothing to map yet",
+        "Built from a Subnet Sweep, a UniFi or SonicWall backup, or a /mapnetwork map. A backup \
+         gives the real uplinks; a sweep alone can only place devices under the gateway.",
+        &[
+            ("Scan this network", &scan_tip, subnet.is_some()),
+            (
+                "Open a backup or map…",
+                "Opens Config Export (or drop the file on the window)",
+                true,
+            ),
+        ],
+    );
+    let mut act = match hit {
+        Some(0) => Some(Action::Sweep),
+        Some(1) => Some(Action::Export),
+        _ => None,
+    };
     ui.vertical_centered(|ui| {
-        ui.add_space((ui.available_height() * 0.22).max(12.0));
-        ui.label(RichText::new("Nothing to map yet").heading());
-        ui.add_space(6.0);
-        ui.label(
-            "The map is built from what this app has seen: a Subnet Sweep, and a UniFi backup or \
-SonicWall export loaded in Config Export, or a /mapnetwork map opened there. A backup gives the real uplinks; a sweep alone \
-can only place devices under the gateway.",
-        );
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            let subnet = info
-                .lan
-                .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
-            let w = 360.0;
-            ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
-            if ui
-                .add_enabled(subnet.is_some(), egui::Button::new("Scan this network"))
-                .on_hover_text(format!(
-                    "Sweep {} and watch the map fill in",
-                    subnet.as_deref().unwrap_or("this machine's subnet")
-                ))
-                .clicked()
-            {
-                act = Some(Action::Sweep);
-            }
-            if ui
-                .button("Load a UniFi or SonicWall export…")
-                .on_hover_text("Opens Config Export (or drop the file on the window)")
-                .clicked()
-            {
-                act = Some(Action::Export);
-            }
-        });
         ui.add_space(14.0);
         ui.weak("Or look around one of the example maps (fictional sites):");
         ui.add_space(4.0);
@@ -1361,8 +1633,9 @@ mod tests {
         let (cards, links) = v.lit(&[7, 6]);
         assert_eq!(links, set(&[7, 5, 6]));
         assert_eq!(cards, set(&[7, 5, 6, 3]));
-        // One card: its uplink and its children.
-        let (_, links) = v.lit(&[3]);
+        // One card picked with Ctrl+click: its uplink and its children.
+        v.toggle(3);
+        let (_, links) = v.lit(&v.selection());
         assert_eq!(links, set(&[3, 5, 6]));
         // Trace to WAN adds each card's path to the internet.
         v.trace_wan = true;
@@ -1371,26 +1644,266 @@ mod tests {
         assert!(cards.contains(&0));
     }
 
+    /// 0 internet - 1 gateway - 2 core - {3 access - {5 ap - 7, 6 ap}, 4 server}
+    fn tree8() -> MapView {
+        let mut v = view(8);
+        for (c, p) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3), (6, 3), (7, 5)] {
+            v.map.nodes[c].up = Some((p, crate::map::Link::Wired, None));
+        }
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
+        v
+    }
+
+    fn set(v: &[usize]) -> HashSet<usize> {
+        v.iter().copied().collect()
+    }
+
     #[test]
-    fn select_with_uplinks_and_children() {
+    fn a_plain_click_lights_the_whole_path_to_the_internet() {
+        let mut v = tree8();
+        v.select(Some(3));
+        let (cards, links) = v.lit(&v.selection());
+        // Up to the internet, and down to its children.
+        assert_eq!(links, set(&[1, 2, 3, 5, 6]));
+        assert_eq!(cards, set(&[0, 1, 2, 3, 5, 6]));
+        // The same from search, a finding naming one card, a panel link.
+        v.select(Some(7));
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0) && cards.contains(&1));
+        // A pinned card joins the clicked one; only the clicked one traces.
+        v.keep(7);
+        v.select(Some(4));
+        let (cards, links) = v.lit(&v.selection());
+        assert_eq!(links, set(&[1, 2, 3, 4, 5, 7]));
+        assert!(cards.contains(&0));
+    }
+
+    #[test]
+    fn taking_another_card_out_leaves_a_clicked_card_its_path() {
+        let mut v = tree8();
+        v.select(Some(4));
+        v.keep(4);
+        v.select(Some(7));
+        // × on the pinned card (or Ctrl+click on it): 7 was clicked on its
+        // own and still lights its way to the internet.
+        v.toggle(4);
+        assert_eq!(v.selection(), [7]);
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0));
+        assert!(!v.joins_only(), "no Trace to WAN header for a clicked card");
+        // Taking out the clicked card leaves the pinned one, not traced.
+        v.select(Some(4));
+        v.keep(4);
+        v.select(Some(7));
+        v.toggle(7);
+        assert_eq!(v.selection(), [4]);
+        let (cards, _) = v.lit(&v.selection());
+        assert!(!cards.contains(&0));
+        assert!(v.joins_only());
+    }
+
+    #[test]
+    fn a_pinned_card_left_alone_offers_trace_to_wan() {
+        let mut v = tree8();
+        v.select(Some(7));
+        v.keep(7);
+        // A click on the background or Esc: the pin stays, untraced, and
+        // the panel's header (with Trace to WAN) is there to bring it back.
+        v.select(None);
+        assert_eq!(v.selection(), [7]);
+        assert!(v.joins_only());
+        let (cards, _) = v.lit(&v.selection());
+        assert!(!cards.contains(&0));
+        v.trace_wan = true;
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0));
+    }
+
+    #[test]
+    fn a_search_miss_on_the_lit_path_can_be_clicked() {
+        let mut v = tree8();
+        for (k, n) in v.map.nodes.iter_mut().enumerate() {
+            n.label = format!("dev{k}");
+        }
+        for k in 0..8 {
+            let p = v.lay.pos[k].unwrap();
+            v.pos.insert(format!("n{k}"), p);
+        }
+        let mid = |v: &MapView, k: usize| v.lay.pos[k].unwrap() + CARD / 2.0;
+        v.select(Some(7));
+        v.search = "dev7".into();
+        // 5 is on 7's path, drawn in sight: it can be picked.
+        assert_eq!(v.hit(mid(&v, 5)), Some(5));
+        // 4 is off the path, faded out: it can't.
+        assert_eq!(v.hit(mid(&v, 4)), None);
+    }
+
+    #[test]
+    fn fits_frame_the_canvas_the_panel_leaves() {
+        let mut v = tree8();
+        v.panel_full = 320.0;
+        let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
+        // Nothing selected, the panel shut: the whole canvas.
+        assert_eq!(v.settled(full), full);
+        // A finding selects cards this frame: the panel will open over the
+        // right of the canvas.
+        v.show_cards(full, &[5, 6]);
+        assert_eq!(v.settled(full).right(), 680.0);
+        // A double-click puts the selection back while the panel is half
+        // shut: the fit is to the canvas with it open again.
+        v.panel_now = 150.0;
+        let mid = Rect::from_min_size(pos2(0.0, 0.0), vec2(850.0, 600.0));
+        v.fit_view(mid);
+        assert_eq!(v.wide.map(|w| w.right()), Some(680.0));
+        // Sliding shut: the canvas it will have, the whole width.
+        v.select(None);
+        assert_eq!(v.settled(mid).right(), 1000.0);
+    }
+
+    #[test]
+    fn a_dragged_card_pushes_the_map_only_near_the_edge() {
+        let r = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert_eq!(interact::edge_push(r, pos2(400.0, 300.0)), Vec2::ZERO);
+        assert_eq!(interact::edge_push(r, pos2(790.0, 300.0)).y, 0.0);
+        assert!(interact::edge_push(r, pos2(790.0, 300.0)).x < 0.0);
+        assert_eq!(interact::edge_push(r, pos2(810.0, 300.0)).x, -1.0);
+        // Well past it (over the panel, out of the window): nothing.
+        assert_eq!(interact::edge_push(r, pos2(880.0, 300.0)), Vec2::ZERO);
+    }
+
+    #[test]
+    fn ctrl_clicking_two_cards_lights_only_what_joins_them() {
+        let mut v = tree8();
+        v.select(Some(7));
+        v.toggle(6);
+        let (cards, links) = v.lit(&v.selection());
+        assert_eq!(links, set(&[7, 5, 6]));
+        assert_eq!(cards, set(&[7, 5, 6, 3]));
+        // Shift+click goes the same way (both call toggle); taking one out
+        // leaves the other on its own, still not traced.
+        v.toggle(6);
+        let (_, links) = v.lit(&v.selection());
+        assert_eq!(links, set(&[7]));
+        // A plain click traces again.
+        v.select(Some(6));
+        let (cards, _) = v.lit(&v.selection());
+        assert!(cards.contains(&0));
+    }
+
+    #[test]
+    fn the_menu_on_one_of_several_selected_cards_acts_on_all_of_them() {
+        let mut v = tree8();
+        v.select(Some(7));
+        v.toggle(4);
+        // On a selected card: the whole selection, that card first.
+        assert_eq!(v.menu_group(4), [4, 7]);
+        assert_eq!(v.menu_group(7), [7, 4]);
+        // On a card outside it: that card alone.
+        assert_eq!(v.menu_group(6), [6]);
+        // Uplinks: each card's, added to the selection, not replacing it.
+        let g = v.menu_group(4);
+        let up = v.grow(&g, Grow::Uplink);
+        assert_eq!(up, [4, 7, 2, 5]);
+        v.select_group(4, &up);
+        assert_eq!(set(&v.selection()), set(&[4, 7, 2, 5]));
+        assert_eq!(v.ordered()[0], 4, "the card right-clicked shows first");
+        // Joined, not traced: nothing above the core lights.
+        let (cards, _) = v.lit(&v.selection());
+        assert!(!cards.contains(&1));
+        // Paths, children and everything below: the union over each.
+        let g = [4, 7];
+        assert_eq!(set(&v.grow(&g, Grow::Path)), set(&[0, 1, 2, 3, 4, 5, 7]));
+        assert_eq!(set(&v.grow(&[3, 4], Grow::Children)), set(&[3, 4, 5, 6]));
+        assert_eq!(set(&v.grow(&[3, 4], Grow::Below)), set(&[3, 4, 5, 6, 7]));
+        // Pinning from the menu pins every card it acts on.
+        v.select(Some(7));
+        v.toggle(4);
+        for k in v.menu_group(4) {
+            v.keep(k);
+        }
+        v.select(Some(1));
+        assert_eq!(set(&v.selection()), set(&[1, 4, 7]));
+    }
+
+    #[test]
+    fn select_group_with_uplinks_and_children() {
         // 0 internet - 1 gateway - 2 switch - {3 ap - 5 client, 4 server}
         let mut v = view(6);
         for (c, p) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3)] {
             v.map.nodes[c].up = Some((p, crate::map::Link::Wired, None));
         }
         v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
-        assert_eq!(v.below(2), [3, 4, 5]);
-        assert_eq!(v.below(5), Vec::<usize>::new());
+        assert_eq!(below_in(&v.map.children(), 2), [3, 4, 5]);
+        assert_eq!(below_in(&v.map.children(), 5), Vec::<usize>::new());
         let path = v.map.path(5);
-        v.select_with(5, &path);
+        v.select_group(5, &path);
         assert_eq!(v.selected.as_deref(), Some("n5"));
         assert_eq!(v.also, ["n0", "n1", "n2", "n3"]);
-        v.select_with(2, &v.map.children()[2].clone());
+        assert_eq!(v.ordered(), [5, 0, 1, 2, 3]);
+        v.select_group(2, &v.map.children()[2].clone());
         assert_eq!(v.selection().len(), 3);
+        assert_eq!(v.ordered(), [2, 3, 4]);
         // A card the layout doesn't show (a folded site) stays out.
         v.lay.pos[4] = None;
-        v.select_with(2, &v.below(2));
+        v.select_group(2, &below_in(&v.map.children(), 2));
         assert_eq!(v.also, ["n3", "n5"]);
+    }
+
+    #[test]
+    fn a_double_click_puts_back_what_its_first_click_replaced() {
+        let mut v = tree8();
+        v.select(Some(7));
+        v.toggle(6);
+        v.ordered();
+        let before = v.selection();
+        // The first click of a double-click on 6 picked it alone.
+        v.undo = Some(interact::Undo {
+            at: 0.0,
+            selected: v.selected.clone(),
+            also: v.also.clone(),
+            traced: v.traced,
+            order: v.order.clone(),
+        });
+        v.select(Some(6));
+        let u = v.undo.take().unwrap();
+        v.restore(u);
+        assert_eq!(v.selection(), before);
+        assert!(!v.traced);
+    }
+
+    #[test]
+    fn dragged_and_selected_cards_draw_and_pick_on_top() {
+        let mut v = view(3);
+        for i in 0..3 {
+            v.pos.insert(format!("n{i}"), Pos2::ZERO);
+        }
+        // All three on one spot: the last drawn wins.
+        assert_eq!(v.hit(pos2(5.0, 5.0)), Some(2));
+        v.select(Some(0));
+        assert_eq!(v.stack(), [1, 2, 0]);
+        assert_eq!(v.hit(pos2(5.0, 5.0)), Some(0));
+        v.raised = vec!["n1".into()];
+        assert_eq!(v.stack(), [2, 0, 1]);
+        assert_eq!(v.hit(pos2(5.0, 5.0)), Some(1));
+        // Faded out by the search: not picked, unless it's selected.
+        v.search = "nothing like it".into();
+        assert_eq!(v.hit(pos2(5.0, 5.0)), Some(0));
+        v.select(None);
+        assert_eq!(v.hit(pos2(5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn fit_leaves_room_for_the_zoom_controls() {
+        let mut v = view(1);
+        let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        v.fit_to(
+            view,
+            Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 2000.0)),
+        );
+        let (pan, zoom) = v.aim.unwrap();
+        (v.pan, v.zoom) = (pan, zoom);
+        let bottom = v.to_screen(view, pos2(0.0, 2000.0)).y;
+        assert!(bottom <= view.max.y - 44.0 + 0.01, "{bottom}");
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! - **Zones**: one box per role, its cards in a grid inside.
 //! - **Sites**: one box per site, each holding its part of the tree.
 
-use super::{Map, Zone};
+use super::{Link, Map, Zone};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
 use std::collections::BTreeMap;
 
@@ -651,6 +651,194 @@ pub fn route_free(parent: Pos2, child: Pos2) -> Vec<Pos2> {
     }
 }
 
+/// A line from a grid card in Zones box `bx` to a card placed outside it:
+/// out of the side facing that card into the gap beside it, along the gap
+/// and out of the box (its bottom, or its top for a card above it), then
+/// round to the card. A straight line would cut across the grid's cards.
+pub fn route_out(inner: Pos2, outer: Pos2, bx: Rect) -> Vec<Pos2> {
+    let p = Rect::from_min_size(inner, CARD);
+    let c = Rect::from_min_size(outer, CARD);
+    let (from, x) = if c.center().x < p.center().x {
+        (p.left_center(), p.left() - GAP_X / 2.0)
+    } else {
+        (p.right_center(), p.right() + GAP_X / 2.0)
+    };
+    let y = if c.bottom() < bx.top() {
+        bx.top() - BOX_PAD / 2.0
+    } else {
+        bx.bottom() + BOX_PAD / 2.0
+    };
+    let mut pts = vec![from, pos2(x, from.y), pos2(x, y)];
+    let cx = c.center().x;
+    if c.top() > y {
+        pts.extend([pos2(cx, y), pos2(cx, c.top())]);
+    } else if c.bottom() < y {
+        pts.extend([pos2(cx, y), pos2(cx, c.bottom())]);
+    } else {
+        pts.push(pos2(if cx < x { c.right() } else { c.left() }, y));
+    }
+    pts
+}
+
+/// The line from `up` to `i` when either was dragged by hand: straight
+/// across (`route_free`), unless that crosses other cards in the Zones grid
+/// one end sits in; then out of the grid along its gaps (`route_out`).
+fn route_placed(
+    lay: &Layout,
+    at: &dyn Fn(usize) -> Option<Pos2>,
+    up: usize,
+    i: usize,
+) -> Vec<Pos2> {
+    let (Some(a), Some(b)) = (at(up), at(i)) else {
+        return Vec::new();
+    };
+    let direct = route_free(a, b);
+    // The grid box card `k` sits inside, if any.
+    let grid = |k: usize| {
+        let g = lay.group.get(k).copied().flatten()?;
+        let bx = lay.boxes.get(g).filter(|bx| !bx.tree)?;
+        let r = Rect::from_min_size(at(k)?, CARD);
+        bx.rect.contains_rect(r).then_some((g, bx.rect))
+    };
+    let crosses = |pts: &[Pos2], g: usize| {
+        let cards: Vec<Rect> = (0..lay.group.len())
+            .filter(|&k| k != up && k != i && lay.group[k] == Some(g))
+            .filter_map(|k| at(k).map(|p| Rect::from_min_size(p, CARD).shrink(1.0)))
+            .collect();
+        pts.windows(2).any(|s| {
+            let seg = Rect::from_two_pos(s[0], s[1]);
+            cards.iter().any(|r| r.intersects(seg))
+        })
+    };
+    let outside = |r: Rect, p: Pos2| !r.intersects(Rect::from_min_size(p, CARD));
+    if let Some((g, r)) = grid(up)
+        && outside(r, b)
+        && crosses(&direct, g)
+    {
+        return route_out(a, b, r);
+    }
+    if let Some((g, r)) = grid(i)
+        && outside(r, a)
+        && crosses(&direct, g)
+    {
+        let mut pts = route_out(b, a, r);
+        pts.reverse();
+        return pts;
+    }
+    direct
+}
+
+/// How solid a link is drawn, weakest first: the order links are drawn in.
+pub fn strength(l: Link) -> u8 {
+    match l {
+        Link::Assumed => 0,
+        Link::Wireless => 1,
+        Link::Wired => 2,
+        Link::Backbone => 3,
+    }
+}
+
+/// One line on the map: a card's link to its uplink, or a trunk carrying
+/// every link from one card into another box (Zones).
+pub struct Line {
+    pub up: usize,
+    /// The cards whose links it carries; more than one is a trunk.
+    pub kids: Vec<usize>,
+    /// The box a trunk runs into.
+    pub into: Option<usize>,
+    /// Between two cards in one Zones box: shown only while lit, as it
+    /// would cut across the box's grid.
+    pub quiet: bool,
+    /// The route, in world space.
+    pub pts: Vec<Pos2>,
+}
+
+/// Every line on the map: links weakest first (cards stacked under one
+/// uplink share its line, so a solid link drawn last covers the dashes of
+/// an assumed one), then the trunks. `at` is where each card is drawn;
+/// `moved` says it was dragged by hand, which joins it straight to its
+/// uplink on the sides facing each other, out of any trunk.
+pub fn lines(
+    map: &Map,
+    lay: &Layout,
+    at: &dyn Fn(usize) -> Option<Pos2>,
+    moved: &dyn Fn(usize) -> bool,
+) -> Vec<Line> {
+    let group = |i: usize| lay.group.get(i).copied().flatten();
+    let mut out = Vec::new();
+    let mut trunks: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+    let mut order: Vec<usize> = (0..map.nodes.len()).collect();
+    order.sort_by_key(|&i| map.nodes[i].link().map_or(0, strength));
+    for i in order {
+        let Some(up) = map.nodes[i].parent() else {
+            continue;
+        };
+        let free = moved(i) || moved(up);
+        if let Some(g) = group(i)
+            && group(up) != Some(g)
+            && !free
+        {
+            trunks.entry((up, g)).or_default().push(i);
+            continue;
+        }
+        let tree = group(i)
+            .and_then(|g| lay.boxes.get(g))
+            .is_some_and(|b| b.tree);
+        let quiet = group(i).is_some() && group(i) == group(up) && !tree && !free;
+        let (Some(a), Some(b)) = (at(up), at(i)) else {
+            continue;
+        };
+        let pts = if free {
+            route_placed(lay, at, up, i)
+        } else {
+            route(
+                a,
+                b,
+                lay.stacked.get(i).copied().unwrap_or(false),
+                lay.trunk.get(i).copied().flatten(),
+            )
+        };
+        out.push(Line {
+            up,
+            kids: vec![i],
+            into: None,
+            quiet,
+            pts,
+        });
+    }
+    for ((up, g), kids) in trunks {
+        let (Some(a), Some(b)) = (at(up), lay.boxes.get(g)) else {
+            continue;
+        };
+        let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
+        let pts = if b.rect.top() > from.y + 8.0 {
+            // Below: into the middle of the box's top edge.
+            let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
+            route(a, into, false, None)
+        } else {
+            // Beside it (same row): under both boxes and up into its
+            // bottom, rather than along the cards' edges.
+            let own = group(up).and_then(|g| lay.boxes.get(g));
+            let floor = own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom()) + BOX_PAD;
+            let x = b.rect.center().x;
+            vec![
+                from,
+                pos2(from.x, floor),
+                pos2(x, floor),
+                pos2(x, b.rect.bottom()),
+            ]
+        };
+        out.push(Line {
+            up,
+            kids,
+            into: Some(g),
+            quiet: false,
+            pts,
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,6 +869,72 @@ mod tests {
             .map(|p| eframe::egui::Rect::from_min_size(*p, CARD))
             .collect();
         (0..r.len()).any(|i| (i + 1..r.len()).any(|j| r[i].intersects(r[j].shrink(1.0))))
+    }
+
+    #[test]
+    fn a_dragged_card_keeps_its_link_out_of_the_zones_trunk() {
+        // internet → gw → core → 3 clients: Zones puts them in boxes.
+        let mut m = tree(&[None, Some(0), Some(1), Some(2), Some(2), Some(2)]);
+        m.nodes[1].zone = Zone::Gateway;
+        for n in &mut m.nodes[3..] {
+            n.zone = Zone::Client;
+        }
+        let l = layout_in(&m, &|_| true, Mode::Zones);
+        let at = |i: usize| l.pos[i];
+        let lines = lines(&m, &l, &at, &|_| false);
+        // core → clients: one trunk into the clients' box.
+        let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
+        assert_eq!(trunk.map(|t| t.kids.len()), Some(3));
+        // Between the clients nothing; dragged, card 3 gets its own line,
+        // joined on the sides facing its uplink.
+        let moved = |i: usize| i == 3;
+        let lines = super::lines(&m, &l, &at, &moved);
+        let own = lines.iter().find(|x| x.kids == [3]).expect("its own line");
+        assert!(own.into.is_none() && !own.quiet);
+        assert_eq!(own.pts, route_free(at(2).unwrap(), at(3).unwrap()));
+        let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
+        assert_eq!(trunk.map(|t| t.kids.len()), Some(2));
+    }
+
+    #[test]
+    fn a_card_dragged_out_of_a_zones_grid_is_joined_round_it() {
+        // internet → gw → core → 6 switches, each with an AP.
+        let mut p = vec![None, Some(0), Some(1)];
+        p.extend(std::iter::repeat_n(Some(2), 6));
+        p.extend((3..9).map(Some));
+        let mut m = tree(&p);
+        m.nodes[1].zone = Zone::Gateway;
+        for n in &mut m.nodes[9..] {
+            n.zone = Zone::Wireless;
+        }
+        let l = layout_in(&m, &|_| true, Mode::Zones);
+        let g = l.group[3].unwrap();
+        let bx = l.boxes[g].rect;
+        // The AP under the grid's last switch, dragged left of the box.
+        let (sw, ap) = (8, 14);
+        assert_eq!(l.group[sw], Some(g));
+        let left = pos2(bx.left() - CARD.x - 60.0, l.pos[sw].unwrap().y);
+        let at = |k: usize| if k == ap { Some(left) } else { l.pos[k] };
+        let moved = |k: usize| k == ap;
+        let cards: Vec<Rect> = (3..9)
+            .filter(|&k| k != sw)
+            .map(|k| Rect::from_min_size(l.pos[k].unwrap(), CARD).shrink(1.0))
+            .collect();
+        let cuts = |pts: &[Pos2]| {
+            pts.windows(2).any(|s| {
+                let seg = Rect::from_two_pos(s[0], s[1]);
+                cards.iter().any(|r| r.intersects(seg))
+            })
+        };
+        // Straight across, it would cut through the switches beside it.
+        assert!(cuts(&route_free(at(sw).unwrap(), left)));
+        let lines = lines(&m, &l, &at, &moved);
+        let own = lines.iter().find(|x| x.kids == [ap]).expect("its own line");
+        assert!(!cuts(&own.pts), "{:?}", own.pts);
+        assert_eq!(
+            own.pts.first(),
+            Some(&Rect::from_min_size(l.pos[sw].unwrap(), CARD).left_center())
+        );
     }
 
     #[test]

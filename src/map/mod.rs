@@ -386,22 +386,29 @@ impl Map {
         }
         let ids: Vec<String> = inside.iter().map(|&i| self.nodes[i].id.clone()).collect();
 
-        // Reindex: the cards inside become the site's card.
+        // Reindex: the cards inside become the site's card, where the
+        // first of them was, so the site keeps its place in the sidebar
+        // and the layout.
+        let first = inside.iter().copied().min().unwrap_or(n);
         let mut map_to = vec![usize::MAX; n];
         let mut out = Vec::with_capacity(n - inside.len() + 1);
+        let mut card = Some(card);
         for (i, node) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            if i == first {
+                out.extend(card.take());
+            }
             if !member[i] {
                 map_to[i] = out.len();
                 out.push(node);
             }
         }
-        let at = out.len();
+        let at = first.min(out.len());
+        out.extend(card.take());
         for (i, m) in member.iter().enumerate() {
             if *m {
                 map_to[i] = at;
             }
         }
-        out.push(card);
         for node in &mut out {
             if let Some(u) = &mut node.up {
                 u.0 = map_to[u.0];
@@ -1786,7 +1793,7 @@ pub fn build(input: &Input) -> Map {
         .unwrap_or_else(|| "This network".into());
     map.fill_sites(&site);
     if map.hidden > 0 && !input.clients {
-        map.summary += &format!(" · {} clients hidden", map.hidden);
+        map.summary += &format!(" · clients off: {} not drawn", map.hidden);
     }
     map
 }
@@ -2227,7 +2234,10 @@ mod tests {
     fn a_closed_site_is_one_card_where_the_site_hangs() {
         let mut m = two_sites();
         m.fill_sites("Elsewhere");
+        let sites = m.sites();
         m.close_sites(&HashSet::from(["Branch".to_string()]));
+        // Where the site's first card was: the site keeps its place.
+        assert_eq!(m.sites(), sites);
         let card = by_label(&m, "Branch");
         assert_eq!(
             (card.id.as_str(), card.kind.as_str()),

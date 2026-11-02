@@ -97,11 +97,13 @@ impl MapView {
         ui: &mut Ui,
         mut sel: Vec<usize>,
         busy: bool,
-        pick: &mut Option<usize>,
+        pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
     ) -> Option<Action> {
         let mut act = None;
-        if sel.is_empty() {
+        // Sliding shut: the last card shown, without the header.
+        let closing = sel.is_empty();
+        if closing {
             sel.extend(self.shown.as_deref().and_then(|s| self.index(s)));
         }
         egui::ScrollArea::vertical()
@@ -109,38 +111,14 @@ impl MapView {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if sel.len() > 1 {
-                        ui.strong(format!("{} selected", sel.len()))
-                            .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
-                    }
-                    let mut trace = self.trace_wan;
-                    if ui
-                        .checkbox(&mut trace, "Trace to WAN")
-                        .on_hover_text(
-                            "Light each selected card's whole path to the internet. Off, only \
-                             the links between the selected cards light (one card: its own \
-                             links)",
-                        )
-                        .changed()
-                    {
-                        *ev = Some(PanelEv::TraceWan(trace));
-                    }
-                    if sel.len() > 1 {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("Copy all")
-                                .on_hover_text("Copy every selected card's details as text")
-                                .clicked()
-                            {
-                                let s: Vec<String> =
-                                    sel.iter().map(|&k| card_text(&self.map.nodes[k])).collect();
-                                widgets::copy(ui.ctx(), s.join("\n"));
-                                widgets::toast(format!("{} cards copied", sel.len()), true);
-                            }
-                        });
-                    }
-                });
+                // A card clicked on its own already lights its path to the
+                // internet: Trace to WAN is for cards picked together
+                // (Ctrl+click, the right-click menu, a site, a finding) and
+                // pinned cards left on their own, which light only what
+                // joins them.
+                if !closing && self.joins_only() {
+                    ui.horizontal(|ui| self.panel_header(ui, &sel, ev));
+                }
                 ui.add_space(4.0);
                 // Where the stack starts, so a card's place in it doesn't
                 // change as the panel scrolls.
@@ -190,6 +168,40 @@ impl MapView {
         act
     }
 
+    /// Over the stack: how many are selected, Trace to WAN, Copy all.
+    fn panel_header(&self, ui: &mut Ui, sel: &[usize], ev: &mut Option<PanelEv>) {
+        if sel.len() > 1 {
+            ui.strong(format!("{} selected", sel.len()))
+                .on_hover_text("Ctrl+click a card to add or remove it; Esc clears");
+        }
+        let mut trace = self.trace_wan;
+        if ui
+            .checkbox(&mut trace, "Trace to WAN")
+            .on_hover_text(
+                "Light each selected card's whole path to the internet. Off, only the links \
+                 that join the selected cards light (one card: its uplink and its children). \
+                 A card clicked on its own always shows its path",
+            )
+            .changed()
+        {
+            *ev = Some(PanelEv::TraceWan(trace));
+        }
+        if sel.len() > 1 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("Copy all")
+                    .on_hover_text("Copy every selected card's details as text")
+                    .clicked()
+                {
+                    let s: Vec<String> =
+                        sel.iter().map(|&k| card_text(&self.map.nodes[k])).collect();
+                    widgets::copy(ui.ctx(), s.join("\n"));
+                    widgets::toast(format!("{} cards copied", sel.len()), true);
+                }
+            });
+        }
+    }
+
     /// One card's section in the detail panel, `at` from the top.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn card_panel(
@@ -199,7 +211,7 @@ impl MapView {
         i: usize,
         busy: bool,
         stacked: bool,
-        pick: &mut Option<usize>,
+        pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
     ) -> (Option<Action>, egui::Response) {
         let mut act = None;
@@ -249,11 +261,14 @@ impl MapView {
                     }
                     ui.label(RichText::new(&n.kind).monospace().small().color(accent));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if stacked
-                            && ui
-                                .small_button("×")
-                                .on_hover_text("Take it out of the selection")
-                                .clicked()
+                        if ui
+                            .small_button("×")
+                            .on_hover_text(if stacked {
+                                "Take it out of the selection"
+                            } else {
+                                "Close (Esc)"
+                            })
+                            .clicked()
                         {
                             *ev = Some(PanelEv::Drop(i));
                         }
@@ -364,18 +379,25 @@ impl MapView {
                 if n.up.is_some() || !kids.is_empty() {
                     section(ui, "Connections");
                 }
-                let row = |ui: &mut Ui, k: usize, via: String, tip: &str| -> bool {
-                    let m = &self.map.nodes[k];
-                    let c = zone_colour(m.zone);
-                    let mut go = false;
-                    ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-                        ui.painter().circle_filled(r.center(), 4.0, c);
-                        go = ui.link(&m.label).on_hover_text(tip).clicked();
-                        ui.weak(via);
-                    });
-                    go
-                };
+                // A name links to its card: a click shows it, Ctrl+click
+                // adds it to the selection.
+                let row =
+                    |ui: &mut Ui, k: usize, via: String, tip: &str| -> Option<(usize, bool)> {
+                        let m = &self.map.nodes[k];
+                        let c = zone_colour(m.zone);
+                        let mut go = None;
+                        ui.horizontal(|ui| {
+                            let (r, _) =
+                                ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                            ui.painter().circle_filled(r.center(), 4.0, c);
+                            if ui.link(&m.label).on_hover_text(tip).clicked() {
+                                let add = ui.input(|i| i.modifiers.command || i.modifiers.shift);
+                                go = Some((k, add));
+                            }
+                            ui.weak(via);
+                        });
+                        go
+                    };
                 if let Some((p, link, port)) = &n.up {
                     let how = match link {
                         Link::Backbone => "uplink · WAN".to_string(),
@@ -385,12 +407,13 @@ impl MapView {
                     };
                     let tip = match link {
                         Link::Assumed => {
-                            "Assumed: it answered here, but its switch port isn't known"
+                            "Show it (Ctrl+click adds it). Assumed: it answered here, but its \
+                             switch port isn't known"
                         }
-                        _ => "Show it",
+                        _ => SHOW_IT,
                     };
-                    if row(ui, *p, how, tip) {
-                        *pick = Some(*p);
+                    if let Some(go) = row(ui, *p, how, tip) {
+                        *pick = Some(go);
                     }
                 }
                 for &k in kids.iter().take(14) {
@@ -400,8 +423,8 @@ impl MapView {
                         Some((_, _, Some(port))) => port.clone(),
                         _ => "below it".to_string(),
                     };
-                    if row(ui, k, via, "Show it") {
-                        *pick = Some(k);
+                    if let Some(go) = row(ui, k, via, SHOW_IT) {
+                        *pick = Some(go);
                     }
                 }
                 if kids.len() > 14 {
@@ -525,6 +548,9 @@ impl MapView {
         (act, frame.response)
     }
 }
+
+/// A card's name in the panel's Connections.
+const SHOW_IT: &str = "Show it (Ctrl+click adds it to the selection)";
 
 /// What a run's section in a card asked for.
 pub(super) enum RunEv {
