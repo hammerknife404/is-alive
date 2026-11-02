@@ -4,7 +4,7 @@
 //! row fades that role out or back in, as the sidebar's does.
 
 use super::paint::{
-    card_frame, chip_pill, draw_box, draw_link, link_width, pin, trunk_font, warn_badge,
+    card_frame, chip_pill, draw_box, draw_link, link_width, note_glyph, pin, trunk_font, warn_badge,
 };
 use super::*;
 use crate::map::legend::{self, Entry, Ink, Slot, Swatch};
@@ -386,7 +386,11 @@ fn tip(s: Swatch) -> &'static str {
         }
         Swatch::Warn => "Hover or select the card for what's wrong",
         Swatch::Pin => "Stays selected while you click others",
-        Swatch::Chip => "The uplink's port, or a note such as inferred, on the card it leads to",
+        Swatch::Note => {
+            "You wrote a note on it: hover for its first lines, select it to read or edit it \
+             (N)"
+        }
+        Swatch::Chip => "The uplink's port, or a tag such as inferred, on the card it leads to",
         Swatch::Line(Link::Backbone) => "The internet to a firewall, in the gateway's colour",
         Swatch::Line(Link::Assumed) => {
             "Placed here because it answered, not because the data shows the link \
@@ -422,6 +426,12 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
         }
         Swatch::Warn => warn_badge(p, s.center(), 0.75, a, now),
         Swatch::Pin => pin(p, vis, s.center(), 0.75, a),
+        Swatch::Note => note_glyph(
+            p,
+            vis,
+            Rect::from_center_size(s.center(), vec2(9.0, 11.0)),
+            a,
+        ),
         Swatch::Chip => {
             let chip = Rect::from_center_size(s.center(), vec2(s.width(), s.height()));
             chip_pill(p, chip, c, a);

@@ -1,7 +1,7 @@
 //! Undo and redo for what the user changes by hand on a map: cards
 //! dragged or put back, Re-layout, the layout, Clients, pins, sites
 //! collapsed, roles faded out, clients shown or hidden on a card (+N, −,
-//! Show all). Selecting cards
+//! Show all), notes on cards. Selecting cards
 //! isn't a step, as in most editors.
 //!
 //! Each step keeps the whole of that state as it was (a small struct), so
@@ -10,7 +10,7 @@
 //! drag is one step however many frames it takes.
 
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Most steps kept; the oldest go first.
 pub const STEPS: usize = 100;
@@ -32,6 +32,9 @@ pub struct Edits {
     pub hidden: HashSet<Zone>,
     /// Pinned cards.
     pub kept: Vec<String>,
+    /// Notes on cards, by id, as typed (redacted wherever they leave the
+    /// map: a file, an export, a copy).
+    pub notes: BTreeMap<String, String>,
 }
 
 /// Steps to undo and redo, each with what it did ("move 3 cards"), and the
@@ -185,6 +188,22 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
             _ => "pins".into(),
         };
     }
+    if a.notes != b.notes {
+        let mut changed: Vec<&String> = sorted(
+            a.notes
+                .keys()
+                .chain(b.notes.keys())
+                .filter(|k| a.notes.get(*k) != b.notes.get(*k)),
+        );
+        changed.dedup();
+        let gone = changed.iter().all(|k| !b.notes.contains_key(*k));
+        return match (changed.as_slice(), gone) {
+            ([one], false) => format!("note on {}", name(one)),
+            ([one], true) => format!("remove note on {}", name(one)),
+            (more, false) => format!("notes on {} cards", more.len()),
+            (more, true) => format!("remove notes on {} cards", more.len()),
+        };
+    }
     if a.placed != b.placed {
         if b.placed.is_empty() {
             return "Re-layout".into();
@@ -222,6 +241,7 @@ impl MapView {
             closed: self.closed.clone(),
             hidden: self.hidden.clone(),
             kept: self.kept.clone(),
+            notes: self.notes.clone(),
         }
     }
 
@@ -235,6 +255,7 @@ impl MapView {
             || self.closed != e.closed
             || self.hidden != e.hidden
             || self.kept != e.kept
+            || self.notes != e.notes
     }
 
     /// Put edits back (undo, redo, a saved map opened). The map rebuilds
@@ -247,6 +268,7 @@ impl MapView {
         self.closed.clone_from(&e.closed);
         self.hidden.clone_from(&e.hidden);
         self.kept.clone_from(&e.kept);
+        self.notes.clone_from(&e.notes);
         // A pin put back takes the panel slot its card shows in.
         self.slots.retain(|s, _| e.kept.contains(s));
         for id in &e.kept {

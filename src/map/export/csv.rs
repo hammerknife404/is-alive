@@ -1,13 +1,14 @@
 //! The map as an inventory: one row per card for a spreadsheet, with
-//! cells Excel would run as a formula defused (names come off the network).
+//! cells Excel would run as a formula defused (names come off the network,
+//! notes are typed by anyone). A card's note is its redacted text.
 
 use super::Drawn;
 use crate::log::{CSV_START, csv_row};
 use crate::map::{Link, Node};
 
-const HEAD: [&str; 13] = [
+const HEAD: [&str; 14] = [
     "name", "role", "kind", "ip", "mac", "vendor", "site", "uplink", "port", "link", "address",
-    "flags", "findings",
+    "flags", "findings", "note",
 ];
 
 pub fn write(d: &Drawn) -> String {
@@ -36,6 +37,11 @@ pub fn write(d: &Drawn) -> String {
             n.sub.clone(),
             n.flags.join("; "),
             d.findings_of(i).join("; "),
+            // Characters no file should carry (U+FFFE, U+FFFF) go.
+            n.note
+                .chars()
+                .filter(|c| !matches!(c, '\u{FFFE}' | '\u{FFFF}'))
+                .collect(),
         ];
         s += &csv_row(row.iter().map(String::as_str));
     }
@@ -108,6 +114,23 @@ mod tests {
             assert!(r.iter().all(|row| row.len() == HEAD.len()));
             // Every card names its site and every card but the top its uplink.
             assert!(r[1..].iter().filter(|row| !row[7].is_empty()).count() >= r.len() - 3);
+        });
+    }
+
+    /// A note gets its own column: a formula defused, quotes and line
+    /// breaks kept inside the cell, U+FFFE dropped.
+    #[test]
+    fn a_hostile_note_is_one_defused_cell() {
+        super::super::tests::with_hostile(|d| {
+            let s = write(d);
+            assert!(!s.contains('\u{FFFE}'));
+            let r = rows(&s);
+            assert_eq!(r.len(), 3, "{s}");
+            assert_eq!(r[0][13], "note");
+            let note = &r[2][13];
+            assert!(note.starts_with("'=cmd"), "{note}");
+            assert!(note.contains("\n<script>alert(\"x\")</script> & 'q'\\N"));
+            assert!(r[1][13].is_empty());
         });
     }
 

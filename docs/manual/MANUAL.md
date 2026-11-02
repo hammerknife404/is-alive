@@ -626,7 +626,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 | Control | What it does |
 |---|---|
-| **Search** | Find a card by name, IP, MAC or vendor; **Enter** selects the first match |
+| **Search** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
 | **Clients: Off / Some / More / All** | End devices, drawn as small tiles: **Off** shows none; **Some** shows up to 10 under each switch or AP (fewer on a big map) and folds the rest into a **+N more** card; **More** up to 30, on a map of up to 400 cards; **All** gives every client its own card. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
@@ -635,7 +635,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
 | **Legend** | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Your choice is remembered |
 | **Examples ⏷** | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
-| **Export ⏷** | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings) for a spreadsheet |
+| **Export ⏷** | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out) |
 
 **Layouts:**
 
@@ -659,7 +659,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 The **Legend** panel in the bottom left corner says what everything on the map means, listing only what this map has, with counts:
 
 - **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
-- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, and the chips cards carry (an uplink's port, or a note such as *inferred*).
+- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, cards with a note (the small folded sheet), and the chips cards carry (an uplink's port, or a tag such as *inferred*).
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
@@ -667,7 +667,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 
 ### Undo and saved maps
 
-**Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards dragged (a whole drag is one step) or put back, **Re-layout**, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out. Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
+**Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards dragged (a whole drag is one step) or put back, **Re-layout**, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
 
 **Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
 
@@ -702,6 +702,7 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 | **Select its path to the WAN** | This card and every uplink up to the internet |
 | **Select with its direct children** | This card and the cards straight under it |
 | **Select with everything below it** | This card and every card under it, all the way down |
+| **Add note…** / **Edit note…** / **Remove note** | Write a note on the card, change it or take it off (see *Notes on cards* below). On several selected cards: **Add note to N cards…** puts the same note on each (in place of any they have), and **Remove notes** takes theirs off |
 | **Show 8 more clients** / **Show all N clients** / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
 | **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
@@ -724,11 +725,28 @@ Each selected card gets a section, newest on top:
 - **The role and name**, with **☰** (the card's right-click menu, see above), the 📌 pin button and **×**.
 - **Action items:** the card's own warnings and the findings that name it.
 - **Details:** IP, MAC, open ports, what saw it (sweep, backup, map), then everything the source said about it.
+- **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below). **Add note** in the row of buttons starts one.
 - **Connections:** its uplink and what hangs off it; click one to jump to that card.
 - **Ping**, **Ports**, **Trace**: a quick check of this device, right in the panel. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**; click it for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
 - **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser. **Copy** copies the card.
 
 With several cards selected, the panel's header says how many and offers **Copy all**. Drag a card's grip (⠿) to reorder; **×** takes a card out of the panel. The panel can be resized from its edge.
+
+### Notes on cards
+
+Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ☰), **Add note** in its panel, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's panel. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Several cards selected: **Add note to N cards…** writes one note onto each.
+
+A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy details** and the exports carry it.
+
+**Redaction works as in Notes**, with the same lists: select a value in the editor and press **Ctrl+R** (or right-click, **Redact**) to hide it wherever it appears, in Notes too; a secret from a backup loaded in Config Export (a Wi-Fi key, an admin password) is caught by itself. What will be hidden is highlighted, with a count (*🔑 1 redacted: by hand*). **Unredact** keeps a value as written, and a value kept in Notes is kept here too. The note is kept as typed only while is-alive runs: saved maps, the notes kept on this computer, copies, exports, the tooltip and the Site Bundle only ever get the redacted text.
+
+**Where a note is kept**, so it never shows up on another customer's card with the same address (`10.0.0.1` is everywhere):
+
+- **A saved map** keeps its notes in its file, like its other changes: **Update with current** saves them.
+- **An example** keeps them on this computer, with that example.
+- **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. A card with no MAC to go by (known only by IP, a randomized or shared address, this computer) keeps its note only until is-alive closes or another map starts; its panel says so. **+ Save current** keeps them all in a saved map.
+
+Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`).
 
 ### The left panel and findings
 
@@ -1018,7 +1036,7 @@ The bottom of Settings shows the folder:
 - **Windows:** `%APPDATA%\is-alive` (for example `C:\Users\you\AppData\Roaming\is-alive`)
 - **Linux:** `~/.config/is-alive`
 
-It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep). The window also reopens at the size you last closed it.
+It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). The window also reopens at the size you last closed it.
 
 **Help wiki** at the top right of Settings opens the wiki.
 
@@ -1035,10 +1053,12 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Esc** | While a tool runs | Stop the run |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
 | **Ctrl+B / Ctrl+I** | Notes | Bold / italic |
-| **Ctrl+R** | Notes, Site Bundle's Known problems | Redact the selection, or unredact the value under the cursor |
+| **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
 | **Esc** | Map | Clear the selection (pinned cards stay) |
+| **N** | Map, one card selected | Write or edit its note |
+| **Ctrl+Enter** / **Esc** | A card's note | Save it / leave it as it was |
 
 On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have no number shortcut.
 
@@ -1048,9 +1068,10 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Scroll / pinch | Map | Zoom |
 | Double-click the background | Map | Fit the whole map |
 | Double-click a card | Map | Zoom to that card |
+| Double-click a card's note mark | Map | Open its note |
 | Click a card | Map | Select it and light its path to the internet |
 | Ctrl+click or Shift+click a card | Map | Add to or take out of the selection |
-| Right-click a card (or ☰ on it in the panel) | Map | Pin, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
+| Right-click a card (or ☰ on it in the panel) | Map | Pin, add a note, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
 | Drag a card | Map | Move it (and the rest of the selection with it) |
 | Click a site's title | Map | Collapse or expand the site |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
@@ -1085,6 +1106,7 @@ is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi exp
 | Sweep inventory | The last finished Subnet Sweep | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
 | Tech notes | The Notes tab, redacted (the row says how much) | off |
+| Card notes | The notes on the live map's cards, redacted, each with its card's name, role, IP and MAC (`card-notes.json`) | on when there are any |
 | Claude Skills | The two skills themselves (about 650 KB), for a Claude that doesn't have them installed | on |
 
 The bundle also holds `manifest.json` (what each file is, this computer's LAN, gateway and WAN, and the answers to `/mapnetwork`'s questions) and `prompt.txt`, the kickoff prompt.

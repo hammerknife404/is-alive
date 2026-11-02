@@ -67,6 +67,9 @@ pub struct NotesTool {
     /// A selection (characters) to put back once the editor has the
     /// keyboard again: without it, the editor drops all but the cursor.
     reselect: Option<Range<usize>>,
+    /// The Map's card notes, as typed: a kept value still in one of them
+    /// stays on the keep list.
+    elsewhere: Vec<String>,
 }
 
 /// A text or config file open in the viewer: read-only, never saved or
@@ -174,6 +177,7 @@ impl Default for NotesTool {
             picker_sel: None,
             picker_restyled: false,
             reselect: None,
+            elsewhere: Vec::new(),
         };
         if unclean {
             notes.write();
@@ -243,10 +247,11 @@ impl NotesTool {
         }
     }
 
-    /// The allow list, trimmed to values still in the notes.
+    /// The allow list, trimmed to values still in the notes or a card
+    /// note on the Map.
     fn write_allow(&mut self) {
-        let text = &self.text;
-        self.ov.allow.retain(|a| text.contains(a.as_str()));
+        let (text, elsewhere) = (&self.text, &self.elsewhere);
+        self.ov.allow.retain(|a| still_kept(a, text, elsewhere));
         let Some(p) = allow_path() else { return };
         let r = if self.ov.allow.is_empty() {
             match std::fs::remove_file(&p) {
@@ -275,9 +280,37 @@ impl NotesTool {
         }
     }
 
-    /// The technician's own redact and keep calls, for the Site Bundle.
+    /// The technician's own redact and keep calls (and the loaded
+    /// configs' secrets), for the Site Bundle and the Map's card notes.
     pub fn overrides(&self) -> &redact::Overrides {
         &self.ov
+    }
+
+    /// Notes are waiting to be saved (the keep list is trimmed then).
+    pub fn saving(&self) -> bool {
+        self.dirty.is_some()
+    }
+
+    /// The Map's card notes, as typed, so the keep list holds on to the
+    /// values kept in them.
+    pub fn set_elsewhere(&mut self, texts: Vec<String>) {
+        if self.elsewhere != texts {
+            self.elsewhere = texts;
+        }
+    }
+
+    /// Redact or keep a value picked in `text` (a card note on the Map),
+    /// wherever it appears: here too, as a pick in the editor would.
+    pub fn apply_pick(&mut self, text: &str, pick: Pick, now: f64) {
+        match self.ov.apply(text, pick) {
+            Ok(m) => widgets::toast(m, true),
+            Err(m) => return widgets::toast(m, false),
+        }
+        if self.text.is_empty() {
+            self.write_allow();
+        } else {
+            self.changed(now);
+        }
     }
 
     /// What the Redact button would do now.
@@ -1414,6 +1447,12 @@ fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
         });
 }
 
+/// A value on the keep list stays there while the notes or a card note
+/// on the Map (`elsewhere`) still has it.
+fn still_kept(value: &str, text: &str, elsewhere: &[String]) -> bool {
+    text.contains(value) || elsewhere.iter().any(|t| t.contains(value))
+}
+
 /// Editor colouring: headings, list markers and code, and a highlight on
 /// every value that will be redacted.
 pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontId) -> LayoutJob {
@@ -1543,6 +1582,7 @@ mod tests {
             picker_sel: None,
             picker_restyled: false,
             reselect: None,
+            elsewhere: Vec::new(),
         }
     }
 
@@ -1635,6 +1675,31 @@ mod tests {
             "{clean}"
         );
         assert!(clean.contains("[🔑 REDACTED: from config]"));
+    }
+
+    /// Kept in a card note on the Map, a value stays on the keep list
+    /// when the notes no longer have it; a pick made in a card note is
+    /// the Notes tab's too.
+    #[test]
+    fn a_value_kept_in_a_card_note_holds_here_too() {
+        let card = vec!["guest wifi Office365".to_string()];
+        assert!(still_kept("Office365", "", &card));
+        assert!(!still_kept("Office365", "", &[]));
+        assert!(still_kept("Office365", "Office365 renewal", &[]));
+        let mut n = notes("Office365 renewal due");
+        n.set_known(&["Office365".into()], 0.0);
+        assert!(!n.sanitized().0.contains("Office365"));
+        // Unredact picked in a card note's editor (its own text).
+        let text = "guest wifi Office365";
+        let hit = redact::find_with(text, n.overrides())[0].clone();
+        n.apply_pick(text, Pick::Unredact(hit), 1.0);
+        assert_eq!(n.overrides().allow, ["Office365"]);
+        assert!(n.sanitized().0.contains("Office365"), "kept here too");
+        // Redact picked there: hidden in the notes as well.
+        let text = "door code 4471";
+        n.apply_pick(text, Pick::Redact(10..14), 2.0);
+        n.text.push_str("\nlockbox 4471");
+        assert!(!n.sanitized().0.contains("4471"));
     }
 
     #[test]

@@ -93,6 +93,8 @@ impl MapView {
     /// on top. Each has /mapnetwork's sections: action items, details and
     /// connections, then what can be run against it. `menus` gets each
     /// card's ☰ button, for `card_menus` to open the right-click menu from.
+    /// `edit` is the note being written, shown in its card.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn detail(
         &self,
         ui: &mut Ui,
@@ -101,6 +103,7 @@ impl MapView {
         pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
         menus: &mut Vec<(usize, egui::Response)>,
+        edit: &mut Option<notes::Edit>,
     ) -> Option<Action> {
         let mut act = None;
         // Sliding shut: the last card shown, without the header.
@@ -131,7 +134,8 @@ impl MapView {
                     }
                     let layer = ui.layer_id();
                     let first = ui.ctx().graphics(|g| g.get(layer).map(|l| l.next_idx()));
-                    let (a, frame, menu) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev);
+                    let (a, frame, menu) =
+                        self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev, edit);
                     act = act.take().or(a);
                     menus.extend(menu.map(|m| (i, m)));
                     // A card whose place in the stack changed (moved, or
@@ -242,6 +246,7 @@ impl MapView {
         stacked: bool,
         pick: &mut Option<(usize, bool)>,
         ev: &mut Option<PanelEv>,
+        edit: &mut Option<notes::Edit>,
     ) -> (Option<Action>, egui::Response, Option<egui::Response>) {
         let mut act = None;
         let mut menu = None;
@@ -291,6 +296,11 @@ impl MapView {
                         });
                     }
                     ui.label(RichText::new(&n.kind).monospace().small().color(accent));
+                    if self.note_of(i).is_some() {
+                        let (r, resp) = ui.allocate_exact_size(vec2(9.0, 11.0), Sense::hover());
+                        paint::note_glyph(ui.painter(), ui.visuals(), r, 1.0);
+                        resp.on_hover_text("Has a note (below)");
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("×")
@@ -427,6 +437,13 @@ impl MapView {
                     ui.weak("Nothing more is known about it.");
                 }
 
+                // The technician's note, or its editor.
+                let mut note_ev = None;
+                self.note_section(ui, i, edit, &mut note_ev);
+                if let Some(e) = note_ev {
+                    *ev = Some(PanelEv::Note(e));
+                }
+
                 // Connections: up to its parent, down to what hangs off it.
                 let kids: Vec<usize> = (0..self.map.nodes.len())
                     .filter(|&k| self.map.nodes[k].parent() == Some(i))
@@ -540,6 +557,16 @@ impl MapView {
                     {
                         widgets::copy(ui.ctx(), card_text(n));
                         widgets::toast("Card details copied", true);
+                    }
+                    let writing = edit.as_ref().is_some_and(|e| e.ids.contains(&n.id));
+                    if self.note_of(i).is_none()
+                        && !writing
+                        && ui
+                            .small_button("Add note")
+                            .on_hover_text("Write a note on this card (N)")
+                            .clicked()
+                    {
+                        *ev = Some(PanelEv::Note(notes::NoteEv::Open(i)));
                     }
                 });
 
@@ -781,6 +808,13 @@ pub(super) fn card_text(n: &crate::map::Node) -> String {
         .chain(n.details.iter().cloned())
     {
         s += &format!("{d}\n");
+    }
+    // Its note, redacted, each line indented under it.
+    if !n.note.is_empty() {
+        s += "Note:\n";
+        for l in n.note.lines() {
+            s += &format!("  {l}\n");
+        }
     }
     s
 }

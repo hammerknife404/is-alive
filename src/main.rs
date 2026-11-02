@@ -195,6 +195,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.notes.set_elsewhere(self.map.note_texts());
         self.notes.flush();
         widgets::clear_own_clipboard();
         let size = self
@@ -300,6 +301,11 @@ impl App {
             }
         }
         self.notes.set_known(self.export.secrets(), now);
+        self.map.redact(self.notes.overrides());
+        // Before an autosave trims the keep list to values still in use.
+        if self.notes.saving() {
+            self.notes.set_elsewhere(self.map.note_texts());
+        }
         self.notes.poll(ctx);
         self.collect();
         self.dropped_files(ctx);
@@ -352,6 +358,7 @@ impl App {
             log,
             info,
             notes,
+            map,
             ..
         } = self;
         bundle.window(
@@ -362,6 +369,7 @@ impl App {
                 log,
                 info,
                 notes,
+                map,
             },
         );
     }
@@ -388,6 +396,7 @@ impl App {
                         busy,
                         note: self.look.map_note,
                         legend: self.look.map_legend,
+                        redact: self.notes.overrides(),
                     },
                 );
                 self.map_action(ui.ctx(), act);
@@ -481,6 +490,11 @@ impl App {
             Some(Action::Legend(on)) => {
                 self.look.map_legend = on;
                 theme::save(&self.look);
+            }
+            Some(Action::NotePick(text, pick)) => {
+                let now = ctx.input(|i| i.time);
+                self.notes.set_elsewhere(self.map.note_texts());
+                self.notes.apply_pick(&text, pick, now);
             }
             Some(Action::Reload) => {
                 let files = self.export.map_sources();

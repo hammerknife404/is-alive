@@ -87,6 +87,21 @@ fn item_to(s: &mut String, item: &Item) {
                 .collect();
             let _ = writeln!(s, r#"<path d="{d}" fill="none"{}/>"#, stroke(st));
         }
+        Item::Poly { pts, rgb } => {
+            let pts: Vec<String> = pts
+                .iter()
+                .map(|p| format!("{:.1},{:.1}", p.x, p.y))
+                .collect();
+            let _ = writeln!(
+                s,
+                r#"<polygon points="{}" fill="{}"/>"#,
+                pts.join(" "),
+                hex(*rgb)
+            );
+        }
+        Item::Title(t) => {
+            let _ = writeln!(s, "<title>{}</title>", xml(t));
+        }
         Item::Dot { c, r, rgb } => {
             let _ = writeln!(
                 s,

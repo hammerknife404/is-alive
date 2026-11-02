@@ -61,6 +61,8 @@ pub struct MapTabs {
     skipped: Vec<String>,
     /// The Map tab has shown, so `skipped` was told once.
     told: bool,
+    /// How card notes are redacted, as every map was last told.
+    ov: crate::redact::Overrides,
 }
 
 impl MapTabs {
@@ -69,7 +71,9 @@ impl MapTabs {
     pub fn new(mode: Option<Mode>) -> Self {
         let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
         let dir = saved::folder().filter(|_| !tour);
-        Self::in_dir(MapView::new(mode), dir)
+        let mut live = MapView::new(mode);
+        live.note_store = Some(super::notes::Store::open());
+        Self::in_dir(live, dir)
     }
 
     fn in_dir(live: MapView, dir: Option<PathBuf>) -> Self {
@@ -86,6 +90,7 @@ impl MapTabs {
             opening: None,
             skipped,
             told: false,
+            ov: Default::default(),
         }
     }
 
@@ -107,6 +112,61 @@ impl MapTabs {
                 false,
             );
         }
+    }
+
+    /// Once a frame, whichever tab shows: card notes are redacted as the
+    /// Notes tab redacts now (every map's, shown or not, as Update writes
+    /// one that isn't), and the live map's kept notes are rewritten at
+    /// once when that changes, as notes.md is.
+    pub fn redact(&mut self, ov: &crate::redact::Overrides) {
+        if self.ov != *ov {
+            self.ov = ov.clone();
+            self.live.ov = ov.clone();
+            for t in &mut self.saved {
+                t.view.ov = ov.clone();
+            }
+        }
+        self.live.sync_notes();
+    }
+
+    /// Every card note's text, on every map and kept for the live one:
+    /// the Notes tab's keep list holds on to values still in one.
+    pub fn note_texts(&self) -> Vec<String> {
+        let mut v = self.live.note_texts();
+        for t in &self.saved {
+            v.extend(t.view.note_texts());
+        }
+        v
+    }
+
+    /// The live map's card notes for the Site Bundle, redacted with `ov`
+    /// (the Notes tab's, as of now): each card's name, role, address and
+    /// note, as JSON. None without any.
+    pub fn bundle_notes(&self, ov: &crate::redact::Overrides) -> Option<(usize, String)> {
+        let rows: Vec<serde_json::Value> = self
+            .live
+            .map
+            .nodes
+            .iter()
+            .filter_map(|n| Some((n, self.live.notes.get(&n.id)?)))
+            .map(|(n, raw)| {
+                serde_json::json!({
+                    "card": n.id,
+                    "name": n.label,
+                    "kind": n.kind,
+                    "ip": n.ip.map(|ip| ip.to_string()),
+                    "mac": n.mac.as_ref().map(crate::net::mac::fmt),
+                    "site": n.site,
+                    "note": super::notes::clean(raw, ov),
+                })
+            })
+            .collect();
+        (!rows.is_empty()).then(|| {
+            (
+                rows.len(),
+                serde_json::to_string_pretty(&rows).unwrap_or_default(),
+            )
+        })
     }
 
     /// The map on screen: Live or a saved one.
@@ -164,6 +224,9 @@ impl MapTabs {
         let path = saved::fresh_path(dir, &s.name);
         saved::write(&path, &s).map_err(|e| format!("couldn't save the map: {e}"))?;
         self.saved.push(tab(path, s));
+        if let Some(t) = self.saved.last_mut() {
+            t.view.ov = self.ov.clone();
+        }
         self.shown = Some(self.saved.len() - 1);
         self.bar = true;
         Ok(())
@@ -229,6 +292,7 @@ impl MapTabs {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         self.poll_open();
         self.tell_skipped();
+        self.redact(src.redact);
         if self.bar {
             egui::Panel::bottom("map_saved_bar")
                 .resizable(false)
@@ -541,7 +605,8 @@ impl MapTabs {
             return;
         }
         let t = &mut self.saved[i];
-        t.saved = s.edits;
+        // As the view has them (its notes as typed; the file's redacted).
+        t.saved = t.view.edits();
         widgets::toast(format!("Updated \"{}\"", t.name), true);
     }
 
@@ -559,6 +624,7 @@ impl MapTabs {
         }
         let path = self.saved[i].path.clone();
         self.saved[i] = tab(path, s);
+        self.saved[i].view.ov = self.ov.clone();
         widgets::toast(format!("Replaced \"{name}\""), true);
     }
 
