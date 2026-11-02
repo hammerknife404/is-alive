@@ -1,5 +1,5 @@
-//! Embeds the icon and version info in the Windows .exe (Explorer, taskbar,
-//! Alt-Tab). Other targets take the icon from the window or the AppImage.
+//! Embeds the icon, version info and application manifest in the Windows
+//! .exe (Explorer, taskbar, Alt-Tab, DPI, no admin prompt). Other targets take the icon from the window or the AppImage.
 //! Also lists every file under skills/ for `src/skills.rs` to embed.
 
 use std::fmt::Write;
@@ -7,10 +7,23 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/is-alive.ico");
+    println!("cargo:rerun-if-changed=packaging/windows/is-alive.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
-        res.set_icon("assets/is-alive.ico");
-        res.compile().expect("failed to embed Windows icon");
+        res.set_icon("assets/is-alive.ico")
+            // What Explorer shows under Properties → Details, and in the
+            // taskbar and Task Manager (FileDescription).
+            .set("ProductName", "is-alive")
+            .set("FileDescription", "is-alive network tester")
+            .set("InternalName", "is-alive")
+            .set("OriginalFilename", "is-alive.exe")
+            .set("CompanyName", "hammerknife404")
+            .set("LegalCopyright", "Copyright 2026 hammerknife404")
+            // Windows 10/11, per-monitor DPI, long paths, current-style
+            // dialogs, and no administrator prompt.
+            .set_manifest_file("packaging/windows/is-alive.manifest");
+        res.compile()
+            .expect("failed to embed Windows icon and manifest");
     }
     skills();
 }
