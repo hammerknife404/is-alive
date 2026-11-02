@@ -28,6 +28,16 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --release
+      # The .exe must run on a fresh Windows: no Visual C++ Redistributable
+      # (VCRUNTIME140.dll) or Universal CRT DLLs to install. The runner has
+      # them, so running it here wouldn't notice; the import table would.
+      - name: No C runtime DLLs needed
+        shell: pwsh
+        run: |
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("target/release/is-alive.exe"))
+          $bad = 'VCRUNTIME140', 'MSVCP140', 'api-ms-win-crt-' | Where-Object { $text -match [regex]::Escape($_) }
+          if ($bad) { Write-Error "is-alive.exe imports: $($bad -join ', ')"; exit 1 }
+          "is-alive.exe imports no C runtime DLLs"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: is-alive-windows-x64
