@@ -821,7 +821,8 @@ impl MapView {
         };
         let narrow = ui.available_width() < need;
         ui.horizontal(|ui| {
-            let r = ui.add(
+            let r = crate::widgets::add_text_edit(
+                ui,
                 egui::TextEdit::singleline(&mut self.search)
                     .char_limit(widgets::FIELD_MAX)
                     .desired_width(220.0)

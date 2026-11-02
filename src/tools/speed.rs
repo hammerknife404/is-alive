@@ -261,7 +261,8 @@ impl SpeedTool {
                     });
                 match self.pick {
                     Pick::File => {
-                        ui.add(
+                        crate::widgets::add_text_edit(
+                            ui,
                             egui::TextEdit::singleline(&mut self.file_url)
                                 .char_limit(widgets::URL_MAX)
                                 .desired_width(240.0)
@@ -271,7 +272,8 @@ impl SpeedTool {
                         presets(ui, speed::DOWNLOADS, &mut self.file_url);
                     }
                     Pick::Upload => {
-                        ui.add(
+                        crate::widgets::add_text_edit(
+                            ui,
                             egui::TextEdit::singleline(&mut self.upload_url)
                                 .char_limit(widgets::URL_MAX)
                                 .desired_width(240.0)

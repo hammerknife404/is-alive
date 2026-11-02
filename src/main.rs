@@ -180,6 +180,7 @@ impl eframe::App for App {
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
+        widgets::route_copies(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -624,7 +625,8 @@ impl App {
         let mut clear = false;
         ui.horizontal(|ui| {
             widgets::lead(ui, "Filter");
-            ui.add(
+            crate::widgets::add_text_edit(
+                ui,
                 egui::TextEdit::singleline(&mut self.filter)
                     .char_limit(widgets::FIELD_MAX)
                     .desired_width(240.0)

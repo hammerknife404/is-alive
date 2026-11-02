@@ -141,7 +141,8 @@ impl CalcTool {
         ui.horizontal(|ui| {
             let h = ui.spacing().interact_size.y;
             cell(ui, KEY_W, h, RichText::new("Check address"));
-            ui.add(
+            crate::widgets::add_text_edit(
+                ui,
                 egui::TextEdit::singleline(&mut self.check)
                     .char_limit(widgets::FIELD_MAX)
                     .desired_width(220.0)

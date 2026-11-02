@@ -392,7 +392,8 @@ pub const PROBLEMS_MAX: usize = 20_000;
 /// Single-line text field; returns true if Enter was pressed in it.
 pub fn field(ui: &mut Ui, label: &str, value: &mut String, width: f32, hint: &str) -> bool {
     lead(ui, label);
-    let r = ui.add(
+    let r = add_text_edit(
+        ui,
         egui::TextEdit::singleline(value)
             .char_limit(FIELD_MAX)
             .desired_width(width)
@@ -643,6 +644,138 @@ pub fn compact_title(ctx: &egui::Context, show: impl FnOnce()) {
             s.text_styles.insert(heading, f);
         });
     }
+}
+
+/// Send every copy egui made this frame (Ctrl+C or Ctrl+X in any text box,
+/// a selectable label) through `copy`, as the app's own Copy buttons go:
+/// kept out of Windows clipboard history and cloud sync, and cleared on
+/// exit if it's still there. Call once, after the UI.
+pub fn route_copies(ctx: &egui::Context) {
+    let mut texts = Vec::new();
+    ctx.output_mut(|o| {
+        o.commands.retain(|c| match c {
+            egui::OutputCommand::CopyText(t) => {
+                texts.push(t.clone());
+                false
+            }
+            _ => true,
+        })
+    });
+    for t in texts {
+        copy(ctx, t);
+    }
+}
+
+/// The selection in text box `id` as a right-click lands: egui's text box
+/// moves the cursor on a press of any button, which would leave the menu's
+/// Cut, Copy and Redact nothing to work on. Pair with `restore_selection`.
+pub fn selection_before_right_click(
+    ctx: &egui::Context,
+    id: egui::Id,
+) -> Option<egui::text::CCursorRange> {
+    if !ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary)) {
+        return None;
+    }
+    egui::TextEdit::load_state(ctx, id)?.cursor.char_range()
+}
+
+/// Put back what `selection_before_right_click` saved, if the right-click
+/// was on this box (`resp`).
+pub fn restore_selection(
+    ctx: &egui::Context,
+    id: egui::Id,
+    resp: &egui::Response,
+    saved: Option<egui::text::CCursorRange>,
+) {
+    let Some(range) = saved else { return };
+    if !resp.hovered() {
+        return;
+    }
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(range));
+    state.store(ctx, id);
+}
+
+/// Add a text box with a right-click menu (Cut, Copy, Paste, Select all)
+/// that keeps the selection it was opened on. For a box without its own
+/// `.id(…)`; one with an id goes through `add_text_edit_with_id`.
+pub fn add_text_edit(ui: &mut Ui, edit: egui::TextEdit<'_>) -> egui::Response {
+    // A box with no id of its own takes the next automatic one.
+    let id = ui.next_auto_id();
+    add_text_edit_with_id(ui, id, edit)
+}
+
+/// `add_text_edit` for a box given `.id(id)`.
+pub fn add_text_edit_with_id(
+    ui: &mut Ui,
+    id: egui::Id,
+    edit: egui::TextEdit<'_>,
+) -> egui::Response {
+    let keep = selection_before_right_click(ui.ctx(), id);
+    let r = ui.add(edit);
+    restore_selection(ui.ctx(), r.id, &r, keep);
+    r.context_menu(|ui| {
+        if text_edit_menu(ui, r.id, true) {
+            ui.close();
+        }
+    });
+    r
+}
+
+/// A right-click menu for a text box: Cut, Copy, Paste and Select all, as
+/// the keyboard shortcuts do them (Paste and Cut only when `editable`).
+/// Returns true when an item was picked.
+pub fn text_edit_menu(ui: &mut Ui, id: egui::Id, editable: bool) -> bool {
+    let ctx = ui.ctx().clone();
+    let selected = egui::TextEdit::load_state(&ctx, id)
+        .and_then(|s| s.cursor.char_range())
+        .is_some_and(|r| r.primary != r.secondary);
+    let mut picked = false;
+    // The command reaches the box on the next frame, so it gets the focus
+    // back (and keeps its selection) first.
+    let send = |cmd: egui::ViewportCommand| {
+        ctx.memory_mut(|m| m.request_focus(id));
+        ctx.send_viewport_cmd(cmd);
+    };
+    if editable
+        && ui
+            .add_enabled(selected, egui::Button::new("Cut").shortcut_text("Ctrl+X"))
+            .clicked()
+    {
+        send(egui::ViewportCommand::RequestCut);
+        picked = true;
+    }
+    if ui
+        .add_enabled(selected, egui::Button::new("Copy").shortcut_text("Ctrl+C"))
+        .clicked()
+    {
+        send(egui::ViewportCommand::RequestCopy);
+        picked = true;
+    }
+    if editable
+        && ui
+            .add(egui::Button::new("Paste").shortcut_text("Ctrl+V"))
+            .clicked()
+    {
+        send(egui::ViewportCommand::RequestPaste);
+        picked = true;
+    }
+    if ui
+        .add(egui::Button::new("Select all").shortcut_text("Ctrl+A"))
+        .clicked()
+    {
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+        // The far end is clamped to the text's length when it's drawn.
+        let all = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(egui::text::CharIndex(0)),
+            egui::text::CCursor::new(egui::text::CharIndex(usize::MAX / 2)),
+        );
+        state.cursor.set_char_range(Some(all));
+        state.store(&ctx, id);
+        ctx.memory_mut(|m| m.request_focus(id));
+        picked = true;
+    }
+    picked
 }
 
 /// Take every link egui was asked to open this frame (`ctx.open_url`,
