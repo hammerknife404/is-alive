@@ -305,6 +305,7 @@ impl App {
                     busy: false,
                     note: self.look.map_note,
                     legend: self.look.map_legend,
+                    animate: self.look.animate,
                 })
             {
                 self.map_call.start(now, self.tab == Tab::Map);
@@ -399,6 +400,7 @@ impl App {
                         busy,
                         note: self.look.map_note,
                         legend: self.look.map_legend,
+                        animate: self.look.animate,
                     },
                 );
                 self.map_action(ui.ctx(), act);

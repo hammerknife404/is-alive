@@ -651,7 +651,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Legend** and **Export** (the same formats).
-- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow.
+- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way. Dropped onto other cards' links, it moves them round it the same way.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
 
 ### The legend
@@ -684,6 +684,7 @@ A saved map doesn't change with the files: **Reload** and **Clients** are greyed
 ![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)
 
 - **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link: the route its traffic takes.
+- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing down it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
 - **Trace to WAN**, at the top of the panel, lights every selected card's whole path to the internet instead.
@@ -986,7 +987,7 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
-**Animate** (on by default) lets things move: the Map tab pulses after a Full scan, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Off, the Map tab lights up still instead and the rest holds still. Turn it off on battery or if motion bothers you.
+**Animate** (on by default, in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Everything pauses while the window isn't in front. Off, the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. Turn it off on battery or if motion bothers you.
 
 ### Miami backdrop
 

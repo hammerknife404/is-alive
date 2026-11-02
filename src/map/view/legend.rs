@@ -4,9 +4,11 @@
 //! row fades that role out or back in, as the sidebar's does.
 
 use super::paint::{
-    card_frame, chip_pill, draw_box, draw_link, link_width, pin, trunk_font, warn_badge,
+    canvas_fill, card_frame, chip_pill, draw_box, draw_link, draw_lit, draw_packet, link_width,
+    packet_gap, packet_radius, packet_travel, pin, trunk_font, warn_badge,
 };
 use super::*;
+use crate::map::colours;
 use crate::map::legend::{self, Entry, Ink, Slot, Swatch};
 
 /// One row, a section's heading or an entry's.
@@ -344,6 +346,7 @@ impl MapView {
                                 off,
                                 z,
                                 now,
+                                self.animate,
                             );
                             let tx = s.max.x + GAP;
                             let ty = top.y + (ROW - label.size().y) / 2.0;
@@ -412,14 +415,28 @@ fn tip(s: Swatch) -> &'static str {
             "Every link from one card into a box, folded into one line in the colour \
              of the box it runs into"
         }
-        Swatch::Lit => "Click a card: its path to the internet lights up, packets flowing",
+        Swatch::Lit => {
+            "Click a card: its path to the internet lights up in the colours of the cards it \
+             leads to, packets flowing (with Animate on)"
+        }
         Swatch::Box => "A site's cards (click its title to fold it), or a role's in Zones",
     }
 }
 
 /// An entry's swatch in `s`, drawn as the map draws it (`z` its zoom for
-/// lines). `off`: a role faded out, drawn faded as on the map.
-fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f32, now: f64) {
+/// lines). `off`: a role faded out, drawn faded as on the map. `animate`:
+/// Settings' Animate, so a lit path's packets move only when the map's do.
+#[allow(clippy::too_many_arguments)]
+fn swatch(
+    p: &Painter,
+    vis: &egui::Visuals,
+    e: &Entry,
+    s: Rect,
+    off: bool,
+    z: f32,
+    now: f64,
+    animate: bool,
+) {
     let c = ink(vis, e.ink);
     let glow = glow_strength(vis);
     let a = if off { 0.15 } else { 1.0 };
@@ -472,26 +489,14 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
             );
         }
         Swatch::Line(link) => {
-            draw_link(
-                p,
-                &mid,
-                c,
-                c,
-                link,
-                link_width(link, z, false),
-                a,
-                false,
-                z,
-                glow,
-                now,
-            );
+            draw_link(p, &mid, c, link, link_width(link, z, false), a, z, glow);
         }
         Swatch::Trunk(link) => {
             // As a trunk into a box: a little wider, its count at its end.
             let end = s.max.x - 12.0;
             let w = link_width(link, z, false) + 0.6;
             let pts = [s.left_center(), pos2(end, s.center().y)];
-            draw_link(p, &pts, c, c, link, w, a, false, z, glow, now);
+            draw_link(p, &pts, c, link, w, a, z, glow);
             p.text(
                 pos2(end + 1.0, s.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -501,8 +506,21 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
             );
         }
         Swatch::Lit => {
+            // A lit path to a card of this colour, by the canvas's own rules:
+            // the colour its cards share, kept legible on the canvas, and its
+            // packets (a grey card's hollow) flowing while Animate is on.
+            let behind = canvas_fill(vis);
+            let (colour, mixed) = colours::path_colour(&[c], c);
+            let (lc, grey) = colours::packet_look(colour, behind);
             let w = link_width(Link::Wired, z, true);
-            draw_link(p, &mid, c, c, Link::Wired, w, a, true, z, glow, now);
+            draw_lit(p, &mid, 0.0, lc, mixed, Link::Wired, w, a, z, glow);
+            if animate {
+                let gap = packet_gap(z);
+                let phase = packet_travel(now, z).rem_euclid(gap);
+                for at in along_from(&mid, 0.0, phase, gap, Rect::EVERYTHING) {
+                    draw_packet(p, at, lc, grey, packet_radius(w), a, behind);
+                }
+            }
         }
         Swatch::Box => draw_box(p, s, CARD_Z, c, a),
     }

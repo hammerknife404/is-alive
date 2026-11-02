@@ -384,6 +384,78 @@ pub(crate) mod tests {
         assert!(w >= 7.0 * said.chars().count() as f32 + 64.0, "{w}");
     }
 
+    /// A card dragged out of its column: the pictures and diagrams take
+    /// the canvas's routing, so its link goes round the cards in the way
+    /// (client tiles at their own size) rather than through them.
+    #[test]
+    fn a_dragged_cards_link_misses_the_other_cards_in_exports_too() {
+        let m = acme();
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let shown: Vec<usize> = (0..m.nodes.len())
+            .filter(|&k| lay.pos[k].is_some())
+            .collect();
+        let bottom = shown
+            .iter()
+            .map(|&k| layout::card_rect(&m.nodes[k], lay.pos[k].unwrap()).bottom())
+            .fold(f32::MIN, f32::max);
+        let look = Look::new(&eframe::egui::Visuals::dark(), false);
+        // Each stacked card in turn, dropped under the whole map at its
+        // own x, and beside its column.
+        let stacked: Vec<usize> = shown
+            .iter()
+            .copied()
+            .filter(|&k| lay.stacked[k] && m.nodes[k].parent().is_some())
+            .take(4)
+            .collect();
+        assert!(!stacked.is_empty());
+        for k in stacked {
+            let home = lay.pos[k].unwrap();
+            for to in [
+                eframe::egui::pos2(home.x, bottom + 120.0),
+                home + eframe::egui::vec2(CARD.x + 40.0, 0.0),
+            ] {
+                let mut pos = lay.pos.clone();
+                pos[k] = Some(to);
+                let mut moved = vec![false; m.nodes.len()];
+                moved[k] = true;
+                let d = Drawn {
+                    map: &m,
+                    lay: &lay,
+                    pos: &pos,
+                    moved: &moved,
+                    legend: false,
+                    caption: None,
+                };
+                let own = d
+                    .lines()
+                    .into_iter()
+                    .find(|l| l.kids == [k])
+                    .expect("its link");
+                let r = d.rect(k).unwrap();
+                let end = *own.pts.last().unwrap();
+                assert!(r.expand(0.01).contains(end), "{k}: {:?}", own.pts);
+                // Only where the drop itself sits on a card can't it be clear.
+                let on_card = shown
+                    .iter()
+                    .any(|&o| o != k && d.rect(o).unwrap().intersects(r));
+                if !on_card {
+                    let up = m.nodes[k].parent().unwrap();
+                    for &o in shown.iter().filter(|&&o| o != k && o != up) {
+                        let c = d.rect(o).unwrap().shrink(1.0);
+                        let hit = own
+                            .pts
+                            .windows(2)
+                            .any(|s| c.intersects(Rect::from_two_pos(s[0], s[1])));
+                        assert!(!hit, "{k} to {to:?} runs through {o}: {:?}", own.pts);
+                    }
+                }
+                for f in [Format::Svg, Format::DrawIo] {
+                    parse_xml(&f.text(&d, look).expect("text"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn xml_escapes_and_drops_controls() {
         assert_eq!(xml("a<b>&\"'\u{7}\nc"), "a&lt;b&gt;&amp;&quot;&apos;&#10;c");
