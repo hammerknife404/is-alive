@@ -9,7 +9,7 @@
 
 use super::{Link, Map, Zone};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Mode {
@@ -806,21 +806,42 @@ pub fn lines(
             pts,
         });
     }
+    // Several trunks into one box side spread along it, in the order their
+    // uplinks sit, so their lines and ×N counts don't land on one point.
+    let mut ends: BTreeMap<(usize, bool), Vec<(f32, usize)>> = BTreeMap::new();
+    for &(up, g) in trunks.keys() {
+        let (Some(a), Some(b)) = (at(up), lay.boxes.get(g)) else {
+            continue;
+        };
+        let below = b.rect.top() > a.y + CARD.y + 8.0;
+        ends.entry((g, below)).or_default().push((a.x, up));
+    }
+    let mut entry: HashMap<(usize, usize), f32> = HashMap::new();
+    for ((g, _), mut ups) in ends {
+        let b = lay.boxes[g].rect;
+        ups.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let n = ups.len() as f32;
+        let gap = (b.width() / (n + 1.0)).min(CARD.x * 0.4);
+        for (k, (_, up)) in ups.into_iter().enumerate() {
+            let x = b.center().x + (k as f32 - (n - 1.0) / 2.0) * gap;
+            entry.insert((up, g), x);
+        }
+    }
     for ((up, g), kids) in trunks {
         let (Some(a), Some(b)) = (at(up), lay.boxes.get(g)) else {
             continue;
         };
         let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
+        let x = entry.get(&(up, g)).copied().unwrap_or(b.rect.center().x);
         let pts = if b.rect.top() > from.y + 8.0 {
-            // Below: into the middle of the box's top edge.
-            let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
+            // Below: into the box's top edge.
+            let into = pos2(x - CARD.x / 2.0, b.rect.top());
             route(a, into, false, None)
         } else {
             // Beside it (same row): under both boxes and up into its
             // bottom, rather than along the cards' edges.
             let own = group(up).and_then(|g| lay.boxes.get(g));
             let floor = own.map_or(from.y, |o| o.rect.bottom()).max(b.rect.bottom()) + BOX_PAD;
-            let x = b.rect.center().x;
             vec![
                 from,
                 pos2(from.x, floor),
@@ -894,6 +915,39 @@ mod tests {
         assert_eq!(own.pts, route_free(at(2).unwrap(), at(3).unwrap()));
         let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
         assert_eq!(trunk.map(|t| t.kids.len()), Some(2));
+    }
+
+    #[test]
+    fn trunks_into_one_box_enter_it_apart() {
+        // internet → gw → 2 switches, each with 2 clients: two trunks into
+        // the clients' box, from left to right as their switches sit.
+        let mut m = tree(&[
+            None,
+            Some(0),
+            Some(1),
+            Some(1),
+            Some(2),
+            Some(2),
+            Some(3),
+            Some(3),
+        ]);
+        m.nodes[1].zone = Zone::Gateway;
+        for n in &mut m.nodes[4..] {
+            n.zone = Zone::Client;
+        }
+        let l = layout_in(&m, &|_| true, Mode::Zones);
+        let lines = lines(&m, &l, &|i| l.pos[i], &|_| false);
+        let end = |up: usize| {
+            let t = lines.iter().find(|x| x.up == up && x.into.is_some());
+            *t.expect("a trunk").pts.last().unwrap()
+        };
+        let (a, b) = (end(2), end(3));
+        assert_ne!(a, b);
+        assert_eq!(a.y, b.y);
+        let left = l.pos[2].unwrap().x < l.pos[3].unwrap().x;
+        assert_eq!(a.x < b.x, left);
+        let bx = l.boxes[l.group[4].unwrap()].rect;
+        assert!(bx.x_range().contains(a.x) && bx.x_range().contains(b.x));
     }
 
     #[test]

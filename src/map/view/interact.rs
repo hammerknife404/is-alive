@@ -192,6 +192,9 @@ impl MapView {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !self.keys_busy {
             self.select(None);
         }
+        if !self.keys_busy {
+            self.keys(ui, rect);
+        }
         let icon = if self.drag.is_some() || (resp.dragged() && over.is_none()) {
             egui::CursorIcon::Grabbing
         } else if over.is_some() || title.is_some() {
@@ -209,6 +212,51 @@ impl MapView {
             self.card_tip(resp, i);
         }
         over
+    }
+
+    /// The view from the keyboard: F fits, + and − zoom, 0 is 100%, the
+    /// arrows pan. Not with Ctrl or Alt held (Ctrl+plus zooms the app).
+    fn keys(&mut self, ui: &Ui, rect: Rect) {
+        use egui::Key;
+        let (fit, zoom, pan) = ui.input(|i| {
+            if i.modifiers.command || i.modifiers.alt {
+                return (false, None, Vec2::ZERO);
+            }
+            let k = |key| i.key_pressed(key);
+            let zoom = if k(Key::Plus) || k(Key::Equals) {
+                Some(1.25)
+            } else if k(Key::Minus) {
+                Some(0.8)
+            } else if k(Key::Num0) {
+                Some(0.0)
+            } else {
+                None
+            };
+            let step = 80.0;
+            let pan = [
+                (Key::ArrowLeft, vec2(step, 0.0)),
+                (Key::ArrowRight, vec2(-step, 0.0)),
+                (Key::ArrowUp, vec2(0.0, step)),
+                (Key::ArrowDown, vec2(0.0, -step)),
+            ]
+            .into_iter()
+            .filter(|(key, _)| k(*key))
+            .map(|(_, d)| d)
+            .fold(Vec2::ZERO, |a, d| a + d);
+            (k(Key::F), zoom, pan)
+        });
+        if fit {
+            self.fit_view(rect);
+        }
+        if let Some(f) = zoom {
+            let z = self.aim.map_or(self.zoom, |a| a.1);
+            self.zoom_about_middle(rect, if f == 0.0 { 1.0 } else { z * f });
+        }
+        if pan != Vec2::ZERO {
+            let (to, z) = self.aim.unwrap_or((self.pan, self.zoom));
+            self.aim = Some((to + pan, z));
+            self.follow = false;
+        }
     }
 
     /// Put back the selection a click replaced.
@@ -544,8 +592,8 @@ impl MapView {
     /// the layout, export.
     fn background_menu(&mut self, ui: &mut Ui, rect: Rect) {
         if ui
-            .add(egui::Button::new("Fit").shortcut_text("Double-click"))
-            .on_hover_text("Show the whole map")
+            .add(egui::Button::new("Fit").shortcut_text("F"))
+            .on_hover_text("Show the whole map (or double-click the background)")
             .clicked()
         {
             self.fit_view(rect);
