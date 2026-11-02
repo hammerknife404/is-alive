@@ -362,13 +362,16 @@ impl MapView {
                             ui.end_row();
                         }
                     });
-                for d in &n.details {
+                for d in drawn_note(n)
+                    .into_iter()
+                    .chain(n.details.iter().map(String::as_str))
+                {
                     ui.horizontal_top(|ui| {
                         ui.weak("·");
-                        ui.add(egui::Label::new(d.as_str()).wrap().selectable(true));
+                        ui.add(egui::Label::new(d).wrap().selectable(true));
                     });
                 }
-                if facts.is_empty() && n.details.is_empty() {
+                if facts.is_empty() && n.details.is_empty() && drawn_note(n).is_none() {
                     ui.weak("Nothing more is known about it.");
                 }
 
@@ -675,16 +678,27 @@ pub(super) fn run_detail(ui: &mut Ui, r: &Run) {
         });
 }
 
+/// What a card drawn by hand says about it (none when discovered).
+pub(super) fn drawn_note(n: &crate::map::Node) -> Option<&'static str> {
+    if n.drawn {
+        Some("Drawn by hand, not discovered")
+    } else if n.drawn_up {
+        Some("Its link up was drawn by hand, not discovered")
+    } else {
+        None
+    }
+}
+
 /// A card's details as text, for Copy.
 pub(super) fn card_text(n: &crate::map::Node) -> String {
     let mut s = format!("{} ({})\n", n.label, n.kind);
     if !n.sub.is_empty() {
         s += &format!("{}\n", n.sub);
     }
-    for d in n
-        .flags
-        .iter()
-        .map(|f| format!("Flag: {f}"))
+    for d in drawn_note(n)
+        .map(str::to_string)
+        .into_iter()
+        .chain(n.flags.iter().map(|f| format!("Flag: {f}")))
         .chain(n.details.iter().cloned())
     {
         s += &format!("{d}\n");

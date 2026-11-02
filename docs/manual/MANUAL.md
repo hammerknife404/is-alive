@@ -618,7 +618,7 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
 | **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings; a sweep of the same network marks which devices answered |
 
-A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps.
+A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps and a blank one.
 
 ### The toolbar
 
@@ -631,7 +631,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
-| **Examples ⏷** | Open one of two fictional sites, or **Close the example** |
+| **Examples ⏷** | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
 | **Export SVG…** | Save the map and its findings as a picture for a ticket or site document |
 
 **Layouts:**
@@ -661,6 +661,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
+- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab and above the map, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 

@@ -4,7 +4,7 @@
 //! Saved maps by the zoom controls opens it.
 
 use super::history::Edits;
-use super::saved::{self, Snapshot};
+use super::saved::{self, Purpose, Snapshot};
 use super::*;
 use crate::job::{Job, pump};
 use std::path::{Path, PathBuf};
@@ -27,6 +27,8 @@ enum TabEv {
     Duplicate(usize),
     Export(usize),
     Delete(usize),
+    /// Mark it as found, a plan or a training map.
+    Purpose(usize, Purpose),
 }
 
 /// What the dialog over the map is asking before it's done.
@@ -201,7 +203,17 @@ impl MapTabs {
                 // Built again with every site open: collapsed ones open
                 // again from the saved map.
                 let full = crate::map::build(&v.input(src));
-                Some(v.snapshot(name, created, full))
+                let mut s = v.snapshot(name, created, full);
+                // The blank example is a start to fill in: a plan, not
+                // what was found.
+                if src
+                    .export
+                    .mapnetwork()
+                    .is_some_and(|(p, _)| crate::skills::is_blank(p))
+                {
+                    s.purpose = Purpose::Plan;
+                }
+                Some(s)
             }
         }
     }
@@ -356,6 +368,7 @@ impl MapTabs {
                 }
             }
             Some(TabEv::Delete(i)) => self.asking = Some(Ask::Delete(i)),
+            Some(TabEv::Purpose(i, p)) => self.set_purpose(i, p),
             None => {}
         }
     }
@@ -396,21 +409,22 @@ impl MapTabs {
             }
             let t = &self.saved[i];
             let changed = t.view.edits_differ(&t.saved);
-            let mut label = short(&t.name);
-            if changed {
-                label.push_str(" •");
-            }
+            let (purpose, faults) = (t.view.purpose, t.view.faults.len());
             let what = if changed {
                 "Changed since it was saved: right-click › Update with current keeps the changes"
             } else {
                 "A saved map. Right-click to rename, update, duplicate, export or delete it"
             };
+            let note = purpose_note(purpose, faults)
+                .map(|n| format!("{n}\n"))
+                .unwrap_or_default();
             let tip = format!(
-                "{}\n{what}\n{} · saved {}",
+                "{}\n{note}{what}\n{} · saved {}",
                 t.name,
                 crate::tools::export::file_name(&t.path),
                 t.created.get(..10).unwrap_or(&t.created)
             );
+            let label = tab_text(ui, &t.name, purpose, changed);
             let r = ui
                 .selectable_label(self.shown == Some(i), label)
                 .on_hover_text(tip);
@@ -418,7 +432,7 @@ impl MapTabs {
                 self.shown = Some(i);
             }
             r.context_menu(|ui| {
-                ev = tab_menu(ui, i, self.shown, changed);
+                ev = tab_menu(ui, i, self.shown, changed, purpose, faults);
             });
         }
         if self.saved.is_empty() {
@@ -449,21 +463,25 @@ impl MapTabs {
         }
     }
 
+    /// Saved map `i` as its file has it (unsaved changes left out); what's
+    /// showing if the file went.
+    fn on_file(&self, i: usize) -> Option<Snapshot> {
+        let t = &self.saved[i];
+        match saved::read(&t.path) {
+            Ok(s) => Some(s),
+            Err(_) => t.view.frozen.as_deref().map(|full| {
+                t.view
+                    .snapshot(&t.name, t.created.clone(), saved::copy_map(full))
+            }),
+        }
+    }
+
     /// Rename a saved map: its file takes the new name too. What's in the
     /// file stays as it was (unsaved changes aren't written).
     fn rename(&mut self, i: usize, name: String) {
         let Some(dir) = self.dir.clone() else { return };
+        let Some(mut s) = self.on_file(i) else { return };
         let t = &self.saved[i];
-        let mut s = match saved::read(&t.path) {
-            Ok(s) => s,
-            // The file went: write what's showing.
-            Err(_) => match t.view.frozen.as_deref() {
-                Some(full) => t
-                    .view
-                    .snapshot(&t.name, t.created.clone(), saved::copy_map(full)),
-                None => return,
-            },
-        };
         s.name = name.clone();
         let path = if saved::slug(&name) == saved::slug(&t.name) {
             t.path.clone()
@@ -481,6 +499,31 @@ impl MapTabs {
             }
             Err(e) => widgets::toast(format!("Couldn't rename the map: {e}"), false),
         }
+    }
+
+    /// Mark saved map `i` as found, a plan or a training map, in its file
+    /// at once (not a step to undo: it's what the map is, not a change to
+    /// it). Unsaved changes stay unsaved. A map with an answer key stays a
+    /// training map.
+    fn set_purpose(&mut self, i: usize, p: Purpose) {
+        let t = &self.saved[i];
+        if t.view.purpose == p || (p != Purpose::Training && !t.view.faults.is_empty()) {
+            return;
+        }
+        let Some(mut s) = self.on_file(i) else { return };
+        s.purpose = p;
+        if let Err(e) = saved::write(&t.path, &s) {
+            widgets::toast(format!("Couldn't save the map: {e}"), false);
+            return;
+        }
+        let t = &mut self.saved[i];
+        t.view.purpose = p;
+        let what = match p {
+            Purpose::AsFound => "as found",
+            Purpose::Plan => "a plan",
+            Purpose::Training => "a training map",
+        };
+        widgets::toast(format!("\"{}\" is now marked {what}", t.name), true);
     }
 
     /// Update with current: saved map `i` keeps the changes made to it
@@ -647,9 +690,84 @@ fn short(name: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// What a sub-tab's tooltip says a plan or a training map is. Of the
+/// answer key, only how many faults: never what they are.
+fn purpose_note(p: Purpose, faults: usize) -> Option<String> {
+    let mut s = p.caption()?.to_string();
+    if faults > 0 {
+        s += &format!(
+            "\nAnswer key: {faults} fault{}, hidden",
+            if faults == 1 { "" } else { "s" }
+        );
+    }
+    Some(s)
+}
+
+/// A sub-tab's label: its name cut to fit, a small tag for a plan or a
+/// training map, and • when it has changes not saved.
+fn tab_text(ui: &Ui, name: &str, p: Purpose, changed: bool) -> egui::WidgetText {
+    let dot = if changed { " •" } else { "" };
+    let Some(tag) = p.tag() else {
+        return format!("{}{dot}", short(name)).into();
+    };
+    let mut job = egui::text::LayoutJob::default();
+    let mut add = |t: RichText| {
+        t.append_to(
+            &mut job,
+            ui.style(),
+            egui::FontSelection::Default,
+            egui::Align::Center,
+        )
+    };
+    add(RichText::new(short(name)));
+    add(RichText::new(format!(" {}", tag.to_uppercase()))
+        .small()
+        .strong()
+        .color(widgets::warn()));
+    if changed {
+        add(RichText::new(dot));
+    }
+    job.into()
+}
+
 /// A sub-tab's right-click menu. `changed`: it has changes not saved.
-fn tab_menu(ui: &mut Ui, i: usize, shown: Option<usize>, changed: bool) -> Option<TabEv> {
+/// `faults`: how many in its answer key.
+fn tab_menu(
+    ui: &mut Ui,
+    i: usize,
+    shown: Option<usize>,
+    changed: bool,
+    purpose: Purpose,
+    faults: usize,
+) -> Option<TabEv> {
     let mut ev = None;
+    ui.menu_button(format!("What it is: {}", purpose.name()), |ui| {
+        for p in Purpose::ALL {
+            let tip = match p {
+                Purpose::AsFound => "Found on a network: a sweep, backups, a /mapnetwork map",
+                Purpose::Plan => "Drawn by hand: a network to build or change, not discovered",
+                Purpose::Training => "Made up for practice, not discovered",
+            };
+            // An answer key makes it a training map.
+            let on = p == Purpose::Training || faults == 0;
+            if ui
+                .add_enabled(on, egui::Button::selectable(p == purpose, p.name()))
+                .on_hover_text(tip)
+                .on_disabled_hover_text(format!(
+                    "It has a training answer key ({faults} fault{}, hidden): it stays a \
+                     training map",
+                    if faults == 1 { "" } else { "s" }
+                ))
+                .clicked()
+            {
+                if p != purpose {
+                    ev = Some(TabEv::Purpose(i, p));
+                }
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
     let mut item = |ui: &mut Ui, on: bool, label: &str, tip: &str, e: TabEv| {
         if ui
             .add_enabled(on, egui::Button::new(label))
@@ -878,6 +996,60 @@ mod tests {
         let long = short(&"x".repeat(80));
         assert_eq!(long.chars().count(), LABEL_MAX);
         assert!(long.ends_with('…'));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_a_saved_map_is_is_kept_after_a_restart() {
+        let dir = temp("purpose");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        t.keep_new(sample("Site", "2026-01-01T00:00:00Z")).unwrap();
+        assert_eq!(t.saved[0].view.purpose, Purpose::AsFound);
+        // An unsaved change stays unsaved.
+        t.saved[0].view.placed.insert("gw".into(), pos2(5.0, 5.0));
+        t.set_purpose(0, Purpose::Plan);
+        assert_eq!(t.saved[0].view.purpose, Purpose::Plan);
+        let t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        assert_eq!(t.saved[0].view.purpose, Purpose::Plan);
+        assert!(!t.saved[0].saved.placed.contains_key("gw"));
+        assert_eq!(purpose_note(Purpose::AsFound, 0), None);
+        assert_eq!(
+            purpose_note(Purpose::Plan, 0).as_deref(),
+            Some("Plan — drawn by hand, not discovered")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shared_training_map_opens_as_one_and_stays_one() {
+        let dir = temp("training");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        let mut s = sample("Practice", "2026-01-01T00:00:00Z");
+        s.purpose = Purpose::Training;
+        s.faults = vec![saved::Fault {
+            card: Some("sw".into()),
+            title: "Secret loop".into(),
+            detail: "on port 7".into(),
+        }];
+        let text = saved::to_json(&s);
+        t.open_file(Path::new("practice.json"), text.as_bytes())
+            .unwrap();
+        let v = &t.saved[0].view;
+        assert_eq!((v.purpose, v.faults.len()), (Purpose::Training, 1));
+        let note = purpose_note(v.purpose, v.faults.len()).unwrap();
+        assert!(note.ends_with("Answer key: 1 fault, hidden"), "{note}");
+        assert!(!note.contains("Secret") && !note.contains("port 7"));
+        // With an answer key it can't be called as found (or a plan).
+        t.set_purpose(0, Purpose::AsFound);
+        t.set_purpose(0, Purpose::Plan);
+        assert_eq!(t.saved[0].view.purpose, Purpose::Training);
+        // Kept through a rename, an update and a restart.
+        t.rename(0, "Practice 2".into());
+        t.update(0);
+        let t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        let v = &t.saved[0].view;
+        assert_eq!((v.purpose, v.faults.len()), (Purpose::Training, 1));
+        assert_eq!(v.faults[0].title, "Secret loop");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

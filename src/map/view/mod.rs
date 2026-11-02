@@ -225,6 +225,12 @@ pub struct MapView {
     /// A saved map: drawn from this (every site open) rather than from the
     /// sweep and files.
     frozen: Option<Box<Map>>,
+    /// What a saved map is (as found, a plan, a training map); the live
+    /// map is always as found.
+    purpose: saved::Purpose,
+    /// A training map's answer key, kept to be saved again. Never shown:
+    /// only how many, in its sub-tab's tooltip.
+    faults: Vec<saved::Fault>,
     /// The saved maps bar is showing (the toolbar's toggle), and the
     /// toggle was clicked.
     bar: bool,
@@ -1266,6 +1272,10 @@ impl MapView {
     /// a running sweep has got.
     fn notices(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
         let mut act = None;
+        // A plan or a training map says so first: it isn't what was found.
+        if let Some(c) = self.purpose.caption() {
+            ui.label(RichText::new(c).strong().color(widgets::warn()));
+        }
         if !self.map.summary.is_empty() {
             ui.weak(&self.map.summary);
         }
@@ -1601,17 +1611,29 @@ fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
         ui.add_space(14.0);
         ui.weak("Or look around one of the example maps (fictional sites):");
         ui.add_space(4.0);
-        for (i, (label, _)) in crate::skills::EXAMPLES.iter().enumerate() {
-            if ui
-                .link(*label)
-                .on_hover_text("Opens it like a /mapnetwork map loaded in Config Export")
-                .clicked()
-            {
+        for (i, (label, f)) in crate::skills::EXAMPLES.iter().enumerate() {
+            let blank = *f == crate::skills::BLANK;
+            if blank {
+                ui.add_space(6.0);
+                ui.weak("Or start from a blank one:");
+                ui.add_space(4.0);
+            }
+            if ui.link(*label).on_hover_text(example_tip(blank)).clicked() {
                 act = Some(Action::Example(i));
             }
         }
     });
     act
+}
+
+/// What an example in the Examples menu (or the empty map's list) is.
+fn example_tip(blank: bool) -> &'static str {
+    if blank {
+        "The Internet and one gateway at one site, nothing else: a start for a map drawn by \
+         hand, or a small map to try things on. Saved, it's marked a plan"
+    } else {
+        "Opens it like a /mapnetwork map loaded in Config Export"
+    }
 }
 
 /// The toolbar's Examples menu; the example picked, if any.
@@ -1624,10 +1646,18 @@ fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<Action> {
         .and_then(|m| m.0.file_name().map(|f| f.to_os_string()));
     ui.menu_button("Examples ⏷", |ui| {
         ui.weak("Fictional sites, as /mapnetwork maps");
-        for (i, (label, _)) in crate::skills::EXAMPLES.iter().enumerate() {
+        for (i, (label, f)) in crate::skills::EXAMPLES.iter().enumerate() {
+            let blank = *f == crate::skills::BLANK;
+            if blank {
+                ui.separator();
+            }
             let on =
                 shown.is_some() && shown.as_deref() == crate::skills::example_path(i).file_name();
-            if ui.selectable_label(on, *label).clicked() {
+            if ui
+                .selectable_label(on, *label)
+                .on_hover_text(example_tip(blank))
+                .clicked()
+            {
                 picked = Some(Action::Example(i));
                 ui.close();
             }
@@ -1645,7 +1675,7 @@ fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<Action> {
         }
     })
     .response
-    .on_hover_text("Open an example map: a fictional site drawn by /mapnetwork");
+    .on_hover_text("Open an example map (a fictional site drawn by /mapnetwork) or a blank one");
     picked
 }
 
