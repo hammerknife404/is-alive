@@ -167,7 +167,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
-When every check is done, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small dot until you open it. With **Animate** off (Settings, under the Miami backdrop) it lights up briefly instead of pulsing.
+When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
 
 ### Dropping files
 
@@ -952,11 +952,13 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
+**Animate** (on by default) lets things move: the Map tab pulses after a Full scan, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Off, the Map tab lights up still instead and the rest holds still. Turn it off on battery or if motion bothers you.
+
 ### Miami backdrop
 
 With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
 
-- **Animate** moves the scene (10 frames a second, paused when the window isn't in front). Turn it off on battery. Off, the Map tab also lights up still after a Full scan rather than pulsing.
+- With **Animate** on (above), the scene moves at 10 frames a second, paused when the window isn't in front.
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 

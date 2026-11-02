@@ -71,11 +71,7 @@ impl App {
                     if let Some(at) = behind {
                         map_glow(ui, at, r.rect, glow);
                         if call != Call::Off {
-                            ui.painter().circle_filled(
-                                egui::pos2(r.rect.right() - 2.0, r.rect.top() + 3.0),
-                                2.5,
-                                theme::accent(),
-                            );
+                            map_ring(ui, r.rect);
                         }
                     }
                     if on {
@@ -127,10 +123,7 @@ impl App {
     fn map_call(&mut self, ui: &egui::Ui) -> Call {
         let (now, focused) = ui.input(|i| (i.time, i.viewport().focused != Some(false)));
         let animate = self.look.animate;
-        if !focused {
-            self.map_call.hold(now, animate);
-        }
-        let call = self.map_call.call(now, animate);
+        let call = self.map_call.frame(now, focused, animate);
         if let Call::Glow { left, .. } = call
             && focused
         {
@@ -425,10 +418,12 @@ const PULSES: f64 = 3.0;
 const STILL_SECS: f64 = 1.5;
 
 /// The Map tab calling for attention once a full scan is done: it glows in
-/// the accent colour for a few seconds, then keeps a dot until it's opened.
+/// the accent colour for a few seconds, then keeps a ring until it's opened.
 #[derive(Default)]
 pub(crate) struct MapCall {
     since: Option<f64>,
+    /// The glow is waiting for the window to be focused again.
+    held: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -439,27 +434,32 @@ pub(crate) enum Call {
         glow: f32,
         left: f64,
     },
-    Dot,
+    Ring,
 }
 
 impl MapCall {
     /// A full scan finished at `now`; nothing to show if the Map is open.
     pub(crate) fn start(&mut self, now: f64, on_map: bool) {
         self.since = (!on_map).then_some(now);
+        self.held = false;
     }
 
     /// The Map tab is open (or another scan began): the call is answered.
     pub(crate) fn seen(&mut self) {
         self.since = None;
+        self.held = false;
     }
 
-    /// Nobody's looking: start the glow again from the top.
-    fn hold(&mut self, now: f64, animate: bool) {
+    /// This frame's call. While the window isn't focused the glow waits,
+    /// however long that is, and plays from the top on the first frame back.
+    fn frame(&mut self, now: f64, focused: bool, animate: bool) -> Call {
         if let Some(s) = &mut self.since
-            && now - *s < glow_secs(animate)
+            && (self.held || !focused && now - *s < glow_secs(animate))
         {
             *s = now;
+            self.held = !focused;
         }
+        self.call(now, animate)
     }
 
     fn call(&self, now: f64, animate: bool) -> Call {
@@ -469,7 +469,7 @@ impl MapCall {
         let t = (now - since).max(0.0);
         let left = glow_secs(animate) - t;
         if left <= 0.0 {
-            return Call::Dot;
+            return Call::Ring;
         }
         let glow = if animate {
             let turns = t / PULSE_SECS * PULSES;
@@ -501,6 +501,16 @@ fn map_glow(ui: &egui::Ui, at: egui::layers::ShapeIdx, r: egui::Rect, glow: f32)
             egui::Stroke::new(1.0, accent.gamma_multiply(0.7 * glow)),
             egui::StrokeKind::Inside,
         ),
+    );
+}
+
+/// A small ring in the Map tab's top-right corner until it's opened: hollow,
+/// so it isn't read as a running job's dot.
+fn map_ring(ui: &egui::Ui, r: egui::Rect) {
+    ui.painter().circle_stroke(
+        egui::pos2(r.right() - 2.5, r.top() + 3.5),
+        2.75,
+        egui::Stroke::new(1.5, theme::accent()),
     );
 }
 
@@ -536,7 +546,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn map_tab_glows_then_keeps_a_dot_until_opened() {
+    fn map_tab_glows_then_keeps_a_ring_until_opened() {
         let mut m = MapCall::default();
         assert_eq!(m.call(0.0, true), Call::Off);
         m.start(10.0, false);
@@ -549,8 +559,8 @@ mod tests {
         assert!(glow(&m, 0.6) > 0.99);
         assert!(glow(&m, 1.2) < 0.01);
         assert!(glow(&m, 3.0) > 0.99);
-        assert_eq!(m.call(10.01 + PULSE_SECS, true), Call::Dot);
-        assert_eq!(m.call(500.0, true), Call::Dot);
+        assert_eq!(m.call(10.01 + PULSE_SECS, true), Call::Ring);
+        assert_eq!(m.call(500.0, true), Call::Ring);
         m.seen();
         assert_eq!(m.call(500.0, true), Call::Off);
     }
@@ -560,7 +570,7 @@ mod tests {
         let mut m = MapCall::default();
         m.start(0.0, false);
         assert!(matches!(m.call(0.2, false), Call::Glow { glow: 1.0, .. }));
-        assert_eq!(m.call(STILL_SECS + 0.01, false), Call::Dot);
+        assert_eq!(m.call(STILL_SECS + 0.01, false), Call::Ring);
     }
 
     #[test]
@@ -571,10 +581,32 @@ mod tests {
         assert_eq!(m.call(0.5, true), Call::Off);
         // Window in the background: the glow waits for the user.
         m.start(0.0, false);
-        m.hold(3.0, true);
-        assert!(matches!(m.call(3.6, true), Call::Glow { glow, .. } if glow > 0.99));
-        // Once it's played, the dot just stays.
-        m.hold(40.0, true);
-        assert_eq!(m.call(40.0, true), Call::Dot);
+        m.frame(0.0, false, true);
+        m.frame(3.0, false, true);
+        assert!(matches!(m.frame(3.6, true, true), Call::Glow { .. }));
+        assert!(matches!(m.frame(4.2, true, true), Call::Glow { glow, .. } if glow > 0.99));
+        // Once it's played, the ring just stays.
+        m.frame(40.0, false, true);
+        assert_eq!(m.frame(40.0, true, true), Call::Ring);
+    }
+
+    #[test]
+    fn map_tab_glows_when_the_user_is_back_however_long_away() {
+        // Nothing draws while the window idles in the background: one frame
+        // as the scan ends, the next when the user comes back.
+        for animate in [true, false] {
+            let mut m = MapCall::default();
+            m.start(100.0, false);
+            m.frame(100.0, false, animate);
+            assert!(matches!(m.frame(160.0, true, animate), Call::Glow { .. }));
+            assert!(matches!(m.frame(161.0, true, animate), Call::Glow { .. }));
+            assert_eq!(m.frame(170.0, true, animate), Call::Ring);
+        }
+        // Back after the call had played: just the ring.
+        let mut m = MapCall::default();
+        m.start(0.0, false);
+        m.frame(0.0, true, true);
+        m.frame(10.0, false, true);
+        assert_eq!(m.frame(60.0, true, true), Call::Ring);
     }
 }

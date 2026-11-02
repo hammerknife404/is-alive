@@ -194,6 +194,19 @@ pub fn text_selection(
     Some(byte(a.min(b))..byte(a.max(b)))
 }
 
+/// Draws `add` with the popups it opens free to use the window's height:
+/// egui lays a new popup out at most 400 points tall, so a long list in a
+/// drop-down or menu would scroll with room to spare.
+pub fn tall_popups<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let was = ctx.global_style().spacing.default_area_size;
+    let tall = ctx.content_rect().height();
+    ctx.global_style_mut(|s| s.spacing.default_area_size.y = tall);
+    let r = add(ui);
+    ctx.global_style_mut(|s| s.spacing.default_area_size = was);
+    r
+}
+
 /// Busy indicator. egui's own spinner asks for a redraw every frame, which
 /// means 60 full window redraws a second (unbounded without vsync) for as
 /// long as a tool runs; this one turns at 20 frames a second.

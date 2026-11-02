@@ -135,9 +135,10 @@ struct App {
     update_asked: bool,
     /// The sweep was running last frame (to see one start).
     was_sweeping: bool,
-    /// A full scan's runs are under way: when they're done, the Map tab
-    /// calls for attention.
-    scanning: bool,
+    /// The tabs whose full-scan run is still going: when the last ends,
+    /// the Map tab calls for attention. A run started there by hand after
+    /// the scan's own ended doesn't count.
+    scanning: Vec<Tab>,
     map_call: chrome::MapCall,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
@@ -282,10 +283,14 @@ impl App {
                 );
             }
         }
-        // The full scan is done: its sweep is on the Map now.
-        if self.scanning && !self.scan_running() {
-            self.scanning = false;
-            self.map_call.start(now, self.tab == Tab::Map);
+        // The full scan is done: what its sweep found is on the Map now.
+        if !self.scanning.is_empty() {
+            let mut left = std::mem::take(&mut self.scanning);
+            left.retain(|t| self.tab_running(*t));
+            self.scanning = left;
+            if self.scanning.is_empty() && self.sweep.finished().is_some_and(|(_, n)| n > 0) {
+                self.map_call.start(now, self.tab == Tab::Map);
+            }
         }
         self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ctx);
@@ -521,15 +526,6 @@ impl App {
             || self.advanced.is_running()
     }
 
-    /// A full scan's runs still going (the WAN lookup aside).
-    fn scan_running(&self) -> bool {
-        self.ping.is_running()
-            || self.ports.is_running()
-            || self.trace.is_running()
-            || self.dns.is_running()
-            || self.sweep.is_running()
-    }
-
     /// Run every tool against this machine's network and switch to Results.
     fn full_scan(&mut self, ctx: &egui::Context) {
         // LAN and gateway are re-read now; the WAN address refreshes alongside.
@@ -549,15 +545,20 @@ impl App {
 
         let gw = local.gateway.map(|g| g.to_string());
         self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
+        self.scanning = vec![Tab::Ping, Tab::Trace, Tab::Dns];
         if let Some(gw) = &gw {
             self.ports.run(ctx, gw);
+            self.scanning.push(Tab::Ports);
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
+            self.scanning.push(Tab::Sweep);
+        } else {
+            // Only the sweep puts anything on the Map.
+            self.scanning.clear();
         }
-        self.scanning = true;
         self.map_call.seen();
         self.tab = Tab::Results;
         // Show the new runs: a leftover filter could hide them, and the
@@ -873,7 +874,7 @@ fn main() {
                 info_job: None,
                 wan_asked: false,
                 was_sweeping: false,
-                scanning: false,
+                scanning: Vec::new(),
                 map_call: Default::default(),
                 update_job: None,
                 update: None,

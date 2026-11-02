@@ -919,10 +919,11 @@ fn servers(ui: &mut Ui, id: &str, list: &[speed::Preset], url: &mut String) {
         ),
         None => "Public servers to test against, by region".to_string(),
     };
-    egui::ComboBox::from_id_salt(id)
+    let combo = egui::ComboBox::from_id_salt(id)
         .selected_text("Servers")
-        .height(f32::INFINITY)
-        .show_ui(ui, |ui| {
+        .height(f32::INFINITY);
+    widgets::tall_popups(ui, |ui| {
+        combo.show_ui(ui, |ui| {
             ui.set_width(260.0);
             let mut region = "";
             for p in list {
@@ -943,19 +944,24 @@ fn servers(ui: &mut Ui, id: &str, list: &[speed::Preset], url: &mut String) {
                 }
             }
             ui.separator();
-            ui.add(
-                egui::Label::new(
-                    RichText::new(
-                        "Free public servers, best effort. If one fails or is slow, try \
-                         another nearby.",
+            // Left-aligned: the list's layout would justify it.
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_max_width(ui.available_width() - 8.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Free public servers, best effort. If one fails or is slow, try \
+                             another nearby.",
+                        )
+                        .weak(),
                     )
-                    .weak(),
-                )
-                .wrap(),
-            );
+                    .wrap(),
+                );
+            });
         })
-        .response
-        .on_hover_text(tip);
+    })
+    .response
+    .on_hover_text(tip);
 }
 
 fn run(tx: &Tx<Ev>, server: &Server, secs: u32, streams: usize, down: bool, up: bool) {

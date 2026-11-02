@@ -269,11 +269,12 @@ fn natural(c: char) -> Option<Color32> {
         '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' | '🔄' | '🆗' => {
             rgb(70, 150, 240)
         }
+        '☁' => rgb(150, 190, 230),
         '💜' | '🔮' => rgb(170, 110, 240),
         '🎉' => rgb(240, 110, 180),
         '📦' => rgb(190, 130, 70),
-        '📝' | '📄' | '📃' | '📋' | '☁' | '⚪' | '💬' => rgb(225, 225, 225),
-        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' | '🗑' | '🔍' | '🛡' => {
+        '📝' | '📄' | '📃' | '⚪' => rgb(225, 225, 225),
+        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' | '🗑' | '🔍' | '🛡' | '💬' | '📋' => {
             rgb(150, 165, 185)
         }
         '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' | '🗄' | '🛜' | '🖧'
@@ -1051,6 +1052,23 @@ pub fn appearance(
         });
         ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
+        let tip = if gpu {
+            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
+             line under the tabs drift (10 frames a second on the GPU, paused while the window \
+             isn't focused). Off, everything holds still."
+        } else {
+            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
+             line under the tabs drift (10 frames a second, no usable GPU, paused while the \
+             window isn't focused). Off, everything holds still."
+        };
+        if ui
+            .checkbox(&mut s.animate, "Animate")
+            .on_hover_text(tip)
+            .changed()
+        {
+            act = Some(MenuAction::Changed);
+        }
+        ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
             ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
@@ -1082,18 +1100,6 @@ pub fn appearance(
             if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
             {
                 s.backdrop = Source::None;
-                act = Some(MenuAction::Changed);
-            }
-            let tip = if gpu {
-                "10 frames a second on the GPU, paused while the window isn't focused"
-            } else {
-                "10 frames a second (no usable GPU), paused while the window isn't focused"
-            };
-            if ui
-                .checkbox(&mut s.animate, "Animate")
-                .on_hover_text(tip)
-                .changed()
-            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
