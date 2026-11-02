@@ -317,19 +317,48 @@ impl MapView {
 
     /// The right-click menu on card `i`: on one of several selected cards,
     /// every item acts on all of them. A card's ☰ in the detail panel opens
-    /// this same menu.
+    /// this same menu. Its sections, each shown only when it has items:
+    /// pin and select, select more, test, copy, then the layout.
     pub(super) fn card_menu(&mut self, ui: &mut Ui, i: usize) {
         let group = self.menu_group(i);
+        self.menu_header(ui, i, &group);
+        let mut sep = Sep(true);
+        self.menu_pick(ui, &mut sep, i, &group);
+        sep.next();
+        self.menu_more(ui, &mut sep, i, &group);
+        sep.next();
+        self.menu_test(ui, &mut sep, i, &group);
+        sep.next();
+        self.menu_copy(ui, &mut sep, &group);
+        sep.next();
+        self.menu_layout(ui, &mut sep, &group);
+    }
+
+    /// The menu's title: the card's name, with its role and IP under it;
+    /// or how many cards it acts on.
+    fn menu_header(&self, ui: &mut Ui, i: usize, group: &[usize]) {
+        if group.len() > 1 {
+            ui.label(RichText::new(format!("{} selected cards", group.len())).strong())
+                .on_hover_text("Everything here acts on all of them");
+            return;
+        }
+        let n = &self.map.nodes[i];
+        ui.label(RichText::new(&n.label).strong());
+        let ip = n.ip.map(|ip| ip.to_string()).filter(|ip| *ip != n.label);
+        let about: Vec<String> = [Some(n.kind.clone()), ip]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !about.is_empty() {
+            ui.label(RichText::new(about.join(" · ")).small().weak());
+        }
+    }
+
+    /// Pin, and select this card (or let go of the others).
+    fn menu_pick(&mut self, ui: &mut Ui, sep: &mut Sep, i: usize, group: &[usize]) {
         let n = group.len();
         let many = n > 1;
-        if many {
-            ui.label(RichText::new(format!("{n} selected cards")).strong())
-                .on_hover_text("Everything here acts on all of them");
-        } else {
-            ui.label(RichText::new(&self.map.nodes[i].label).strong());
-        }
-        ui.separator();
-
         // Pin: all of them, or (all pinned already) none.
         let pinned = group.iter().all(|&k| self.is_kept(k));
         let pin = match (many, pinned) {
@@ -338,12 +367,12 @@ impl MapView {
             (true, false) => format!("Pin all {n}"),
             (true, true) => format!("Unpin all {n}"),
         };
-        if ui
-            .button(pin)
+        if sep
+            .add(ui, egui::Button::new(pin))
             .on_hover_text("A pinned card stays selected when you click elsewhere")
             .clicked()
         {
-            for &k in &group {
+            for &k in group {
                 if pinned || !self.is_kept(k) {
                     self.keep(k);
                 }
@@ -362,16 +391,19 @@ impl MapView {
         };
         if many {
             if loose
-                && ui
-                    .button("Select only this card")
+                && sep
+                    .add(ui, egui::Button::new("Select only this card"))
                     .on_hover_text(only_tip)
                     .clicked()
             {
                 self.select_group(i, &[]);
                 ui.close();
             }
-            if ui
-                .add(egui::Button::new("Clear selection").shortcut_text("Esc"))
+            if sep
+                .add(
+                    ui,
+                    egui::Button::new("Clear selection").shortcut_text("Esc"),
+                )
                 .on_hover_text("Pinned cards stay")
                 .clicked()
             {
@@ -379,8 +411,11 @@ impl MapView {
                 ui.close();
             }
         } else if sel.contains(&i) {
-            if ui
-                .add(egui::Button::new("Remove from selection").shortcut_text("Ctrl+click"))
+            if sep
+                .add(
+                    ui,
+                    egui::Button::new("Remove from selection").shortcut_text("Ctrl+click"),
+                )
                 .clicked()
             {
                 self.toggle(i);
@@ -388,35 +423,43 @@ impl MapView {
             }
         } else {
             let only = if loose {
-                ui.button("Select only this card").on_hover_text(only_tip)
+                sep.add(ui, egui::Button::new("Select only this card"))
+                    .on_hover_text(only_tip)
             } else {
-                ui.button("Select")
+                sep.add(ui, egui::Button::new("Select"))
             };
             if only.clicked() {
                 self.select_group(i, &[]);
                 ui.close();
             }
             if !sel.is_empty()
-                && ui
-                    .add(egui::Button::new("Add to selection").shortcut_text("Ctrl+click"))
+                && sep
+                    .add(
+                        ui,
+                        egui::Button::new("Add to selection").shortcut_text("Ctrl+click"),
+                    )
                     .clicked()
             {
                 self.toggle(i);
                 ui.close();
             }
         }
+    }
 
-        // Select more: each one is shown only when it adds cards.
+    /// Select more: each one is shown only when it adds cards.
+    fn menu_more(&mut self, ui: &mut Ui, sep: &mut Sep, i: usize, group: &[usize]) {
+        let n = group.len();
+        let many = n > 1;
         let (it, its, them) = if many {
             ("these cards", "their", "them")
         } else {
             ("this card", "its", "it")
         };
-        let up = self.grow(&group, Grow::Uplink);
+        let up = self.grow(group, Grow::Uplink);
         let up_n = up.len();
-        let path = self.grow(&group, Grow::Path);
-        let kids = self.grow(&group, Grow::Children);
-        let below = self.grow(&group, Grow::Below);
+        let path = self.grow(group, Grow::Path);
+        let kids = self.grow(group, Grow::Children);
+        let below = self.grow(group, Grow::Below);
         let uplink_tip = match self.map.nodes[i].parent() {
             Some(u) if !many => format!(
                 "This card and {}, the card it hangs off",
@@ -453,13 +496,13 @@ impl MapView {
                 below,
             ),
         ];
-        if items.iter().any(|t| t.0) {
-            ui.separator();
-        }
         for (show, label, tip, cards) in items {
             if show
-                && ui
-                    .add(egui::Button::new(label).shortcut_text(format!("{} cards", cards.len())))
+                && sep
+                    .add(
+                        ui,
+                        egui::Button::new(label).shortcut_text(format!("{} cards", cards.len())),
+                    )
                     .on_hover_text(tip)
                     .clicked()
             {
@@ -467,68 +510,146 @@ impl MapView {
                 ui.close();
             }
         }
+    }
 
-        ui.separator();
-        if self.mode() == Mode::Sites {
-            let mut sites: Vec<String> = Vec::new();
-            for &k in &group {
-                if let Some(s) = &self.map.nodes[k].site
-                    && !sites.contains(s)
-                {
-                    sites.push(s.clone());
-                }
-            }
-            let open: Vec<String> = sites
-                .iter()
-                .filter(|s| !self.map.closed.contains_key(*s))
-                .cloned()
-                .collect();
-            let (verb, flip) = if open.is_empty() {
-                ("Expand", sites)
-            } else {
-                ("Collapse", open)
-            };
-            let label = match flip.as_slice() {
-                [] => None,
-                [one] => Some(format!("{verb} {one}")),
-                more => Some(format!("{verb} {} sites", more.len())),
-            };
-            if let Some(label) = label
-                && ui
-                    .button(label)
-                    .on_hover_text(if verb == "Expand" {
-                        "Open the site up again"
-                    } else {
-                        "Fold the site to one card"
-                    })
-                    .clicked()
+    /// Test: Ping, Port Check and Traceroute, run as the panel's buttons
+    /// run them, the result in the card's section of the panel; or in full
+    /// in the tool's tab. Then the device's web admin page. On several
+    /// cards: Ping or Port Check each one that has an IP.
+    fn menu_test(&mut self, ui: &mut Ui, sep: &mut Sep, i: usize, group: &[usize]) {
+        let with_ip: Vec<usize> = group
+            .iter()
+            .copied()
+            .filter(|&k| self.map.nodes[k].ip.is_some())
+            .collect();
+        if with_ip.is_empty() {
+            return;
+        }
+        if group.len() > 1 {
+            self.menu_test_all(ui, sep, &with_ip, group.len());
+            return;
+        }
+        let n = &self.map.nodes[i];
+        let (id, ip) = (n.id.clone(), n.ip.map(std::net::IpAddr::from));
+        let admin = ip.filter(|_| has_admin(n)).map(|ip| web_url(ip, &n.open));
+        for (tool, tip) in TESTS {
+            if sep
+                .add_enabled(
+                    ui,
+                    !self.runs.active(&id, tool),
+                    egui::Button::new(tool.name()),
+                )
+                .on_hover_text(tip)
+                .on_disabled_hover_text("Running: see its section in the panel")
+                .clicked()
             {
-                self.flip_sites.extend(flip);
+                self.menu_run(ui.ctx(), &[i], tool);
                 ui.close();
             }
         }
-        let moved: Vec<String> = group
-            .iter()
-            .map(|&k| self.map.nodes[k].id.clone())
-            .filter(|id| self.placed.contains_key(id))
-            .collect();
-        if !moved.is_empty()
-            && ui
-                .button("Put back in the layout")
-                .on_hover_text(format!("Back where the layout had {them}"))
+        if let Some(ip) = ip {
+            sep.before(ui);
+            ui.menu_button("Open in a tab", |ui| {
+                for (tool, _) in TESTS {
+                    if ui
+                        .add_enabled(!self.busy, egui::Button::new(tool.name()))
+                        .on_hover_text(format!("Run it in full in the {} tab", tool.name()))
+                        .on_disabled_hover_text("Wait for the test running in its tab to finish")
+                        .clicked()
+                    {
+                        self.menu_act = Some(panel::tab(tool, ip.to_string()));
+                        ui.close();
+                    }
+                }
+            });
+        }
+        if let Some(url) = admin
+            && sep
+                .add(ui, egui::Button::new("Open web admin"))
+                .on_hover_text(format!("Open {url} in your browser"))
                 .clicked()
         {
-            for id in moved {
-                self.placed.remove(&id);
-            }
+            widgets::open_url(url);
             ui.close();
+        }
+    }
+
+    /// Ping all, Port Check all: each of `cards` (those of `n` that have
+    /// an IP) gets the panel's quick run; a few at a time, the rest queued.
+    fn menu_test_all(&mut self, ui: &mut Ui, sep: &mut Sep, cards: &[usize], n: usize) {
+        let k = cards.len();
+        let room = k <= MAX_TESTS;
+        for (tool, tip) in TESTS.into_iter().take(2) {
+            let label = if k == n {
+                format!("{} all {k}", tool.name())
+            } else {
+                format!("{} the {k} with an IP", tool.name())
+            };
+            if sep
+                .add_enabled(ui, room, egui::Button::new(label))
+                .on_hover_text(tip)
+                .on_disabled_hover_text(format!("At most {MAX_TESTS} at once: select fewer cards"))
+                .clicked()
+            {
+                self.menu_run(ui.ctx(), cards, tool);
+                ui.close();
+            }
+        }
+    }
+
+    /// Run `tool` on each of `cards`, as the panel's buttons do. A card
+    /// that isn't selected is selected first, so its result shows.
+    fn menu_run(&mut self, ctx: &egui::Context, cards: &[usize], tool: Tool) {
+        if let [i] = cards
+            && !self.selection().contains(i)
+        {
+            self.select(Some(*i));
+        }
+        for &k in cards {
+            self.run_card(ctx, k, tool);
+        }
+    }
+
+    /// Copy: the IP and the MAC (one line per card for several), the
+    /// details.
+    fn menu_copy(&mut self, ui: &mut Ui, sep: &mut Sep, group: &[usize]) {
+        let n = group.len();
+        let many = n > 1;
+        for (what, list) in self.copy_lists(group) {
+            let k = list.len();
+            let button = match list.as_slice() {
+                [] => continue,
+                [one] if !many => egui::Button::new(format!("Copy {what}")).shortcut_text(one),
+                _ => egui::Button::new(format!("Copy {what}s")).shortcut_text(format!("{k} cards")),
+            };
+            let tip = if many {
+                "One per line, for each card that has one".to_string()
+            } else {
+                format!("Copy its {what} address")
+            };
+            if sep.add(ui, button).on_hover_text(tip).clicked() {
+                widgets::copy(ui.ctx(), list.join("\n"));
+                widgets::toast(
+                    if many {
+                        format!("{k} {what}s copied")
+                    } else {
+                        format!("{what} copied")
+                    },
+                    true,
+                );
+                ui.close();
+            }
         }
         let copy = if many {
             format!("Copy details of all {n}")
         } else {
             "Copy details".to_string()
         };
-        if ui.button(copy).clicked() {
+        if sep
+            .add(ui, egui::Button::new(copy))
+            .on_hover_text("Name, role, flags and details, as text")
+            .clicked()
+        {
             let text: Vec<String> = group
                 .iter()
                 .map(|&k| card_text(&self.map.nodes[k]))
@@ -542,6 +663,89 @@ impl MapView {
                 },
                 true,
             );
+            ui.close();
+        }
+    }
+
+    /// What Copy IP and Copy MAC copy: a line for each card in `group`
+    /// that has one, in order.
+    pub(super) fn copy_lists(&self, group: &[usize]) -> [(&'static str, Vec<String>); 2] {
+        let lines = |what: &dyn Fn(&Node) -> Option<String>| -> Vec<String> {
+            group
+                .iter()
+                .filter_map(|&k| what(&self.map.nodes[k]))
+                .collect()
+        };
+        [
+            ("IP", lines(&|n| n.ip.map(|ip| ip.to_string()))),
+            ("MAC", lines(&|n| n.mac.map(|m| crate::net::mac::fmt(&m)))),
+        ]
+    }
+
+    /// The layout: put dragged cards back; collapse or expand their site
+    /// (Sites layout; Collapse only when the map has another site, since
+    /// collapsing the only one folds the whole map into one card).
+    fn menu_layout(&mut self, ui: &mut Ui, sep: &mut Sep, group: &[usize]) {
+        let them = if group.len() > 1 { "them" } else { "it" };
+        let moved: Vec<String> = group
+            .iter()
+            .map(|&k| self.map.nodes[k].id.clone())
+            .filter(|id| self.placed.contains_key(id))
+            .collect();
+        if !moved.is_empty()
+            && sep
+                .add(ui, egui::Button::new("Put back in the layout"))
+                .on_hover_text(format!("Back where the layout had {them}"))
+                .clicked()
+        {
+            for id in moved {
+                self.placed.remove(&id);
+            }
+            ui.close();
+        }
+        if self.mode() != Mode::Sites {
+            return;
+        }
+        let mut sites: Vec<String> = Vec::new();
+        for &k in group {
+            if let Some(s) = &self.map.nodes[k].site
+                && !sites.contains(s)
+            {
+                sites.push(s.clone());
+            }
+        }
+        let open: Vec<String> = sites
+            .iter()
+            .filter(|s| !self.map.closed.contains_key(*s))
+            .cloned()
+            .collect();
+        let expand = open.is_empty();
+        if !expand && !self.multi_site {
+            return;
+        }
+        let (verb, flip) = if expand {
+            ("Expand", sites)
+        } else {
+            ("Collapse", open)
+        };
+        let (label, tip) = match flip.as_slice() {
+            [] => return,
+            [one] if expand => (
+                format!("Expand {}", ellipsis(one, SITE_CHARS)),
+                format!("Open {one} up again"),
+            ),
+            [one] => (
+                format!("Collapse {}", ellipsis(one, SITE_CHARS)),
+                format!("Fold {one} into one card"),
+            ),
+            more => (format!("{verb} {} sites", more.len()), more.join(", ")),
+        };
+        if sep
+            .add(ui, egui::Button::new(label))
+            .on_hover_text(tip)
+            .clicked()
+        {
+            self.flip_sites.extend(flip);
             ui.close();
         }
     }
@@ -678,4 +882,89 @@ fn cap(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
+}
+
+/// A separator owed before the next menu item: one stands only between
+/// sections that have items, never two in a row.
+struct Sep(bool);
+
+impl Sep {
+    /// Draw the separator owed, if any.
+    fn before(&mut self, ui: &mut Ui) {
+        if std::mem::take(&mut self.0) {
+            ui.separator();
+        }
+    }
+
+    fn add(&mut self, ui: &mut Ui, w: impl egui::Widget) -> egui::Response {
+        self.before(ui);
+        ui.add(w)
+    }
+
+    fn add_enabled(&mut self, ui: &mut Ui, on: bool, w: impl egui::Widget) -> egui::Response {
+        self.before(ui);
+        ui.add_enabled(on, w)
+    }
+
+    /// A new section: its first item gets a separator above it.
+    fn next(&mut self) {
+        self.0 = true;
+    }
+}
+
+/// The card menu's tests, with what each does.
+const TESTS: [(Tool, &str); 3] = [
+    (Tool::Ping, "Ping it 4 times; the result shows in its panel"),
+    (
+        Tool::Ports,
+        "Check its common ports; the result shows in its panel",
+    ),
+    (
+        Tool::Trace,
+        "Trace the route to it; the result shows in its panel",
+    ),
+];
+
+/// Most cards one Ping all or Port Check all takes (they queue, a few
+/// probing at a time).
+const MAX_TESTS: usize = 32;
+
+/// A site's name in the card menu is cut to this many characters.
+const SITE_CHARS: usize = 28;
+
+/// Network gear with a web admin page worth offering: the gateway or
+/// firewall, switches, access points, other gear and servers (a NAS).
+pub(super) fn has_admin(n: &Node) -> bool {
+    !n.client
+        && matches!(
+            n.zone,
+            Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear | Zone::Server
+        )
+}
+
+/// A device's web page: https on its own port, unless its known open ports
+/// say 8443 or plain http; an IPv6 address in brackets.
+pub(super) fn web_url(ip: std::net::IpAddr, open: &[u16]) -> String {
+    let host = match ip {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => format!("[{v6}]"),
+    };
+    let (scheme, port) = [
+        (443, "https", ""),
+        (8443, "https", ":8443"),
+        (80, "http", ""),
+    ]
+    .into_iter()
+    .find(|(p, ..)| open.contains(p))
+    .map_or(("https", ""), |(_, s, p)| (s, p));
+    format!("{scheme}://{host}{port}")
+}
+
+/// `s` cut to `max` characters, the last one an ellipsis.
+pub(super) fn ellipsis(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
 }

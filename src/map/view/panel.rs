@@ -514,24 +514,17 @@ impl MapView {
                             }
                         }
                     }
-                    if let Some(ip) = n.ip {
-                        let web = [
-                            (443, "https", ""),
-                            (8443, "https", ":8443"),
-                            (80, "http", ""),
-                        ]
-                        .into_iter()
-                        .find(|(p, ..)| n.open.contains(p));
-                        if let Some((_, scheme, port)) = web
-                            && ui
-                                .small_button("Web")
-                                .on_hover_text(format!(
-                                    "Open {scheme}://{ip}{port} in your browser"
-                                ))
-                                .clicked()
+                    // Web only when a web port is known to be open.
+                    if let Some(ip) = n.ip
+                        && [443, 8443, 80].iter().any(|p| n.open.contains(p))
+                    {
+                        let url = interact::web_url(ip.into(), &n.open);
+                        if ui
+                            .small_button("Web")
+                            .on_hover_text(format!("Open {url} in your browser"))
+                            .clicked()
                         {
-                            ui.ctx()
-                                .open_url(egui::OpenUrl::new_tab(format!("{scheme}://{ip}{port}")));
+                            widgets::open_url(url);
                         }
                     }
                     // A +N more card opens its uplink up; an opened uplink folds back.
@@ -581,12 +574,7 @@ impl MapView {
                                     RunEv::Stop => *ev = Some(PanelEv::Stop(i, r.tool)),
                                     RunEv::Clear => *ev = Some(PanelEv::Clear(i, r.tool)),
                                     RunEv::Tab => {
-                                        let ip = r.ip.to_string();
-                                        act = Some(match r.tool {
-                                            Tool::Ping => Action::Ping(ip),
-                                            Tool::Ports => Action::Ports(ip),
-                                            Tool::Trace => Action::Trace(ip),
-                                        });
+                                        act = Some(tab(r.tool, r.ip.to_string()));
                                     }
                                 }
                             }
@@ -595,6 +583,28 @@ impl MapView {
                 }
             });
         (act, frame.response, menu)
+    }
+}
+
+impl MapView {
+    /// Start a quick `tool` run on card `i`, its result in the card's
+    /// section of the panel: the panel's Ping, Ports and Trace, and the
+    /// card menu's Test items.
+    pub(super) fn run_card(&mut self, ctx: &egui::Context, i: usize, tool: Tool) {
+        let n = &self.map.nodes[i];
+        if let Some(ip) = n.ip {
+            self.runs.start(&n.id, tool, ip.into());
+            self.runs.poll(ctx);
+        }
+    }
+}
+
+/// What opens a card's IP in a tool's own tab, for a full run.
+pub(super) fn tab(tool: Tool, ip: String) -> Action {
+    match tool {
+        Tool::Ping => Action::Ping(ip),
+        Tool::Ports => Action::Ports(ip),
+        Tool::Trace => Action::Trace(ip),
     }
 }
 

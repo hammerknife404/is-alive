@@ -216,6 +216,10 @@ pub struct MapView {
     flipped_at: f64,
     /// The sidebar's starting state was picked for the window's width.
     sized: bool,
+    /// A test runs in its own tab (Sources::busy), as of this frame.
+    busy: bool,
+    /// What a card menu asked of the app (Open in a tab).
+    menu_act: Option<Action>,
 }
 
 /// What a right-click menu was opened on.
@@ -995,6 +999,7 @@ impl MapView {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let ctx = ui.ctx().clone();
         self.refresh(&ctx, &src);
+        self.busy = src.busy;
         let empty = self.map.nodes.is_empty();
         let bar = self.toolbar(ui, &src, empty);
         // The first thing asked for wins: a toolbar click isn't lost to
@@ -1022,7 +1027,7 @@ impl MapView {
         self.canvas(ui, bar.fit, focus);
         // Esc next frame closes a menu or leaves a text box: not the map's.
         self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
-        act
+        act.or(self.menu_act.take())
     }
 
     /// Search, clients, scan, fit and layout, and Export SVG.
@@ -1278,13 +1283,7 @@ impl MapView {
             Some(PanelEv::TraceWan(on)) => self.trace_wan = on,
             Some(PanelEv::Keep(i)) => self.keep(i),
             Some(PanelEv::Move(from, to)) => self.move_card(from, to),
-            Some(PanelEv::Run(i, tool)) => {
-                let n = &self.map.nodes[i];
-                if let Some(ip) = n.ip {
-                    self.runs.start(&n.id, tool, ip.into());
-                    self.runs.poll(ui.ctx());
-                }
-            }
+            Some(PanelEv::Run(i, tool)) => self.run_card(ui.ctx(), i, tool),
             Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
             Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
             Some(PanelEv::Open(p, on)) => {
@@ -2257,13 +2256,15 @@ mod tests {
     }
 
     /// What one frame of the map in a test showed: the text on the canvas's
-    /// right-click menu, on the open ☰ menu in the panel, and where each
-    /// card's ☰ button is.
+    /// right-click menu (and its separators), on the open ☰ menu in the
+    /// panel, and where each card's ☰ button is.
     #[derive(Default)]
     struct Shown {
         canvas: Vec<(String, Rect)>,
         panel: Vec<(String, Rect)>,
         buttons: HashMap<usize, Rect>,
+        /// Separators on the canvas's menu.
+        canvas_lines: usize,
     }
 
     /// One frame as the tab draws it: the panel and its ☰ menus, then the
@@ -2273,6 +2274,7 @@ mod tests {
         fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
             match s {
                 Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+                Shape::LineSegment { .. } => out.push(("—".into(), s.visual_bounding_rect())),
                 Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
                 _ => {}
             }
@@ -2310,9 +2312,16 @@ mod tests {
             let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 500.0));
             let resp = ui.interact(canvas, egui::Id::new("canvas"), Sense::click_and_drag());
             v.interact(ui, canvas, &resp);
-            shown.canvas = on(ui.ctx(), Popup::default_response_id(&resp));
+            // Separators drawn as "—" are counted, not listed.
+            let lines = |mut t: Vec<(String, Rect)>| {
+                let n = t.len();
+                t.retain(|(s, _)| s != "—");
+                (n - t.len(), t)
+            };
+            (shown.canvas_lines, shown.canvas) =
+                lines(on(ui.ctx(), Popup::default_response_id(&resp)));
             for id in popups {
-                shown.panel.extend(on(ui.ctx(), id));
+                shown.panel.extend(lines(on(ui.ctx(), id)).1);
             }
         });
         out.textures_delta.clear();
@@ -2352,13 +2361,12 @@ mod tests {
     #[test]
     fn a_cards_menu_button_in_the_panel_is_its_right_click_menu() {
         let ctx = egui::Context::default();
-        let mut v = tree8();
-        v.zoom = 1.0;
+        let mut v = on_canvas();
+        // With IPs, and an access point: every section of the menu.
         for (i, n) in v.map.nodes.iter_mut().enumerate() {
-            n.label = format!("card {i}");
-            let at = pos2(10.0 + (i % 3) as f32 * 260.0, 10.0 + (i / 3) as f32 * 130.0);
-            v.pos.insert(n.id.clone(), at);
+            n.ip = Some(std::net::Ipv4Addr::new(10, 0, 0, i as u8));
         }
+        v.map.nodes[5].zone = Zone::Wireless;
         let middle = |v: &MapView, i: usize| v.pos[&v.map.nodes[i].id] + CARD / 2.0;
         let (right, left) = (egui::PointerButton::Secondary, egui::PointerButton::Primary);
 
@@ -2411,6 +2419,9 @@ mod tests {
         let shown = frame(&ctx, &mut v, vec![]);
         let menu = click(&ctx, &mut v, shown.buttons[&5].center(), left);
         assert_eq!(words(&menu.panel)[0], "card 5");
+        for item in ["Ping", "Open in a tab", "Open web admin", "Copy IP"] {
+            assert!(has(&words(&menu.panel), item), "no {item:?}");
+        }
         frame(&ctx, &mut v, vec![]);
         click(
             &ctx,
@@ -2425,5 +2436,198 @@ mod tests {
         let at = frame(&ctx, &mut v, vec![]).buttons[&5].center();
         let menu = click(&ctx, &mut v, at, left);
         assert_eq!(words(&menu.panel), words(&rc.canvas));
+        for item in ["Ping all 5", "Port Check all 5", "Copy IPs"] {
+            assert!(has(&words(&menu.panel), item), "no {item:?}");
+        }
+    }
+
+    /// tree8 laid out on the canvas, each card labelled "card i".
+    fn on_canvas() -> MapView {
+        let mut v = tree8();
+        v.zoom = 1.0;
+        for (i, n) in v.map.nodes.iter_mut().enumerate() {
+            n.label = format!("card {i}");
+            let at = pos2(10.0 + (i % 3) as f32 * 260.0, 10.0 + (i / 3) as f32 * 130.0);
+            v.pos.insert(n.id.clone(), at);
+        }
+        v
+    }
+
+    /// The canvas's right-click menu on card `i`, in a fresh context.
+    fn menu_on(v: &mut MapView, i: usize) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let at = v.pos[&v.map.nodes[i].id] + CARD / 2.0;
+        words(&click(&ctx, v, at, egui::PointerButton::Secondary).canvas)
+    }
+
+    fn has(menu: &[String], item: &str) -> bool {
+        menu.iter().any(|s| s == item)
+    }
+
+    #[test]
+    fn the_card_menu_tests_and_copies_only_what_a_card_has() {
+        let mut v = on_canvas();
+        let ip = |n: u8| Some(std::net::Ipv4Addr::new(10, 0, 0, n));
+        // No IP: nothing to test or copy but the details.
+        let menu = menu_on(&mut v, 7);
+        for item in [
+            "Ping",
+            "Port Check",
+            "Traceroute",
+            "Open in a tab",
+            "Copy IP",
+        ] {
+            assert!(!has(&menu, item), "{item:?} in {menu:?}");
+        }
+        assert!(has(&menu, "Copy details"));
+        // A client with an IP and a MAC: the tests, both copies (showing
+        // what they copy), no web admin.
+        v.map.nodes[7].ip = ip(7);
+        v.map.nodes[7].mac = Some([0, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        v.map.nodes[7].zone = Zone::Client;
+        let menu = menu_on(&mut v, 7);
+        for item in [
+            "Ping",
+            "Port Check",
+            "Traceroute",
+            "Open in a tab",
+            "Copy IP",
+            "10.0.0.7",
+            "Copy MAC",
+            "00:11:22:33:44:55",
+        ] {
+            assert!(has(&menu, item), "no {item:?} in {menu:?}");
+        }
+        assert!(!has(&menu, "Open web admin"));
+        // A switch: its web admin too.
+        v.map.nodes[3].ip = ip(3);
+        v.map.nodes[3].zone = Zone::Switch;
+        assert!(has(&menu_on(&mut v, 3), "Open web admin"));
+        // Two picked, one with an IP: Ping and Port Check that one, no
+        // Traceroute or web admin; one IP line.
+        v.select(Some(7));
+        v.toggle(6);
+        let menu = menu_on(&mut v, 7);
+        assert_eq!(menu[0], "2 selected cards");
+        for item in [
+            "Ping the 1 with an IP",
+            "Port Check the 1 with an IP",
+            "Copy IPs",
+        ] {
+            assert!(has(&menu, item), "no {item:?} in {menu:?}");
+        }
+        for item in ["Traceroute", "Open in a tab", "Open web admin"] {
+            assert!(!has(&menu, item), "{item:?} in {menu:?}");
+        }
+        v.map.nodes[6].ip = ip(6);
+        assert!(has(&menu_on(&mut v, 7), "Ping all 2"));
+    }
+
+    #[test]
+    fn copy_ip_and_mac_give_a_line_for_each_card_that_has_one() {
+        let mut v = view(3);
+        v.map.nodes[0].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 5));
+        v.map.nodes[0].mac = Some([0xaa, 0xbb, 0xcc, 0, 0, 1]);
+        v.map.nodes[2].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 7));
+        let [(ip, ips), (mac, macs)] = v.copy_lists(&[0]);
+        assert_eq!((ip, mac), ("IP", "MAC"));
+        assert_eq!(ips, ["10.0.0.5"]);
+        assert_eq!(macs, ["aa:bb:cc:00:00:01"]);
+        // Several: one per line, in the menu's order, skipping the card
+        // without one.
+        let [(_, ips), (_, macs)] = v.copy_lists(&[2, 1, 0]);
+        assert_eq!(ips.join("\n"), "10.0.0.7\n10.0.0.5");
+        assert_eq!(macs.join("\n"), "aa:bb:cc:00:00:01");
+        assert!(v.copy_lists(&[1]).iter().all(|(_, l)| l.is_empty()));
+    }
+
+    #[test]
+    fn collapse_is_offered_only_on_a_map_with_another_site() {
+        let long = "Acme Distribution LLC — Multi-Site";
+        let mut v = on_canvas();
+        v.mode = Some(Mode::Sites);
+        for n in &mut v.map.nodes {
+            n.site = Some(long.to_string());
+        }
+        // The only site: collapsing it would fold the whole map.
+        let menu = menu_on(&mut v, 4);
+        assert!(!menu.iter().any(|s| s.starts_with("Collapse")), "{menu:?}");
+        // Folded already (from before): it can still be opened.
+        v.map.closed.insert(long.to_string(), Vec::new());
+        assert!(has(
+            &menu_on(&mut v, 4),
+            "Expand Acme Distribution LLC — Mul…"
+        ));
+        v.map.closed.clear();
+        // With another site: offered, the long name cut.
+        v.map.nodes[7].site = Some("Branch".into());
+        v.multi_site = true;
+        let menu = menu_on(&mut v, 4);
+        assert!(
+            has(&menu, "Collapse Acme Distribution LLC — Mul…"),
+            "{menu:?}"
+        );
+        assert!(has(&menu_on(&mut v, 7), "Collapse Branch"));
+    }
+
+    #[test]
+    fn the_card_menu_sets_sections_apart_with_one_separator() {
+        // A card on its own (no uplink, nothing below), no IP: Pin and
+        // Select, then Copy details, with one separator under the title
+        // and one between them, none for the empty sections in between.
+        let ctx = egui::Context::default();
+        let mut v = on_canvas();
+        v.map.nodes[4].up = None;
+        let at = v.pos[&v.map.nodes[4].id] + CARD / 2.0;
+        let shown = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
+        assert_eq!(
+            words(&shown.canvas),
+            ["card 4", "Pin", "Select", "Copy details"]
+        );
+        assert_eq!(shown.canvas_lines, 2);
+    }
+
+    #[test]
+    fn web_admin_is_https_unless_the_ports_say_otherwise() {
+        use interact::web_url;
+        let v4: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        assert_eq!(web_url(v4, &[]), "https://10.0.0.1");
+        assert_eq!(web_url(v4, &[22, 80]), "http://10.0.0.1");
+        assert_eq!(web_url(v4, &[80, 8443]), "https://10.0.0.1:8443");
+        assert_eq!(web_url(v4, &[80, 443]), "https://10.0.0.1");
+        let v6: std::net::IpAddr = "fe80::1".parse().unwrap();
+        assert_eq!(web_url(v6, &[]), "https://[fe80::1]");
+    }
+
+    #[test]
+    fn long_names_are_cut_with_an_ellipsis() {
+        use interact::ellipsis;
+        assert_eq!(ellipsis("HQ", 28), "HQ");
+        assert_eq!(ellipsis("abcdef", 6), "abcdef");
+        assert_eq!(ellipsis("abc defg", 5), "abc…");
+        assert_eq!(
+            ellipsis("Acme Distribution LLC — Multi-Site", 28),
+            "Acme Distribution LLC — Mul…"
+        );
+    }
+
+    #[test]
+    fn web_admin_is_for_network_gear_not_clients() {
+        let card = |zone| Node {
+            zone,
+            ..Default::default()
+        };
+        for z in [
+            Zone::Gateway,
+            Zone::Switch,
+            Zone::Wireless,
+            Zone::Gear,
+            Zone::Server,
+        ] {
+            assert!(interact::has_admin(&card(z)), "{z:?}");
+        }
+        for z in [Zone::Client, Zone::Device, Zone::Internet, Zone::Unknown] {
+            assert!(!interact::has_admin(&card(z)), "{z:?}");
+        }
     }
 }
