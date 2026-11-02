@@ -76,7 +76,7 @@ Put the file anywhere you like: the desktop, a tools folder, a USB stick. It run
 3. Windows may also show an **"Open File - Security Warning"** box with **Publisher: Unknown Publisher**. Click **Run**. (Untick *Always ask before opening this file* first if you don't want to see it again.)
 4. The window opens on the **Ping** tab.
 
-**Why "Unknown Publisher"?** A program shows its publisher only when it's code-signed. Release builds are set up to be signed through Microsoft's Azure Artifact Signing; until that signing is switched on, Windows can't name a publisher and shows *Unknown Publisher*. The download is still the one built by the project's GitHub release workflow: the `.sha256` check above confirms you have exactly that file.
+**Why "Unknown Publisher"?** A program shows its publisher only when it's code-signed, and is-alive isn't, so Windows can't name a publisher and shows *Unknown Publisher*. The download is still the one built by the project's GitHub release workflow: the `.sha256` check above confirms you have exactly that file.
 
 The `.exe` carries everything it needs: a fresh Windows 10 or 11 doesn't need the Visual C++ Redistributable or anything else installed.
 
