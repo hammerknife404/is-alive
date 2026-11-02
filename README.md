@@ -31,6 +31,10 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 
 Built for sites with regulated data. Nothing is sent unless you run something, apart from one DNS query to OpenDNS for the public IP and one request to GitHub for the latest release when it starts (both off in Settings; an update is only linked, never downloaded); there's no telemetry, update check or account. Configs are sanitized on this machine before they're saved or shared, notes are redacted, and copies stay out of Windows clipboard history. See [Privacy and security](https://github.com/hammerknife404/is-alive/wiki/Privacy-and-security).
 
+## If the window doesn't open
+
+is-alive draws its window with OpenGL. Where that can't start (a virtual machine without 3D acceleration, a missing graphics driver) it starts itself again with Direct3D 12 on Windows, which works without a graphics card, or Vulkan on Linux, and keeps using that. If nothing works it says why in a message box. Each start is written to `startup.log`: `%APPDATA%\is-alive\startup.log` on Windows, `~/.config/is-alive/startup.log` on Linux. To choose yourself (also if the window opens but stays blank), start it once from a command prompt or a shortcut with `is-alive.exe --renderer=wgpu` (Direct3D or Vulkan; kept for later starts) or `--renderer=glow` (OpenGL, the default), or set `IS_ALIVE_RENDERER`.
+
 ## Build
 
 ```sh

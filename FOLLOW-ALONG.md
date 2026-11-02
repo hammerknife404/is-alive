@@ -18,6 +18,8 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 4. Check the version: the bottom right corner of the window says `v0.24.0` (or newer), and so does the title bar.
 5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
 
+> **Nothing opens, or the window stays blank?** See [If the window doesn't open](README.md#if-the-window-doesnt-open): what to try, and where the app writes down why.
+
 You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export**, **Map**, **Notes**, **Speed Test**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** (or the **F1** key) opens the is-alive wiki, a page per tab, in your browser. Clicking **is-alive** at the top left opens Settings (theme and the like).
 
 > **Please watch, don't run, the Port Check and Subnet Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
