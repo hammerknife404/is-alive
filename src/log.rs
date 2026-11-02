@@ -210,9 +210,9 @@ pre{background:#f4f4f4;padding:.8em;overflow-x:auto}\
 }
 
 // BOM so Excel reads UTF-8 (…, ✓) correctly; CRLF per RFC 4180.
-const CSV_START: &str = "\u{feff}";
+pub(crate) const CSV_START: &str = "\u{feff}";
 
-fn csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
+pub(crate) fn csv_row<'a>(cells: impl IntoIterator<Item = &'a str>) -> String {
     let cells: Vec<String> = cells.into_iter().map(csv_field).collect();
     cells.join(",") + "\r\n"
 }

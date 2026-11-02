@@ -416,6 +416,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         summary += &format!(" · clients off: {} not drawn", map.hidden);
     }
     map.summary = summary;
+    map.title = doc.title.trim().to_string();
     // A map without SITES is one place: the map's own title names it. With
     // SITES, a card the map put at no site stays outside every site's box.
     if doc.sites.is_empty() {
