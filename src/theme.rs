@@ -237,18 +237,23 @@ pub fn emoji_colour_in(style: EmojiStyle, c: char, text: Color32) -> Color32 {
         EmojiStyle::Theme => EmojiStyle::Mono,
         s => s,
     };
-    match style {
+    let colour = match style {
         EmojiStyle::Neon => {
             const NEON: [Color32; 4] = [PINK, TEAL, SUNSET, Color32::from_rgb(178, 120, 255)];
             NEON[c as usize % NEON.len()]
         }
         EmojiStyle::Color => match natural(c) {
-            // A shade darker on a light background, so yellow still reads.
-            Some(n) if current().is_light() => n.lerp_to_gamma(Color32::BLACK, 0.3),
             Some(n) => n,
-            None => text,
+            None => return text,
         },
-        _ => text,
+        _ => return text,
+    };
+    // A shade darker on a light background, so yellow and teal still read:
+    // emoji in the notes keep their style whatever the theme.
+    if current().is_light() {
+        colour.lerp_to_gamma(Color32::BLACK, 0.3)
+    } else {
+        colour
     }
 }
 
