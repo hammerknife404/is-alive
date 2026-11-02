@@ -146,7 +146,8 @@ impl BundleTool {
             .spacing([8.0, 6.0])
             .show(ui, |ui| {
                 ui.label("Site name");
-                ui.add(
+                crate::widgets::add_text_edit(
+                    ui,
                     egui::TextEdit::singleline(&mut self.site)
                         .char_limit(widgets::FIELD_MAX)
                         .desired_width(380.0)
@@ -172,6 +173,7 @@ impl BundleTool {
                         job.wrap.max_width = wrap;
                         ui.fonts_mut(|f| f.layout_job(job))
                     };
+                    let keep = widgets::selection_before_right_click(ui.ctx(), id);
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
                         .char_limit(widgets::PROBLEMS_MAX)
@@ -180,6 +182,12 @@ impl BundleTool {
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")
                         .layouter(&mut layouter)
                         .show(ui);
+                    widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
+                    edit.response.context_menu(|ui| {
+                        if widgets::text_edit_menu(ui, id, true) {
+                            ui.close();
+                        }
+                    });
                     let hits = crate::redact::find_with(&self.notes, &ov);
                     let pick = widgets::text_selection(ui.ctx(), id, &self.notes)
                         .and_then(|sel| crate::redact::pick(&self.notes, sel, &hits));

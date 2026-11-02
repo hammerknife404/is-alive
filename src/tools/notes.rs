@@ -293,6 +293,19 @@ impl NotesTool {
         self.changed(ctx.input(|i| i.time));
     }
 
+    /// Wrap the selection (or an empty spot at the cursor) in `mark`:
+    /// ** for bold, * for italic, ` for code.
+    fn wrap(&mut self, ctx: &egui::Context, mark: &str) {
+        self.edit_at_cursor(ctx, |sel| {
+            let n = mark.chars().count();
+            let len = sel.chars().count();
+            (
+                format!("{mark}{sel}{mark}"),
+                if len == 0 { n } else { len + 2 * n },
+            )
+        })
+    }
+
     /// Put `prefix` at the start of the cursor's line.
     fn line_prefix(&mut self, ctx: &egui::Context, prefix: &str) {
         let id = egui::Id::new(EDITOR_ID);
@@ -486,36 +499,26 @@ impl NotesTool {
                 }
             }
             ui.separator();
-            let wrap = |s: &mut Self, mark: &'static str| {
-                s.edit_at_cursor(&ctx, |sel| {
-                    let n = mark.chars().count();
-                    let len = sel.chars().count();
-                    (
-                        format!("{mark}{sel}{mark}"),
-                        if len == 0 { n } else { len + 2 * n },
-                    )
-                })
-            };
             if ui
                 .button(RichText::new("B").strong())
                 .on_hover_text("Bold (Ctrl+B)")
                 .clicked()
             {
-                wrap(self, "**");
+                self.wrap(&ctx, "**");
             }
             if ui
                 .button(RichText::new("I").italics())
                 .on_hover_text("Italic (Ctrl+I)")
                 .clicked()
             {
-                wrap(self, "*");
+                self.wrap(&ctx, "*");
             }
             if ui
                 .button(RichText::new("</>").monospace())
                 .on_hover_text("Inline code")
                 .clicked()
             {
-                wrap(self, "`");
+                self.wrap(&ctx, "`");
             }
             if ui.button("H").on_hover_text("Heading").clicked() {
                 self.line_prefix(&ctx, "## ");
@@ -786,8 +789,9 @@ impl NotesTool {
                         .on_hover_text("Save as Markdown, redacted")
                         .clicked()
                     {
+                        // Dated, so one visit's notes don't land on another's.
                         widgets::save_file(
-                            "notes.md".into(),
+                            format!("notes-{}.md", chrono::Local::now().format("%Y-%m-%d")),
                             "Markdown",
                             vec!["md"],
                             self.sanitized().0,
@@ -893,14 +897,7 @@ impl NotesTool {
         if focused {
             for (key, mark) in [(Key::B, "**"), (Key::I, "*")] {
                 if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) {
-                    self.edit_at_cursor(&ctx, |sel| {
-                        let n = mark.chars().count();
-                        let len = sel.chars().count();
-                        (
-                            format!("{mark}{sel}{mark}"),
-                            if len == 0 { n } else { len + 2 * n },
-                        )
-                    });
+                    self.wrap(&ctx, mark);
                 }
             }
         }
@@ -917,6 +914,7 @@ impl NotesTool {
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
+        let keep = widgets::selection_before_right_click(&ctx, id);
         let out = egui::ScrollArea::vertical()
             .id_salt("notes_edit_scroll")
             .auto_shrink(false)
@@ -928,7 +926,7 @@ impl NotesTool {
                     .desired_width(f32::INFINITY)
                     .min_size(fill)
                     .lock_focus(true)
-                    .hint_text("Notes in Markdown. Select text and press Ctrl+R to redact it.")
+                    .hint_text("Notes in Markdown. Select text and press Ctrl+R (or right-click, Redact) to redact it.")
                     .layouter(&mut layouter)
                     .show(ui)
             })
@@ -938,6 +936,61 @@ impl NotesTool {
             self.changed(now);
             if ui.input(|i| i.key_pressed(Key::Enter)) {
                 self.continue_list(&ctx, &out);
+            }
+        }
+        widgets::restore_selection(&ctx, id, &out.response, keep);
+        out.response.context_menu(|ui| self.editor_menu(ui));
+    }
+
+    /// Right-click in the editor: the clipboard, formatting and Redact.
+    fn editor_menu(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let id = egui::Id::new(EDITOR_ID);
+        if widgets::text_edit_menu(ui, id, true) {
+            ui.close();
+            return;
+        }
+        ui.separator();
+        let hits = hits_for(&self.cache, &self.text, &self.ov);
+        let pick = self.pick(&ctx, &hits);
+        let label = match &pick {
+            Some(Pick::Unredact(_)) => "Unredact",
+            _ => "Redact",
+        };
+        if ui
+            .add_enabled(
+                pick.is_some(),
+                egui::Button::new(label).shortcut_text("Ctrl+R"),
+            )
+            .on_disabled_hover_text("Select text to redact")
+            .clicked()
+            && let Some(p) = pick
+        {
+            self.apply(&ctx, p);
+            ui.close();
+        }
+        ui.separator();
+        for (name, keys, mark) in [
+            ("Bold", "Ctrl+B", "**"),
+            ("Italic", "Ctrl+I", "*"),
+            ("Inline code", "", "`"),
+        ] {
+            if ui
+                .add(egui::Button::new(name).shortcut_text(keys))
+                .clicked()
+            {
+                self.wrap(&ctx, mark);
+                ui.close();
+            }
+        }
+        for (name, prefix) in [
+            ("Heading", "## "),
+            ("Bullet list", "- "),
+            ("Task box", "- [ ] "),
+        ] {
+            if ui.button(name).clicked() {
+                self.line_prefix(&ctx, prefix);
+                ui.close();
             }
         }
     }
@@ -1052,13 +1105,22 @@ fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
                 );
                 ui.separator();
                 let mut text = v.text.as_str();
-                ui.add(
+                let id = egui::Id::new("notes_viewer_text");
+                let keep = widgets::selection_before_right_click(ui.ctx(), id);
+                let r = ui.add(
                     egui::TextEdit::multiline(&mut text)
+                        .id(id)
                         .font(font.clone())
                         .frame(egui::Frame::NONE)
                         .desired_width(f32::INFINITY)
                         .layouter(&mut layouter),
                 );
+                widgets::restore_selection(ui.ctx(), id, &r, keep);
+                r.context_menu(|ui| {
+                    if widgets::text_edit_menu(ui, id, false) {
+                        ui.close();
+                    }
+                });
             });
         });
 }
