@@ -19,8 +19,6 @@ const COL_GAP: f32 = 16.0;
 /// Inside the panel's edge, and its title's height.
 const PAD: f32 = 8.0;
 const TITLE: f32 = 18.0;
-/// Left clear for the zoom controls along the canvas's bottom right.
-const ZOOM_W: f32 = 232.0;
 /// The most of the canvas's height the legend takes.
 const MAX_SHARE: f32 = 0.4;
 /// Cards in a swatch are drawn as at this zoom: corners and bar to scale.
@@ -110,8 +108,9 @@ impl MapView {
     }
 
     /// Lay the legend out for the canvas `rect`: bottom left, at most
-    /// MAX_SHARE of its height, columns side by side as far as the zoom
-    /// controls (above them on a narrow canvas), scrolling past that.
+    /// MAX_SHARE of its height, columns side by side as far as Saved maps
+    /// and the zoom controls (above them on a narrow canvas), scrolling past
+    /// that.
     fn plan(&self, ui: &Ui, rect: Rect, entries: &[Entry]) -> Plan {
         let vis = ui.visuals();
         let font = FontId::proportional(11.5);
@@ -183,11 +182,15 @@ impl MapView {
                 rows += 1;
             }
         };
-        // Beside the zoom controls when it fits there without scrolling (or
-        // scrolls less than above them), else above them, the canvas wide.
-        let beside_w = rect.width() - 20.0 - ZOOM_W;
+        // Beside the zoom controls and Saved maps when it fits there without
+        // scrolling (or scrolls less than above them), else above them, the
+        // canvas wide. Both stop where Saved maps starts (`tabs::corner_left`).
+        let beside_w = super::tabs::corner_left(rect) - 8.0 - (rect.min.x + 10.0);
         let above_w = rect.width() - 20.0;
-        let above = || (above_w, rect.max.y - 10.0 - 22.0 - 8.0, arrange(above_w));
+        let above = || {
+            let bottom = super::tabs::corner_top(rect) - 8.0;
+            (above_w, bottom, arrange(above_w))
+        };
         let (max_w, bottom, (at, content)) = if beside_w >= 220.0 {
             let side = arrange(beside_w);
             if side.1.y <= max_h + 0.5 {

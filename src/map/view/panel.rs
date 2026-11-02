@@ -486,7 +486,9 @@ impl MapView {
                         }
                     }
                     // A +N more card opens its uplink up; an opened uplink folds back.
+                    // A saved map keeps the cards it was saved with.
                     if n.id.starts_with("more:")
+                        && self.frozen.is_none()
                         && let Some(p) = n.parent()
                         && ui
                             .small_button(format!("Show all {}", n.label.trim_start_matches('+')))
@@ -496,6 +498,7 @@ impl MapView {
                         *ev = Some(PanelEv::Open(p, true));
                     }
                     if self.open.contains(&n.id)
+                        && self.frozen.is_none()
                         && ui
                             .small_button("Fold clients")
                             .on_hover_text("Back to 10 cards and a +N more")

@@ -120,7 +120,7 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
-    map: map::view::MapView,
+    map: map::view::MapTabs,
     notes: tools::notes::NotesTool,
     log: log::Log,
     info: HostInfo,
@@ -267,6 +267,13 @@ impl App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        // A saved map opened in Config Export or dropped: the Map shows it.
+        for (path, data) in self.export.take_saved_maps() {
+            match self.map.open_file(&path, &data) {
+                Ok(()) => self.tab = Tab::Map,
+                Err(e) => self.export.refused(&path, &e),
+            }
+        }
         if self.reloading && !self.export.is_running() {
             self.reloading = false;
             let failed = self.export.failed();
@@ -428,7 +435,7 @@ impl App {
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop a UniFi backup, SonicWall export or report, or /mapnetwork map",
+                "Drop a UniFi backup, SonicWall export or report, /mapnetwork map, or saved map",
                 egui::FontId::proportional(18.0),
                 egui::Color32::WHITE.gamma_multiply(fade),
             );
@@ -872,7 +879,7 @@ fn main() {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
-                map: map::view::MapView::new(look.map_layout),
+                map: map::view::MapTabs::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),

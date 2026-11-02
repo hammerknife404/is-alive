@@ -631,6 +631,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
+| **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
 | **Legend** | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Your choice is remembered |
 | **Examples ⏷** | Open one of two fictional sites, or **Close the example** |
@@ -663,6 +664,19 @@ The **Legend** panel in the bottom left corner says what everything on the map m
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
 Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** in the toolbar, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ⏷** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
+
+### Undo and saved maps
+
+**Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards dragged (a whole drag is one step) or put back, **Re-layout**, the layout, **Clients**, pins, sites collapsed or expanded, roles faded out. Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
+
+**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
+
+- **Live** is the map from the sweep and the files loaded now; each saved map has a tab beside it. Click one to open it. A **•** after its name means it has changed since it was saved.
+- **+ Save current** saves the map showing as a new tab, ready to be named.
+- **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
+- **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
+
+A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
 ### Selecting cards
 

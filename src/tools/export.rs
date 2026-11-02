@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::widgets;
 use crate::{mapnetwork, meraki, sonicwall, unifi};
 use eframe::egui::{self, Ui};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A converted config, by what the file turned out to be.
 enum Export {
@@ -148,6 +148,8 @@ impl Slot {
 enum Ev {
     Picked(PathBuf),
     Done(PathBuf, Box<Result<Export, String>>),
+    /// A saved map (is-alive's own): the Map tab keeps it.
+    SavedMap(PathBuf, Vec<u8>),
     /// A problem with no one file to name.
     Failed(String),
 }
@@ -173,6 +175,8 @@ pub struct ExportTool {
     generation: u64,
     /// Files the last load couldn't read or convert.
     failed: Vec<String>,
+    /// Saved maps opened here or dropped, for the Map tab to take.
+    saved_maps: Vec<(PathBuf, Vec<u8>)>,
 }
 
 /// Largest SonicWall, Meraki or map file read; only a UniFi backup (whose
@@ -389,6 +393,7 @@ impl ExportTool {
                 }
             },
             Ev::Failed(e) => add_err(&mut self.err, e),
+            Ev::SavedMap(path, data) => self.saved_maps.push((path, data)),
         });
         if loaded {
             self.gather_secrets();
@@ -398,6 +403,17 @@ impl ExportTool {
             self.pending = None;
         }
         running
+    }
+
+    /// A saved map the Map couldn't open: said here with the other files
+    /// that couldn't be read.
+    pub fn refused(&mut self, path: &Path, e: &str) {
+        add_err(&mut self.err, format!("{}: {e}", file_name(path)));
+    }
+
+    /// Saved maps opened or dropped since last asked, for the Map tab.
+    pub fn take_saved_maps(&mut self) -> Vec<(PathBuf, Vec<u8>)> {
+        std::mem::take(&mut self.saved_maps)
     }
 
     /// Take the example maps out (a scan of a real network is starting, or
@@ -458,7 +474,13 @@ impl ExportTool {
             let more = paths.len().saturating_sub(OPEN_MAX);
             for path in paths.into_iter().take(OPEN_MAX) {
                 tx.send(Ev::Picked(path.clone()));
-                let r = read_input(&path).and_then(|data| convert(data, clients));
+                let r = match read_input(&path) {
+                    Ok(data) if crate::map::view::saved::sniff(&data) => {
+                        tx.send(Ev::SavedMap(path, data));
+                        continue;
+                    }
+                    r => r.and_then(|data| convert(data, clients)),
+                };
                 tx.send(Ev::Done(path, Box::new(r)));
             }
             if more > 0 {
