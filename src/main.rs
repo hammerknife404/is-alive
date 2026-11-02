@@ -355,6 +355,7 @@ impl App {
             Tab::Map => {
                 let busy =
                     self.ping.is_running() || self.ports.is_running() || self.trace.is_running();
+                self.map.animate = self.look.animate;
                 let act = self.map.ui(
                     ui,
                     map::view::Sources {

@@ -219,6 +219,9 @@ pub struct MapView {
     flipped_at: f64,
     /// The sidebar's starting state was picked for the window's width.
     sized: bool,
+    /// Settings' Animate: packets flow along lit links. Off, lit links
+    /// still take their cards' colours, but nothing moves.
+    pub animate: bool,
 }
 
 /// What a right-click menu was opened on.
@@ -276,6 +279,7 @@ impl MapView {
             side: true,
             mode,
             clients,
+            animate: true,
             ..Default::default()
         }
     }
@@ -1482,17 +1486,25 @@ fn chevron(p: &egui::Painter, c: Pos2, r: f32, open: bool, colour: Color32) {
     p.add(Shape::convex_polygon(pts, colour, Stroke::NONE));
 }
 
-/// Points `gap` apart along a polyline, the first `off` from its start.
-fn along(pts: &[Pos2], off: f32, gap: f32) -> Vec<Pos2> {
+/// Points `period` apart along a polyline at `phase` (and every `period`
+/// on) from its start, none before `from` and none outside `clip`: a lit
+/// line's packets, from where they're its own (see `paint`).
+fn along_from(pts: &[Pos2], from: f32, phase: f32, period: f32, clip: Rect) -> Vec<Pos2> {
     let mut out = Vec::new();
-    let mut next = off;
+    if period <= 0.0 {
+        return out;
+    }
+    let mut next = phase + ((from - phase) / period).ceil() * period;
     let mut walked = 0.0;
     for seg in pts.windows(2) {
         let (a, b) = (seg[0], seg[1]);
         let len = a.distance(b);
         while len > 0.0 && next <= walked + len {
-            out.push(a + (b - a) * ((next - walked) / len));
-            next += gap;
+            let at = a + (b - a) * ((next - walked) / len);
+            if clip.contains(at) {
+                out.push(at);
+            }
+            next += period;
         }
         walked += len;
     }
@@ -1896,40 +1908,6 @@ mod tests {
     }
 
     #[test]
-    fn a_column_lit_together_takes_one_colour() {
-        // A gateway with three cards stacked in one column: two cameras
-        // and an unidentified one, all on assumed links.
-        let mut v = view(4);
-        v.map.nodes[0].zone = Zone::Gateway;
-        for (k, zone) in [(1, Zone::Device), (2, Zone::Device), (3, Zone::Unknown)] {
-            v.map.nodes[k].zone = zone;
-            v.map.nodes[k].up = Some((0, Link::Assumed, None));
-        }
-        v.lay.stacked = vec![false, true, true, true];
-        v.lay.pos = (0..4).map(|k| Some(pos2(0.0, k as f32 * 100.0))).collect();
-        let lines: Vec<layout::Line> = (1..4)
-            .map(|k| layout::Line {
-                up: 0,
-                kids: vec![k],
-                into: None,
-                quiet: false,
-                pts: Vec::new(),
-            })
-            .collect();
-        let set = |v: &[usize]| v.iter().copied().collect::<HashSet<usize>>();
-        // Lit together with a stranger: the gateway's colour, not the last
-        // card's.
-        let c = v.column_colours(&lines, &set(&[1, 2, 3]));
-        let gw = v.accent(&v.map.nodes[0]);
-        assert!([1, 2, 3].iter().all(|k| c[k] == gw));
-        // Both cameras only: their own colour.
-        let c = v.column_colours(&lines, &set(&[1, 2]));
-        assert_eq!(c[&1], v.accent(&v.map.nodes[1]));
-        // One card lit alone keeps its own colour (not in the table).
-        assert!(v.column_colours(&lines, &set(&[3])).is_empty());
-    }
-
-    #[test]
     fn fit_leaves_room_for_the_zoom_controls() {
         let mut v = view(1);
         let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
@@ -2157,7 +2135,8 @@ mod tests {
     #[test]
     fn flow_dots_are_spaced_along_the_whole_route() {
         let pts = [pos2(0.0, 0.0), pos2(0.0, 30.0), pos2(40.0, 30.0)];
-        let d = along(&pts, 5.0, 20.0);
+        let all = Rect::EVERYTHING;
+        let d = along_from(&pts, 0.0, 5.0, 20.0, all);
         assert_eq!(
             d,
             [
@@ -2167,7 +2146,18 @@ mod tests {
                 pos2(35.0, 30.0)
             ]
         );
-        assert!(along(&[pos2(0.0, 0.0)], 0.0, 10.0).is_empty());
+        assert!(along_from(&[pos2(0.0, 0.0)], 0.0, 0.0, 10.0, all).is_empty());
+        // From partway along: the same phase (counted from the start), the
+        // points before it left out, as are those off screen.
+        assert_eq!(
+            along_from(&pts, 20.0, 45.0, 20.0, all),
+            [pos2(0.0, 25.0), pos2(15.0, 30.0), pos2(35.0, 30.0)]
+        );
+        let clip = Rect::from_min_max(pos2(-1.0, -1.0), pos2(20.0, 40.0));
+        assert_eq!(
+            along_from(&pts, 0.0, 5.0, 20.0, clip),
+            [pos2(0.0, 5.0), pos2(0.0, 25.0), pos2(15.0, 30.0)]
+        );
     }
 
     #[test]

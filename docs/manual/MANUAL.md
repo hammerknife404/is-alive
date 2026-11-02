@@ -647,7 +647,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout** and **Export SVG…**.
-- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow.
+- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
 
 ### Selecting cards
@@ -655,6 +655,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 ![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)
 
 - **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link: the route its traffic takes.
+- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing down it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (see [Miami backdrop](#miami-backdrop)) there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
 - **Trace to WAN**, at the top of the panel, lights every selected card's whole path to the internet instead.
@@ -954,7 +955,7 @@ The dots beside each name are that theme's Map colours for each role.
 
 With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
 
-- **Animate** moves the scene (10 frames a second, paused when the window isn't in front). Turn it off on battery.
+- **Animate** moves the scene (10 frames a second, paused when the window isn't in front), and the dots flowing along the map's lit links. Turn it off on battery.
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 
