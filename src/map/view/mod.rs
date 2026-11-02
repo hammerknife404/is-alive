@@ -2565,6 +2565,35 @@ mod tests {
         menu.iter().any(|s| s == item)
     }
 
+    /// A card with clients it doesn't draw: the menu offers its +N and −
+    /// chips' steps (not on a saved map, which keeps its cards).
+    #[test]
+    fn the_card_menu_shows_a_cards_clients_a_few_at_a_time() {
+        let mut v = on_canvas();
+        let id = v.map.nodes[2].id.clone();
+        v.map.under.insert(id.clone(), (0, 20));
+        let menu = menu_on(&mut v, 2);
+        assert!(has(&menu, "Show 8 more clients") && has(&menu, "Show all 20 clients"));
+        assert!(!has(&menu, "Fold clients"));
+        let ctx = egui::Context::default();
+        let at = v.pos[&id] + CARD / 2.0;
+        let rc = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
+        frame(&ctx, &mut v, vec![]);
+        let left = egui::PointerButton::Primary;
+        click(&ctx, &mut v, item(&rc.canvas, "Show 8 more clients"), left);
+        assert_eq!(v.reveal.get(&id), Some(&crate::map::STEP));
+        // Stepped open: the next few, the rest, or back to the level.
+        v.map.under.insert(id.clone(), (8, 30));
+        let menu = menu_on(&mut v, 2);
+        for item in ["Show 8 more clients", "Show all 22 clients", "Fold clients"] {
+            assert!(has(&menu, item), "no {item:?} in {menu:?}");
+        }
+        // Cards without clients, and a saved map: none.
+        assert!(!menu_on(&mut v, 3).iter().any(|s| s.contains("clients")));
+        v.frozen = Some(Box::default());
+        assert!(!menu_on(&mut v, 2).iter().any(|s| s.contains("clients")));
+    }
+
     #[test]
     fn the_card_menu_tests_and_copies_only_what_a_card_has() {
         let mut v = on_canvas();

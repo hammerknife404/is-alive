@@ -368,7 +368,7 @@ impl MapView {
     /// The right-click menu on card `i`: on one of several selected cards,
     /// every item acts on all of them. A card's ☰ in the detail panel opens
     /// this same menu. Its sections, each shown only when it has items:
-    /// pin and select, select more, test, copy, then the layout.
+    /// pin and select, select more, clients, test, copy, then the layout.
     pub(super) fn card_menu(&mut self, ui: &mut Ui, i: usize) {
         let group = self.menu_group(i);
         self.menu_header(ui, i, &group);
@@ -376,6 +376,8 @@ impl MapView {
         self.menu_pick(ui, &mut sep, i, &group);
         sep.next();
         self.menu_more(ui, &mut sep, i, &group);
+        sep.next();
+        self.menu_clients(ui, &mut sep, i, &group);
         sep.next();
         self.menu_test(ui, &mut sep, i, &group);
         sep.next();
@@ -557,6 +559,25 @@ impl MapView {
                     .clicked()
             {
                 self.select_group(i, &cards);
+                ui.close();
+            }
+        }
+    }
+
+    /// Clients (one card with clients it doesn't draw, or shown by itself):
+    /// the next few, all of them, or fold them back, as its +N and − chips
+    /// and its panel's buttons do.
+    fn menu_clients(&mut self, ui: &mut Ui, sep: &mut Sep, i: usize, group: &[usize]) {
+        if group.len() != 1 {
+            return;
+        }
+        for (label, tip, p, to) in self.reveal_items(i) {
+            if sep
+                .add(ui, egui::Button::new(label))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                self.reveal_step(p, to);
                 ui.close();
             }
         }

@@ -332,6 +332,29 @@ mod tests {
         });
     }
 
+    /// The legend shown on the canvas goes under the map in the PNG too,
+    /// as in the SVG: the same scene.
+    #[test]
+    fn the_png_has_the_legend_when_it_is_shown() {
+        let m = super::super::tests::acme();
+        let lay = crate::map::layout::layout_in(&m, &|_| true, Mode::Sites);
+        let moved = vec![false; m.nodes.len()];
+        let look = Look::new(&eframe::egui::Visuals::light(), false);
+        let size = |legend| {
+            let d = super::super::Drawn {
+                map: &m,
+                lay: &lay,
+                pos: &lay.pos,
+                moved: &moved,
+                legend,
+            };
+            let img = decode(&write(&scene::draw(&d, look), 1.0).expect("png"));
+            (img.width(), img.height())
+        };
+        let (off, on) = (size(false), size(true));
+        assert!(on.1 > off.1 + 40, "{off:?} {on:?}");
+    }
+
     #[test]
     fn png_is_the_same_every_time() {
         super::super::tests::with_acme(Mode::Cluster, |d| {

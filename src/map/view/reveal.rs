@@ -217,6 +217,63 @@ impl MapView {
         }
     }
 
+    /// The card menu's items for card `i`'s clients (an uplink's, or the
+    /// one a +N more card follows on from), as the panel's buttons offer
+    /// them: (label, tooltip, uplink, clients it then shows).
+    pub(super) fn reveal_items(
+        &self,
+        i: usize,
+    ) -> Vec<(String, &'static str, usize, Option<usize>)> {
+        let n = &self.map.nodes[i];
+        let p = if is_more(n) {
+            match n.parent() {
+                Some(p) => p,
+                None => return Vec::new(),
+            }
+        } else {
+            i
+        };
+        let Some(&(shown, total)) = self.map.under.get(&self.map.nodes[p].id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for c in self.steps(p) {
+            if c.text.starts_with('+') {
+                let next = c.to.unwrap_or(usize::MAX);
+                if next != usize::MAX {
+                    out.push((
+                        format!("Show {} more clients", next - shown),
+                        "Cards for the next few, best first",
+                        p,
+                        Some(next),
+                    ));
+                }
+                out.push((
+                    format!("Show all {} clients", total - shown),
+                    "A card for each of them",
+                    p,
+                    Some(usize::MAX),
+                ));
+            } else {
+                out.push(match c.to {
+                    None => (
+                        "Fold clients".into(),
+                        "Back to what the Clients level shows",
+                        p,
+                        None,
+                    ),
+                    Some(_) => (
+                        "Hide clients".into(),
+                        "Hide the clients shown here again",
+                        p,
+                        c.to,
+                    ),
+                });
+            }
+        }
+        out
+    }
+
     /// Card `i`'s clients in the detail panel (an uplink's, or the one a +N
     /// more card follows on from): how many show, and buttons for the next
     /// few, all of them, or fewer. Near the top, so they stay put as the
