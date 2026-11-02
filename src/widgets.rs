@@ -645,6 +645,110 @@ pub fn compact_title(ctx: &egui::Context, show: impl FnOnce()) {
     }
 }
 
+/// Take every link egui was asked to open this frame (`ctx.open_url`,
+/// `hyperlink`) and open it with `open_url`. Call once, after the UI.
+pub fn open_requested_links(ctx: &egui::Context) {
+    let mut urls = Vec::new();
+    ctx.output_mut(|o| {
+        o.commands.retain(|c| match c {
+            egui::OutputCommand::OpenUrl(u) => {
+                urls.push(u.url.clone());
+                false
+            }
+            _ => true,
+        })
+    });
+    for url in urls {
+        open_url(url);
+    }
+}
+
+/// Open an http(s) link in the default browser, off the UI thread, with
+/// the system's own launcher by absolute path (never a PATH lookup). A
+/// toast says so if it can't.
+pub fn open_url(url: String) {
+    if !is_web_link(&url) {
+        toast("Only web links open from here", false);
+        return;
+    }
+    std::thread::spawn(move || {
+        if let Err(e) = launch(&url) {
+            toast(format!("Couldn't open the browser ({e}): {url}"), false);
+        }
+    });
+}
+
+/// http or https, and nothing that could read as an option to the launcher.
+fn is_web_link(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+#[cfg(windows)]
+fn launch(url: &str) -> Result<(), String> {
+    let root = std::env::var_os("SystemRoot").ok_or("SystemRoot not set")?;
+    // explorer.exe hands a URL to the default browser; its exit code
+    // means nothing, so only failing to start it counts.
+    std::process::Command::new(std::path::PathBuf::from(root).join("explorer.exe"))
+        .arg(url)
+        .spawn()
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn launch(url: &str) -> Result<(), String> {
+    let s = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .status()
+        .map_err(|e| e.to_string())?;
+    s.success()
+        .then_some(())
+        .ok_or_else(|| format!("open exited with {s}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn launch(url: &str) -> Result<(), String> {
+    let tool = crate::net::system_tool("xdg-open").ok_or("xdg-open not found")?;
+    let mut cmd = std::process::Command::new(tool);
+    cmd.arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // Run from an AppImage, LD_LIBRARY_PATH leads with the AppImage's own
+    // libraries; a browser started with them can fail to load. Hand on the
+    // user's own value only.
+    let appdir = std::env::var("APPDIR").ok();
+    match std::env::var("LD_LIBRARY_PATH") {
+        Ok(v) => match host_library_path(&v, appdir.as_deref()) {
+            Some(keep) => cmd.env("LD_LIBRARY_PATH", keep),
+            None => cmd.env_remove("LD_LIBRARY_PATH"),
+        },
+        Err(_) => &mut cmd,
+    };
+    let s = cmd.status().map_err(|e| e.to_string())?;
+    s.success()
+        .then_some(())
+        .ok_or_else(|| format!("xdg-open exited with {s}"))
+}
+
+/// `LD_LIBRARY_PATH` without the AppImage's entries (those under `appdir`,
+/// or any `.mount_*` AppImage mount when `appdir` isn't known); None when
+/// nothing is left.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
+    let keep: Vec<&str> = value
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .filter(|p| match appdir {
+            Some(d) if !d.is_empty() => !p.starts_with(d),
+            _ => !p.contains("/.mount_"),
+        })
+        .collect();
+    (!keep.is_empty()).then(|| keep.join(":"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,5 +762,37 @@ mod tests {
         assert_eq!(p("a.bat"), PathBuf::from("a.bat.txt"));
         assert_eq!(p("report.xlsm"), PathBuf::from("report.xlsm.txt"));
         assert_eq!(p("noext"), PathBuf::from("noext.txt"));
+    }
+
+    #[test]
+    fn only_plain_web_links_open() {
+        assert!(super::is_web_link(
+            "https://github.com/hammerknife404/is-alive/wiki"
+        ));
+        assert!(super::is_web_link("http://10.0.0.1:8443"));
+        assert!(!super::is_web_link("file:///etc/passwd"));
+        assert!(!super::is_web_link("javascript:alert(1)"));
+        assert!(!super::is_web_link("https://x.example/a b"));
+        assert!(!super::is_web_link("--help"));
+    }
+
+    #[test]
+    fn the_appimage_libraries_stay_behind() {
+        let v = "/tmp/.mount_is-aliXYZ/usr/lib:/opt/mine/lib";
+        assert_eq!(
+            super::host_library_path(v, Some("/tmp/.mount_is-aliXYZ")),
+            Some("/opt/mine/lib".into())
+        );
+        assert_eq!(
+            super::host_library_path(v, None),
+            Some("/opt/mine/lib".into())
+        );
+        assert_eq!(
+            super::host_library_path(
+                "/tmp/.mount_is-aliXYZ/usr/lib",
+                Some("/tmp/.mount_is-aliXYZ")
+            ),
+            None
+        );
     }
 }
