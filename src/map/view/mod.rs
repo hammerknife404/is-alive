@@ -212,9 +212,11 @@ pub struct MapView {
     /// toggle was clicked.
     bar: bool,
     bar_flip: bool,
-    /// What the toolbar's one row took the last time it was drawn as
-    /// one, with a gap to spare: narrower, the layouts wrap.
-    row_need: f32,
+    /// How wide each of the toolbar's groups was when last drawn (0: not
+    /// yet), for which row each goes on.
+    bar_w: [f32; BAR_GROUPS],
+    /// Re-layout was clicked this frame: Undo names the step for it.
+    relaid: bool,
     /// A test runs in its own tab (Sources::busy), as of this frame.
     busy: bool,
     /// What a card menu asked of the app (Open in a tab).
@@ -248,6 +250,46 @@ struct Toolbar {
     act: Option<Action>,
     search_enter: bool,
     fit: bool,
+}
+
+/// The toolbar's groups, in order: search, Clients and Scan; Re-layout and
+/// Reload; ↩ ↪; the layouts and Legend; Examples and Export.
+const BAR_GROUPS: usize = 5;
+const BAR_LAYOUTS: usize = 3;
+const BAR_END: usize = 4;
+/// About how wide each group is, until it's been drawn.
+const BAR_GUESS: [f32; BAR_GROUPS] = [560.0, 160.0, 60.0, 340.0, 180.0];
+/// Room for the separator before a group and the gap after it.
+const BAR_GAP: f32 = 16.0;
+/// Narrower than this, the layouts go under the search row even when they
+/// would just fit after it: one long row is hard to scan.
+const BAR_ONE_ROW: f32 = 1100.0;
+
+/// Which of the toolbar's groups (widths `w`, 0 for one not drawn yet) go
+/// on each row in `full`: in order, each on the row so far if it fits,
+/// else starting the next. The search group always has the first row.
+/// Each group fits the window on its own, the widest (search, Clients and
+/// Scan) at the narrowest the window gets.
+fn bar_rows(w: &[f32; BAR_GROUPS], full: f32) -> Vec<Vec<usize>> {
+    let width = |k: usize| if w[k] > 0.0 { w[k] } else { BAR_GUESS[k] } + BAR_GAP;
+    let mut rows = vec![vec![0]];
+    let mut used = width(0);
+    for k in 1..BAR_GROUPS {
+        // The layouts join the search row only with Examples and Export
+        // after them: one row for the lot, or the layouts lead the next.
+        let alone = k == BAR_LAYOUTS
+            && rows.len() == 1
+            && (full < BAR_ONE_ROW || used + width(k) + width(BAR_END) > full);
+        let fits = used + width(k) <= full && !alone;
+        if fits {
+            rows.last_mut().expect("a row").push(k);
+            used += width(k);
+        } else {
+            rows.push(vec![k]);
+            used = width(k);
+        }
+    }
+    rows
 }
 
 /// Cards or a site the canvas should bring into view this frame.
@@ -337,6 +379,14 @@ impl MapView {
     /// Rebuild from the data on the next frame (Reload map).
     pub fn reload(&mut self) {
         self.stale = true;
+    }
+
+    /// What a finished sweep found is on this map: it has hosts, and the
+    /// map's files don't leave it off as another network's. Built here and
+    /// now, as the map itself rebuilds only while it's on screen.
+    pub fn shows_sweep(&self, src: &Sources) -> bool {
+        let input = self.input(src);
+        !input.sweep.is_empty() && !super::build(&input).sweep_apart
     }
 
     /// Pinned cards missing from `new`, carried over from `old` and marked
@@ -1068,154 +1118,179 @@ impl MapView {
         act
     }
 
-    /// Search, clients, scan, fit and layout, and Export.
+    /// Search, clients, scan, fit and layout, and Export. Its groups go on
+    /// as few rows as the window has room for, in order, each on the first
+    /// row it fits on (Examples and Export at a row's right end), so none
+    /// is ever cut off at the window's edge.
     fn toolbar(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Toolbar {
         let ctx = ui.ctx().clone();
-        let mut act = None;
-        let mut search_enter = false;
-        let mut fit = false;
-        // What one row needs, as measured when last drawn as one.
+        let mut bar = Toolbar {
+            act: None,
+            search_enter: false,
+            fit: false,
+        };
         let full = ui.available_width();
-        let narrow = full < self.row_need.max(1100.0);
-        ui.horizontal(|ui| {
-            // Narrower with text in it: room for the count and ×.
-            let width = if self.search.is_empty() { 220.0 } else { 140.0 };
-            let r = widgets::line(
-                ui,
-                crate::input::Field::Text,
-                &mut self.search,
-                width,
-                "Search name, IP, MAC, vendor",
-            );
-            search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if !self.search.is_empty() {
-                let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
-                ui.weak(format!("{n} match{}", if n == 1 { "" } else { "es" }));
-                if ui.small_button("×").on_hover_text("Clear search").clicked() {
-                    self.search.clear();
-                }
-            }
-            ui.separator();
-            // A map with no end devices at all (an infrastructure-only
-            // /mapnetwork map) has nothing for the switch to show or hide.
-            let any =
-                empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
-            ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
-                ui.label("Clients");
-                for c in Clients::ALL {
-                    if ui
-                        .selectable_label(self.clients == c, c.name())
-                        .on_hover_text(c.tip())
-                        .on_disabled_hover_text(if self.frozen.is_some() {
-                            "A saved map keeps the clients it was saved with"
-                        } else {
-                            reveal::no_clients_why(src)
-                        })
-                        .clicked()
-                    {
-                        self.clients = c;
-                        // The level sets every uplink again.
-                        self.reveal.clear();
+        for row in bar_rows(&self.bar_w, full) {
+            ui.horizontal(|ui| {
+                // A row never takes more than the window: the right end
+                // stays on screen.
+                ui.set_max_width(full);
+                for (n, &k) in row.iter().enumerate() {
+                    if k == BAR_END {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let r = ui.scope(|ui| {
+                                bar.act = bar.act.take().or(self.toolbar_end(ui, src, empty));
+                            });
+                            self.bar_w[k] = r.response.rect.width();
+                        });
+                        continue;
                     }
+                    if k == BAR_LAYOUTS && n > 0 {
+                        ui.separator();
+                    }
+                    let r = ui.horizontal(|ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar));
+                    self.bar_w[k] = r.response.rect.width();
                 }
             });
-            ui.separator();
-            let subnet = src
-                .info
-                .lan
-                .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
-            if !empty {
-                let subnet = subnet.as_deref().unwrap_or("this machine's subnet");
-                let tip = if src.export.example_open() {
-                    format!(
-                        "Close the example and sweep {subnet}, filling in the map as hosts answer"
-                    )
-                } else if src.sweep.finished().is_some() {
-                    format!("Sweep {subnet} again and update the map as hosts answer")
-                } else {
-                    format!("Sweep {subnet} and add what answers to the map")
-                };
-                if ui
-                    .add_enabled(
-                        src.info.lan.is_some() && !src.sweep.is_running(),
-                        egui::Button::new("Scan"),
-                    )
-                    .on_hover_text(&tip)
-                    .on_disabled_hover_text(if src.sweep.is_running() {
-                        "A sweep is running"
-                    } else {
-                        "No LAN address on this machine"
-                    })
-                    .clicked()
-                {
-                    act = Some(Action::Sweep);
+        }
+        bar
+    }
+
+    /// The toolbar's group `k` (see `bar_rows`).
+    fn bar_group(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &egui::Context,
+        k: usize,
+        src: &Sources,
+        empty: bool,
+        bar: &mut Toolbar,
+    ) {
+        match k {
+            0 => self.bar_find(ui, src, empty, bar),
+            1 => self.bar_edit(ui, empty, bar),
+            2 => self.history_buttons(ui),
+            BAR_LAYOUTS => {
+                if let Some(m) = self.layout_buttons(ui, ctx, empty) {
+                    bar.fit = true;
+                    bar.act = Some(Action::Layout(m));
                 }
             }
-            ui.add_enabled_ui(!empty, |ui| {
-                // Always there, so the buttons after it never move; it
-                // has something to do once a card was dragged.
+            _ => {}
+        }
+    }
+
+    /// Search, Clients and Scan.
+    fn bar_find(&mut self, ui: &mut Ui, src: &Sources, empty: bool, bar: &mut Toolbar) {
+        // Narrower with text in it: room for the count and ×.
+        let width = if self.search.is_empty() { 220.0 } else { 140.0 };
+        let r = widgets::line(
+            ui,
+            crate::input::Field::Text,
+            &mut self.search,
+            width,
+            "Search name, IP, MAC, vendor",
+        );
+        bar.search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if !self.search.is_empty() {
+            let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
+            ui.weak(format!("{n} match{}", if n == 1 { "" } else { "es" }));
+            if ui.small_button("×").on_hover_text("Clear search").clicked() {
+                self.search.clear();
+            }
+        }
+        ui.separator();
+        // A map with no end devices at all (an infrastructure-only
+        // /mapnetwork map) has nothing for the switch to show or hide.
+        let any = empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
+        ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
+            ui.label("Clients");
+            for c in Clients::ALL {
                 if ui
-                    .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
-                    .on_hover_text("Put dragged cards back where the layout had them")
-                    .on_disabled_hover_text(if empty {
-                        NOTHING_YET
+                    .selectable_label(self.clients == c, c.name())
+                    .on_hover_text(c.tip())
+                    .on_disabled_hover_text(if self.frozen.is_some() {
+                        "A saved map keeps the clients it was saved with"
                     } else {
-                        "Puts dragged cards back where the layout had them: no card was dragged"
+                        reveal::no_clients_why(src)
                     })
                     .clicked()
                 {
-                    self.placed.clear();
-                    fit = true;
+                    self.clients = c;
+                    // The level sets every uplink again.
+                    self.reveal.clear();
                 }
-                if ui
-                    .add_enabled(self.frozen.is_none(), egui::Button::new("⟲ Reload"))
-                    .on_hover_text(
-                        "Read the map's files again and rebuild it, keeping pins and the \
-                         selection. (It already updates by itself as a sweep finds hosts or a \
-                         file is loaded.)",
-                    )
-                    .on_disabled_hover_text(if empty {
-                        NOTHING_YET
-                    } else {
-                        "A saved map doesn't change with the files: Live has the map they make"
-                    })
-                    .clicked()
-                {
-                    act = Some(Action::Reload);
-                }
-            });
-            self.history_buttons(ui);
-            if !narrow {
-                ui.separator();
-                if let Some(m) = self.layout_buttons(ui, &ctx, empty) {
-                    fit = true;
-                    act = Some(Action::Layout(m));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    act = act.take().or(self.toolbar_end(ui, src, empty));
-                    // Zones touching Examples: two rows from the next frame.
-                    self.row_need = full - ui.available_width() + 16.0;
-                });
             }
         });
-        // A narrow window: the layouts, Examples and Export on a row of
-        // their own rather than cut off at the window's edge.
-        if narrow {
-            ui.horizontal(|ui| {
-                if let Some(m) = self.layout_buttons(ui, &ctx, empty) {
-                    fit = true;
-                    act = Some(Action::Layout(m));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    act = act.take().or(self.toolbar_end(ui, src, empty));
-                });
-            });
+        if empty {
+            return;
         }
-        Toolbar {
-            act,
-            search_enter,
-            fit,
+        ui.separator();
+        let subnet = src
+            .info
+            .lan
+            .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
+        let subnet = subnet.as_deref().unwrap_or("this machine's subnet");
+        let tip = if src.export.example_open() {
+            format!("Close the example and sweep {subnet}, filling in the map as hosts answer")
+        } else if src.sweep.finished().is_some() {
+            format!("Sweep {subnet} again and update the map as hosts answer")
+        } else {
+            format!("Sweep {subnet} and add what answers to the map")
+        };
+        if ui
+            .add_enabled(
+                src.info.lan.is_some() && !src.sweep.is_running(),
+                egui::Button::new("Scan"),
+            )
+            .on_hover_text(&tip)
+            .on_disabled_hover_text(if src.sweep.is_running() {
+                "A sweep is running"
+            } else {
+                "No LAN address on this machine"
+            })
+            .clicked()
+        {
+            bar.act = Some(Action::Sweep);
         }
+    }
+
+    /// Re-layout and Reload.
+    fn bar_edit(&mut self, ui: &mut Ui, empty: bool, bar: &mut Toolbar) {
+        ui.add_enabled_ui(!empty, |ui| {
+            // Always there, so the buttons after it never move; it
+            // has something to do once a card was dragged.
+            if ui
+                .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
+                .on_hover_text("Put dragged cards back where the layout had them")
+                .on_disabled_hover_text(if empty {
+                    NOTHING_YET
+                } else {
+                    "Puts dragged cards back where the layout had them: no card was dragged"
+                })
+                .clicked()
+            {
+                self.placed.clear();
+                self.relaid = true;
+                bar.fit = true;
+            }
+            if ui
+                .add_enabled(self.frozen.is_none(), egui::Button::new("⟲ Reload"))
+                .on_hover_text(
+                    "Read the map's files again and rebuild it, keeping pins and the \
+                     selection. (It already updates by itself as a sweep finds hosts or a \
+                     file is loaded.)",
+                )
+                .on_disabled_hover_text(if empty {
+                    NOTHING_YET
+                } else {
+                    "A saved map doesn't change with the files: Live has the map they make"
+                })
+                .clicked()
+            {
+                bar.act = Some(Action::Reload);
+            }
+        });
     }
 
     /// Sites, Cluster, Tree, Zones; the one picked, if it changed.
@@ -1666,6 +1741,26 @@ fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<Action> {
 mod tests {
     use super::*;
     use crate::map::Node;
+
+    /// The toolbar wraps group by group, so nothing is ever cut off: one
+    /// row on a wide window, the layouts with Examples and Export under
+    /// the rest at the default size, and three rows at the narrowest.
+    #[test]
+    fn the_toolbar_wraps_rather_than_cut_anything_off() {
+        let w = [540.0, 150.0, 50.0, 300.0, 160.0];
+        assert_eq!(bar_rows(&w, 1400.0), [vec![0, 1, 2, 3, 4]]);
+        assert_eq!(bar_rows(&w, 1100.0), [vec![0, 1, 2], vec![3, 4]]);
+        assert_eq!(bar_rows(&w, 740.0), [vec![0, 1], vec![2, 3, 4]]);
+        assert_eq!(bar_rows(&w, 600.0), [vec![0], vec![1, 2, 3], vec![4]]);
+        // A row's groups never add up to more than the window (one alone
+        // can't be helped).
+        for full in (560..1500).step_by(20) {
+            for row in bar_rows(&w, full as f32) {
+                let need: f32 = row.iter().map(|&k| w[k] + BAR_GAP).sum();
+                assert!(row.len() == 1 || need <= full as f32, "{full}: {row:?}");
+            }
+        }
+    }
 
     fn view(n: usize) -> MapView {
         let mut v = MapView::new(None);
@@ -2585,9 +2680,17 @@ mod tests {
         // Stepped open: the next few, the rest, or back to the level.
         v.map.under.insert(id.clone(), (8, 30));
         let menu = menu_on(&mut v, 2);
-        for item in ["Show 8 more clients", "Show all 22 clients", "Fold clients"] {
+        for item in [
+            "Show 8 more clients",
+            "Show the other 22 clients",
+            "Fold clients",
+        ] {
             assert!(has(&menu, item), "no {item:?} in {menu:?}");
         }
+        // The panel's buttons are the same steps, shorter beside its
+        // "8 of 30 clients shown".
+        let short: Vec<String> = v.reveal_items(2).into_iter().map(|it| it.short).collect();
+        assert_eq!(short, ["Show 8 more", "Show all 22", "Fold clients"]);
         // Cards without clients, and a saved map: none.
         assert!(!menu_on(&mut v, 3).iter().any(|s| s.contains("clients")));
         v.frozen = Some(Box::default());

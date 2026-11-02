@@ -9,7 +9,7 @@ const MIN_CHIP_ZOOM: f32 = 0.28;
 
 /// One chip on a card: its text, tooltip, and the clients its uplink shows
 /// once clicked (None: as the level says).
-struct Chip {
+pub(super) struct Chip {
     text: String,
     tip: String,
     to: Option<usize>,
@@ -66,7 +66,7 @@ impl MapView {
 
     /// What can be done with card `i`'s clients, zoomed in or not: "+N"
     /// while it has clients not drawn, and "−" once stepped open.
-    fn steps(&self, i: usize) -> Vec<Chip> {
+    pub(super) fn steps(&self, i: usize) -> Vec<Chip> {
         let n = &self.map.nodes[i];
         let mut out = Vec::new();
         // A saved map keeps the cards it was saved with.
@@ -217,57 +217,62 @@ impl MapView {
         }
     }
 
-    /// The card menu's items for card `i`'s clients (an uplink's, or the
-    /// one a +N more card follows on from), as the panel's buttons offer
-    /// them: (label, tooltip, uplink, clients it then shows).
-    pub(super) fn reveal_items(
-        &self,
-        i: usize,
-    ) -> Vec<(String, &'static str, usize, Option<usize>)> {
+    /// The uplink card `i`'s clients hang off (its own, or the one a +N
+    /// more card follows on from), with (clients drawn, clients known).
+    fn reveal_of(&self, i: usize) -> Option<(usize, usize, usize)> {
         let n = &self.map.nodes[i];
-        let p = if is_more(n) {
-            match n.parent() {
-                Some(p) => p,
-                None => return Vec::new(),
-            }
-        } else {
-            i
-        };
-        let Some(&(shown, total)) = self.map.under.get(&self.map.nodes[p].id) else {
+        let p = if is_more(n) { n.parent()? } else { i };
+        let &(shown, total) = self.map.under.get(&self.map.nodes[p].id)?;
+        Some((p, shown, total))
+    }
+
+    /// What can be done with card `i`'s clients (an uplink's, or the one a
+    /// +N more card follows on from), as its +N and − chips do: one list
+    /// for the card menu and the panel's buttons, so they always offer the
+    /// same steps.
+    pub(super) fn reveal_items(&self, i: usize) -> Vec<RevealItem> {
+        let Some((p, shown, total)) = self.reveal_of(i) else {
             return Vec::new();
         };
+        let s = |n: usize| if n == 1 { "" } else { "s" };
         let mut out = Vec::new();
         for c in self.steps(p) {
             if c.text.starts_with('+') {
                 let next = c.to.unwrap_or(usize::MAX);
                 if next != usize::MAX {
-                    out.push((
-                        format!("Show {} more clients", next - shown),
-                        "Cards for the next few, best first",
-                        p,
-                        Some(next),
-                    ));
+                    out.push(RevealItem {
+                        label: format!("Show {} more client{}", next - shown, s(next - shown)),
+                        short: format!("Show {} more", next - shown),
+                        tip: "Cards for the next few, best first",
+                        uplink: p,
+                        to: Some(next),
+                    });
                 }
-                out.push((
-                    format!("Show all {} clients", total - shown),
-                    "A card for each of them",
-                    p,
-                    Some(usize::MAX),
-                ));
+                // The menu has no "N of M shown" beside it: all of them is
+                // the uplink's total, and once some show, the rest.
+                let left = total - shown;
+                out.push(RevealItem {
+                    label: if shown == 0 {
+                        format!("Show all {total} client{}", s(total))
+                    } else {
+                        format!("Show the other {left} client{}", s(left))
+                    },
+                    short: format!("Show all {left}"),
+                    tip: "A card for each of them",
+                    uplink: p,
+                    to: Some(usize::MAX),
+                });
             } else {
-                out.push(match c.to {
-                    None => (
-                        "Fold clients".into(),
-                        "Back to what the Clients level shows",
-                        p,
-                        None,
-                    ),
-                    Some(_) => (
-                        "Hide clients".into(),
-                        "Hide the clients shown here again",
-                        p,
-                        c.to,
-                    ),
+                let (label, tip) = match c.to {
+                    None => ("Fold clients", "Back to what the Clients level shows"),
+                    Some(_) => ("Hide clients", "Hide the clients shown here again"),
+                };
+                out.push(RevealItem {
+                    label: label.into(),
+                    short: label.into(),
+                    tip,
+                    uplink: p,
+                    to: c.to,
                 });
             }
         }
@@ -282,9 +287,7 @@ impl MapView {
         if self.frozen.is_some() {
             return None;
         }
-        let n = &self.map.nodes[i];
-        let p = if is_more(n) { n.parent()? } else { i };
-        let &(shown, total) = self.map.under.get(&self.map.nodes[p].id)?;
+        let (_, shown, total) = self.reveal_of(i)?;
         let mut asked = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -292,37 +295,28 @@ impl MapView {
                 "{shown} of {total} client{} shown",
                 if total == 1 { "" } else { "s" }
             ));
-            for c in self.steps(p) {
-                if c.text.starts_with('+') {
-                    let next = c.to.unwrap_or(usize::MAX);
-                    if next != usize::MAX
-                        && ui
-                            .small_button(format!("Show {} more", next - shown))
-                            .on_hover_text("Cards for the next few, best first")
-                            .clicked()
-                    {
-                        asked = Some((p, Some(next)));
-                    }
-                    if ui
-                        .small_button(format!("Show all {}", total - shown))
-                        .on_hover_text("A card for each of them")
-                        .clicked()
-                    {
-                        asked = Some((p, Some(usize::MAX)));
-                    }
-                } else {
-                    let (label, tip) = match c.to {
-                        None => ("Fold clients", "Back to what the Clients level shows"),
-                        Some(_) => ("Hide clients", "Hide the clients shown here again"),
-                    };
-                    if ui.small_button(label).on_hover_text(tip).clicked() {
-                        asked = Some((p, c.to));
-                    }
+            for it in self.reveal_items(i) {
+                if ui.small_button(&it.short).on_hover_text(it.tip).clicked() {
+                    asked = Some((it.uplink, it.to));
                 }
             }
         });
         asked
     }
+}
+
+/// One step for a card's clients, as the card menu and the detail panel
+/// offer it.
+pub(super) struct RevealItem {
+    /// The menu's label, which says what it's about ("Show 8 more clients").
+    pub label: String,
+    /// The panel's, beside its "N of M clients shown" ("Show 8 more").
+    pub short: String,
+    pub tip: &'static str,
+    /// The uplink stepped.
+    pub uplink: usize,
+    /// The clients it shows then (None: as the level says).
+    pub to: Option<usize>,
 }
 
 /// Why the Clients control has nothing to show, for its tooltip: what the

@@ -59,14 +59,21 @@ impl MapView {
             .iter()
             .filter(|id| self.index(id).is_some())
             .count();
-        legend::entries(
+        let mut out = legend::entries(
             &self.map,
             &self.lay.boxes,
             lines,
             self.mode() == Mode::Sites,
             pinned,
             true,
-        )
+        );
+        // The +N and − chips, on cards that can wear them at any zoom.
+        let chips: Vec<Ink> = (0..self.map.nodes.len())
+            .filter(|&i| !self.map.nodes[i].gone && !self.steps(i).is_empty())
+            .map(|i| Ink::Role(self.map.nodes[i].zone))
+            .collect();
+        legend::add_client_chips(&mut out, &chips);
+        out
     }
 
     /// The corner the legend took of the canvas `rect` last frame (as Fit
@@ -387,6 +394,10 @@ fn tip(s: Swatch) -> &'static str {
         Swatch::Warn => "Hover or select the card for what's wrong",
         Swatch::Pin => "Stays selected while you click others",
         Swatch::Chip => "The uplink's port, or a note such as inferred, on the card it leads to",
+        Swatch::Steps => {
+            "Click +N on a card for the next few of its clients not drawn (Shift+click: all \
+             of them), − to hide them again"
+        }
         Swatch::Line(Link::Backbone) => "The internet to a firewall, in the gateway's colour",
         Swatch::Line(Link::Assumed) => {
             "Placed here because it answered, not because the data shows the link \
@@ -431,6 +442,25 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
                 "port",
                 FontId::proportional(9.0),
                 c.gamma_multiply(a),
+            );
+        }
+        Swatch::Steps => {
+            // As the chip on a card: tinted, outlined, "+N".
+            let chip = Rect::from_center_size(s.center(), vec2(s.width() - 4.0, s.height()));
+            let fill = vis.window_fill.lerp_to_gamma(c, 0.2).gamma_multiply(a);
+            p.rect(
+                chip,
+                (chip.height() / 2.0) as u8,
+                fill,
+                Stroke::new(1.0, c.gamma_multiply(a)),
+                StrokeKind::Inside,
+            );
+            p.text(
+                chip.center(),
+                egui::Align2::CENTER_CENTER,
+                "+N",
+                FontId::proportional(9.5),
+                vis.strong_text_color().gamma_multiply(a),
             );
         }
         Swatch::Line(link) => {

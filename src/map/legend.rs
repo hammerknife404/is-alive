@@ -57,6 +57,9 @@ pub enum Swatch {
     Pin,
     /// A chip on a card (the uplink's port or a note).
     Chip,
+    /// The +N chip on a card with clients it doesn't draw (and − on one
+    /// stepped open): click for more or fewer.
+    Steps,
     /// A link drawn as this kind.
     Line(Link),
     /// Several links into a box folded into one line, with a count; drawn
@@ -166,6 +169,30 @@ pub fn slots(entries: &[Entry], rows: usize) -> Vec<Slot> {
         row += 1;
     }
     out
+}
+
+/// The +N and − chips on cards with clients they don't draw, `inks` one
+/// for each card wearing one: the last of the Cards section. The canvas's
+/// only (a picture draws no chips), and only it knows which cards have
+/// them, so it adds them to what `entries` lists.
+pub fn add_client_chips(out: &mut Vec<Entry>, inks: &[Ink]) {
+    let Some(ink) = most(inks) else {
+        return;
+    };
+    let at = out
+        .iter()
+        .rposition(|e| matches!(e.section, Section::Roles | Section::Cards))
+        .map_or(0, |k| k + 1);
+    out.insert(
+        at,
+        Entry::new(
+            Section::Cards,
+            Swatch::Steps,
+            ink,
+            "More or fewer clients",
+            Some(inks.len()),
+        ),
+    );
 }
 
 /// The link a line is drawn as: its strongest (one solid uplink makes a
@@ -630,6 +657,33 @@ mod tests {
         for mode in [Mode::Cluster, Mode::Tree, Mode::Zones] {
             check(&m, mode);
         }
+    }
+
+    /// The +N chips go last in Cards, before Links; with no Cards entry,
+    /// right after the roles.
+    #[test]
+    fn client_chips_end_the_cards_section() {
+        let role = Ink::Role(Zone::Switch);
+        let e = |s, sw| Entry::new(s, sw, role, "x", None);
+        let mut v = vec![
+            e(Section::Roles, Swatch::Card),
+            e(Section::Cards, Swatch::Warn),
+            e(Section::Links, Swatch::Line(Link::Wired)),
+        ];
+        add_client_chips(&mut v, &[]);
+        assert_eq!(v.len(), 3, "no chips: no entry");
+        add_client_chips(&mut v, &[role, Ink::Role(Zone::Wireless), role]);
+        assert_eq!(
+            (v[2].swatch, v[2].ink, v[2].count),
+            (Swatch::Steps, role, Some(3))
+        );
+        assert_eq!(v[2].section, Section::Cards);
+        let mut v = vec![
+            e(Section::Roles, Swatch::Card),
+            e(Section::Links, Swatch::Lit),
+        ];
+        add_client_chips(&mut v, &[role]);
+        assert_eq!(v[1].swatch, Swatch::Steps);
     }
 
     #[test]

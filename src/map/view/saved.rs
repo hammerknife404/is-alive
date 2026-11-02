@@ -79,6 +79,7 @@ pub fn copy_map(m: &Map) -> Map {
         closed: m.closed.clone(),
         under: m.under.clone(),
         cap: m.cap,
+        sweep_apart: m.sweep_apart,
     }
 }
 
@@ -342,6 +343,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         // A saved map keeps the cards it was saved with: no steps.
         under: Default::default(),
         cap: 0,
+        sweep_apart: false,
     };
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -713,6 +715,7 @@ pub(super) fn sample() -> Snapshot {
         closed: Default::default(),
         under: Default::default(),
         cap: 0,
+        sweep_apart: false,
     };
     let mut edits = Edits {
         mode: Some(Mode::Tree),

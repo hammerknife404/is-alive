@@ -308,6 +308,9 @@ pub struct Map {
     pub under: HashMap<String, (usize, usize)>,
     /// Clients per uplink the level came to (fewer than asked on a big map).
     pub cap: usize,
+    /// A sweep was loaded but left off: it found nothing the data knows
+    /// (another network).
+    pub sweep_apart: bool,
 }
 
 impl Map {
@@ -1884,6 +1887,7 @@ pub fn build(input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     map.summary = summary;
+    map.sweep_apart = !local && had_sweep;
     // One site unless a multi-site controller says otherwise: the
     // controller's site, the firewall's name, or this network.
     let site = unifi
@@ -2196,6 +2200,7 @@ fn limit(b: B, input: &Input) -> Map {
         closed: BTreeMap::new(),
         under,
         cap,
+        sweep_apart: false,
     }
 }
 
@@ -2853,7 +2858,7 @@ mod tests {
             range: Some("192.168.1.0/24".into()),
             ..Default::default()
         });
-        assert!(at_office.summary.contains("sweep not merged"));
+        assert!(at_office.summary.contains("sweep not merged") && at_office.sweep_apart);
         let gw = |m: &Map| m.nodes.iter().find(|n| n.id == "gateway").unwrap().clone();
         assert_eq!(gw(&at_office).label, "Gateway (not in the data)");
         assert!(
@@ -2870,6 +2875,7 @@ mod tests {
         });
         assert_eq!(gw(&on_site).sub, "192.168.1.1");
         assert!(by_label(&on_site, "Core").seen_by.contains(&"sweep"));
+        assert!(!on_site.sweep_apart);
     }
 
     #[test]

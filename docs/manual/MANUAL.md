@@ -659,7 +659,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 The **Legend** panel in the bottom left corner says what everything on the map means, listing only what this map has, with counts:
 
 - **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
-- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, and the chips cards carry (an uplink's port, or a note such as *inferred*).
+- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, the chips cards carry (an uplink's port, or a note such as *inferred*), and the **+N** and **−** chips of cards with clients to show or hide.
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
@@ -701,7 +701,7 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 | **Select its path to the WAN** | This card and every uplink up to the internet |
 | **Select with its direct children** | This card and the cards straight under it |
 | **Select with everything below it** | This card and every card under it, all the way down |
-| **Show 8 more clients** / **Show all N clients** / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
+| **Show 8 more clients** / **Show all N clients** (once some show, **Show the other N clients**) / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
 | **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
 | **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |

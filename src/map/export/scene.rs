@@ -581,14 +581,21 @@ fn draw_legend(entries: &[Entry], plan: &LegendPlan, top: Pos2, ink: &Ink) -> Ve
                 middle: true,
                 runs: run("📌", c, 400),
             }),
-            Swatch::Chip => {
+            // A picture draws no +N chips, so lists none; drawn as a
+            // chip should one ever be.
+            Swatch::Chip | Swatch::Steps => {
                 v.push(chip_pill(sw, c));
+                let word = if e.swatch == Swatch::Chip {
+                    "port"
+                } else {
+                    "+N"
+                };
                 v.push(Item::Text {
                     at: pos2(sw.center().x, mid + 3.0),
                     size: 9.0,
                     mono: false,
                     middle: true,
-                    runs: run("port", c, 400),
+                    runs: run(word, c, 400),
                 });
             }
             Swatch::Line(link) => {

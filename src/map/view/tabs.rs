@@ -120,6 +120,12 @@ impl MapTabs {
         self.live.reload();
     }
 
+    /// What a finished sweep found is on the live map (not left off it as
+    /// another network's).
+    pub fn shows_sweep(&self, src: &Sources) -> bool {
+        self.live.shows_sweep(src)
+    }
+
     /// Keep every map's card runs going while another tab is shown.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.live.poll(ctx);

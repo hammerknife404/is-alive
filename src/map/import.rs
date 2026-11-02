@@ -492,6 +492,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;
+    map.sweep_apart = !local && !input.sweep.is_empty();
     map.title = doc.title.trim().to_string();
     // A map without SITES is one place: the map's own title names it. With
     // SITES, a card the map put at no site stays outside every site's box.
@@ -901,7 +902,7 @@ mod tests {
         };
         let m = build(&doc, &look_alike);
         assert_eq!(by(&m, "sw").seen_by, ["mapnetwork"]);
-        assert!(m.summary.contains("sweep not merged"));
+        assert!(m.summary.contains("sweep not merged") && m.sweep_apart);
 
         let here = Input {
             sweep: vec![
@@ -914,7 +915,7 @@ mod tests {
         let m = build(&doc, &here);
         assert_eq!(by(&m, "fw").seen_by, ["mapnetwork", "sweep"]);
         assert_eq!(by(&m, "sw").seen_by, ["mapnetwork", "sweep"]);
-        assert!(m.summary.contains("1 host(s) not on the map"));
+        assert!(m.summary.contains("1 host(s) not on the map") && !m.sweep_apart);
     }
 
     #[test]
