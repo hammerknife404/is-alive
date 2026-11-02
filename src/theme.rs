@@ -1051,6 +1051,24 @@ pub fn appearance(
         });
         ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
+        // In every theme: it also moves the map's packets.
+        let tip = if gpu {
+            "The dots flowing along the map's lit links, the Miami backdrop (10 frames a \
+             second on the GPU) and the Miami and RGB rule under the tabs. All paused \
+             while the window isn't focused; turn it off on battery."
+        } else {
+            "The dots flowing along the map's lit links, the Miami backdrop (10 frames a \
+             second, no usable GPU) and the Miami and RGB rule under the tabs. All paused \
+             while the window isn't focused; turn it off on battery."
+        };
+        if ui
+            .checkbox(&mut s.animate, "Animate")
+            .on_hover_text(tip)
+            .changed()
+        {
+            act = Some(MenuAction::Changed);
+        }
+        ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
             ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
@@ -1082,18 +1100,6 @@ pub fn appearance(
             if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
             {
                 s.backdrop = Source::None;
-                act = Some(MenuAction::Changed);
-            }
-            let tip = if gpu {
-                "10 frames a second on the GPU, paused while the window isn't focused"
-            } else {
-                "10 frames a second (no usable GPU), paused while the window isn't focused"
-            };
-            if ui
-                .checkbox(&mut s.animate, "Animate")
-                .on_hover_text(tip)
-                .changed()
-            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {

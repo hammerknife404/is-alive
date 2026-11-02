@@ -5,6 +5,7 @@
 //! the data doesn't show (a sweep can't see switch ports) is drawn as
 //! assumed, never as fact.
 
+pub(crate) mod colours;
 pub mod import;
 pub mod layout;
 pub mod runs;

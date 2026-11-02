@@ -222,6 +222,8 @@ pub struct MapView {
     /// Settings' Animate: packets flow along lit links. Off, lit links
     /// still take their cards' colours, but nothing moves.
     pub animate: bool,
+    /// The lit links as last drawn, kept while they don't change.
+    lit_drawn: std::cell::RefCell<crate::map::colours::Lit>,
 }
 
 /// What a right-click menu was opened on.
