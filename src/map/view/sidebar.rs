@@ -38,8 +38,7 @@ impl MapView {
             None
         };
         if fit {
-            self.follow = true;
-            self.fit(rect);
+            self.fit_view(rect);
         } else if center {
             self.center(rect);
         } else if let Some(z) = target {
@@ -60,11 +59,10 @@ impl MapView {
                 n.site.as_deref() == Some(site) && n.zone != Zone::Internet
             })
             .collect();
-        let Some((&first, rest)) = cards.split_first() else {
+        let Some(&first) = cards.first() else {
             return;
         };
-        self.select(Some(first));
-        self.also = rest.iter().map(|&i| self.map.nodes[i].id.clone()).collect();
+        self.select_group(first, &cards);
         let area = match self.lay.boxes.iter().find(|b| b.tree && b.title == site) {
             Some(b) => b.rect,
             None => cards
@@ -114,6 +112,8 @@ impl MapView {
                     });
                 });
                 ui.separator();
+                // A bar of its own, not one floating over the counts.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
                 egui::ScrollArea::vertical()
                     .id_salt("map_side_scroll")
                     .auto_shrink(false)
@@ -175,7 +175,7 @@ impl MapView {
                                             "Collapse this site to one card"
                                         });
                                         if toggle.clicked() {
-                                            self.flip_site = Some(site.clone());
+                                            self.flip_sites.push(site.clone());
                                         }
                                         if toggle.hovered() {
                                             ui.ctx()
@@ -188,13 +188,19 @@ impl MapView {
                                         ui.allocate_ui(
                                             vec2(room, ui.spacing().interact_size.y),
                                             |ui| {
-                                                ui.add(egui::Label::new(text).truncate())
-                                                    .on_hover_text(site);
+                                                // Not selectable: a click on the
+                                                // name is a click on the row.
+                                                ui.add(
+                                                    egui::Label::new(text)
+                                                        .truncate()
+                                                        .selectable(false),
+                                                )
+                                                .on_hover_text(site);
                                             },
                                         );
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| ui.weak(n.to_string()),
+                                            |ui| count(ui, *n),
                                         );
                                     });
                                     let r = ui
@@ -240,10 +246,17 @@ impl MapView {
                                                 ui.painter().circle_filled(d.center(), 5.0, c);
                                             }
                                             let text = RichText::new(zone.name());
-                                            ui.label(if off { text.weak() } else { text });
+                                            ui.add(
+                                                egui::Label::new(if off {
+                                                    text.weak()
+                                                } else {
+                                                    text
+                                                })
+                                                .selectable(false),
+                                            );
                                             ui.with_layout(
                                                 egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| ui.weak(n.to_string()),
+                                                |ui| count(ui, *n),
                                             );
                                         })
                                         .response
@@ -283,7 +296,7 @@ impl MapView {
                                                 4.0,
                                                 c,
                                             );
-                                            ui.add(egui::Label::new(text).wrap());
+                                            ui.add(egui::Label::new(text).wrap().selectable(false));
                                         })
                                         .response;
                                     if !nodes.is_empty() {
@@ -386,4 +399,9 @@ impl MapView {
             x = r.max.x + 6.0;
         }
     }
+}
+
+/// A row's count, right-aligned: part of the row, so not selectable.
+fn count(ui: &mut Ui, n: usize) {
+    ui.add(egui::Label::new(RichText::new(n.to_string()).weak()).selectable(false));
 }

@@ -413,7 +413,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     if map.hidden > 0 && !input.clients {
-        summary += &format!(" · {} clients hidden", map.hidden);
+        summary += &format!(" · clients off: {} not drawn", map.hidden);
     }
     map.summary = summary;
     // A map without SITES is one place: the map's own title names it. With
@@ -523,7 +523,7 @@ mod tests {
         // Clients off: the workstation folds into a count, as everywhere else.
         let off = build(&doc, &Input::default());
         assert!(off.nodes.iter().all(|n| n.id != "ws"));
-        assert!(off.summary.ends_with("clients hidden"), "{}", off.summary);
+        assert!(off.summary.ends_with("not drawn"), "{}", off.summary);
     }
 
     #[test]
