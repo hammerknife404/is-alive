@@ -786,18 +786,20 @@ fn column_route(
 /// top or bottom, as its other links do, when it passes above or below
 /// it. Along the gutter, and into the side of `c` facing it; a gutter
 /// that would run flush down `c`'s edge, or into its corner, moves out
-/// beside it.
-fn detour(p: Rect, c: Rect, block: Rect, g: f32, across: bool) -> Vec<Pos2> {
+/// beside it, or with `inward` in over it, clear of the corner (for when
+/// beside it is another card, as in a row of client tiles).
+fn detour(p: Rect, c: Rect, block: Rect, g: f32, across: bool, inward: bool) -> Vec<Pos2> {
     // Worked out as a column; a row is the same thing with x and y swapped.
     let t = |q: Pos2| if across { pos2(q.y, q.x) } else { q };
     let tr = |r: Rect| Rect::from_two_pos(t(r.min), t(r.max));
     let (p, c, block) = (tr(p), tr(c), tr(block));
     const EDGE: f32 = 8.0;
     let half = if across { STACK_GAP } else { GAP_X } / 2.0;
+    let step = if inward { -(EDGE + 4.0) } else { half };
     let g = if (g - c.left()).abs() < EDGE {
-        c.left() - half
+        c.left() - step
     } else if (g - c.right()).abs() < EDGE {
-        c.right() + half
+        c.right() + step
     } else {
         g
     };
@@ -906,11 +908,14 @@ fn route_placed(
         ];
         let mut clear: Vec<Vec<Pos2>> = Vec::new();
         for (g, across) in gutters {
-            let pts = detour(p, c, u, g, across);
-            let n = blocked(&pts);
-            if n == 0 {
-                clear.push(pts);
-            } else {
+            // Out beside the card; in over it when another card is there.
+            for inward in [false, true] {
+                let pts = detour(p, c, u, g, across, inward);
+                let n = blocked(&pts);
+                if n == 0 {
+                    clear.push(pts);
+                    break;
+                }
                 tried.push((n, length(&pts), pts));
             }
         }
@@ -1805,19 +1810,65 @@ mod tests {
     }
 
     #[test]
+    fn a_tile_dropped_under_a_row_of_tiles_is_routed_between_them() {
+        // Acme with every client: ACME-WS-205 (a tile stacked under one
+        // access switch) dropped all along under the other switch's row
+        // of tiles, 24 apart. A gutter by the tile's edge mustn't be moved
+        // out into the next tile: wherever the drop is clear, so is its link.
+        let bytes = crate::skills::example(&crate::skills::example_path(0)).expect("example");
+        let doc = crate::mapnetwork::parse(bytes).expect("parses");
+        let m = crate::map::build(&crate::map::Input {
+            mapnetwork: Some(&doc),
+            clients: crate::map::Clients::All,
+            ..Default::default()
+        });
+        let l = layout_in(&m, &|_| true, Mode::Cluster);
+        let k = m
+            .nodes
+            .iter()
+            .position(|n| n.label == "ACME-WS-205")
+            .expect("in the example");
+        let (home, up) = (l.pos[k].unwrap(), m.nodes[k].parent().unwrap());
+        let mut drops = 0;
+        for dx in (-1400..200).step_by(7) {
+            for dy in [-40.0, -26.5, 0.0, 60.0] {
+                let to = home + vec2(dx as f32, dy);
+                let at = |i: usize| if i == k { Some(to) } else { l.pos[i] };
+                let rect = |i: usize| at(i).map(|p| card_rect(&m.nodes[i], p));
+                let r = rect(k).unwrap();
+                if (0..m.nodes.len()).any(|o| o != k && rect(o).is_some_and(|x| x.intersects(r))) {
+                    continue;
+                }
+                drops += 1;
+                let lines = lines(&m, &l, &at, &|i| i == k);
+                let own = lines.iter().find(|x| x.kids == [k]).unwrap();
+                let cards = card_rects(&m, &l, &rect);
+                let hit: Vec<usize> = blockers(&cards, up, k, &own.pts).map(|c| c.0).collect();
+                assert!(hit.is_empty(), "{to:?} runs through {hit:?}: {:?}", own.pts);
+            }
+        }
+        assert!(drops > 100);
+    }
+
+    #[test]
     fn a_detour_keeps_off_the_edges_and_out_of_the_uplinks_side() {
         let card = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), CARD);
         let (p, block) = (card(0.0, 0.0), card(0.0, 200.0));
         // A column gutter that lands on the card's right edge moves out
         // beside it, and comes into its side.
         let c = card(-100.0, 400.0);
-        let pts = detour(p, c, block, c.right() + 2.0, false);
+        let pts = detour(p, c, block, c.right() + 2.0, false, false);
         assert_eq!(*pts.last().unwrap(), c.right_center());
         assert!(pts[pts.len() - 2].x >= c.right() + GAP_X / 2.0);
+        // Or in over it, clear of its corner, into its top.
+        let pts = detour(p, c, block, c.right() + 2.0, false, true);
+        let end = *pts.last().unwrap();
+        assert_eq!(end.y, c.top());
+        assert!(end.x < c.right() - 8.0 && end.x > c.center().x);
         // A row below the uplink leaves from its bottom, as a trunk does.
         let c = card(300.0, 120.0);
         let g = block.bottom() + STACK_GAP / 2.0;
-        let pts = detour(p, c, block, g, true);
+        let pts = detour(p, c, block, g, true, false);
         assert_eq!(pts[0], p.center_bottom());
         assert_eq!(pts[1], pos2(p.center().x, g));
         assert_eq!(*pts.last().unwrap(), c.center_bottom());
