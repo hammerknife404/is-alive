@@ -135,6 +135,10 @@ struct App {
     update_asked: bool,
     /// The sweep was running last frame (to see one start).
     was_sweeping: bool,
+    /// A full scan's runs are under way: when they're done, the Map tab
+    /// calls for attention.
+    scanning: bool,
+    map_call: chrome::MapCall,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
     /// ((filter, log stamp), matching entries) for the last frame.
@@ -162,6 +166,9 @@ impl eframe::App for App {
         if self.tab != self.shown_tab {
             self.shown_tab = self.tab;
             self.tab_since = now;
+        }
+        if self.tab == Tab::Map {
+            self.map_call.seen();
         }
         self.size = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         self.poll_all(ui.ctx(), now);
@@ -274,6 +281,11 @@ impl App {
                     false,
                 );
             }
+        }
+        // The full scan is done: its sweep is on the Map now.
+        if self.scanning && !self.scan_running() {
+            self.scanning = false;
+            self.map_call.start(now, self.tab == Tab::Map);
         }
         self.notes.set_known(self.export.secrets(), now);
         self.notes.poll(ctx);
@@ -509,6 +521,15 @@ impl App {
             || self.advanced.is_running()
     }
 
+    /// A full scan's runs still going (the WAN lookup aside).
+    fn scan_running(&self) -> bool {
+        self.ping.is_running()
+            || self.ports.is_running()
+            || self.trace.is_running()
+            || self.dns.is_running()
+            || self.sweep.is_running()
+    }
+
     /// Run every tool against this machine's network and switch to Results.
     fn full_scan(&mut self, ctx: &egui::Context) {
         // LAN and gateway are re-read now; the WAN address refreshes alongside.
@@ -536,6 +557,8 @@ impl App {
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
         }
+        self.scanning = true;
+        self.map_call.seen();
         self.tab = Tab::Results;
         // Show the new runs: a leftover filter could hide them, and the
         // view may be scrolled up on older ones.
@@ -824,6 +847,7 @@ fn main() {
         options,
         Box::new(|cc| {
             startup::created(cc);
+            cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
@@ -849,6 +873,8 @@ fn main() {
                 info_job: None,
                 wan_asked: false,
                 was_sweeping: false,
+                scanning: false,
+                map_call: Default::default(),
                 update_job: None,
                 update: None,
                 update_asked: false,
@@ -930,8 +956,8 @@ mod tests {
     /// for both proportional and monospace text, or it shows as a box.
     #[test]
     fn every_glyph_in_the_source_renders() {
-        use eframe::egui::{FontDefinitions, FontFamily};
-        let defs = FontDefinitions::default();
+        use eframe::egui::FontFamily;
+        let defs = crate::fonts::definitions();
         let covers = |fam: &FontFamily, c: char| {
             defs.families[fam]
                 .iter()

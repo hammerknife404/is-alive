@@ -3,7 +3,7 @@
 //! addresses, Full scan, Refresh), and Settings itself.
 
 use crate::job::Job;
-use crate::{App, FULL_SCAN_TIP, TABS, VERSION, tab_key, theme, widgets};
+use crate::{App, FULL_SCAN_TIP, TABS, Tab, VERSION, tab_key, theme, widgets};
 use eframe::egui;
 
 /// The wiki's front page: Help and F1 open it.
@@ -42,11 +42,22 @@ impl App {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let mut selected = None;
                 let mut dots = Vec::new();
+                let call = self.map_call(ui);
                 for (n, (tab, name, tip)) in TABS.iter().enumerate() {
                     let on = self.tab == *tab;
                     let mut text = egui::RichText::new(*name);
                     if on {
                         text = text.color(theme::accent());
+                    }
+                    // Behind the Map tab's label, for its glow after a full scan.
+                    let behind = (*tab == Tab::Map).then(|| ui.painter().add(egui::Shape::Noop));
+                    let glow = match call {
+                        Call::Glow { glow, .. } if *tab == Tab::Map => glow,
+                        _ => 0.0,
+                    };
+                    if glow > 0.0 {
+                        let plain = ui.visuals().text_color();
+                        text = text.color(plain.lerp_to_gamma(theme::accent(), glow));
                     }
                     let r = ui
                         .selectable_label(on, text)
@@ -56,6 +67,16 @@ impl App {
                         });
                     if r.clicked() {
                         self.tab = *tab;
+                    }
+                    if let Some(at) = behind {
+                        map_glow(ui, at, r.rect, glow);
+                        if call != Call::Off {
+                            ui.painter().circle_filled(
+                                egui::pos2(r.rect.right() - 2.0, r.rect.top() + 3.0),
+                                2.5,
+                                theme::accent(),
+                            );
+                        }
                     }
                     if on {
                         selected = Some(r.rect);
@@ -98,6 +119,29 @@ impl App {
             ui.add_space(2.0);
         });
         theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
+    }
+
+    /// How the Map tab calls for attention this frame, asking for the
+    /// frames its pulse needs. While the window isn't focused the pulse
+    /// waits, so it plays when the user comes back.
+    fn map_call(&mut self, ui: &egui::Ui) -> Call {
+        let (now, focused) = ui.input(|i| (i.time, i.viewport().focused != Some(false)));
+        let animate = self.look.animate;
+        if !focused {
+            self.map_call.hold(now, animate);
+        }
+        let call = self.map_call.call(now, animate);
+        if let Call::Glow { left, .. } = call
+            && focused
+        {
+            if animate {
+                ui.ctx().request_repaint();
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(left));
+            }
+        }
+        call
     }
 
     /// LAN, gateway and WAN on the left; Full scan, Refresh and the version
@@ -374,6 +418,92 @@ fn tab_underline(ui: &egui::Ui, r: egui::Rect) {
         .hline(x0..=x1, y, egui::Stroke::new(2.0, theme::accent()));
 }
 
+/// Seconds the Map tab pulses for after a full scan (three slow pulses);
+/// with Animate off it lights up, still, for a moment instead.
+const PULSE_SECS: f64 = 3.6;
+const PULSES: f64 = 3.0;
+const STILL_SECS: f64 = 1.5;
+
+/// The Map tab calling for attention once a full scan is done: it glows in
+/// the accent colour for a few seconds, then keeps a dot until it's opened.
+#[derive(Default)]
+pub(crate) struct MapCall {
+    since: Option<f64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Call {
+    Off,
+    /// `glow` 0–1 now, for `left` seconds more.
+    Glow {
+        glow: f32,
+        left: f64,
+    },
+    Dot,
+}
+
+impl MapCall {
+    /// A full scan finished at `now`; nothing to show if the Map is open.
+    pub(crate) fn start(&mut self, now: f64, on_map: bool) {
+        self.since = (!on_map).then_some(now);
+    }
+
+    /// The Map tab is open (or another scan began): the call is answered.
+    pub(crate) fn seen(&mut self) {
+        self.since = None;
+    }
+
+    /// Nobody's looking: start the glow again from the top.
+    fn hold(&mut self, now: f64, animate: bool) {
+        if let Some(s) = &mut self.since
+            && now - *s < glow_secs(animate)
+        {
+            *s = now;
+        }
+    }
+
+    fn call(&self, now: f64, animate: bool) -> Call {
+        let Some(since) = self.since else {
+            return Call::Off;
+        };
+        let t = (now - since).max(0.0);
+        let left = glow_secs(animate) - t;
+        if left <= 0.0 {
+            return Call::Dot;
+        }
+        let glow = if animate {
+            let turns = t / PULSE_SECS * PULSES;
+            (0.5 - 0.5 * (turns * std::f64::consts::TAU).cos()) as f32
+        } else {
+            1.0
+        };
+        Call::Glow { glow, left }
+    }
+}
+
+fn glow_secs(animate: bool) -> f64 {
+    if animate { PULSE_SECS } else { STILL_SECS }
+}
+
+/// A soft accent fill behind the Map tab, `glow` 0–1, in the slot `at`
+/// reserved under its label.
+fn map_glow(ui: &egui::Ui, at: egui::layers::ShapeIdx, r: egui::Rect, glow: f32) {
+    if glow <= 0.0 {
+        return;
+    }
+    let accent = theme::accent();
+    ui.painter().set(
+        at,
+        egui::epaint::RectShape::new(
+            r.expand2(egui::vec2(2.0, 1.0)),
+            4.0,
+            accent.gamma_multiply(0.3 * glow),
+            egui::Stroke::new(1.0, accent.gamma_multiply(0.7 * glow)),
+            egui::StrokeKind::Inside,
+        ),
+    );
+}
+
 /// Pulsing dot in the top-right corner of each tab whose job is running.
 fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
     if rects.is_empty() {
@@ -398,5 +528,53 @@ fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
     if focused {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_tab_glows_then_keeps_a_dot_until_opened() {
+        let mut m = MapCall::default();
+        assert_eq!(m.call(0.0, true), Call::Off);
+        m.start(10.0, false);
+        // Three pulses: dark at the start and between, bright in between.
+        let glow = |m: &MapCall, t: f64| match m.call(10.0 + t, true) {
+            Call::Glow { glow, .. } => glow,
+            c => panic!("{c:?} at {t}"),
+        };
+        assert!(glow(&m, 0.0) < 0.01);
+        assert!(glow(&m, 0.6) > 0.99);
+        assert!(glow(&m, 1.2) < 0.01);
+        assert!(glow(&m, 3.0) > 0.99);
+        assert_eq!(m.call(10.01 + PULSE_SECS, true), Call::Dot);
+        assert_eq!(m.call(500.0, true), Call::Dot);
+        m.seen();
+        assert_eq!(m.call(500.0, true), Call::Off);
+    }
+
+    #[test]
+    fn map_tab_still_and_short_without_animation() {
+        let mut m = MapCall::default();
+        m.start(0.0, false);
+        assert!(matches!(m.call(0.2, false), Call::Glow { glow: 1.0, .. }));
+        assert_eq!(m.call(STILL_SECS + 0.01, false), Call::Dot);
+    }
+
+    #[test]
+    fn map_tab_open_or_unwatched() {
+        let mut m = MapCall::default();
+        // Already on the Map: nothing to point at.
+        m.start(0.0, true);
+        assert_eq!(m.call(0.5, true), Call::Off);
+        // Window in the background: the glow waits for the user.
+        m.start(0.0, false);
+        m.hold(3.0, true);
+        assert!(matches!(m.call(3.6, true), Call::Glow { glow, .. } if glow > 0.99));
+        // Once it's played, the dot just stays.
+        m.hold(40.0, true);
+        assert_eq!(m.call(40.0, true), Call::Dot);
     }
 }

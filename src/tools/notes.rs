@@ -742,33 +742,37 @@ impl NotesTool {
                         crate::theme::EmojiStyle::Theme => crate::theme::emoji_style(),
                         s => s,
                     };
-                    egui::Grid::new("notes_emoji")
-                        .spacing([2.0, 2.0])
-                        .show(ui, |ui| {
-                            for (i, (e, code, what)) in markdown::SHORTCODES.iter().enumerate() {
-                                let c = e.chars().next().unwrap_or(' ');
-                                let glyph = RichText::new(*e)
-                                    .size(font.size * crate::theme::EMOJI_SCALE)
-                                    .color(crate::theme::emoji_colour_in(
-                                        style,
-                                        c,
-                                        ui.visuals().text_color(),
-                                    ));
-                                if ui
-                                    .button(glyph)
-                                    .on_hover_text(format!(
-                                        "{what}\n:{code}:  (Preview draws the code as the emoji)"
-                                    ))
-                                    .clicked()
-                                {
-                                    emoji = Some(*e);
-                                    ui.close();
+                    for (group, list) in markdown::SHORTCODES {
+                        ui.label(RichText::new(*group).small().weak());
+                        egui::Grid::new(("notes_emoji", *group))
+                            .spacing([2.0, 2.0])
+                            .show(ui, |ui| {
+                                for (i, (e, code, what)) in list.iter().enumerate() {
+                                    let c = e.chars().next().unwrap_or(' ');
+                                    let glyph = RichText::new(*e)
+                                        .size(font.size * crate::theme::EMOJI_SCALE)
+                                        .color(crate::theme::emoji_colour_in(
+                                            style,
+                                            c,
+                                            ui.visuals().text_color(),
+                                        ));
+                                    if ui
+                                        .button(glyph)
+                                        .on_hover_text(format!(
+                                            "{what}\n:{code}:  (Preview draws the code \
+                                             as the emoji)"
+                                        ))
+                                        .clicked()
+                                    {
+                                        emoji = Some(*e);
+                                        ui.close();
+                                    }
+                                    if i % 8 == 7 {
+                                        ui.end_row();
+                                    }
                                 }
-                                if i % 8 == 7 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
+                            });
+                    }
                 });
             let (menu, open) = menu;
             if menu.clicked() {
