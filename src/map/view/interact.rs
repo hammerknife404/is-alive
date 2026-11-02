@@ -29,7 +29,7 @@ impl MapView {
                 && self
                     .pos
                     .get(&self.map.nodes[i].id)
-                    .is_some_and(|p| Rect::from_min_size(*p, CARD).contains(w))
+                    .is_some_and(|p| layout::card_rect(&self.map.nodes[i], *p).contains(w))
         })
     }
 

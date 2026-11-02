@@ -2,9 +2,15 @@
 //! with roles read from their kind, its links become the tree (each card
 //! hangs off the first link that reaches it from the internet; any other
 //! link is listed in its details), and its findings become the band. A
-//! sweep of the same network marks which of its devices answer.
+//! sweep of the same network marks which of its devices answer, and what
+//! the map left out (/mapnetwork maps clients only on request) joins it as
+//! clients: the sweep's other hosts, and a loaded UniFi backup's client
+//! table, each under the card it most likely plugs into.
 
-use super::{B, Input, Link, Map, Node, Sev, Zone, caps, limit};
+use super::{
+    B, Input, Link, Map, Node, Sev, Unifi, Zone, caps, limit, parse_unifi, sweep_card,
+    unifi_client_card,
+};
 use crate::mapnetwork::Doc;
 use crate::net::mac::{self, Mac};
 use serde_json::Value;
@@ -379,6 +385,22 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         b.findings.push((sev, text.to_string(), ids));
     }
 
+    // What each card's zone says about it ("VLAN 20 · 192.168.2.x"), to
+    // place the hosts the map left out.
+    let mut zone_text = vec![String::new(); b.nodes.len()];
+    for (i, v) in src.iter().enumerate() {
+        if let Some(z) = doc.zones.get(s(v, "zone")) {
+            zone_text[card[i]] = format!("{} {}", s(z, "name"), s(z, "vlan"));
+        }
+    }
+    let hints = subnet_uplinks(&b, &zone_text);
+    let cards = b.nodes.len();
+    // A UniFi backup of the same site knows clients the map left out, and
+    // the switch or AP each was last seen on.
+    let unifi = input
+        .unifi
+        .map(parse_unifi)
+        .filter(|u| join_unifi(&mut b, u, cards));
     // A sweep joins only when it found hardware the map knows by MAC: the
     // same network, not a look-alike 192.168.1.x.
     let local = input
@@ -386,14 +408,48 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         .iter()
         .any(|h| h.mac.is_some_and(|m| b.by_mac.contains_key(&m)));
     let mut off_map = 0;
+    let mut deferred = Vec::new();
     if local {
+        let in_unifi: HashSet<Mac> = unifi
+            .iter()
+            .flat_map(|u| u.clients.iter().map(|c| c.mac))
+            .collect();
         for h in &input.sweep {
             match b.find(h.mac, Some(h.ip)) {
                 Some(i) => b.merge_seen(i, h),
-                None => off_map += 1,
+                // UniFi's card for it, below, knows where it plugs in.
+                None if h.mac.is_some_and(|m| in_unifi.contains(&m)) => {
+                    off_map += 1;
+                    deferred.push(h);
+                }
+                None => {
+                    off_map += 1;
+                    let i = b.add(sweep_card(h, Some(h.ip) == input.this));
+                    b.merge_seen(i, h);
+                }
             }
         }
     }
+    let mut unifi_added = 0;
+    if let Some(u) = &unifi {
+        for c in &u.clients {
+            if let Some(i) = b.find(Some(c.mac), None) {
+                b.nodes[i].seen("UniFi");
+                continue;
+            }
+            let (parent, link, port) = b.unifi_uplink(c);
+            let mut n = unifi_client_card(c);
+            n.up = parent.map(|p| (p, link, port));
+            let i = b.add(n);
+            unifi_added += 1;
+            if let Some(h) = deferred.iter().find(|h| h.mac == Some(c.mac)) {
+                b.merge_seen(i, h);
+                // It answered just now.
+                b.nodes[i].rank.1 = 0;
+            }
+        }
+    }
+    let unplaced = place_added(&mut b, cards, &hints);
 
     let mut summary = [doc.title.as_str(), doc.subtitle.as_str()]
         .iter()
@@ -407,14 +463,20 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         " · from /mapnetwork"
     };
     if local {
-        summary += &format!(" · sweep merged, {off_map} host(s) not on the map");
+        summary += &format!(" · sweep merged, {off_map} host(s) not on the map added as clients");
     } else if !input.sweep.is_empty() {
         summary += " · sweep not merged (no device on the map shares a MAC with it)";
     }
-    let mut map = limit(b, input);
-    if map.hidden > 0 && !input.clients {
-        summary += &format!(" · clients off: {} not drawn", map.hidden);
+    if unifi.is_some() {
+        summary += &format!(" · UniFi backup merged, {unifi_added} client(s) added");
+    } else if input.unifi.is_some() {
+        summary += " · UniFi backup not merged (none of its devices is on the map)";
     }
+    if unplaced > 0 {
+        summary += &format!(" · {unplaced} not placed");
+    }
+    let mut map = limit(b, input);
+    summary += &map.hidden_note();
     map.summary = summary;
     // A map without SITES is one place: the map's own title names it. With
     // SITES, a card the map put at no site stays outside every site's box.
@@ -429,10 +491,170 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     map
 }
 
+/// The /24 of an address.
+fn net24(ip: Ipv4Addr) -> [u8; 3] {
+    let o = ip.octets();
+    [o[0], o[1], o[2]]
+}
+
+/// The /24s a line of text names: "192.168.2.x", or "10.0.0.0/24" (or a
+/// smaller block). Wider ones say too little to place a host by.
+fn nets_in(text: &str) -> Vec<[u8; 3]> {
+    let mut out = Vec::new();
+    for w in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '/')) {
+        let w = w.to_ascii_lowercase();
+        let net = if let Some(head) = w.strip_suffix(".x") {
+            let o: Vec<u8> = head.split('.').filter_map(|p| p.parse().ok()).collect();
+            (o.len() == 3 && head.split('.').count() == 3).then(|| [o[0], o[1], o[2]])
+        } else if let Some((ip, bits)) = w.split_once('/') {
+            match (ip.parse::<Ipv4Addr>(), bits.parse::<u8>()) {
+                (Ok(ip), Ok(24..=32)) => Some(net24(ip)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(n) = net.filter(|n| !out.contains(n)) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+fn is_infra(z: Zone) -> bool {
+    matches!(
+        z,
+        Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear
+    )
+}
+
+/// For each /24 the map shows, the card a host from it most likely hangs
+/// off: the gateway, switch or AP the map's own cards in that subnet hang
+/// off (by their address, or their zone's "VLAN 20 · 192.168.2.x"), else
+/// one in the subnet itself; on a tie, the one higher up the file.
+fn subnet_uplinks(b: &B, zone_text: &[String]) -> HashMap<[u8; 3], usize> {
+    let mut votes: HashMap<[u8; 3], HashMap<usize, usize>> = HashMap::new();
+    for (i, n) in b.nodes.iter().enumerate() {
+        let mut nets = nets_in(zone_text.get(i).map_or("", String::as_str));
+        if let Some(ip) = n.ip
+            && !nets.contains(&net24(ip))
+        {
+            nets.push(net24(ip));
+        }
+        for net in nets {
+            let v = votes.entry(net).or_default();
+            if is_infra(n.zone) {
+                *v.entry(i).or_default() += 1;
+            }
+            // A firewall's own uplink is the WAN side, not its subnet's.
+            if n.zone != Zone::Gateway
+                && let Some(p) = n.parent()
+                && is_infra(b.nodes[p].zone)
+            {
+                *v.entry(p).or_default() += 2;
+            }
+        }
+    }
+    votes
+        .into_iter()
+        .filter_map(|(net, v)| {
+            let best = v
+                .into_iter()
+                .max_by_key(|&(i, n)| (n, std::cmp::Reverse(i)))?;
+            Some((net, best.0))
+        })
+        .collect()
+}
+
+/// Link each UniFi device to its card on the map (by MAC, else by name,
+/// else by address), so its clients find their switch or AP. True when the
+/// backup is of this site: a device on the map by MAC or name. `cards`:
+/// how many cards came from the map.
+fn join_unifi(b: &mut B, u: &Unifi, cards: usize) -> bool {
+    let mut links = Vec::new();
+    let mut same = false;
+    for d in &u.devices {
+        let by_name = || (0..cards).find(|&i| b.nodes[i].label.eq_ignore_ascii_case(&d.name));
+        match b.by_mac.get(&d.mac).copied().or_else(by_name) {
+            Some(i) => {
+                same = true;
+                links.push((d.mac, i));
+            }
+            None => {
+                if let Some(&i) = d.ip.and_then(|ip| b.by_ip.get(&ip)) {
+                    links.push((d.mac, i));
+                }
+            }
+        }
+    }
+    if same {
+        for (m, i) in links {
+            b.by_mac.entry(m).or_insert(i);
+        }
+    }
+    same
+}
+
+/// The cards from `first` on are hosts the map left out: make them
+/// clients, each under its UniFi uplink, else the card its subnet hangs
+/// off, else a "Not placed" card. Returns how many went there.
+fn place_added(b: &mut B, first: usize, hints: &HashMap<[u8; 3], usize>) -> usize {
+    let mut unplaced = Vec::new();
+    for i in first..b.nodes.len() {
+        let n = &mut b.nodes[i];
+        n.client = true;
+        n.chip("not on map");
+        n.details.insert(
+            0,
+            format!(
+                "Not on the /mapnetwork map: added from {}",
+                if n.seen_by.contains(&"UniFi") {
+                    "the UniFi backup"
+                } else {
+                    "the sweep"
+                }
+            ),
+        );
+        if n.up.is_some() {
+            continue;
+        }
+        match n.ip.and_then(|ip| hints.get(&net24(ip))) {
+            Some(&p) => {
+                n.up = Some((p, Link::Assumed, None));
+                n.details
+                    .push("Uplink guessed from its subnet: other cards there hang off it".into());
+            }
+            None => unplaced.push(i),
+        }
+    }
+    if unplaced.is_empty() {
+        return 0;
+    }
+    let np = b.add(Node {
+        id: "mapnetwork:not-placed".into(),
+        zone: Zone::Unknown,
+        kind: "NOT PLACED".into(),
+        label: "Not placed".into(),
+        sub: format!("{} host(s), uplink unknown", unplaced.len()),
+        details: vec![
+            "Hosts the sweep or the UniFi backup found that this map doesn't show, with \
+             nothing to say where they plug in (no UniFi uplink, and no card on the map in \
+             their subnet)"
+                .into(),
+        ],
+        up: Some((0, Link::Assumed, None)),
+        ..Default::default()
+    });
+    for &i in &unplaced {
+        b.nodes[i].up = Some((np, Link::Assumed, None));
+    }
+    unplaced.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::Seen;
+    use crate::map::{Clients, Seen};
 
     const PAGE: &str = r#"
     /* ===================== SITE DATA ===================== */
@@ -472,7 +694,7 @@ mod tests {
         let m = build(
             &doc,
             &Input {
-                clients: true,
+                clients: Clients::Some,
                 ..Default::default()
             },
         );
@@ -559,6 +781,111 @@ mod tests {
     }
 
     #[test]
+    fn hosts_the_map_left_out_join_under_their_likely_uplink() {
+        let doc = crate::mapnetwork::parse(PAGE.as_bytes()).unwrap();
+        let host = |ip: [u8; 4], mac: Option<Mac>| Seen {
+            ip: ip.into(),
+            mac,
+            name: None,
+            rtt: Some(1.0),
+            open: Vec::new(),
+        };
+        let laptop = [2, 0, 0, 0, 0, 0x99];
+        let sweep = vec![
+            host([10, 0, 0, 1], Some([0xc0, 0xea, 0xe4, 0, 0, 1])),
+            host([10, 0, 0, 99], Some(laptop)),
+            host([10, 0, 1, 77], None),
+            host([172, 16, 0, 5], None),
+        ];
+        // The backup's switch is the map's USW-24 by name; its clients
+        // were anonymized by Config Export.
+        let unifi = serde_json::json!([
+            {"__cmd": "select", "collection": "device"},
+            {"name": "USW-24", "type": "usw", "mac": "00:00:00:00:00:02", "ip": "10.0.0.2"},
+            {"__cmd": "select", "collection": "user"},
+            {"mac": "02:00:00:00:00:99", "hostname": "client-0badf00d",
+             "last_uplink_mac": "00:00:00:00:00:02", "last_uplink_remote_port": 7, "is_wired": true},
+            {"mac": "02:00:00:00:00:42", "last_ip": "10.0.0.150"},
+        ])
+        .to_string();
+        let input = Input {
+            sweep,
+            unifi: Some(&unifi),
+            clients: Clients::All,
+            ..Default::default()
+        };
+        let m = build(&doc, &input);
+        let parent = |n: &Node| m.nodes[n.parent().unwrap()].id.clone();
+        let named = |l: &str| m.nodes.iter().find(|n| n.label == l).unwrap();
+        // The sweep's laptop is the backup's anonymized client: one card,
+        // its token for a name, on its switch port.
+        let laptop = named("client-0badf00d");
+        assert!(laptop.client);
+        assert_eq!(laptop.seen_by, ["UniFi", "sweep"]);
+        assert_eq!(parent(laptop), "sw");
+        assert_eq!(laptop.up.as_ref().unwrap().1, Link::Wired);
+        assert_eq!(laptop.up.as_ref().unwrap().2.as_deref(), Some("port 7"));
+        // By subnet: where the map's own cards in it hang.
+        let wifi = named("Host 10.0.1.77");
+        assert_eq!(parent(wifi), "ap");
+        assert_eq!(wifi.link(), Some(Link::Assumed));
+        assert_eq!(parent(named("02:00:00:00:00:42")), "fw");
+        // Nothing to go by: Not placed.
+        let stray = named("Host 172.16.0.5");
+        assert_eq!(parent(stray), "mapnetwork:not-placed");
+        assert!(stray.chips.contains(&"not on map".to_string()));
+        assert!(
+            m.summary
+                .contains("3 host(s) not on the map added as clients")
+        );
+        assert!(m.summary.contains("UniFi backup merged, 2 client(s) added"));
+        assert!(m.summary.contains("1 not placed"), "{}", m.summary);
+        // Clients off: none drawn, each uplink with a count to step open.
+        let off = build(
+            &doc,
+            &Input {
+                clients: Clients::Off,
+                ..input
+            },
+        );
+        assert!(off.nodes.iter().all(|n| !n.client));
+        assert_eq!(off.under.get("fw"), Some(&(0, 1)));
+        assert_eq!(off.under.get("mapnetwork:not-placed"), Some(&(0, 1)));
+    }
+
+    #[test]
+    fn a_backup_of_another_site_does_not_join() {
+        let doc = crate::mapnetwork::parse(PAGE.as_bytes()).unwrap();
+        let unifi = serde_json::json!([
+            {"__cmd": "select", "collection": "device"},
+            {"name": "Elsewhere", "type": "usw", "mac": "00:00:00:00:00:77", "ip": "10.0.0.2"},
+            {"__cmd": "select", "collection": "user"},
+            {"mac": "02:00:00:00:00:42", "last_uplink_mac": "00:00:00:00:00:77"},
+        ])
+        .to_string();
+        let m = build(
+            &doc,
+            &Input {
+                unifi: Some(&unifi),
+                clients: Clients::All,
+                ..Default::default()
+            },
+        );
+        assert!(m.nodes.iter().all(|n| n.label != "02:00:00:00:00:42"));
+        assert!(m.summary.contains("UniFi backup not merged"));
+    }
+
+    #[test]
+    fn subnets_named_in_zone_text() {
+        assert_eq!(nets_in("VLAN 20 · 192.168.2.x"), [[192, 168, 2]]);
+        assert_eq!(
+            nets_in("10.0.0.0/24 and 10.1.0.0/16, 10.0.0.9/32"),
+            [[10, 0, 0]]
+        );
+        assert!(nets_in("192.168.10/11.x · WAN").is_empty());
+    }
+
+    #[test]
     fn synthesizes_the_internet_without_one() {
         let doc = crate::mapnetwork::parse(
             b"this.NODES = [ {id:'gw', kind:'GATEWAY', label:'UDM'}, {id:'s', kind:'SWITCH', label:'S'} ];\
@@ -584,7 +911,7 @@ mod tests {
         let m = build(
             &doc,
             &Input {
-                clients: true,
+                clients: Clients::Some,
                 ..Default::default()
             },
         );
@@ -599,6 +926,7 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
+    use crate::map::Clients;
     use crate::map::layout::{Mode, layout_in};
 
     /// The built-in examples redraw in every Clients setting and layout,
@@ -607,10 +935,9 @@ mod examples {
     fn examples_build_in_every_client_mode_and_layout() {
         for (name, f) in crate::skills::EXAMPLES {
             let doc = crate::mapnetwork::parse(crate::skills::file(f).unwrap()).unwrap();
-            for (clients, all_clients) in [(false, false), (true, false), (true, true)] {
+            for clients in Clients::ALL {
                 let input = Input {
                     clients,
-                    all_clients,
                     ..Default::default()
                 };
                 let m = build(&doc, &input);

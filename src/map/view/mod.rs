@@ -6,11 +6,12 @@
 mod interact;
 mod paint;
 mod panel;
+mod reveal;
 mod sidebar;
 
 use super::layout::{self, CARD, Layout, Mode};
 use super::runs::{CardRuns, Out, Run, State, Tool};
-use super::{Input, Link, Map, Node, Sev, Zone};
+use super::{Clients, Input, Link, Map, Node, Sev, Zone};
 use crate::net::hostinfo::HostInfo;
 use crate::tools::{export::ExportTool, sweep::SweepTool};
 use crate::widgets;
@@ -46,44 +47,6 @@ pub enum Action {
     Layout(Mode),
 }
 
-/// Which end devices get cards.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-pub enum Clients {
-    #[default]
-    Off,
-    /// Up to 10 per switch or AP, the rest in a +N more card, fewer per
-    /// uplink on a big map.
-    Some,
-    /// A card for every one.
-    All,
-}
-
-impl Clients {
-    const ALL: [Clients; 3] = [Clients::Off, Clients::Some, Clients::All];
-
-    fn name(self) -> &'static str {
-        match self {
-            Clients::Off => "Off",
-            Clients::Some => "Some",
-            Clients::All => "All",
-        }
-    }
-
-    fn tip(self) -> &'static str {
-        match self {
-            Clients::Off => "No end devices: a count on each switch or AP instead",
-            Clients::Some => {
-                "Up to 10 per switch or AP, the rest in a +N more card (Show all on it opens \
-                 that one up)"
-            }
-            Clients::All => {
-                "A card for every end device. A big site can mean hundreds of cards; Zones \
-                 keeps them tidy"
-            }
-        }
-    }
-}
-
 /// What a right-click menu item adds to the cards it acts on.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Grow {
@@ -95,8 +58,8 @@ enum Grow {
 
 /// What the detail panel asked for.
 enum PanelEv {
-    /// Show every client under this uplink, or fold them back.
-    Open(usize, bool),
+    /// How many clients to show under this uplink (None: as the level says).
+    Reveal(usize, Option<usize>),
     /// × on a card: take it out of the selection.
     Drop(usize),
     /// The pin: keep it selected, or not.
@@ -132,8 +95,9 @@ pub struct MapView {
     map: Map,
     key: u64,
     clients: Clients,
-    /// Uplinks whose clients are all shown (Show all on a +N more card).
-    open: HashSet<String>,
+    /// Uplinks stepped on their own (+N or − on the card, Show all): how
+    /// many clients each shows, whatever the level.
+    reveal: HashMap<String, usize>,
     search: String,
     /// The card the detail panel shows: the one clicked last.
     selected: Option<String>,
@@ -262,9 +226,10 @@ struct Focus {
 impl MapView {
     pub fn new(mode: Option<Mode>) -> Self {
         // The screenshot tour can start with clients shown
-        // (IS_ALIVE_SHOTS_CLIENTS=some or all).
+        // (IS_ALIVE_SHOTS_CLIENTS=some, more or all).
         let clients = match std::env::var("IS_ALIVE_SHOTS_CLIENTS").as_deref() {
             Ok("some") => Clients::Some,
+            Ok("more") => Clients::More,
             Ok("all") => Clients::All,
             _ => Clients::Off,
         };
@@ -443,9 +408,8 @@ impl MapView {
             unifi: src.export.unifi().map(|u| u.1.json.as_str()),
             sonicwall: src.export.sonicwall().map(|s| s.1.json.as_str()),
             mapnetwork: src.export.mapnetwork().map(|m| m.1),
-            clients: self.clients != Clients::Off,
-            all_clients: self.clients == Clients::All,
-            open: Some(&self.open),
+            clients: self.clients,
+            reveal: Some(&self.reveal),
         }
     }
 
@@ -456,9 +420,9 @@ impl MapView {
         src.sweep.generation().hash(&mut h);
         src.export.generation().hash(&mut h);
         self.clients.hash(&mut h);
-        let mut open: Vec<&String> = self.open.iter().collect();
-        open.sort();
-        open.hash(&mut h);
+        let mut reveal: Vec<_> = self.reveal.iter().collect();
+        reveal.sort();
+        reveal.hash(&mut h);
         if let Some((p, r)) = src.export.unifi() {
             (p, r.json.len()).hash(&mut h);
         }
@@ -890,7 +854,7 @@ impl MapView {
         let mut r = Rect::NOTHING;
         for i in 0..self.map.nodes.len() {
             if let Some(p) = self.target(i) {
-                r = r.union(Rect::from_min_size(p, CARD));
+                r = r.union(layout::card_rect(&self.map.nodes[i], p));
             }
         }
         for b in &self.lay.boxes {
@@ -931,8 +895,8 @@ impl MapView {
                 self.select_group(*first, &cards);
                 let area = cards
                     .iter()
-                    .filter_map(|&i| self.target(i))
-                    .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_size(p, CARD)));
+                    .filter_map(|&i| Some(layout::card_rect(&self.map.nodes[i], self.target(i)?)))
+                    .fold(Rect::NOTHING, |r, c| r.union(c));
                 self.fit_to(self.settled(view), area);
                 self.follow = false;
             }
@@ -984,7 +948,7 @@ impl MapView {
         let view = self.settled(view);
         if let Some(p) = self.target(i) {
             let zoom = self.zoom.max(0.85);
-            let c = p + CARD / 2.0;
+            let c = layout::card_rect(&self.map.nodes[i], p).center();
             self.aim = Some((view.size() / 2.0 - c.to_vec2() * zoom, zoom));
             self.follow = false;
         }
@@ -1052,19 +1016,20 @@ impl MapView {
             ui.separator();
             // A map with no end devices at all (an infrastructure-only
             // /mapnetwork map) has nothing for the switch to show or hide.
-            let any = empty || self.map.hidden > 0 || self.map.nodes.iter().any(|n| n.client);
+            let any =
+                empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
             ui.add_enabled_ui(any, |ui| {
                 ui.label("Clients");
                 for c in Clients::ALL {
                     if ui
                         .selectable_label(self.clients == c, c.name())
                         .on_hover_text(c.tip())
-                        .on_disabled_hover_text(
-                            "This map has no end devices: it was drawn with infrastructure only",
-                        )
+                        .on_disabled_hover_text(reveal::no_clients_why(src))
                         .clicked()
                     {
                         self.clients = c;
+                        // The level sets every uplink again.
+                        self.reveal.clear();
                     }
                 }
             });
@@ -1283,14 +1248,7 @@ impl MapView {
             }
             Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
             Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
-            Some(PanelEv::Open(p, on)) => {
-                let id = self.map.nodes[p].id.clone();
-                if on {
-                    self.open.insert(id);
-                } else {
-                    self.open.remove(&id);
-                }
-            }
+            Some(PanelEv::Reveal(p, n)) => self.step(p, n),
             _ => {}
         }
         act
@@ -1368,6 +1326,7 @@ impl MapView {
         }
         self.animate(&ctx);
         self.paint(ui, rect, hover);
+        self.reveal_chips(ui, rect);
         // With the sidebar shut, the roles go back on the canvas, beside a
         // button that opens it again.
         if !self.side {

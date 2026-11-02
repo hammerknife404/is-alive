@@ -7,7 +7,7 @@
 //! - **Zones**: one box per role, its cards in a grid inside.
 //! - **Sites**: one box per site, each holding its part of the tree.
 
-use super::{Link, Map, Zone};
+use super::{Link, Map, Node, Zone};
 use eframe::egui::{Pos2, Rect, Vec2, pos2, vec2};
 use std::collections::BTreeMap;
 
@@ -79,6 +79,9 @@ pub const BOX_TITLE: f32 = 30.0;
 const BOX_GAP: f32 = 40.0;
 
 pub const CARD: Vec2 = vec2(200.0, 92.0);
+/// A client's card: as wide, half as tall (its name and address), so a
+/// switch with forty of them stays compact.
+pub const TILE: Vec2 = vec2(200.0, 50.0);
 pub const GAP_X: f32 = 24.0;
 pub const GAP_Y: f32 = 56.0;
 pub const STACK_GAP: f32 = 14.0;
@@ -101,6 +104,16 @@ pub struct Layout {
     pub group: Vec<Option<usize>>,
 }
 
+/// The size a card is drawn at: a tile for a client, else a full card.
+pub fn card_size(n: &Node) -> Vec2 {
+    if n.client { TILE } else { CARD }
+}
+
+/// Where a card at `p` is drawn.
+pub fn card_rect(n: &Node, p: Pos2) -> Rect {
+    Rect::from_min_size(p, card_size(n))
+}
+
 struct Block {
     w: f32,
     h: f32,
@@ -110,22 +123,24 @@ struct Block {
 /// Lay out the cards `shown` allows in `mode`. Sites on a map without them
 /// (only the internet, or nothing) lays out as Cluster.
 pub fn layout_in(map: &Map, shown: &dyn Fn(usize) -> bool, mode: Mode) -> Layout {
+    let hs: Vec<f32> = map.nodes.iter().map(|n| card_size(n).y).collect();
+    let hs = hs.as_slice();
     match mode {
-        Mode::Cluster => tree(map, shown, true),
-        Mode::Tree => tree(map, shown, false),
-        Mode::Zones => grouped(map, shown, false, &|i| {
+        Mode::Cluster => tree(map, shown, true, hs),
+        Mode::Tree => tree(map, shown, false, hs),
+        Mode::Zones => grouped(map, shown, false, hs, &|i| {
             let z = map.nodes[i].zone;
             (z != Zone::Internet).then(|| (zone_order(z) as usize, z.name().to_string(), Some(z)))
         }),
         Mode::Sites if !map.sites().is_empty() => {
             let sites = map.sites();
-            grouped(map, shown, true, &|i| {
+            grouped(map, shown, true, hs, &|i| {
                 let s = map.nodes[i].site.as_ref()?;
                 let k = sites.iter().position(|x| x == s)?;
                 Some((k, s.clone(), None))
             })
         }
-        Mode::Sites => tree(map, shown, true),
+        Mode::Sites => tree(map, shown, true, hs),
     }
 }
 
@@ -140,8 +155,9 @@ fn empty(n: usize) -> Layout {
     }
 }
 
-/// `stack`: leaves stack in columns (Cluster), or not (Tree).
-fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool) -> Layout {
+/// `stack`: leaves stack in columns (Cluster), or not (Tree). `hs`: each
+/// card's height.
+fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool, hs: &[f32]) -> Layout {
     let n = map.nodes.len();
     let mut out = empty(n);
     if n == 0 || !shown(0) {
@@ -150,13 +166,13 @@ fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool) -> Layout {
     let kids = sorted_kids(map, shown);
     let mut seen = vec![false; n];
     let root = if stack {
-        let (b, trunks) = place_wrapped(0, &kids, &mut seen);
+        let (b, trunks) = place_wrapped(0, &kids, &mut seen, hs);
         for (i, t) in trunks {
             out.trunk[i] = Some(t);
         }
         b
     } else {
-        place(0, &kids, &mut seen, stack)
+        place(0, &kids, &mut seen, stack, hs)
     };
     let mut place_block = |b: &Block, at: Vec2| {
         for &(i, p, s) in &b.items {
@@ -170,7 +186,7 @@ fn tree(map: &Map, shown: &dyn Fn(usize) -> bool, stack: bool) -> Layout {
     let (mut x, top) = (0.0, root.h + GAP_Y);
     for i in 0..n {
         if shown(i) && !seen[i] {
-            let b = place(i, &kids, &mut seen, stack);
+            let b = place(i, &kids, &mut seen, stack, hs);
             place_block(&b, vec2(x, top));
             x += b.w + GAP_X;
             w = w.max(x - GAP_X);
@@ -186,9 +202,16 @@ fn sorted_kids(map: &Map, shown: &dyn Fn(usize) -> bool) -> Vec<Vec<usize>> {
     let mut kids = map.children();
     for k in &mut kids {
         k.retain(|&c| shown(c));
+        // A +N more card goes after the clients it follows on from.
         k.sort_by(|&a, &b| {
             let (x, y) = (&map.nodes[a], &map.nodes[b]);
-            (zone_order(x.zone), x.client, &x.label).cmp(&(zone_order(y.zone), y.client, &y.label))
+            let more = |n: &Node| n.id.starts_with("more:");
+            (zone_order(x.zone), x.client, more(x), &x.label).cmp(&(
+                zone_order(y.zone),
+                y.client,
+                more(y),
+                &y.label,
+            ))
         });
     }
     kids
@@ -209,26 +232,32 @@ pub(super) fn zone_order(z: Zone) -> u8 {
     }
 }
 
-fn place(i: usize, kids: &[Vec<usize>], seen: &mut [bool], stack: bool) -> Block {
+fn place(i: usize, kids: &[Vec<usize>], seen: &mut [bool], stack: bool, hs: &[f32]) -> Block {
     seen[i] = true;
     let mine: Vec<usize> = kids[i].iter().copied().filter(|&c| !seen[c]).collect();
     if mine.is_empty() {
         return Block {
             w: CARD.x,
-            h: CARD.y,
+            h: hs[i],
             items: vec![(i, Vec2::ZERO, false)],
         };
     }
     for &c in &mine {
         seen[c] = true;
     }
-    let row = kid_row(&mine, kids, seen, stack);
-    assemble(i, row)
+    let row = kid_row(&mine, kids, seen, stack, hs);
+    assemble(i, row, hs)
 }
 
 /// The blocks under a card, left to right: its leaves (in columns when
 /// `stack` and there are a few) and then its branches, each placed.
-fn kid_row(mine: &[usize], kids: &[Vec<usize>], seen: &mut [bool], stack: bool) -> Vec<Block> {
+fn kid_row(
+    mine: &[usize],
+    kids: &[Vec<usize>],
+    seen: &mut [bool],
+    stack: bool,
+    hs: &[f32],
+) -> Vec<Block> {
     let (branches, leaves): (Vec<usize>, Vec<usize>) = mine
         .iter()
         .partition(|&&c| kids[c].iter().any(|&g| !seen[g]));
@@ -237,33 +266,34 @@ fn kid_row(mine: &[usize], kids: &[Vec<usize>], seen: &mut [bool], stack: bool) 
     if stack && leaves.len() >= 4 {
         let rows = (((leaves.len() as f32) * 2.4).sqrt().ceil() as usize).max(5);
         for col in leaves.chunks(rows) {
-            let items = col
-                .iter()
-                .enumerate()
-                .map(|(j, &c)| (c, vec2(INDENT, j as f32 * (CARD.y + STACK_GAP)), true))
-                .collect();
+            let mut y = 0.0;
+            let mut items = Vec::new();
+            for &c in col {
+                items.push((c, vec2(INDENT, y), true));
+                y += hs[c] + STACK_GAP;
+            }
             row.push(Block {
                 w: INDENT + CARD.x,
-                h: col.len() as f32 * (CARD.y + STACK_GAP) - STACK_GAP,
+                h: y - STACK_GAP,
                 items,
             });
         }
     } else {
         row.extend(leaves.iter().map(|&c| Block {
             w: CARD.x,
-            h: CARD.y,
+            h: hs[c],
             items: vec![(c, Vec2::ZERO, false)],
         }));
     }
     for &c in &branches {
         seen[c] = false;
-        row.push(place(c, kids, seen, stack));
+        row.push(place(c, kids, seen, stack, hs));
     }
     row
 }
 
 /// A card centred over one row of blocks.
-fn assemble(i: usize, row: Vec<Block>) -> Block {
+fn assemble(i: usize, row: Vec<Block>, hs: &[f32]) -> Block {
     let row_w = row.iter().map(|b| b.w).sum::<f32>() + GAP_X * (row.len() - 1) as f32;
     let row_h = row.iter().map(|b| b.h).fold(0.0, f32::max);
     let w = row_w.max(CARD.x);
@@ -272,13 +302,13 @@ fn assemble(i: usize, row: Vec<Block>) -> Block {
     let mut x = row_x;
     for b in row {
         for (c, p, s) in b.items {
-            items.push((c, vec2(x, CARD.y + GAP_Y) + p, s));
+            items.push((c, vec2(x, hs[i] + GAP_Y) + p, s));
         }
         x += b.w + GAP_X;
     }
     Block {
         w,
-        h: CARD.y + GAP_Y + row_h,
+        h: hs[i] + GAP_Y + row_h,
         items,
     }
 }
@@ -296,26 +326,31 @@ const WRAP_AIM: f32 = 1.6;
 /// height (many sites off the internet) wraps into rows, left-aligned
 /// beside a trunk down the left edge; returns the trunk (x, y of the gap
 /// above its row) for each card whose link takes it.
-fn place_wrapped(i: usize, kids: &[Vec<usize>], seen: &mut [bool]) -> (Block, Vec<(usize, Trunk)>) {
+fn place_wrapped(
+    i: usize,
+    kids: &[Vec<usize>],
+    seen: &mut [bool],
+    hs: &[f32],
+) -> (Block, Vec<(usize, Trunk)>) {
     seen[i] = true;
     let mine: Vec<usize> = kids[i].iter().copied().filter(|&c| !seen[c]).collect();
     if mine.is_empty() {
         seen[i] = false;
-        return (place(i, kids, seen, true), Vec::new());
+        return (place(i, kids, seen, true, hs), Vec::new());
     }
     for &c in &mine {
         seen[c] = true;
     }
-    let row = kid_row(&mine, kids, seen, true);
+    let row = kid_row(&mine, kids, seen, true, hs);
     let rows = wrap_rows(&row);
     if rows.len() < 2 {
-        return (assemble(i, row), Vec::new());
+        return (assemble(i, row, hs), Vec::new());
     }
     let channel = GAP_X;
     let trunk_x = channel / 2.0;
     let mut items = Vec::new();
     let mut trunks = Vec::new();
-    let mut y = CARD.y + GAP_Y;
+    let mut y = hs[i] + GAP_Y;
     let mut w = 0.0_f32;
     let mut row_ws = Vec::new();
     let mut blocks = row.into_iter();
@@ -400,6 +435,7 @@ fn grouped(
     map: &Map,
     shown: &dyn Fn(usize) -> bool,
     as_tree: bool,
+    hs: &[f32],
     key: &dyn Fn(usize) -> Option<(usize, String, Option<Zone>)>,
 ) -> Layout {
     let n = map.nodes.len();
@@ -440,7 +476,7 @@ fn grouped(
         .map(|((_, title), (zone, mut v))| {
             sort(&mut v);
             if as_tree {
-                let (w, h, items) = subtree(&kids, &v);
+                let (w, h, items) = subtree(&kids, &v, hs);
                 // Room for the title, chevron and "· N inside" at 11 pt
                 // caps, so a collapsed site's one card doesn't crop it.
                 let title_w = 14.0 + 7.2 * (title.chars().count() + 12) as f32;
@@ -458,25 +494,18 @@ fn grouped(
                 };
             }
             let cols = ((v.len() as f32 * 1.5).sqrt().ceil() as usize).clamp(1, 6);
-            let rows = v.len().div_ceil(cols);
-            let items = v
-                .iter()
-                .enumerate()
-                .map(|(j, &i)| {
-                    let (c, r) = ((j % cols) as f32, (j / cols) as f32);
-                    let at = vec2(
-                        BOX_PAD + c * (CARD.x + GAP_X),
-                        BOX_TITLE + r * (CARD.y + STACK_GAP),
-                    );
-                    (i, at, false)
-                })
-                .collect();
+            // Each row as tall as its tallest card (a box of clients is tiles).
+            let mut items = Vec::new();
+            let mut y = BOX_TITLE;
+            for row in v.chunks(cols) {
+                for (c, &i) in row.iter().enumerate() {
+                    items.push((i, vec2(BOX_PAD + c as f32 * (CARD.x + GAP_X), y), false));
+                }
+                y += row.iter().map(|&i| hs[i]).fold(0.0, f32::max) + STACK_GAP;
+            }
             Boxed {
                 w: 2.0 * BOX_PAD + cols as f32 * CARD.x + (cols - 1) as f32 * GAP_X,
-                h: BOX_TITLE
-                    + BOX_PAD
-                    + rows as f32 * CARD.y
-                    + (rows.saturating_sub(1)) as f32 * STACK_GAP,
+                h: y - STACK_GAP + BOX_PAD,
                 title,
                 zone,
                 items,
@@ -533,7 +562,7 @@ fn grouped(
 /// The cards `v` (in sort order) as their own part of the tree: each card
 /// whose parent isn't among them starts a subtree, side by side. Returns
 /// the width, height and (card, place, stacked).
-fn subtree(kids: &[Vec<usize>], v: &[usize]) -> (f32, f32, Vec<(usize, Vec2, bool)>) {
+fn subtree(kids: &[Vec<usize>], v: &[usize], hs: &[f32]) -> (f32, f32, Vec<(usize, Vec2, bool)>) {
     let n = kids.len();
     let mut member = vec![false; n];
     for &i in v {
@@ -559,7 +588,7 @@ fn subtree(kids: &[Vec<usize>], v: &[usize]) -> (f32, f32, Vec<(usize, Vec2, boo
         if seen[i] {
             continue;
         }
-        let b = place(i, &inner, &mut seen, true);
+        let b = place(i, &inner, &mut seen, true, hs);
         for (c, p, s) in b.items {
             items.push((c, vec2(x, 0.0) + p, s));
         }
@@ -576,14 +605,15 @@ fn subtree(kids: &[Vec<usize>], v: &[usize]) -> (f32, f32, Vec<(usize, Vec2, boo
 /// With a `trunk` (a row wrapped below the first), the link drops to the
 /// bus, runs to the trunk on the left, down it to the gap above the
 /// child's row, and along that gap into the child as it would from a bus.
-pub fn route(parent: Pos2, child: Pos2, stacked: bool, trunk: Option<Trunk>) -> Vec<Pos2> {
-    let from = pos2(parent.x + CARD.x / 2.0, parent.y + CARD.y);
+pub fn route(parent: Rect, child: Rect, stacked: bool, trunk: Option<Trunk>) -> Vec<Pos2> {
+    let from = parent.center_bottom();
+    let mid = child.center().y;
+    let child = child.min;
     if let Some((tx, gap)) = trunk {
         let bus = from.y + GAP_Y / 2.0;
         let mut pts = vec![from, pos2(from.x, bus), pos2(tx, bus), pos2(tx, gap)];
         if stacked {
             let col = child.x - INDENT / 2.0;
-            let mid = child.y + CARD.y / 2.0;
             pts.extend([pos2(col, gap), pos2(col, mid), pos2(child.x, mid)]);
         } else {
             let cx = child.x + CARD.x / 2.0;
@@ -594,7 +624,6 @@ pub fn route(parent: Pos2, child: Pos2, stacked: bool, trunk: Option<Trunk>) -> 
     if stacked {
         let trunk = child.x - INDENT / 2.0;
         let bus = from.y + (GAP_Y / 2.0).min(((child.y - from.y) / 2.0).max(0.0));
-        let mid = child.y + CARD.y / 2.0;
         vec![
             from,
             pos2(from.x, bus),
@@ -617,10 +646,8 @@ pub fn route(parent: Pos2, child: Pos2, stacked: bool, trunk: Option<Trunk>) -> 
 /// other card: bottom to top when one is clearly below the other, top to
 /// bottom when above, else side to side with the bend halfway across.
 /// Cards on top of each other get a straight line between their middles.
-pub fn route_free(parent: Pos2, child: Pos2) -> Vec<Pos2> {
+pub fn route_free(p: Rect, c: Rect) -> Vec<Pos2> {
     const CLEAR: f32 = 12.0;
-    let p = Rect::from_min_size(parent, CARD);
-    let c = Rect::from_min_size(child, CARD);
     let vertical = |from: Pos2, to: Pos2| {
         let mid = (from.y + to.y) / 2.0;
         if (to.x - from.x).abs() < 0.5 {
@@ -655,9 +682,7 @@ pub fn route_free(parent: Pos2, child: Pos2) -> Vec<Pos2> {
 /// out of the side facing that card into the gap beside it, along the gap
 /// and out of the box (its bottom, or its top for a card above it), then
 /// round to the card. A straight line would cut across the grid's cards.
-pub fn route_out(inner: Pos2, outer: Pos2, bx: Rect) -> Vec<Pos2> {
-    let p = Rect::from_min_size(inner, CARD);
-    let c = Rect::from_min_size(outer, CARD);
+pub fn route_out(p: Rect, c: Rect, bx: Rect) -> Vec<Pos2> {
     let (from, x) = if c.center().x < p.center().x {
         (p.left_center(), p.left() - GAP_X / 2.0)
     } else {
@@ -684,8 +709,9 @@ pub fn route_out(inner: Pos2, outer: Pos2, bx: Rect) -> Vec<Pos2> {
 /// across (`route_free`), unless that crosses other cards in the Zones grid
 /// one end sits in; then out of the grid along its gaps (`route_out`).
 fn route_placed(
+    map: &Map,
     lay: &Layout,
-    at: &dyn Fn(usize) -> Option<Pos2>,
+    at: &dyn Fn(usize) -> Option<Rect>,
     up: usize,
     i: usize,
 ) -> Vec<Pos2> {
@@ -697,20 +723,19 @@ fn route_placed(
     let grid = |k: usize| {
         let g = lay.group.get(k).copied().flatten()?;
         let bx = lay.boxes.get(g).filter(|bx| !bx.tree)?;
-        let r = Rect::from_min_size(at(k)?, CARD);
-        bx.rect.contains_rect(r).then_some((g, bx.rect))
+        bx.rect.contains_rect(at(k)?).then_some((g, bx.rect))
     };
     let crosses = |pts: &[Pos2], g: usize| {
-        let cards: Vec<Rect> = (0..lay.group.len())
+        let cards: Vec<Rect> = (0..lay.group.len().min(map.nodes.len()))
             .filter(|&k| k != up && k != i && lay.group[k] == Some(g))
-            .filter_map(|k| at(k).map(|p| Rect::from_min_size(p, CARD).shrink(1.0)))
+            .filter_map(|k| at(k).map(|r| r.shrink(1.0)))
             .collect();
         pts.windows(2).any(|s| {
             let seg = Rect::from_two_pos(s[0], s[1]);
             cards.iter().any(|r| r.intersects(seg))
         })
     };
-    let outside = |r: Rect, p: Pos2| !r.intersects(Rect::from_min_size(p, CARD));
+    let outside = |r: Rect, c: Rect| !r.intersects(c);
     if let Some((g, r)) = grid(up)
         && outside(r, b)
         && crosses(&direct, g)
@@ -765,6 +790,7 @@ pub fn lines(
     moved: &dyn Fn(usize) -> bool,
 ) -> Vec<Line> {
     let group = |i: usize| lay.group.get(i).copied().flatten();
+    let rect = |i: usize| at(i).map(|p| card_rect(&map.nodes[i], p));
     let mut out = Vec::new();
     let mut trunks: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
     let mut order: Vec<usize> = (0..map.nodes.len()).collect();
@@ -785,11 +811,11 @@ pub fn lines(
             .and_then(|g| lay.boxes.get(g))
             .is_some_and(|b| b.tree);
         let quiet = group(i).is_some() && group(i) == group(up) && !tree && !free;
-        let (Some(a), Some(b)) = (at(up), at(i)) else {
+        let (Some(a), Some(b)) = (rect(up), rect(i)) else {
             continue;
         };
         let pts = if free {
-            route_placed(lay, at, up, i)
+            route_placed(map, lay, &rect, up, i)
         } else {
             route(
                 a,
@@ -807,14 +833,14 @@ pub fn lines(
         });
     }
     for ((up, g), kids) in trunks {
-        let (Some(a), Some(b)) = (at(up), lay.boxes.get(g)) else {
+        let (Some(a), Some(b)) = (rect(up), lay.boxes.get(g)) else {
             continue;
         };
-        let from = pos2(a.x + CARD.x / 2.0, a.y + CARD.y);
+        let from = a.center_bottom();
         let pts = if b.rect.top() > from.y + 8.0 {
             // Below: into the middle of the box's top edge.
             let into = pos2(b.rect.center().x - CARD.x / 2.0, b.rect.top());
-            route(a, into, false, None)
+            route(a, Rect::from_min_size(into, CARD), false, None)
         } else {
             // Beside it (same row): under both boxes and up into its
             // bottom, rather than along the cards' edges.
@@ -861,6 +887,11 @@ mod tests {
         }
     }
 
+    /// A full-size card at `p`.
+    fn card(p: Pos2) -> Rect {
+        Rect::from_min_size(p, CARD)
+    }
+
     fn overlaps(l: &Layout) -> bool {
         let r: Vec<_> = l
             .pos
@@ -891,7 +922,10 @@ mod tests {
         let lines = super::lines(&m, &l, &at, &moved);
         let own = lines.iter().find(|x| x.kids == [3]).expect("its own line");
         assert!(own.into.is_none() && !own.quiet);
-        assert_eq!(own.pts, route_free(at(2).unwrap(), at(3).unwrap()));
+        assert_eq!(
+            own.pts,
+            route_free(card(at(2).unwrap()), card(at(3).unwrap()))
+        );
         let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
         assert_eq!(trunk.map(|t| t.kids.len()), Some(2));
     }
@@ -927,7 +961,7 @@ mod tests {
             })
         };
         // Straight across, it would cut through the switches beside it.
-        assert!(cuts(&route_free(at(sw).unwrap(), left)));
+        assert!(cuts(&route_free(card(at(sw).unwrap()), card(left))));
         let lines = lines(&m, &l, &at, &moved);
         let own = lines.iter().find(|x| x.kids == [ap]).expect("its own line");
         assert!(!cuts(&own.pts), "{:?}", own.pts);
@@ -961,6 +995,57 @@ mod tests {
         assert!(l.size.x < 12.0 * (CARD.x + GAP_X));
         assert!(l.stacked[3]);
         assert!(!l.stacked[a]);
+    }
+
+    #[test]
+    fn client_tiles_stack_compactly_without_overlapping() {
+        // internet → gw → switch with 40 clients and an AP with 3.
+        let mut p = vec![None, Some(0), Some(1), Some(1)];
+        p.extend(std::iter::repeat_n(Some(2), 40));
+        p.extend(std::iter::repeat_n(Some(3), 3));
+        let make = |client: bool| {
+            let mut m = tree(&p);
+            m.nodes[1].zone = Zone::Gateway;
+            m.nodes[3].zone = Zone::Wireless;
+            for n in &mut m.nodes[4..] {
+                n.zone = Zone::Client;
+                n.client = client;
+            }
+            m.fill_sites("Here");
+            m
+        };
+        let m = make(true);
+        let cards = layout_in(&make(false), &|_| true, Mode::Cluster);
+        for mode in Mode::ALL {
+            let l = layout_in(&m, &|_| true, mode);
+            let rects: Vec<Rect> = (0..m.nodes.len())
+                .map(|i| card_rect(&m.nodes[i], l.pos[i].unwrap()))
+                .collect();
+            for (a, ra) in rects.iter().enumerate() {
+                for (b, rb) in rects.iter().enumerate().skip(a + 1) {
+                    assert!(!ra.intersects(rb.shrink(1.0)), "{mode:?}: {a} and {b}");
+                }
+            }
+            for (i, g) in l.group.iter().enumerate() {
+                if let Some(g) = g {
+                    assert!(l.boxes[*g].rect.contains_rect(rects[i]), "{mode:?}: {i}");
+                }
+            }
+            if mode == Mode::Cluster {
+                // Tiles take far less room than full cards would.
+                assert!(
+                    l.size.y < cards.size.y * 0.75,
+                    "{} vs {}",
+                    l.size.y,
+                    cards.size.y
+                );
+                assert_eq!(rects[4].height(), TILE.y);
+                // Each tile's stub meets its middle.
+                let lines = lines(&m, &l, &|i| l.pos[i], &|_| false);
+                let to = lines.iter().find(|x| x.kids == [4]).unwrap();
+                assert_eq!(to.pts.last().unwrap().y, rects[4].center().y);
+            }
+        }
     }
 
     #[test]
@@ -1097,7 +1182,8 @@ mod tests {
 
     #[test]
     fn a_moved_card_is_joined_on_the_side_facing_it() {
-        let p = pos2(0.0, 0.0);
+        let p = card(pos2(0.0, 0.0));
+        let route_free = |p: Rect, c: Pos2| route_free(p, card(c));
         // Below: out of the bottom, into the top.
         let r = route_free(p, pos2(300.0, 300.0));
         assert_eq!(r[0], pos2(CARD.x / 2.0, CARD.y));
@@ -1130,7 +1216,12 @@ mod tests {
     fn routes_are_orthogonal() {
         for stacked in [false, true] {
             for trunk in [None, Some((-12.0, 400.0))] {
-                let r = route(pos2(0.0, 0.0), pos2(300.0, 428.0), stacked, trunk);
+                let r = route(
+                    card(pos2(0.0, 0.0)),
+                    Rect::from_min_size(pos2(300.0, 428.0), TILE),
+                    stacked,
+                    trunk,
+                );
                 for s in r.windows(2) {
                     assert!(s[0].x == s[1].x || s[0].y == s[1].y);
                 }

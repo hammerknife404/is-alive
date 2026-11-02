@@ -616,7 +616,7 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A UniFi backup** (in Config Export) | The real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless |
 | **+ a SonicWall export** | The firewall as the gateway, matched by its MAC addresses; a tech support report adds the switches and APs it heard on each port |
 | **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
-| **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings; a sweep of the same network marks which devices answered |
+| **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered, and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized) |
 
 A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps.
 
@@ -625,7 +625,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | Control | What it does |
 |---|---|
 | **Search** | Find a card by name, IP, MAC or vendor; **Enter** selects the first match |
-| **Clients: Off / Some / All** | End devices: **Off** puts a count on each switch or AP; **Some** shows up to 10 under each and folds the rest into a **+N more** card; **All** gives every client its own card |
+| **Clients: Off / Some / More / All** | End devices, drawn as small tiles: **Off** shows none; **Some** shows up to 10 under each switch or AP (fewer on a big map) and folds the rest into a **+N more** card; **More** up to 30, on a map of up to 400 cards; **All** gives every client its own card. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |

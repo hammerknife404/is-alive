@@ -64,8 +64,10 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], lay: &Layout, moved: &[bool], dar
         ("#f6f7f9", "#ffffff", "#d2d6dc", "#1d2128", "#69707c")
     };
     let mut b = Rect::NOTHING;
-    for p in pos.iter().flatten() {
-        b = b.union(Rect::from_min_size(*p, CARD));
+    for (n, p) in map.nodes.iter().zip(pos) {
+        if let Some(p) = p {
+            b = b.union(layout::card_rect(n, *p));
+        }
     }
     for g in boxes.iter() {
         b = b.union(g.rect);
@@ -177,6 +179,9 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], lay: &Layout, moved: &[bool], dar
             role(n.zone)
         };
         let (x, y) = (p.x, p.y);
+        // A client is a tile: its name and address, nothing else.
+        let size = layout::card_size(n);
+        let tile = size.y < CARD.y;
         // A pinned card missing from the latest data: dashed, in red.
         let (edge, dash) = if n.gone {
             (accent.as_str(), r#" stroke-dasharray="6 4""#)
@@ -186,36 +191,39 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], lay: &Layout, moved: &[bool], dar
         let _ = writeln!(
             s,
             r#"<g><rect x="{x:.1}" y="{y:.1}" width="{}" height="{}" rx="7" fill="{card}" stroke="{edge}"{dash}/>"#,
-            CARD.x, CARD.y
+            size.x, size.y
         );
         let _ = writeln!(
             s,
             r#"<rect x="{x:.1}" y="{y:.1}" width="4" height="{}" rx="2" fill="{accent}"/>"#,
-            CARD.y
+            size.y
         );
-        let _ = writeln!(
-            s,
-            r#"<text x="{:.1}" y="{:.1}" font-size="9.5" font-family="Consolas, Menlo, monospace" fill="{weak}">{}</text>"#,
-            x + 12.0,
-            y + 17.0,
-            esc(&n.kind)
-        );
-        for (k, l) in wrap(&n.label, 26, 2).iter().enumerate() {
+        if !tile {
+            let _ = writeln!(
+                s,
+                r#"<text x="{:.1}" y="{:.1}" font-size="9.5" font-family="Consolas, Menlo, monospace" fill="{weak}">{}</text>"#,
+                x + 12.0,
+                y + 17.0,
+                esc(&n.kind)
+            );
+        }
+        let (top, rows) = if tile { (y + 20.0, 1) } else { (y + 34.0, 2) };
+        let label = wrap(&n.label, 26, rows);
+        for (k, l) in label.iter().enumerate() {
             let _ = writeln!(
                 s,
                 r#"<text x="{:.1}" y="{:.1}" font-size="13" font-weight="600" fill="{text}">{}</text>"#,
                 x + 12.0,
-                y + 34.0 + k as f32 * 16.0,
+                top + k as f32 * 16.0,
                 esc(l)
             );
         }
         if !n.sub.is_empty() {
-            let rows = wrap(&n.label, 26, 2).len().max(1);
             let _ = writeln!(
                 s,
                 r#"<text x="{:.1}" y="{:.1}" font-size="10.5" font-family="Consolas, Menlo, monospace" fill="{accent}">{}</text>"#,
                 x + 12.0,
-                y + 34.0 + rows as f32 * 16.0,
+                top + label.len().max(1) as f32 * 16.0,
                 esc(&n.sub)
             );
         }
@@ -225,7 +233,7 @@ pub fn render(map: &Map, pos: &[Option<Pos2>], lay: &Layout, moved: &[bool], dar
                 .and_then(|u| u.2.as_deref())
                 .into_iter()
                 .chain(n.chips.iter().map(String::as_str))
-                .filter(|c| !(sites && n.site.as_deref() == Some(*c)));
+                .filter(|c| !(sites && n.site.as_deref() == Some(*c)) && !tile);
         let mut cx = x + 12.0;
         for c in chips {
             let cw = 10.0 + 5.6 * c.chars().count() as f32;
@@ -345,6 +353,34 @@ mod tests {
         moved[trunk.kids[0]] = true;
         let dragged = render(&m, &l.pos, &l, &moved, true);
         assert!(dragged.contains(&format!(">×{}<", trunk.kids.len() - 1)));
+    }
+
+    #[test]
+    fn clients_export_as_tiles() {
+        let host = |ip: &str, name: &str| Seen {
+            ip: ip.parse().unwrap(),
+            mac: None,
+            name: Some(name.into()),
+            rtt: Some(1.0),
+            open: vec![],
+        };
+        let m = build(&Input {
+            sweep: vec![host("10.0.0.9", "laptop"), host("10.0.0.10", "desktop")],
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            clients: crate::map::Clients::All,
+            ..Default::default()
+        });
+        let l = crate::map::layout::layout_in(&m, &|_| true, crate::map::layout::Mode::Cluster);
+        let s = render(&m, &l.pos, &l, &vec![false; m.nodes.len()], false);
+        let tile = format!(r#"height="{}""#, layout::TILE.y);
+        // A tile each, with its name and address but no kind line.
+        assert_eq!(
+            s.matches(&format!(r#"width="{}" {tile}"#, layout::TILE.x))
+                .count(),
+            2
+        );
+        assert!(s.contains(">laptop<") && s.contains(">10.0.0.9<"));
+        assert!(!s.contains(">HOST<"));
     }
 
     #[test]

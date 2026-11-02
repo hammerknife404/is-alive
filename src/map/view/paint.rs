@@ -300,7 +300,7 @@ impl MapView {
         let mut pulse = false;
         for i in self.stack() {
             let Some(s) = at(i) else { continue };
-            let r = Rect::from_min_size(s, CARD * z);
+            let r = Rect::from_min_size(s, layout::card_size(&self.map.nodes[i]) * z);
             if !r.intersects(rect) {
                 continue;
             }
@@ -457,7 +457,12 @@ impl MapView {
             let inner = r.width() - pad * 2.0 - 2.0 * z;
             if inner >= small.size * 0.55 * 5.0 && r.height() >= small.size * 1.3 {
                 let g = text(&n.label, small, strong, 1, inner);
-                let y = r.center().y - g.size().y / 2.0;
+                // Up top when the +N chip takes the bottom right corner.
+                let y = if self.chip_room(i) > 0.0 {
+                    r.min.y + 2.0
+                } else {
+                    r.center().y - g.size().y / 2.0
+                };
                 p.galley(pos2(r.min.x + pad + 2.0 * z, y), g, strong);
             }
             if !n.flags.is_empty() {
@@ -493,10 +498,13 @@ impl MapView {
         let uplink = n.up.as_ref().and_then(|u| u.2.as_deref());
         // In Sites the box already names the site.
         let boxed = self.mode() == Mode::Sites;
+        // A +N chip on the card stands in for its count of clients.
+        let counted = self.has_more_chip(i);
         let chips: Vec<&str> = uplink
             .into_iter()
             .chain(n.chips.iter().map(String::as_str))
             .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
+            .filter(|c| !(counted && super::super::is_count_chip(c)))
             .collect();
         let chip_h = row(&chip_f) + 4.0;
         let show_chips = !chips.is_empty() && need + chip_h + 2.0 <= room;
@@ -517,11 +525,19 @@ impl MapView {
             p.galley(pos2(r.min.x + pad, y), g, weak);
             y += kind_h;
         }
+        // The +N and − chips sit in the bottom right corner: the bottom
+        // line stops short of them.
+        let chip_room = self.chip_room(i);
+        if chip_room > 0.0 && !show_sub && !show_chips {
+            let rows = label.rows.len();
+            label = text(&n.label, label_f, strong, rows, inner - badge - chip_room);
+        }
         let h = label.size().y;
         p.galley(pos2(r.min.x + pad, y), label, strong);
         y += h;
         if show_sub {
-            let g = text(&n.sub, sub_f, accent.gamma_multiply(a), 1, inner);
+            let room = if show_chips { 0.0 } else { chip_room };
+            let g = text(&n.sub, sub_f, accent.gamma_multiply(a), 1, inner - room);
             p.galley(pos2(r.min.x + pad, y), g, accent);
         }
         if show_chips {
@@ -530,7 +546,7 @@ impl MapView {
             for c in chips {
                 let g = text(c, chip_f.clone(), accent.gamma_multiply(a), 1, inner);
                 let w = g.size().x + 10.0;
-                if x + w > r.max.x - pad + 4.0 {
+                if x + w > r.max.x - pad + 4.0 - chip_room {
                     break;
                 }
                 let chip = Rect::from_min_max(pos2(x, cy - chip_h), pos2(x + w, cy));
