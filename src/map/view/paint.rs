@@ -423,12 +423,17 @@ impl MapView {
         } else {
             None
         };
+        // The site-name filter skips the drawn chip: a site called
+        // "drawn" mustn't make a drawn card look discovered.
         let chips: Vec<&str> = drawn
             .into_iter()
-            .chain(uplink)
-            .chain(n.chips.iter().map(String::as_str))
-            .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
-            .filter(|c| !(counted && super::super::is_count_chip(c)))
+            .chain(
+                uplink
+                    .into_iter()
+                    .chain(n.chips.iter().map(String::as_str))
+                    .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
+                    .filter(|c| !(counted && super::super::is_count_chip(c))),
+            )
             .collect();
         let chip_h = row(&chip_f) + 4.0;
         let show_chips = !chips.is_empty() && need + chip_h + 2.0 <= room;

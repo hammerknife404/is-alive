@@ -413,7 +413,8 @@ impl MapTabs {
             let what = if changed {
                 "Changed since it was saved: right-click › Update with current keeps the changes"
             } else {
-                "A saved map. Right-click to rename, update, duplicate, export or delete it"
+                "A saved map. Right-click to mark what it is, rename, update, duplicate, export \
+                 or delete it"
             };
             let note = purpose_note(purpose, faults)
                 .map(|n| format!("{n}\n"))
