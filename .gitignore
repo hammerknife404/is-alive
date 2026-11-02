@@ -3,3 +3,6 @@
 # Real site files for local testing: never committed.
 dev-only/
 __pycache__/
+
+# A manual-shots.sh run that failed, kept to look at.
+docs/manual/img/.incoming/

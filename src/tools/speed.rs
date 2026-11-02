@@ -827,6 +827,22 @@ loss is less reliable that way."
         self.job.is_some()
     }
 
+    /// Why the last run has no result, if it hasn't: its error, or a
+    /// direction it ran that ended without one (a 429, a web filter).
+    pub fn error(&self) -> Option<String> {
+        if let Some(e) = &self.err {
+            return Some(e.clone());
+        }
+        let down = self.down && self.pick != Pick::Upload;
+        let up = self.up && self.pick != Pick::File;
+        let missing = (down && self.results[Phase::Down.i()].is_none())
+            || (up && self.results[Phase::Up.i()].is_none());
+        missing.then(|| match self.warns.as_slice() {
+            [] => "a direction ended without a result".to_string(),
+            w => w.join(" "),
+        })
+    }
+
     /// Start a test with the current settings (also the full scan's).
     pub fn run(&mut self, ctx: &egui::Context) {
         let server = match self.pick {

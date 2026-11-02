@@ -202,6 +202,11 @@ impl NotesTool {
         self.text.trim().is_empty()
     }
 
+    /// Editor and preview side by side (the user manual's screenshot).
+    pub fn show_split(&mut self) {
+        self.view = View::Split;
+    }
+
     /// The notes as they may leave this machine.
     pub fn sanitized(&self) -> (String, Vec<Hit>) {
         let h = hash_with(&self.text, &self.ov);
