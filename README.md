@@ -33,7 +33,12 @@ Built for sites with regulated data. Nothing is sent unless you run something, a
 
 ## If the window doesn't open
 
-is-alive draws its window with OpenGL. Where that can't start (a virtual machine without 3D acceleration, a missing graphics driver) it starts itself again with Direct3D 12 on Windows, which works without a graphics card, or Vulkan on Linux, and keeps using that. If nothing works it says why in a message box. Each start is written to `startup.log`: `%APPDATA%\is-alive\startup.log` on Windows, `~/.config/is-alive/startup.log` on Linux. To choose yourself (also if the window opens but stays blank), start it once from a command prompt or a shortcut with `is-alive.exe --renderer=wgpu` (Direct3D or Vulkan; kept for later starts) or `--renderer=glow` (OpenGL, the default), or set `IS_ALIVE_RENDERER`.
+- **"Windows protected your PC"** (a blue SmartScreen box): click **More info**, then **Run anyway**. Windows shows it for new programs that aren't from a large publisher.
+- **Nothing happens on Windows:** right-click `is-alive.exe` → **Properties**, tick **Unblock** at the bottom (if it's there), then **OK**. Windows may block files downloaded from the internet; some antivirus software also holds back new programs, so check its quarantine.
+- **No graphics driver, or a virtual machine without 3D:** is-alive draws its window with OpenGL. Where that can't start it starts itself again with Direct3D 12 on Windows, which works without a graphics card, or Vulkan on Linux, and keeps using that. If nothing works it says why in a message box.
+- **To choose yourself** (also if the window opens but stays blank), start it once from a command prompt or a shortcut with `is-alive.exe --renderer=wgpu` (Direct3D or Vulkan; kept for later starts) or `--renderer=glow` (OpenGL, the default), or set `IS_ALIVE_RENDERER`.
+
+Each start is written to `startup.log`: `%APPDATA%\is-alive\startup.log` on Windows (paste that into Explorer's address bar), `~/.config/is-alive/startup.log` on Linux. Attach it to an [issue](https://github.com/hammerknife404/is-alive/issues) if it still won't start.
 
 ## Build
 
