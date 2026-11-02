@@ -216,13 +216,16 @@ impl App {
     }
 
     /// The screenshot tour (IS_ALIVE_SHOTS): every tab, then the Map with a
-    /// card selected, then Settings.
+    /// card selected, then Settings; or the user manual's pictures.
     fn shots_step(&mut self, ctx: &egui::Context) {
+        if self.shots.as_ref().is_some_and(shots::Shots::manual) {
+            return self.manual_shots_step(ctx);
+        }
         if let Some(s) = &mut self.shots {
             // Every tab, then the Map again with a card selected.
             let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
             names.extend(["Map panel", "Settings"]);
-            match s.step(ctx, &names) {
+            match s.step(ctx, &names, true) {
                 Some(i) if i < TABS.len() => self.tab = TABS[i].0,
                 Some(i) if i == TABS.len() => {
                     self.tab = crate::Tab::Map;

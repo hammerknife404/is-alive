@@ -2,7 +2,7 @@
 
 > **Attending a demo?** Start with the plain-language **[follow-along guide](FOLLOW-ALONG.md)**: download, open, and try it step by step. No technical background needed.
 
-**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it.
+**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it. For one document to read through or print, the **[user manual](docs/manual/MANUAL.md)** covers every tab and control with worked examples, troubleshooting and a glossary.
 
 A native network tester for site visits, written in Rust. One portable `.exe` on Windows, one `.AppImage` on Linux: no installer, no admin rights. **[Download the latest release](https://github.com/hammerknife404/is-alive/releases/latest).**
 
@@ -40,7 +40,7 @@ packaging/linux/build-appimage.sh
 # -> target/appimage/is-alive-x86_64.AppImage
 ```
 
-Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes).
+Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes). The user manual's screenshots are remade for full releases (x.y.0) only, with `scripts/manual-shots.sh` (see the manual's [last chapter](docs/manual/MANUAL.md#22-updating-this-manual)).
 
 ## License
 

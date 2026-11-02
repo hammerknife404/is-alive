@@ -147,4 +147,4 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 ## Questions after the demo?
 
-Ask the presenter, or open the app again later: everything in this guide works the same on your own. **Help** at the bottom right opens the wiki, which explains every tab.
+Ask the presenter, or open the app again later: everything in this guide works the same on your own. **Help** at the bottom right opens the wiki, which explains every tab. The [user manual](docs/manual/MANUAL.md) goes further: every control on every tab, worked examples, and what to do when something doesn't look right.

@@ -254,6 +254,13 @@ impl AdvancedTool {
         self.job.is_some()
     }
 
+    /// Check `domain` with the resolver and DKIM selectors as they are
+    /// (the user manual's screenshot tour).
+    pub fn run(&mut self, ctx: &egui::Context, domain: &str) {
+        self.domain = domain.into();
+        self.start(ctx);
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.took = None;
