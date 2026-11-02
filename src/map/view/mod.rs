@@ -2368,7 +2368,7 @@ mod tests {
         let at = middle(&v, 4);
         let rc = click(&ctx, &mut v, at, right);
         assert!(words(&rc.canvas).contains(&"2 selected cards".to_string()));
-        assert_eq!(v.menu_cards(), [4, 7], "both outlined");
+        assert_eq!(v.menu_cards(), [4, 7], "acts on both");
         // Esc closes it and keeps the selection.
         frame(&ctx, &mut v, vec![]);
         let esc = egui::Event::Key {
@@ -2387,7 +2387,7 @@ mod tests {
         let menu = click(&ctx, &mut v, shown.buttons[&4].center(), left);
         assert!(menu.canvas.is_empty());
         assert_eq!(words(&menu.panel), words(&rc.canvas));
-        assert_eq!(v.menu_cards(), [4, 7], "both outlined");
+        assert_eq!(v.menu_cards(), [4, 7], "acts on both");
         assert_eq!(v.menu, Some(Menu::Panel("n4".into())));
         // Esc closes it too, the selection kept.
         frame(&ctx, &mut v, vec![esc]);

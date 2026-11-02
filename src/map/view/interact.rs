@@ -145,12 +145,14 @@ impl MapView {
             && !matches!(menu, Menu::Panel(_))
         {
             let shown = resp.context_menu(|ui| match &menu {
-                Menu::Card(id) | Menu::Panel(id) => match self.index(id) {
+                Menu::Card(id) => match self.index(id) {
                     Some(i) => self.card_menu(ui, i),
                     // Gone in a rebuild: nothing left to act on.
                     None => ui.close(),
                 },
                 Menu::Background => self.background_menu(ui, rect),
+                // Left to the panel, above; never shown here.
+                Menu::Panel(_) => ui.close(),
             });
             if shown.is_none() {
                 self.menu = None;

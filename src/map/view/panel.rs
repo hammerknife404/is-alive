@@ -172,11 +172,16 @@ impl MapView {
     }
 
     /// Each card's ☰ in the panel: the card's right-click menu, the very
-    /// same one (on one of several selected cards it acts on them all, and
-    /// they're outlined on the canvas while it's open).
+    /// same one (on one of several selected cards it acts on them all).
     pub(super) fn card_menus(&mut self, menus: Vec<(usize, egui::Response)>) {
         let mut open = None;
         for (i, button) in menus {
+            // Scrolled out of the panel: the menu would hang loose, with
+            // nothing to show which card it's for, so it closes.
+            if !button.interact_rect.is_positive() {
+                egui::Popup::close_id(&button.ctx, egui::Popup::default_response_id(&button));
+                continue;
+            }
             if egui::Popup::menu(&button)
                 .show(|ui| self.card_menu(ui, i))
                 .is_some()
@@ -324,6 +329,10 @@ impl MapView {
                         for dy in [-3.5, 0.0, 3.5] {
                             ui.painter().hline(c.x - 5.0..=c.x + 5.0, c.y + dy, stroke);
                         }
+                        // Its name for screen readers, as the lines aren't text.
+                        b.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Card menu")
+                        });
                         menu = Some(b.on_hover_text("Menu (same as right-clicking the card)"));
                     });
                 });

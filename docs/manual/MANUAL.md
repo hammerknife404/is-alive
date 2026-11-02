@@ -681,7 +681,7 @@ Each item shows only when it applies, with how many cards it takes. Selections m
 
 **Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths).
 
-**☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). While either menu is open, the cards it acts on are outlined on the map. Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
+**☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
 
 ### The panel (right)
 
