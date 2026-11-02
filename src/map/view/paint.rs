@@ -415,8 +415,17 @@ impl MapView {
         let boxed = self.mode() == Mode::Sites;
         // A +N chip on the card stands in for its count of clients.
         let counted = self.has_more_chip(i);
-        let chips: Vec<&str> = uplink
+        // Drawn by hand (a plan, a training map): said first.
+        let drawn = if n.drawn {
+            Some("drawn")
+        } else if n.drawn_up {
+            Some("drawn link")
+        } else {
+            None
+        };
+        let chips: Vec<&str> = drawn
             .into_iter()
+            .chain(uplink)
             .chain(n.chips.iter().map(String::as_str))
             .filter(|c| !(boxed && n.site.as_deref() == Some(*c)))
             .filter(|c| !(counted && super::super::is_count_chip(c)))

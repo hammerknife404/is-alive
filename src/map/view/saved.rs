@@ -7,6 +7,23 @@
 //! Read back defensively: a size cap, limits on how many cards, findings
 //! and strings, every link checked, and a file from a newer is-alive (a
 //! higher format version) refused with a message rather than misread.
+//!
+//! What a map is, so a plan or a practice map is never taken for what was
+//! found on a network:
+//! - `"purpose"`: `"as-found"` (discovered: a sweep, backups, a
+//!   /mapnetwork map), `"plan"` (drawn by hand: a network to build) or
+//!   `"training"` (made up for practice). Always written; a file without
+//!   one is as found (the first saved maps had none). A purpose this
+//!   is-alive doesn't know refuses the file rather than calling it as
+//!   found.
+//! - `"drawn": true` on a card: drawn by a person, not discovered. A
+//!   card's link up is kept on the card (`"up"`), so `"up": {"drawn":
+//!   true}` is a drawn link. Left out when false.
+//! - `"faults"`: a training map's answer key, a list of `{"card": id or
+//!   null, "title", "detail"}`, at most 200. Never shown on the map (only
+//!   how many). On any other purpose the file is refused: an answer key
+//!   says it's a training map, and one labelled as found would pass its
+//!   planted faults off as evidence.
 
 use super::history::Edits;
 use super::*;
@@ -25,6 +42,8 @@ const FILE_MAX: u64 = 32 << 20;
 /// Most cards and findings on a map, as /mapnetwork maps are limited.
 const NODES_MAX: usize = 10_000;
 const FINDINGS_MAX: usize = 10_000;
+/// Most faults in a training map's answer key.
+const FAULTS_MAX: usize = 200;
 /// Most items in one card's list (chips, details, flags, ports).
 const LIST_MAX: usize = 1_000;
 /// Most cards left out of the drawing that a map remembers.
@@ -39,6 +58,71 @@ pub const FILES_MAX: usize = 200;
 /// How far from the middle a dragged card may sit.
 const FAR: f32 = 1.0e6;
 
+/// What a saved map is: what was found, or not evidence at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Purpose {
+    /// Discovered: a sweep, backups, a /mapnetwork map.
+    #[default]
+    AsFound,
+    /// Drawn by hand: a network to build or change.
+    Plan,
+    /// Made up for practice, with an answer key.
+    Training,
+}
+
+impl Purpose {
+    pub const ALL: [Purpose; 3] = [Purpose::AsFound, Purpose::Plan, Purpose::Training];
+
+    /// Its name in the file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Purpose::AsFound => "as-found",
+            Purpose::Plan => "plan",
+            Purpose::Training => "training",
+        }
+    }
+
+    fn of(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.key() == k)
+    }
+
+    /// Its name in the sub-tab's menu.
+    pub fn name(self) -> &'static str {
+        match self {
+            Purpose::AsFound => "As found",
+            Purpose::Plan => "Plan",
+            Purpose::Training => "Training",
+        }
+    }
+
+    /// The tag on its sub-tab; none for a map as found.
+    pub fn tag(self) -> Option<&'static str> {
+        match self {
+            Purpose::AsFound => None,
+            p => Some(p.name()),
+        }
+    }
+
+    /// What the map says it is, above its summary; nothing for a map as
+    /// found.
+    pub fn caption(self) -> Option<&'static str> {
+        match self {
+            Purpose::AsFound => None,
+            Purpose::Plan => Some("Plan — drawn by hand, not discovered"),
+            Purpose::Training => Some("Training map — made up for practice, not discovered"),
+        }
+    }
+}
+
+/// One fault in a training map's answer key. Never drawn on the map.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fault {
+    /// The card it's on, if one.
+    pub card: Option<String>,
+    pub title: String,
+    pub detail: String,
+}
+
 /// One saved map: what it shows and how the user left it.
 pub struct Snapshot {
     pub name: String,
@@ -49,6 +133,9 @@ pub struct Snapshot {
     pub edits: Edits,
     /// Pan and zoom, or None to fit the whole map.
     pub camera: Option<(Vec2, f32)>,
+    pub purpose: Purpose,
+    /// The answer key (a training map only).
+    pub faults: Vec<Fault>,
 }
 
 impl std::fmt::Debug for Snapshot {
@@ -187,12 +274,13 @@ pub fn to_json(s: &Snapshot) -> String {
     let camera = s
         .camera
         .map(|(pan, zoom)| json!({"pan": [pan.x, pan.y], "zoom": zoom}));
-    let doc = json!({
+    let mut doc = json!({
         "format": FORMAT,
         "version": VERSION,
         "name": s.name,
         "created": s.created,
         "app": env!("CARGO_PKG_VERSION"),
+        "purpose": s.purpose.key(),
         "map": {
             "title": s.map.title,
             "summary": s.map.summary,
@@ -212,11 +300,20 @@ pub fn to_json(s: &Snapshot) -> String {
             "camera": camera,
         },
     });
+    // Only a training map carries an answer key (one on another map
+    // wouldn't read back).
+    if s.purpose == Purpose::Training && !s.faults.is_empty() {
+        doc["faults"] = s
+            .faults
+            .iter()
+            .map(|f| json!({"card": f.card, "title": f.title, "detail": f.detail}))
+            .collect();
+    }
     serde_json::to_string_pretty(&doc).unwrap_or_default()
 }
 
 fn node_json(n: &Node) -> Value {
-    json!({
+    let mut v = json!({
         "id": n.id,
         "zone": zone_key(n.zone),
         "kind": n.kind,
@@ -230,13 +327,23 @@ fn node_json(n: &Node) -> Value {
         "client": n.client,
         "seen_by": n.seen_by,
         "open": n.open,
-        "up": n.up.as_ref().map(|(p, l, port)| json!({
-            "parent": p,
-            "link": link_key(*l),
-            "port": port,
-        })),
+        "up": n.up.as_ref().map(|(p, l, port)| {
+            let mut up = json!({
+                "parent": p,
+                "link": link_key(*l),
+                "port": port,
+            });
+            if n.drawn_up {
+                up["drawn"] = json!(true);
+            }
+            up
+        }),
         "site": n.site,
-    })
+    });
+    if n.drawn {
+        v["drawn"] = json!(true);
+    }
+    v
 }
 
 /// A string field, cleaned of hidden characters and cut to `max`.
@@ -288,6 +395,16 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
              update is-alive to open it"
         ));
     }
+    let purpose = match doc.get("purpose") {
+        None => Purpose::AsFound,
+        Some(p) => p.as_str().and_then(Purpose::of).ok_or_else(|| {
+            format!(
+                "made for a purpose this is-alive doesn't know: {} (a newer is-alive may \
+                 open it)",
+                input::line(&p.to_string(), 60)
+            )
+        })?,
+    };
     let m = doc.get("map").ok_or("no map in the file")?;
     let nodes = m
         .get("nodes")
@@ -396,6 +513,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .contains(&zoom)
             .then_some((pan.to_vec2(), zoom))
     });
+    let faults = faults_of(&doc, purpose, &ids)?;
     let name = text(&doc, "name", NAME_MAX);
     Ok(Snapshot {
         name: if name.is_empty() {
@@ -407,7 +525,57 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         map,
         edits,
         camera,
+        purpose,
+        faults,
     })
+}
+
+/// A training map's answer key: at most `FAULTS_MAX`, each cleaned and
+/// cut, a card that isn't on the map forgotten. On any other map, refused.
+fn faults_of(doc: &Value, purpose: Purpose, ids: &HashSet<&str>) -> Result<Vec<Fault>, String> {
+    let list = match doc.get("faults") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err("\"faults\" isn't a list".into()),
+    };
+    if list.is_empty() {
+        return Ok(Vec::new());
+    }
+    if purpose != Purpose::Training {
+        return Err(format!(
+            "an answer key (\"faults\") on a map that says it's {}: only a training map \
+             has one",
+            match purpose {
+                Purpose::Plan => "a plan",
+                _ => "as found",
+            }
+        ));
+    }
+    if list.len() > FAULTS_MAX {
+        return Err(format!(
+            "{} faults in the answer key (at most {FAULTS_MAX})",
+            list.len()
+        ));
+    }
+    let mut out = Vec::new();
+    for f in list {
+        if !f.is_object() {
+            return Err("a fault that isn't an object".into());
+        }
+        let fault = Fault {
+            card: f
+                .get("card")
+                .and_then(Value::as_str)
+                .map(|c| input::line(c, ID_MAX))
+                .filter(|c| ids.contains(c.as_str())),
+            title: text(f, "title", TEXT_MAX),
+            detail: text(f, "detail", TEXT_MAX),
+        };
+        if fault.card.is_some() || !fault.title.is_empty() || !fault.detail.is_empty() {
+            out.push(fault);
+        }
+    }
+    Ok(out)
 }
 
 fn node_of(v: &Value) -> Result<Node, String> {
@@ -418,6 +586,11 @@ fn node_of(v: &Value) -> Result<Node, String> {
     if id.is_empty() {
         return Err("a card with no id".into());
     }
+    let drawn_up = v
+        .get("up")
+        .and_then(|u| u.get("drawn"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let up = match v.get("up") {
         Some(u) if u.is_object() => Some((
             u.get("parent")
@@ -470,6 +643,8 @@ fn node_of(v: &Value) -> Result<Node, String> {
             .and_then(Value::as_str)
             .map(|s| input::line(s, TEXT_MAX))
             .filter(|s| !s.is_empty()),
+        drawn: v.get("drawn").and_then(Value::as_bool).unwrap_or(false),
+        drawn_up,
         // Not read: a gone card is one a rebuild found missing, and a
         // saved map is never rebuilt from data (a card marked gone in a
         // file would be taken out as if let go, its children cut loose).
@@ -636,6 +811,8 @@ impl MapView {
             side: true,
             follow: s.camera.is_none(),
             frozen: Some(Box::new(s.map)),
+            purpose: s.purpose,
+            faults: s.faults,
             ..Default::default()
         };
         v.apply_edits(&s.edits);
@@ -655,6 +832,8 @@ impl MapView {
             map: full,
             edits: self.edits(),
             camera: (!self.follow && self.zoom > 0.0).then_some((self.pan, self.zoom)),
+            purpose: self.purpose,
+            faults: self.faults.clone(),
         }
     }
 
@@ -731,6 +910,8 @@ pub(super) fn sample() -> Snapshot {
         map,
         edits,
         camera: Some((vec2(10.0, 20.0), 0.75)),
+        purpose: Purpose::AsFound,
+        faults: Vec::new(),
     }
 }
 
@@ -861,6 +1042,197 @@ mod tests {
             "\"pinned\": [\n      \"nope\"",
         );
         assert!(from_json(&text).unwrap().edits.kept.is_empty());
+    }
+
+    /// A training map: a drawn card, a drawn link, and an answer key.
+    fn training() -> Snapshot {
+        let mut s = sample();
+        s.purpose = Purpose::Training;
+        s.map.nodes[2].drawn = true;
+        s.map.nodes[4].drawn_up = true;
+        s.faults = vec![
+            Fault {
+                card: Some("sw".into()),
+                title: "Loop on port 7".into(),
+                detail: "Both ends of the patch lead plug into sw".into(),
+            },
+            Fault {
+                card: None,
+                title: "Guest VLAN reaches the LAN".into(),
+                detail: String::new(),
+            },
+        ];
+        s
+    }
+
+    #[test]
+    fn what_a_map_is_reads_back_as_written() {
+        for p in Purpose::ALL {
+            let mut s = sample();
+            s.purpose = p;
+            let text = to_json(&s);
+            assert!(text.contains(&format!("\"purpose\": \"{}\"", p.key())));
+            let r = from_json(&text).unwrap();
+            assert_eq!(r.purpose, p);
+            assert!(r.faults.is_empty());
+            assert_eq!(to_json(&r), text);
+        }
+        // Drawn cards and links, and the answer key.
+        let s = training();
+        let text = to_json(&s);
+        let r = from_json(&text).unwrap();
+        assert_eq!(r.purpose, Purpose::Training);
+        let drawn: Vec<(bool, bool)> = r.map.nodes.iter().map(|n| (n.drawn, n.drawn_up)).collect();
+        assert_eq!(
+            drawn,
+            [
+                (false, false),
+                (false, false),
+                (true, false),
+                (false, false),
+                (false, true)
+            ]
+        );
+        assert_eq!(r.faults, s.faults);
+        assert_eq!(to_json(&r), text);
+        // Not drawn: left out of the file.
+        let plain = to_json(&sample());
+        assert!(!plain.contains("drawn") && !plain.contains("faults"));
+    }
+
+    #[test]
+    fn a_map_saved_before_purposes_is_as_found() {
+        let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
+        doc.as_object_mut().unwrap().remove("purpose");
+        let r = from_json(&doc.to_string()).unwrap();
+        assert_eq!(r.purpose, Purpose::AsFound);
+    }
+
+    #[test]
+    fn a_purpose_it_doesnt_know_is_refused_not_taken_as_found() {
+        for bad in [
+            json!("exam"),
+            json!(""),
+            json!(3),
+            json!(null),
+            json!(["plan"]),
+        ] {
+            let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
+            doc["purpose"] = bad.clone();
+            let e = from_json(&doc.to_string()).unwrap_err();
+            assert!(
+                e.starts_with("made for a purpose this is-alive doesn't know: "),
+                "{bad}: {e}"
+            );
+        }
+        // Shown cleaned and cut.
+        let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
+        doc["purpose"] = json!(format!("a\u{202E}b{}", "x".repeat(500)));
+        let e = from_json(&doc.to_string()).unwrap_err();
+        assert!(
+            e.contains("\"ab") && !e.contains('\u{202E}') && e.len() < 200,
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn an_answer_key_is_capped_cleaned_and_only_on_a_training_map() {
+        let doc = |faults: Value, purpose: &str| {
+            let mut d: Value = serde_json::from_str(&to_json(&training())).unwrap();
+            d["faults"] = faults;
+            d["purpose"] = json!(purpose);
+            d.to_string()
+        };
+        let one = json!([{"card": "sw", "title": "t", "detail": "d"}]);
+        // On a map as found or a plan: refused, never quietly dropped.
+        for p in ["as-found", "plan"] {
+            let e = from_json(&doc(one.clone(), p)).unwrap_err();
+            assert!(e.contains("only a training map"), "{e}");
+        }
+        // An empty one is no answer key.
+        assert!(from_json(&doc(json!([]), "as-found")).is_ok());
+        // Too many.
+        let many: Vec<Value> = (0..=FAULTS_MAX)
+            .map(|k| json!({"title": format!("f{k}")}))
+            .collect();
+        let e = from_json(&doc(json!(many), "training")).unwrap_err();
+        assert!(e.contains("at most 200"), "{e}");
+        let most: Vec<Value> = (0..FAULTS_MAX)
+            .map(|k| json!({"title": format!("f{k}")}))
+            .collect();
+        assert_eq!(
+            from_json(&doc(json!(most), "training"))
+                .unwrap()
+                .faults
+                .len(),
+            FAULTS_MAX
+        );
+        // Not a list, or a fault that isn't an object.
+        assert!(
+            from_json(&doc(json!("x"), "training"))
+                .unwrap_err()
+                .contains("isn't a list")
+        );
+        assert!(
+            from_json(&doc(json!([1]), "training"))
+                .unwrap_err()
+                .contains("isn't an object")
+        );
+        // Cleaned and cut; a card not on the map forgotten; an empty one dropped.
+        let r = from_json(&doc(
+            json!([
+                {"card": "nope", "title": format!("a\u{202E}b{}", "x".repeat(TEXT_MAX * 2)), "detail": 5},
+                {"card": null},
+                {},
+            ]),
+            "training",
+        ))
+        .unwrap();
+        assert_eq!(r.faults.len(), 1);
+        assert_eq!(r.faults[0].card, None);
+        assert!(r.faults[0].title.starts_with("abx"));
+        assert_eq!(r.faults[0].title.chars().count(), TEXT_MAX);
+        assert_eq!(r.faults[0].detail, "");
+        // Written only on a training map.
+        let mut s = training();
+        s.purpose = Purpose::Plan;
+        assert!(!to_json(&s).contains("faults"));
+    }
+
+    #[test]
+    fn the_answer_key_never_shows_on_the_map() {
+        let s = training();
+        let secrets: Vec<String> = s
+            .faults
+            .iter()
+            .flat_map(|f| [f.title.clone(), f.detail.clone()])
+            .filter(|t| !t.is_empty())
+            .collect();
+        let mut v = MapView::from_saved(s);
+        v.closed.clear();
+        v.refresh_saved(&egui::Context::default());
+        assert_eq!(v.faults.len(), 2, "kept, to be saved again");
+        let mut shown: Vec<String> = v.map.nodes.iter().map(panel::card_text).collect();
+        shown.push(v.map.summary.clone());
+        shown.extend(v.map.findings.iter().map(|f| f.text.clone()));
+        shown.push(v.purpose.caption().unwrap().to_string());
+        for text in &shown {
+            for secret in &secrets {
+                assert!(
+                    !text.contains(secret.as_str()),
+                    "{secret:?} shown in {text:?}"
+                );
+            }
+        }
+        // Drawn cards say so; discovered ones don't.
+        let sw = v.map.nodes.iter().find(|n| n.id == "sw").unwrap();
+        assert!(panel::card_text(sw).contains("Drawn by hand, not discovered"));
+        let nas = v.map.nodes.iter().find(|n| n.id == "nas").unwrap();
+        assert!(panel::card_text(nas).contains("link up was drawn by hand"));
+        let gw = v.map.nodes.iter().find(|n| n.id == "gw").unwrap();
+        assert!(!panel::card_text(gw).contains("rawn"));
+        assert_eq!(Purpose::AsFound.caption(), None);
+        assert_eq!(Purpose::AsFound.tag(), None);
     }
 
     #[test]

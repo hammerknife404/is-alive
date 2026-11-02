@@ -256,6 +256,12 @@ pub struct Node {
     /// Pinned, then missing from the latest data: kept on the map, marked,
     /// for the user to review.
     pub gone: bool,
+    /// Drawn by a person (on a plan or a training map), not discovered.
+    /// Only a saved map's file carries it.
+    pub drawn: bool,
+    /// Its link up was drawn by a person, not discovered (the card itself
+    /// may have been).
+    pub drawn_up: bool,
 }
 
 impl Node {
