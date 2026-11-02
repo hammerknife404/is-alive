@@ -62,6 +62,11 @@ pub struct NotesTool {
     /// The selection (bytes) and how many emoji it holds, as the emoji menu
     /// opened: the editor loses it once the menu has the pointer.
     picker_sel: Option<(Range<usize>, usize)>,
+    /// Emoji were restyled since the emoji menu opened.
+    picker_restyled: bool,
+    /// A selection (characters) to put back once the editor has the
+    /// keyboard again: without it, the editor drops all but the cursor.
+    reselect: Option<Range<usize>>,
 }
 
 /// A text or config file open in the viewer: read-only, never saved or
@@ -155,6 +160,8 @@ impl Default for NotesTool {
             opening: None,
             refocus: false,
             picker_sel: None,
+            picker_restyled: false,
+            reselect: None,
         };
         if unclean {
             notes.write();
@@ -351,8 +358,8 @@ impl NotesTool {
     }
 
     /// Set the emoji in the selection (`sel`, bytes) to `style`, keeping the
-    /// selection; redaction markers' 🔑 are left alone. Returns where the
-    /// selection is now.
+    /// selection (and giving the editor the keyboard back); redaction
+    /// markers' 🔑 are left alone. Returns where the selection is now.
     fn restyle(
         &mut self,
         ctx: &egui::Context,
@@ -364,8 +371,11 @@ impl NotesTool {
         if n == 0 {
             return sel;
         }
+        // Every mark that changes is before the selection's end, once that
+        // is past the marks of an emoji it ends inside.
+        let end = crate::theme::inside_emoji(&self.text, sel.end).map_or(sel.end, |(_, e)| e);
         let a = self.text[..sel.start].chars().count();
-        let b = (self.text[..sel.end].chars().count() + text.chars().count())
+        let b = (self.text[..end].chars().count() + text.chars().count())
             .saturating_sub(self.text.chars().count())
             .max(a);
         self.text = text;
@@ -376,6 +386,8 @@ impl NotesTool {
             CCursor::new(CharIndex(b)),
         )));
         state.store(ctx, id);
+        self.reselect = Some(a..b);
+        self.refocus = true;
         self.changed(ctx.input(|i| i.time));
         widgets::toast(
             format!("{n} emoji restyled: {}", notes_style_name(style)),
@@ -384,13 +396,14 @@ impl NotesTool {
         sel.start..byte_at(&self.text, b)
     }
 
-    /// Backspace and Delete take an emoji and its invisible marks in one
-    /// press: the marks go first, then the TextEdit deletes the emoji.
+    /// Backspace (and Ctrl+H) and Delete take an emoji and its invisible
+    /// marks in one press: the marks go first, then the TextEdit deletes the
+    /// emoji. (Ctrl+Backspace and Ctrl+Delete take them as one word.)
     fn delete_emoji_marks(&mut self, ctx: &egui::Context) {
         let (back, del) = ctx.input(|i| {
             let plain = i.modifiers.is_none();
             (
-                plain && i.key_pressed(Key::Backspace),
+                plain && i.key_pressed(Key::Backspace) || i.modifiers.ctrl && i.key_pressed(Key::H),
                 plain && i.key_pressed(Key::Delete),
             )
         });
@@ -435,23 +448,33 @@ impl NotesTool {
 
     /// A cursor between an emoji and its invisible marks moves past them
     /// (or before the emoji, going left), so arrows step over an emoji in
-    /// one press and nothing is typed between it and its style.
-    fn step_over_emoji_marks(&self, ctx: &egui::Context, out: &egui::text_edit::TextEditOutput) {
-        let Some(r) = out.cursor_range else { return };
-        if r.primary.index != r.secondary.index {
-            return;
-        }
-        let b = byte_at(&self.text, r.primary.index.0);
-        let Some((start, end)) = crate::theme::inside_emoji(&self.text, b) else {
+    /// one press and nothing is typed between it and its style. Either end
+    /// of a selection moves the same way, so an emoji is selected (typed
+    /// over, deleted, cut) with its marks or not at all.
+    fn step_over_emoji_marks(&self, ctx: &egui::Context) {
+        // From memory, not the editor's output: Enter on a list item may
+        // have changed the text and the cursor since.
+        let id = egui::Id::new(EDITOR_ID);
+        let Some(mut state) = egui::TextEdit::load_state(ctx, id) else {
             return;
         };
+        let Some(mut r) = state.cursor.char_range() else {
+            return;
+        };
+        let step = |c: &mut CCursor, left: bool| {
+            let b = byte_at(&self.text, c.index.0);
+            let Some((start, end)) = crate::theme::inside_emoji(&self.text, b) else {
+                return false;
+            };
+            c.index = CharIndex(self.text[..if left { start } else { end }].chars().count());
+            true
+        };
         let left = ctx.input(|i| i.key_pressed(Key::ArrowLeft));
-        let to = self.text[..if left { start } else { end }].chars().count();
-        let mut state = out.state.clone();
-        state
-            .cursor
-            .set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(to)))));
-        state.store(ctx, egui::Id::new(EDITOR_ID));
+        let moved = step(&mut r.primary, left);
+        if step(&mut r.secondary, false) || moved {
+            state.cursor.set_char_range(Some(r));
+            state.store(ctx, id);
+        }
     }
 
     /// Autosave; called every frame whichever tab is showing, so leaving
@@ -729,19 +752,32 @@ impl NotesTool {
                                 }
                             }
                         });
-                })
-                .0;
+                });
+            let (menu, open) = menu;
             if menu.clicked() {
                 let id = egui::Id::new(EDITOR_ID);
                 self.picker_sel = widgets::text_selection(&ctx, id, &self.text)
                     .map(|r| (r.clone(), emoji_in(&self.text, r)))
                     .filter(|(_, n)| *n > 0);
+                self.picker_restyled = false;
             }
             menu.on_hover_text("Emoji");
             if let Some(s) = restyle
                 && let Some((sel, n)) = self.picker_sel.clone()
             {
                 self.picker_sel = Some((self.restyle(&ctx, sel, s), n));
+                self.picker_restyled = true;
+            }
+            // Escape closes the menu but also takes the keyboard from the
+            // editor: after a restyle, give it back with the selection.
+            let escaped = ctx.input(|i| i.key_pressed(Key::Escape));
+            if self.picker_restyled && (escaped || open.is_none()) {
+                self.picker_restyled = false;
+                if escaped && let Some((sel, _)) = &self.picker_sel {
+                    let chars = |b: usize| self.text[..b].chars().count();
+                    self.reselect = Some(chars(sel.start)..chars(sel.end));
+                    self.refocus = true;
+                }
             }
             if let Some(e) = emoji {
                 // The cursor lands after its style mark.
@@ -1066,6 +1102,18 @@ impl NotesTool {
             }
             self.delete_emoji_marks(&ctx);
         }
+        // Put back a selection the editor dropped while it hadn't the keyboard
+        // (restyling from the emoji menu); forget it if it isn't getting it back.
+        if focused && let Some(r) = self.reselect.take() {
+            let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+            state.cursor.set_char_range(Some(CCursorRange::two(
+                CCursor::new(CharIndex(r.start)),
+                CCursor::new(CharIndex(r.end)),
+            )));
+            state.store(&ctx, id);
+        } else if !self.refocus {
+            self.reselect = None;
+        }
         let show = self.show_hits;
         let cache = &self.cache;
         let ov = &self.ov;
@@ -1107,7 +1155,7 @@ impl NotesTool {
             }
         }
         if out.response.has_focus() {
-            self.step_over_emoji_marks(&ctx, &out);
+            self.step_over_emoji_marks(&ctx);
         }
         widgets::restore_selection(&ctx, id, &out.response, keep);
         out.response.context_menu(|ui| self.editor_menu(ui));
@@ -1461,6 +1509,8 @@ mod tests {
             opening: None,
             refocus: false,
             picker_sel: None,
+            picker_restyled: false,
+            reselect: None,
         }
     }
 
@@ -1634,16 +1684,27 @@ mod tests {
 
     /// One frame of the editor, focused, with `keys` pressed.
     fn type_keys(ctx: &egui::Context, n: &mut NotesTool, keys: &[Key]) {
-        let events = keys
-            .iter()
-            .map(|&key| egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            })
-            .collect();
+        let events = keys.iter().map(|&k| press(k, Modifiers::NONE)).collect();
+        frame(ctx, n, events);
+    }
+
+    fn press(key: Key, modifiers: Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// One frame of the editor, focused, with `events`.
+    fn frame(ctx: &egui::Context, n: &mut NotesTool, mut events: Vec<egui::Event>) {
+        let held = events.iter().fold(Modifiers::NONE, |m, e| match e {
+            egui::Event::Key { modifiers, .. } => m | *modifiers,
+            _ => m,
+        });
+        events.insert(0, egui::Event::ModifiersChanged(held));
         let input = egui::RawInput {
             events,
             ..Default::default()
@@ -1703,5 +1764,115 @@ mod tests {
             assert_eq!(job.text, t);
         });
         out.textures_delta.clear();
+    }
+
+    fn selection(ctx: &egui::Context) -> (usize, usize) {
+        let state = egui::TextEdit::load_state(ctx, egui::Id::new(EDITOR_ID)).unwrap();
+        let r = state.cursor.char_range().unwrap();
+        (r.secondary.index.0, r.primary.index.0)
+    }
+
+    #[test]
+    fn a_selection_takes_an_emoji_with_its_marks_or_not_at_all() {
+        let ctx = egui::Context::default();
+        let (shift, ctrl) = (Modifiers::SHIFT, Modifiers::CTRL);
+        let mut n = notes("a🔥\u{FE02}b");
+        type_keys(&ctx, &mut n, &[]);
+        // Shift+Right over the emoji selects its mark too: deleting or
+        // typing over it leaves no stray mark (other programs would get it).
+        put_cursor(&ctx, 1);
+        frame(&ctx, &mut n, vec![press(Key::ArrowRight, shift)]);
+        assert_eq!(selection(&ctx), (1, 3));
+        type_keys(&ctx, &mut n, &[Key::Delete]);
+        assert_eq!(
+            (n.text.as_str(), n.sanitized_plain().as_str()),
+            ("ab", "ab")
+        );
+        n.text = "a🔥\u{FE02}b".into();
+        put_cursor(&ctx, 1);
+        frame(&ctx, &mut n, vec![press(Key::ArrowRight, shift)]);
+        frame(&ctx, &mut n, vec![egui::Event::Text("X".into())]);
+        assert_eq!(n.text, "aXb");
+        // Shift+Left from after it selects the emoji, not just its mark,
+        // so Backspace doesn't silently drop its style.
+        n.text = "c🔥\u{FE01}d".into();
+        put_cursor(&ctx, 3);
+        frame(&ctx, &mut n, vec![press(Key::ArrowLeft, shift)]);
+        assert_eq!(selection(&ctx), (3, 1));
+        type_keys(&ctx, &mut n, &[Key::Backspace]);
+        assert_eq!(n.text, "cd");
+        // Nor does the mark move onto the emoji before.
+        n.text = "✅🔥\u{FE01}".into();
+        put_cursor(&ctx, 1);
+        frame(&ctx, &mut n, vec![press(Key::ArrowRight, shift)]);
+        type_keys(&ctx, &mut n, &[Key::Delete]);
+        assert_eq!(n.text, "✅");
+        // A selection's far end there moves past the marks too.
+        n.text = "a🔥\u{FE01}b".into();
+        select(&ctx, &n, "a🔥");
+        type_keys(&ctx, &mut n, &[]);
+        assert_eq!(selection(&ctx), (0, 3));
+        // Words take an emoji's marks with it; Ctrl+H is Backspace.
+        n.text = "word 🔥\u{FE02} x".into();
+        put_cursor(&ctx, 5);
+        frame(&ctx, &mut n, vec![press(Key::Delete, ctrl)]);
+        assert_eq!(n.text, "word  x");
+        n.text = "word 🔥\u{FE02}".into();
+        put_cursor(&ctx, 7);
+        frame(&ctx, &mut n, vec![press(Key::Backspace, ctrl)]);
+        assert_eq!(n.text, "word ");
+        n.text = "word 🔥\u{FE02}".into();
+        put_cursor(&ctx, 7);
+        frame(&ctx, &mut n, vec![press(Key::H, ctrl)]);
+        assert_eq!(n.text, "word ");
+    }
+
+    #[test]
+    fn enter_on_an_empty_item_stays_before_the_next_lines_emoji() {
+        let ctx = egui::Context::default();
+        let mut n = notes("- a\n- \n✅\u{FE01} done");
+        type_keys(&ctx, &mut n, &[]);
+        put_cursor(&ctx, 6);
+        type_keys(&ctx, &mut n, &[Key::Enter]);
+        type_keys(&ctx, &mut n, &[]);
+        assert_eq!(
+            (n.text.as_str(), cursor(&ctx)),
+            ("- a\n\n\n✅\u{FE01} done", 5)
+        );
+    }
+
+    #[test]
+    fn restyling_keeps_the_selection_through_the_editor() {
+        use crate::theme::EmojiStyle;
+        let ctx = egui::Context::default();
+        let id = egui::Id::new(EDITOR_ID);
+        // Just the emoji selected, not its mark: the selection still
+        // covers it once the mark has gone.
+        let mut n = notes("🔥\u{FE00}x");
+        let now = n.restyle(&ctx, 0..'🔥'.len_utf8(), EmojiStyle::Theme);
+        assert_eq!((n.text.as_str(), &n.text[now]), ("🔥x", "🔥"));
+        // The menu has the keyboard: the editor drops the selection, then
+        // puts it back once it has the keyboard again.
+        let mut n = notes("a 🔥 b ✅");
+        let all = 0..n.text.len();
+        let now = n.restyle(&ctx, all, EmojiStyle::Color);
+        assert!(n.refocus);
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            n.editor(ui, &FontId::monospace(13.0))
+        });
+        out.textures_delta.clear();
+        assert!(ctx.memory(|m| m.has_focus(id)));
+        type_keys(&ctx, &mut n, &[]);
+        assert_eq!(
+            widgets::text_selection(&ctx, id, &n.text),
+            Some(now.clone())
+        );
+        assert_eq!(&n.text[now], "a 🔥\u{FE01} b ✅\u{FE01}");
+        // Picking the style they already have changes nothing.
+        n.dirty = None;
+        let all = 0..n.text.len();
+        assert_eq!(n.restyle(&ctx, all.clone(), EmojiStyle::Color), all);
+        assert_eq!(n.dirty, None);
     }
 }

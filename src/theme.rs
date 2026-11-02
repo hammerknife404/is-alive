@@ -336,7 +336,7 @@ pub fn styled_emoji(emoji: &str, style: EmojiStyle) -> String {
 }
 
 /// Every emoji that starts in `range` (bytes) set to `style`, except those
-/// inside a `skip` range; returns the new text and how many were set.
+/// inside a `skip` range; returns the new text and how many changed style.
 pub fn restyle_emoji(
     text: &str,
     range: std::ops::Range<usize>,
@@ -352,14 +352,16 @@ pub fn restyle_emoji(
             i += c.len_utf8();
             continue;
         }
-        let (end, _) = emoji_end(text, i);
+        let (end, was) = emoji_end(text, i);
         out.extend(
             text[i..end]
                 .chars()
                 .filter(|c| EmojiStyle::from_marker(*c).is_none()),
         );
         out.extend(style.marker());
-        n += 1;
+        if was.unwrap_or_default() != style {
+            n += 1;
+        }
         i = end;
     }
     (out, n)
@@ -1006,12 +1008,8 @@ pub fn appearance(
             }
         }
         ui.separator();
+        ui.label(egui::RichText::new("Emoji").strong());
         ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Emoji").strong())
-                .on_hover_text(
-                    "How emoji are drawn across the app. Emoji added to the notes in a \
-                     style of their own keep it (pick it in the Notes emoji menu).",
-                );
             for e in EmojiStyle::ALL {
                 let tip = match e {
                     EmojiStyle::Theme => "Monochrome, or neon in Miami and RGB",
@@ -1031,6 +1029,7 @@ pub fn appearance(
                 }
             }
         });
+        ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
             ui.label(egui::RichText::new("Miami backdrop").strong());
