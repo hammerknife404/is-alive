@@ -353,13 +353,18 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
             run(&n.sub, accent, 400),
         ));
     }
-    // The uplink's port or note rides on the card, as on screen.
-    let chips =
-        n.up.as_ref()
-            .and_then(|u| u.2.as_deref())
-            .into_iter()
-            .chain(n.chips.iter().map(String::as_str))
-            .filter(|c| !(sites && n.site.as_deref() == Some(*c)) && !tile);
+    // The uplink's port or note rides on the card, as on screen, after
+    // "drawn" on one drawn by hand (which no site name hides).
+    let chips = crate::map::drawn_chip(n)
+        .into_iter()
+        .chain(
+            n.up.as_ref()
+                .and_then(|u| u.2.as_deref())
+                .into_iter()
+                .chain(n.chips.iter().map(String::as_str))
+                .filter(|c| !(sites && n.site.as_deref() == Some(*c))),
+        )
+        .filter(|_| !tile);
     let mut cx = x + 12.0;
     for c in chips {
         let cw = 10.0 + 5.6 * c.chars().count() as f32;
@@ -583,12 +588,12 @@ fn draw_legend(entries: &[Entry], plan: &LegendPlan, top: Pos2, ink: &Ink) -> Ve
             }),
             // A picture draws no +N chips, so lists none; drawn as a
             // chip should one ever be.
-            Swatch::Chip | Swatch::Steps => {
+            Swatch::Chip | Swatch::Drawn | Swatch::Steps => {
                 v.push(chip_pill(sw, c));
-                let word = if e.swatch == Swatch::Chip {
-                    "port"
-                } else {
-                    "+N"
+                let word = match e.swatch {
+                    Swatch::Chip => "port",
+                    Swatch::Drawn => "drawn",
+                    _ => "+N",
                 };
                 v.push(Item::Text {
                     at: pos2(sw.center().x, mid + 3.0),

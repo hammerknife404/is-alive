@@ -1190,8 +1190,8 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    use crate::map::Clients;
     use crate::map::layout::{Mode, layout_in};
+    use crate::map::{Clients, Seen};
 
     /// The built-in examples redraw in every Clients setting and layout,
     /// with every card's uplink pointing at a card that is there.
@@ -1228,6 +1228,47 @@ mod examples {
                 for mode in Mode::ALL {
                     let l = layout_in(&m, &|_| true, mode);
                     assert!(l.pos.iter().all(|p| p.is_some()), "{name} {mode:?}");
+                }
+            }
+        }
+    }
+
+    /// The blank map with a sweep: it lists no MACs, so no sweep shares
+    /// one with it and the sweep is kept apart (not taken for this map's),
+    /// with its +N steps open or not, in every setting and layout.
+    #[test]
+    fn the_blank_map_keeps_a_sweep_apart() {
+        let doc =
+            crate::mapnetwork::parse(crate::skills::example_file(crate::skills::BLANK).unwrap())
+                .unwrap();
+        let sweep: Vec<Seen> = (1..40)
+            .map(|last| Seen {
+                ip: [192, 168, 1, last].into(),
+                mac: Some([0, 0, 0, 0, 1, last]),
+                name: None,
+                rtt: Some(1.0),
+                open: vec![],
+            })
+            .collect();
+        let open: HashMap<String, usize> = [("gateway".to_string(), usize::MAX)].into();
+        for clients in Clients::ALL {
+            for reveal in [None, Some(&open)] {
+                let m = build(
+                    &doc,
+                    &Input {
+                        sweep: sweep.clone(),
+                        gateway: Some([192, 168, 1, 1].into()),
+                        clients,
+                        reveal,
+                        ..Default::default()
+                    },
+                );
+                let ids: Vec<&str> = m.nodes.iter().map(|n| n.id.as_str()).collect();
+                assert_eq!(ids, ["internet", "gateway"], "{clients:?}");
+                assert!(m.summary.contains("sweep not merged"), "{}", m.summary);
+                for mode in Mode::ALL {
+                    let l = layout_in(&m, &|_| true, mode);
+                    assert!(l.pos.iter().all(|p| p.is_some()), "{clients:?} {mode:?}");
                 }
             }
         }

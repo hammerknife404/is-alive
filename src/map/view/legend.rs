@@ -394,6 +394,10 @@ fn tip(s: Swatch) -> &'static str {
         Swatch::Warn => "Hover or select the card for what's wrong",
         Swatch::Pin => "Stays selected while you click others",
         Swatch::Chip => "The uplink's port, or a note such as inferred, on the card it leads to",
+        Swatch::Drawn => {
+            "Drawn by a person (a plan, a training map), not discovered: the card, or \
+             \"drawn link\" for just its link up"
+        }
         Swatch::Steps => {
             "Click +N on a card for the next few of its clients not drawn (Shift+click: all \
              of them), − to hide them again"
@@ -433,13 +437,17 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
         }
         Swatch::Warn => warn_badge(p, s.center(), 0.75, a, now),
         Swatch::Pin => pin(p, vis, s.center(), 0.75, a),
-        Swatch::Chip => {
+        Swatch::Chip | Swatch::Drawn => {
             let chip = Rect::from_center_size(s.center(), vec2(s.width(), s.height()));
             chip_pill(p, chip, c, a);
             p.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
-                "port",
+                if e.swatch == Swatch::Drawn {
+                    "drawn"
+                } else {
+                    "port"
+                },
                 FontId::proportional(9.0),
                 c.gamma_multiply(a),
             );

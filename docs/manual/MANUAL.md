@@ -659,7 +659,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 The **Legend** panel in the bottom left corner says what everything on the map means, listing only what this map has, with counts:
 
 - **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
-- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, the chips cards carry (an uplink's port, or a note such as *inferred*), and the **+N** and **−** chips of cards with clients to show or hide.
+- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, the chips cards carry (an uplink's port, or a note such as *inferred*), the *drawn* chip of cards drawn by hand on a plan or a training map, and the **+N** and **−** chips of cards with clients to show or hide.
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
@@ -675,7 +675,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
-- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab and above the map, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
+- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab and above the map, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its panel. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 

@@ -57,6 +57,8 @@ pub enum Swatch {
     Pin,
     /// A chip on a card (the uplink's port or a note).
     Chip,
+    /// The "drawn" chip on a card drawn by hand (a plan, a training map).
+    Drawn,
     /// The +N chip on a card with clients it doesn't draw (and − on one
     /// stepped open): click for more or fewer.
     Steps,
@@ -318,6 +320,22 @@ pub fn entries(
             ink,
             "Port, note or tag",
             None,
+        ));
+    }
+    // Drawn by hand, the card or its link up: a client's tile draws no
+    // chip, so isn't counted.
+    let drawn: Vec<Ink> = nodes
+        .iter()
+        .filter(|c| !c.client && super::drawn_chip(c).is_some())
+        .map(accent)
+        .collect();
+    if let Some(ink) = most(&drawn) {
+        out.push(Entry::new(
+            Section::Cards,
+            Swatch::Drawn,
+            ink,
+            "Drawn by hand",
+            Some(drawn.len()),
         ));
     }
 
@@ -771,5 +789,39 @@ mod tests {
         assert_eq!((a.ink, a.count), (Ink::Weak, Some(1)));
         assert!(!has(&e, Swatch::Line(Link::Wireless)));
         assert!(!has(&e, Swatch::Chip));
+        assert!(!has(&e, Swatch::Drawn));
+    }
+
+    #[test]
+    fn cards_drawn_by_hand_are_listed_when_any_wear_the_chip() {
+        let mut m = Map {
+            nodes: (0..4)
+                .map(|i| Node {
+                    id: format!("n{i}"),
+                    zone: [Zone::Internet, Zone::Gateway, Zone::Switch, Zone::Client][i],
+                    up: (i > 0).then(|| (i - 1, Link::Wired, None)),
+                    client: i == 3,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let lay = layout_in(&m, &|_| true, Mode::Cluster);
+        let lines = layout::lines(&m, &lay, &|i| lay.pos[i], &|_| false);
+        let drawn = |m: &Map| {
+            entries(m, &lay.boxes, &lines, false, 0, false)
+                .into_iter()
+                .find(|x| x.swatch == Swatch::Drawn)
+                .map(|x| (x.ink, x.count))
+        };
+        assert_eq!(drawn(&m), None);
+        // A client's tile draws no chips: not counted.
+        m.nodes[3].drawn = true;
+        assert_eq!(drawn(&m), None);
+        m.nodes[2].drawn = true;
+        m.nodes[1].drawn_up = true;
+        let (ink, count) = drawn(&m).unwrap();
+        assert_eq!(count, Some(2));
+        assert!(matches!(ink, Ink::Role(Zone::Gateway | Zone::Switch)));
     }
 }

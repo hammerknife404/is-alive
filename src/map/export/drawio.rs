@@ -158,13 +158,16 @@ fn label(n: &Node, sites: bool) -> String {
             html(&n.sub)
         );
     }
-    let chips: Vec<&str> =
-        n.up.as_ref()
-            .and_then(|u| u.2.as_deref())
-            .into_iter()
-            .chain(n.chips.iter().map(String::as_str))
-            .filter(|c| !(sites && n.site.as_deref() == Some(*c)))
-            .collect();
+    let chips: Vec<&str> = crate::map::drawn_chip(n)
+        .into_iter()
+        .chain(
+            n.up.as_ref()
+                .and_then(|u| u.2.as_deref())
+                .into_iter()
+                .chain(n.chips.iter().map(String::as_str))
+                .filter(|c| !(sites && n.site.as_deref() == Some(*c))),
+        )
+        .collect();
     if !chips.is_empty() {
         let _ = write!(
             v,

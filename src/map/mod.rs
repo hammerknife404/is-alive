@@ -1992,6 +1992,19 @@ pub fn is_more(n: &Node) -> bool {
     n.id.starts_with("more:") || import::is_overflow(n)
 }
 
+/// The chip a card drawn by hand (on a plan or a training map) wears
+/// before its others: "drawn", or "drawn link" when only its link up was.
+/// A client's tile draws no chips: its hover and the panel say it.
+pub fn drawn_chip(n: &Node) -> Option<&'static str> {
+    if n.drawn {
+        Some("drawn")
+    } else if n.drawn_up {
+        Some("drawn link")
+    } else {
+        None
+    }
+}
+
 /// The chip on an uplink whose clients aren't drawn: "12 clients".
 fn count_chip(n: usize) -> String {
     match n {

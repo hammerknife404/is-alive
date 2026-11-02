@@ -1120,6 +1120,10 @@ mod tests {
             ]
         );
         assert_eq!(r.faults, s.faults);
+        // With the title and the clients stepped open beside them.
+        assert_eq!(r.map.title, "Head office network");
+        assert_eq!(r.edits, s.edits);
+        assert_eq!(r.edits.reveal.get("ap"), Some(&8));
         assert_eq!(to_json(&r), text);
         // Not drawn: left out of the file.
         let plain = to_json(&sample());
