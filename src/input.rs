@@ -58,7 +58,8 @@ impl Field {
     pub const fn max(self) -> usize {
         match self {
             Field::Host | Field::Name | Field::Domain | Field::Selectors | Field::Text => 255,
-            Field::Resolver | Field::Range | Field::Address => 64,
+            Field::Resolver | Field::Address => 64,
+            Field::Range => 1024,
             Field::Subnet => 100,
             Field::Ports => 1024,
             Field::Url => 2048,
