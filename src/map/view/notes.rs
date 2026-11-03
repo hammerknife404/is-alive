@@ -1159,6 +1159,7 @@ mod tests {
                 note: false,
                 legend: true,
                 redact: &self.ov,
+                animate: false,
             };
             v.refresh(ctx, &src);
             v.settle_edits();
@@ -1390,6 +1391,7 @@ mod tests {
             pos: &v.lay.pos,
             moved: &moved,
             legend: true,
+            caption: None,
         };
         let look = Look::new(&egui::Visuals::dark(), false);
         for f in [

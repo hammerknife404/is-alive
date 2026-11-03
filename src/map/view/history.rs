@@ -237,9 +237,6 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
         };
     }
     if a.placed != b.placed {
-        if b.placed.is_empty() {
-            return "Re-layout".into();
-        }
         let moved: Vec<&String> = sorted(
             b.placed
                 .iter()
@@ -323,11 +320,17 @@ impl MapView {
     /// Once a frame, after the user's input: anything changed since the
     /// last step is the next one. A drag counts once it's dropped.
     pub(super) fn track_edits(&mut self) {
+        // Re-layout (the toolbar's or the canvas menu's) is named for
+        // itself; a card menu's Put back on the only card moved isn't one.
+        let relaid = std::mem::take(&mut self.relaid);
         if self.drag.is_some() || !self.edits_differ(self.history.now()) {
             return;
         }
         let now = self.edits();
-        let what = describe(self.history.now(), &now, &|id| self.card_name(id));
+        let mut what = describe(self.history.now(), &now, &|id| self.card_name(id));
+        if relaid && what.starts_with("put back ") {
+            what = "Re-layout".into();
+        }
         self.history.record(now, what);
     }
 
@@ -467,7 +470,7 @@ mod tests {
         b.placed.insert("y".into(), pos2(2.0, 2.0));
         b.placed.insert("z".into(), pos2(2.0, 2.0));
         assert_eq!(describe(&a, &b, &name), "move 3 cards");
-        assert_eq!(describe(&b, &a, &name), "Re-layout");
+        assert_eq!(describe(&b, &a, &name), "put back 3 cards");
         let mut c = b.clone();
         c.placed.remove("y");
         assert_eq!(describe(&b, &c, &name), "put back <y>");
@@ -548,6 +551,24 @@ mod tests {
         assert!(v.placed.is_empty(), "the whole drag undone");
         v.step(false);
         assert_eq!(v.placed.get("n2"), Some(&pos2(20.0, 0.0)));
+    }
+
+    /// Putting back the only card moved is "put back" it, as on several;
+    /// Re-layout is named for itself however many cards it puts back.
+    #[test]
+    fn put_back_is_named_for_the_card_and_re_layout_for_itself() {
+        let mut v = tree();
+        v.placed.insert("n1".into(), pos2(5.0, 5.0));
+        v.track_edits();
+        v.placed.remove("n1");
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("put back Card 1"));
+        v.step(true);
+        v.placed.clear();
+        v.relaid = true;
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("Re-layout"));
+        assert!(!v.relaid, "only that frame's step");
     }
 
     #[test]

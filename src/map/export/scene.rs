@@ -234,8 +234,17 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
     let leg = (!entries.is_empty()).then(|| legend_plan(&entries, b.width()));
     let leg_h = leg.as_ref().map_or(0.0, |l| l.height + 16.0);
     let off = vec2(m - b.min.x, m + head - b.min.y);
+    // A plan or a training map's caption (and the summary after it) is
+    // never cut off, however narrow the map: roughly 7 px a character of
+    // the 12 px semibold caption, 6.4 of the summary.
+    let cap_w = d.caption.map_or(0.0, |c| {
+        7.0 * (c.chars().count() + 3) as f32 + 6.4 * d.summary().chars().count() as f32
+    });
     let size = vec2(
-        b.width().max(leg.as_ref().map_or(0.0, |l| l.width)) + 2.0 * m,
+        b.width()
+            .max(leg.as_ref().map_or(0.0, |l| l.width))
+            .max(cap_w)
+            + 2.0 * m,
         b.height() + 2.0 * m + head + leg_h + foot,
     );
     let at = |p: Pos2| p + off;
@@ -255,11 +264,16 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
         pos2(m, m + 26.0),
         12.0,
         false,
-        run(
-            format!("{} · is-alive {}", map.summary, crate::VERSION),
-            ink.weak,
-            400,
-        ),
+        // A plan or a training map says so first: it isn't what was found.
+        d.caption
+            .map(|c| Run {
+                text: format!("{c} · "),
+                rgb: ink.text,
+                weight: 600,
+            })
+            .into_iter()
+            .chain(run(d.summary(), ink.weak, 400))
+            .collect(),
     ));
     boxes(d, &ink, &at, &mut items);
     lines(d, &drawn, &ink, &at, &mut items);
@@ -361,13 +375,18 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
             run(&n.sub, accent, 400),
         ));
     }
-    // The uplink's port or note rides on the card, as on screen.
-    let chips =
-        n.up.as_ref()
-            .and_then(|u| u.2.as_deref())
-            .into_iter()
-            .chain(n.chips.iter().map(String::as_str))
-            .filter(|c| !(sites && n.site.as_deref() == Some(*c)) && !tile);
+    // The uplink's port or note rides on the card, as on screen, after
+    // "drawn" on one drawn by hand (which no site name hides).
+    let chips = crate::map::drawn_chip(n)
+        .into_iter()
+        .chain(
+            n.up.as_ref()
+                .and_then(|u| u.2.as_deref())
+                .into_iter()
+                .chain(n.chips.iter().map(String::as_str))
+                .filter(|c| !(sites && n.site.as_deref() == Some(*c))),
+        )
+        .filter(|_| !tile);
     let mut cx = x + 12.0;
     for c in chips {
         let cw = 10.0 + 5.6 * c.chars().count() as f32;
@@ -645,14 +664,21 @@ fn draw_legend(entries: &[Entry], plan: &LegendPlan, top: Pos2, ink: &Ink) -> Ve
                 middle: true,
                 runs: run("📌", c, 400),
             }),
-            Swatch::Chip => {
+            // A picture draws no +N chips, so lists none; drawn as a
+            // chip should one ever be.
+            Swatch::Chip | Swatch::Drawn | Swatch::Steps => {
                 v.push(chip_pill(sw, c));
+                let word = match e.swatch {
+                    Swatch::Chip => "port",
+                    Swatch::Drawn => "drawn",
+                    _ => "+N",
+                };
                 v.push(Item::Text {
                     at: pos2(sw.center().x, mid + 3.0),
                     size: 9.0,
                     mono: false,
                     middle: true,
-                    runs: run("port", c, 400),
+                    runs: run(word, c, 400),
                 });
             }
             Swatch::Line(link) => {

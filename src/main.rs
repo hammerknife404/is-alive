@@ -291,12 +291,25 @@ impl App {
                 );
             }
         }
-        // The full scan is done: what its sweep found is on the Map now.
+        // The full scan is done: what its sweep found is on the Map now
+        // (not when the map's files leave it off as another network's).
         if !self.scanning.is_empty() {
             let mut left = std::mem::take(&mut self.scanning);
             left.retain(|t| self.tab_running(*t));
             self.scanning = left;
-            if self.scanning.is_empty() && self.sweep.finished().is_some_and(|(_, n)| n > 0) {
+            if self.scanning.is_empty()
+                && self.sweep.finished().is_some_and(|(_, n)| n > 0)
+                && self.map.shows_sweep(&map::view::Sources {
+                    sweep: &self.sweep,
+                    export: &self.export,
+                    info: &self.info,
+                    busy: false,
+                    note: self.look.map_note,
+                    legend: self.look.map_legend,
+                    redact: self.notes.overrides(),
+                    animate: self.look.animate,
+                })
+            {
                 self.map_call.start(now, self.tab == Tab::Map);
             }
         }
@@ -397,6 +410,7 @@ impl App {
                         note: self.look.map_note,
                         legend: self.look.map_legend,
                         redact: self.notes.overrides(),
+                        animate: self.look.animate,
                     },
                 );
                 self.map_action(ui.ctx(), act);

@@ -195,6 +195,7 @@ mod tests {
                 pos: &lay.pos,
                 moved,
                 legend,
+                caption: None,
             },
             Look::new(&eframe::egui::Visuals::dark(), false),
         ))
@@ -300,6 +301,28 @@ mod tests {
             assert!(!cards(&off).is_empty());
             assert_eq!(cards(&on), cards(&off), "{mode:?}: the cards stay put");
         }
+    }
+
+    #[test]
+    fn a_card_drawn_by_hand_says_so_in_the_picture_and_its_legend() {
+        let mut m = super::super::tests::acme();
+        let plain = {
+            let l = layout::layout_in(&m, &|_| true, Mode::Cluster);
+            render_with(&m, &l, &vec![false; m.nodes.len()], true)
+        };
+        assert!(!plain.contains(">drawn<") && !plain.contains("Drawn by hand"));
+        let i = m
+            .nodes
+            .iter()
+            .position(|n| !n.client && n.up.is_some())
+            .unwrap();
+        m.nodes[i].drawn = true;
+        let l = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let svg = render_with(&m, &l, &vec![false; m.nodes.len()], true);
+        // On the card and on the legend's swatch.
+        assert_eq!(svg.matches(">drawn<").count(), 2, "{svg}");
+        assert!(svg.contains("Drawn by hand"));
+        super::super::tests::parse_xml(&svg);
     }
 
     #[test]

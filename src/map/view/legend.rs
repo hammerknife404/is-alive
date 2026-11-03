@@ -4,9 +4,11 @@
 //! row fades that role out or back in, as the sidebar's does.
 
 use super::paint::{
-    card_frame, chip_pill, draw_box, draw_link, link_width, note_glyph, pin, trunk_font, warn_badge,
+    canvas_fill, card_frame, chip_pill, draw_box, draw_link, draw_lit, draw_packet, link_width,
+    note_glyph, packet_gap, packet_radius, packet_travel, pin, trunk_font, warn_badge,
 };
 use super::*;
+use crate::map::colours;
 use crate::map::legend::{self, Entry, Ink, Slot, Swatch};
 
 /// One row, a section's heading or an entry's.
@@ -59,14 +61,21 @@ impl MapView {
             .iter()
             .filter(|id| self.index(id).is_some())
             .count();
-        legend::entries(
+        let mut out = legend::entries(
             &self.map,
             &self.lay.boxes,
             lines,
             self.mode() == Mode::Sites,
             pinned,
             true,
-        )
+        );
+        // The +N and − chips, on cards that can wear them at any zoom.
+        let chips: Vec<Ink> = (0..self.map.nodes.len())
+            .filter(|&i| !self.map.nodes[i].gone && !self.steps(i).is_empty())
+            .map(|i| Ink::Role(self.map.nodes[i].zone))
+            .collect();
+        legend::add_client_chips(&mut out, &chips);
+        out
     }
 
     /// The corner the legend took of the canvas `rect` last frame (as Fit
@@ -337,6 +346,7 @@ impl MapView {
                                 off,
                                 z,
                                 now,
+                                self.animate,
                             );
                             let tx = s.max.x + GAP;
                             let ty = top.y + (ROW - label.size().y) / 2.0;
@@ -391,6 +401,14 @@ fn tip(s: Swatch) -> &'static str {
              (N)"
         }
         Swatch::Chip => "The uplink's port, or a tag such as inferred, on the card it leads to",
+        Swatch::Drawn => {
+            "Drawn by a person (a plan, a training map), not discovered: the card, or \
+             \"drawn link\" for just its link up"
+        }
+        Swatch::Steps => {
+            "Click +N on a card for the next few of its clients not drawn (Shift+click: all \
+             of them), − to hide them again"
+        }
         Swatch::Line(Link::Backbone) => "The internet to a firewall, in the gateway's colour",
         Swatch::Line(Link::Assumed) => {
             "Placed here because it answered, not because the data shows the link \
@@ -401,14 +419,28 @@ fn tip(s: Swatch) -> &'static str {
             "Every link from one card into a box, folded into one line in the colour \
              of the box it runs into"
         }
-        Swatch::Lit => "Click a card: its path to the internet lights up, packets flowing",
+        Swatch::Lit => {
+            "Click a card: its path to the internet lights up in the colours of the cards it \
+             leads to, packets flowing (with Animate on)"
+        }
         Swatch::Box => "A site's cards (click its title to fold it), or a role's in Zones",
     }
 }
 
 /// An entry's swatch in `s`, drawn as the map draws it (`z` its zoom for
-/// lines). `off`: a role faded out, drawn faded as on the map.
-fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f32, now: f64) {
+/// lines). `off`: a role faded out, drawn faded as on the map. `animate`:
+/// Settings' Animate, so a lit path's packets move only when the map's do.
+#[allow(clippy::too_many_arguments)]
+fn swatch(
+    p: &Painter,
+    vis: &egui::Visuals,
+    e: &Entry,
+    s: Rect,
+    off: bool,
+    z: f32,
+    now: f64,
+    animate: bool,
+) {
     let c = ink(vis, e.ink);
     let glow = glow_strength(vis);
     let a = if off { 0.15 } else { 1.0 };
@@ -432,38 +464,49 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
             Rect::from_center_size(s.center(), vec2(9.0, 11.0)),
             a,
         ),
-        Swatch::Chip => {
+        Swatch::Chip | Swatch::Drawn => {
             let chip = Rect::from_center_size(s.center(), vec2(s.width(), s.height()));
             chip_pill(p, chip, c, a);
             p.text(
                 chip.center(),
                 egui::Align2::CENTER_CENTER,
-                "port",
+                if e.swatch == Swatch::Drawn {
+                    "drawn"
+                } else {
+                    "port"
+                },
                 FontId::proportional(9.0),
                 c.gamma_multiply(a),
             );
         }
-        Swatch::Line(link) => {
-            draw_link(
-                p,
-                &mid,
-                c,
-                c,
-                link,
-                link_width(link, z, false),
-                a,
-                false,
-                z,
-                glow,
-                now,
+        Swatch::Steps => {
+            // As the chip on a card: tinted, outlined, "+N".
+            let chip = Rect::from_center_size(s.center(), vec2(s.width() - 4.0, s.height()));
+            let fill = vis.window_fill.lerp_to_gamma(c, 0.2).gamma_multiply(a);
+            p.rect(
+                chip,
+                (chip.height() / 2.0) as u8,
+                fill,
+                Stroke::new(1.0, c.gamma_multiply(a)),
+                StrokeKind::Inside,
             );
+            p.text(
+                chip.center(),
+                egui::Align2::CENTER_CENTER,
+                "+N",
+                FontId::proportional(9.5),
+                vis.strong_text_color().gamma_multiply(a),
+            );
+        }
+        Swatch::Line(link) => {
+            draw_link(p, &mid, c, link, link_width(link, z, false), a, z, glow);
         }
         Swatch::Trunk(link) => {
             // As a trunk into a box: a little wider, its count at its end.
             let end = s.max.x - 12.0;
             let w = link_width(link, z, false) + 0.6;
             let pts = [s.left_center(), pos2(end, s.center().y)];
-            draw_link(p, &pts, c, c, link, w, a, false, z, glow, now);
+            draw_link(p, &pts, c, link, w, a, z, glow);
             p.text(
                 pos2(end + 1.0, s.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -473,8 +516,21 @@ fn swatch(p: &Painter, vis: &egui::Visuals, e: &Entry, s: Rect, off: bool, z: f3
             );
         }
         Swatch::Lit => {
+            // A lit path to a card of this colour, by the canvas's own rules:
+            // the colour its cards share, kept legible on the canvas, and its
+            // packets (a grey card's hollow) flowing while Animate is on.
+            let behind = canvas_fill(vis);
+            let (colour, mixed) = colours::path_colour(&[c], c);
+            let (lc, grey) = colours::packet_look(colour, behind);
             let w = link_width(Link::Wired, z, true);
-            draw_link(p, &mid, c, c, Link::Wired, w, a, true, z, glow, now);
+            draw_lit(p, &mid, 0.0, lc, mixed, Link::Wired, w, a, z, glow);
+            if animate {
+                let gap = packet_gap(z);
+                let phase = packet_travel(now, z).rem_euclid(gap);
+                for at in along_from(&mid, 0.0, phase, gap, Rect::EVERYTHING) {
+                    draw_packet(p, at, lc, grey, packet_radius(w), a, behind);
+                }
+            }
         }
         Swatch::Box => draw_box(p, s, CARD_Z, c, a),
     }

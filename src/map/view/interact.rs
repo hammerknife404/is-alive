@@ -617,13 +617,13 @@ impl MapView {
         if group.len() != 1 {
             return;
         }
-        for (label, tip, p, to) in self.reveal_items(i) {
+        for it in self.reveal_items(i) {
             if sep
-                .add(ui, egui::Button::new(label))
-                .on_hover_text(tip)
+                .add(ui, egui::Button::new(it.label))
+                .on_hover_text(it.tip)
                 .clicked()
             {
-                self.reveal_step(p, to);
+                self.reveal_step(it.uplink, it.to);
                 ui.close();
             }
         }
@@ -928,6 +928,7 @@ impl MapView {
                 .clicked()
         {
             self.placed.clear();
+            self.relaid = true;
             self.fit_view(rect);
             ui.close();
         }

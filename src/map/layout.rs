@@ -713,15 +713,147 @@ pub fn route_out(p: Rect, c: Rect, bx: Rect) -> Vec<Pos2> {
     pts
 }
 
-/// The line from `up` to `i` when either was dragged by hand: straight
-/// across (`route_free`), unless that crosses other cards in the Zones grid
-/// one end sits in; then out of the grid along its gaps (`route_out`).
-fn route_placed(
-    map: &Map,
+/// Every shown card where it's drawn (a client's tile at its own size), a pixel in from its edges (so a line
+/// along a card's side is clear of it): what `blockers` checks routes
+/// against, worked out once for all the lines.
+fn card_rects(map: &Map, lay: &Layout, at: &dyn Fn(usize) -> Option<Rect>) -> Vec<(usize, Rect)> {
+    (0..lay.pos.len().min(map.nodes.len()))
+        .filter(|&k| lay.pos[k].is_some())
+        .filter_map(|k| at(k).map(|r| (k, r.shrink(1.0))))
+        .collect()
+}
+
+/// The cards (of `cards`, see `card_rects`) a route runs through, other
+/// than its two ends `up` and `i`.
+fn blockers<'a>(
+    cards: &'a [(usize, Rect)],
+    up: usize,
+    i: usize,
+    pts: &'a [Pos2],
+) -> impl Iterator<Item = &'a (usize, Rect)> + 'a {
+    let bounds = pts
+        .iter()
+        .map(|p| Rect::from_min_max(*p, *p))
+        .reduce(|a, b| a.union(b))
+        .unwrap_or(Rect::NOTHING);
+    cards.iter().filter(move |(k, r)| {
+        *k != up
+            && *k != i
+            && r.intersects(bounds)
+            && pts
+                .windows(2)
+                .any(|s| r.intersects(Rect::from_two_pos(s[0], s[1])))
+    })
+}
+
+/// A dragged card still about where its column has it (nudged sideways
+/// less than half a card and not over the column's trunk, up or down no
+/// more than a card's height and still below its uplink): its link stays
+/// on the trunk, the stub reaching to where the card now is.
+fn column_route(
     lay: &Layout,
     at: &dyn Fn(usize) -> Option<Rect>,
     up: usize,
     i: usize,
+) -> Option<Vec<Pos2>> {
+    if !lay.stacked.get(i).copied().unwrap_or(false) {
+        return None;
+    }
+    let (a, b, home) = (at(up)?, at(i)?, lay.pos.get(i).copied().flatten()?);
+    let (dx, dy) = (b.min.x - home.x, b.min.y - home.y);
+    if dx >= CARD.x / 2.0
+        || dx <= 4.0 - INDENT / 2.0
+        || dy.abs() > b.height()
+        || b.min.y < a.bottom() + STACK_GAP
+    {
+        return None;
+    }
+    let mut pts = route(
+        a,
+        Rect::from_min_size(pos2(home.x, b.min.y), b.size()),
+        true,
+        lay.trunk.get(i).copied().flatten(),
+    );
+    pts.last_mut()?.x = b.min.x;
+    // Down all the way, never back up the trunk (a card dragged above
+    // the gap its row hangs from).
+    pts.windows(2).all(|s| s[1].y >= s[0].y).then_some(pts)
+}
+
+/// Round the cards in `block` instead of through them, through a gutter
+/// at `g` beside the block: a column at x = `g`, or with `across` a row at
+/// y = `g`. A column leaves the side of `p` facing `c`; a row leaves `p`'s
+/// top or bottom, as its other links do, when it passes above or below
+/// it. Along the gutter, and into the side of `c` facing it; a gutter
+/// that would run flush down `c`'s edge, or into its corner, moves out
+/// beside it, or with `inward` in over it, clear of the corner (for when
+/// beside it is another card, as in a row of client tiles).
+fn detour(p: Rect, c: Rect, block: Rect, g: f32, across: bool, inward: bool) -> Vec<Pos2> {
+    // Worked out as a column; a row is the same thing with x and y swapped.
+    let t = |q: Pos2| if across { pos2(q.y, q.x) } else { q };
+    let tr = |r: Rect| Rect::from_two_pos(t(r.min), t(r.max));
+    let (p, c, block) = (tr(p), tr(c), tr(block));
+    const EDGE: f32 = 8.0;
+    let half = if across { STACK_GAP } else { GAP_X } / 2.0;
+    let step = if inward { -(EDGE + 4.0) } else { half };
+    let g = if (g - c.left()).abs() < EDGE {
+        c.left() - step
+    } else if (g - c.right()).abs() < EDGE {
+        c.right() + step
+    } else {
+        g
+    };
+    let mut pts = if across && (g < p.left() || g > p.right()) {
+        let from = if g < p.left() {
+            p.left_center()
+        } else {
+            p.right_center()
+        };
+        vec![from, pos2(g, from.y)]
+    } else {
+        let down = c.center().y >= p.center().y;
+        let (from, near) = if down {
+            (p.center_bottom(), block.top())
+        } else {
+            (p.center_top(), block.bottom())
+        };
+        let room = ((near - from.y).abs() / 2.0).clamp(6.0, GAP_Y / 2.0);
+        let y0 = if down { from.y + room } else { from.y - room };
+        vec![from, pos2(from.x, y0), pos2(g, y0)]
+    };
+    let down = c.center().y >= pts[pts.len() - 1].y;
+    if g < c.left() {
+        pts.extend([pos2(g, c.center().y), c.left_center()]);
+    } else if g > c.right() {
+        pts.extend([pos2(g, c.center().y), c.right_center()]);
+    } else if down {
+        pts.push(pos2(g, c.top()));
+    } else {
+        pts.push(pos2(g, c.bottom()));
+    }
+    pts.dedup_by(|b, a| a.distance(*b) < 0.5);
+    pts.into_iter().map(t).collect()
+}
+
+/// A route's length.
+fn length(pts: &[Pos2]) -> f32 {
+    pts.windows(2).map(|s| s[0].distance(s[1])).sum()
+}
+
+/// The line from `up` to `i` when either was dragged by hand (or another
+/// card was dragged onto its usual route). Out of a Zones grid along its
+/// gaps (`route_out`) when one end sits in one; otherwise the first of
+/// these that runs through no other card (of `cards`): `column`, its usual
+/// route or its column's trunk for a card nudged out of its column;
+/// straight across (`route_free`); or round the cards in the way through
+/// the gutter beside them. When none is clear, the one through fewest.
+fn route_placed(
+    lay: &Layout,
+    at: &dyn Fn(usize) -> Option<Rect>,
+    cards: &[(usize, Rect)],
+    up: usize,
+    i: usize,
+    column: Option<Vec<Pos2>>,
 ) -> Vec<Pos2> {
     let (Some(a), Some(b)) = (at(up), at(i)) else {
         return Vec::new();
@@ -734,14 +866,7 @@ fn route_placed(
         bx.rect.contains_rect(at(k)?).then_some((g, bx.rect))
     };
     let crosses = |pts: &[Pos2], g: usize| {
-        let cards: Vec<Rect> = (0..lay.group.len().min(map.nodes.len()))
-            .filter(|&k| k != up && k != i && lay.group[k] == Some(g))
-            .filter_map(|k| at(k).map(|r| r.shrink(1.0)))
-            .collect();
-        pts.windows(2).any(|s| {
-            let seg = Rect::from_two_pos(s[0], s[1]);
-            cards.iter().any(|r| r.intersects(seg))
-        })
+        blockers(cards, up, i, pts).any(|(k, _)| lay.group.get(*k) == Some(&Some(g)))
     };
     let outside = |r: Rect, c: Rect| !r.intersects(c);
     if let Some((g, r)) = grid(up)
@@ -758,7 +883,54 @@ fn route_placed(
         pts.reverse();
         return pts;
     }
-    direct
+    let blocked = |pts: &[Pos2]| blockers(cards, up, i, pts).count();
+    let mut tried: Vec<(usize, f32, Vec<Pos2>)> = Vec::new();
+    for pts in column.into_iter().chain([direct]) {
+        let n = blocked(&pts);
+        if n == 0 {
+            return pts;
+        }
+        tried.push((n, length(&pts), pts));
+    }
+    // Round the cards the straight line runs through: the gutter half a gap
+    // beside them, whichever side makes the shorter route.
+    let block = blockers(cards, up, i, &tried[tried.len() - 1].2)
+        .map(|(_, r)| *r)
+        .reduce(|x, y| x.union(y))
+        .map(|r| r.expand(1.0));
+    if let Some(u) = block {
+        let (p, c) = (a, b);
+        let gutters = [
+            (u.left() - GAP_X / 2.0, false),
+            (u.right() + GAP_X / 2.0, false),
+            (u.top() - STACK_GAP / 2.0, true),
+            (u.bottom() + STACK_GAP / 2.0, true),
+        ];
+        let mut clear: Vec<Vec<Pos2>> = Vec::new();
+        for (g, across) in gutters {
+            // Out beside the card; in over it when another card is there.
+            for inward in [false, true] {
+                let pts = detour(p, c, u, g, across, inward);
+                let n = blocked(&pts);
+                if n == 0 {
+                    clear.push(pts);
+                    break;
+                }
+                tried.push((n, length(&pts), pts));
+            }
+        }
+        if let Some(best) = clear
+            .into_iter()
+            .min_by(|x, y| length(x).total_cmp(&length(y)))
+        {
+            return best;
+        }
+    }
+    tried
+        .into_iter()
+        .min_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)))
+        .map(|t| t.2)
+        .unwrap_or_default()
 }
 
 /// How solid a link is drawn, weakest first: the order links are drawn in.
@@ -773,6 +945,7 @@ pub fn strength(l: Link) -> u8 {
 
 /// One line on the map: a card's link to its uplink, or a trunk carrying
 /// every link from one card into another box (Zones).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Line {
     pub up: usize,
     /// The cards whose links it carries; more than one is a trunk.
@@ -790,7 +963,9 @@ pub struct Line {
 /// uplink share its line, so a solid link drawn last covers the dashes of
 /// an assumed one), then the trunks. `at` is where each card is drawn;
 /// `moved` says it was dragged by hand, which joins it straight to its
-/// uplink on the sides facing each other, out of any trunk.
+/// uplink on the sides facing each other, out of any trunk (but never
+/// through another card: see `route_placed`). A link whose usual route a
+/// dragged card now sits on goes round it the same way.
 pub fn lines(
     map: &Map,
     lay: &Layout,
@@ -799,6 +974,17 @@ pub fn lines(
 ) -> Vec<Line> {
     let group = |i: usize| lay.group.get(i).copied().flatten();
     let rect = |i: usize| at(i).map(|p| card_rect(&map.nodes[i], p));
+    // Where the cards are, for the routes that must miss them; the dragged
+    // ones' own list, for the usual routes they might now sit on.
+    let cards = std::cell::OnceCell::new();
+    let cards = || cards.get_or_init(|| card_rects(map, lay, &rect));
+    let dragged: Vec<(usize, Rect)> = (0..map.nodes.len())
+        .filter(|&k| moved(k))
+        .filter_map(|k| {
+            let all = cards();
+            all.binary_search_by_key(&k, |c| c.0).ok().map(|j| all[j])
+        })
+        .collect();
     let mut out = Vec::new();
     let mut trunks: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
     let mut order: Vec<usize> = (0..map.nodes.len()).collect();
@@ -823,14 +1009,24 @@ pub fn lines(
             continue;
         };
         let pts = if free {
-            route_placed(map, lay, &rect, up, i)
+            let column = if moved(up) {
+                None
+            } else {
+                column_route(lay, &rect, up, i)
+            };
+            route_placed(lay, &rect, cards(), up, i, column)
         } else {
-            route(
+            let pts = route(
                 a,
                 b,
                 lay.stacked.get(i).copied().unwrap_or(false),
                 lay.trunk.get(i).copied().flatten(),
-            )
+            );
+            if blockers(&dragged, up, i, &pts).next().is_some() {
+                route_placed(lay, &rect, cards(), up, i, Some(pts))
+            } else {
+                pts
+            }
         };
         out.push(Line {
             up,
@@ -892,6 +1088,163 @@ pub fn lines(
         });
     }
     out
+}
+
+/// A straight stretch of line between two points where lines from one
+/// uplink join or part: a stacked column's trunk between two stubs, the
+/// bus above a row, a stub.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Piece {
+    pub pts: [Pos2; 2],
+    /// The cards whose lines run along it.
+    pub feeds: Vec<usize>,
+    /// The lines that run along it (indices into those given to `pieces`).
+    pub lines: Vec<usize>,
+    /// How far along the first line through it it starts.
+    pub s0: f32,
+}
+
+/// One piece as a line runs through it, in that line's direction: `s` is
+/// how far along the line it starts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    pub piece: usize,
+    pub s: f32,
+    pub a: Pos2,
+    pub b: Pos2,
+}
+
+/// The `lines` cut into pieces where they meet: each line is cut at its
+/// own bends and wherever another line from the same uplink bends or ends
+/// on it, and the cuts that coincide (to half a unit, either way round)
+/// are one piece, fed by every line through it. Returns the pieces, and
+/// each line's steps through them from its uplink down.
+///
+/// Each card has one link, so no card is on two of the lines. The bends
+/// are filed by x and by y: an upright or level segment (every route but
+/// a free one across) looks up only those in line with it.
+pub fn pieces(lines: &[&Line]) -> (Vec<Piece>, Vec<Vec<Step>>) {
+    const NEAR: f32 = 0.5;
+    let key = |p: Pos2| ((p.x * 2.0).round() as i64, (p.y * 2.0).round() as i64);
+    let half = |v: f32| (v * 2.0).round() as i64;
+    // Every line's bends by uplink: all of them, and filed by (uplink, x)
+    // and (uplink, y), each file in order along the other axis.
+    type Bend = (f32, usize, Pos2);
+    let mut bends: HashMap<usize, Vec<(usize, Pos2)>> = HashMap::new();
+    let mut by_x: HashMap<(usize, i64), Vec<Bend>> = HashMap::new();
+    let mut by_y: HashMap<(usize, i64), Vec<Bend>> = HashMap::new();
+    for (li, line) in lines.iter().enumerate() {
+        for &p in &line.pts {
+            bends.entry(line.up).or_default().push((li, p));
+            by_x.entry((line.up, half(p.x)))
+                .or_default()
+                .push((p.y, li, p));
+            by_y.entry((line.up, half(p.y)))
+                .or_default()
+                .push((p.x, li, p));
+        }
+    }
+    for v in by_x.values_mut().chain(by_y.values_mut()) {
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    // The bends in the files for `at` (and those either side) between `lo`
+    // and `hi` along it.
+    let filed = |files: &HashMap<(usize, i64), Vec<Bend>>, up: usize, at: f32, lo: f32, hi: f32| {
+        let k = half(at);
+        let mut out: Vec<(usize, Pos2)> = Vec::new();
+        for f in (k - 1..=k + 1).filter_map(|k| files.get(&(up, k))) {
+            let from = f.partition_point(|b| b.0 < lo);
+            out.extend(
+                f[from..]
+                    .iter()
+                    .take_while(|b| b.0 <= hi)
+                    .map(|b| (b.1, b.2)),
+            );
+        }
+        out
+    };
+    let mut out: Vec<Piece> = Vec::new();
+    // Pieces by uplink and their two ends, either way round.
+    type End = (i64, i64);
+    let mut found: HashMap<(usize, End, End), usize> = HashMap::new();
+    let mut steps = Vec::with_capacity(lines.len());
+    for (li, line) in lines.iter().enumerate() {
+        let mut mine = Vec::new();
+        let mut walked = 0.0;
+        for seg in line.pts.windows(2) {
+            let (a, b) = (seg[0], seg[1]);
+            let len = a.distance(b);
+            if len < NEAR {
+                walked += len;
+                continue;
+            }
+            let dir = (b - a) / len;
+            let near: Vec<(usize, Pos2)> = if (a.x - b.x).abs() < 1e-3 {
+                filed(
+                    &by_x,
+                    line.up,
+                    a.x,
+                    a.y.min(b.y) - NEAR,
+                    a.y.max(b.y) + NEAR,
+                )
+            } else if (a.y - b.y).abs() < 1e-3 {
+                filed(
+                    &by_y,
+                    line.up,
+                    a.y,
+                    a.x.min(b.x) - NEAR,
+                    a.x.max(b.x) + NEAR,
+                )
+            } else {
+                bends[&line.up].clone()
+            };
+            let mut cuts: Vec<(f32, Pos2)> = near
+                .into_iter()
+                .filter(|(o, _)| *o != li)
+                .filter_map(|(_, p)| {
+                    let t = (p - a).dot(dir);
+                    let on = (a + dir * t).distance(p) <= NEAR;
+                    (on && t > NEAR && t < len - NEAR).then_some((t, p))
+                })
+                .collect();
+            cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+            cuts.push((len, b));
+            let mut from = (0.0, a);
+            for (t, p) in cuts {
+                if t - from.0 < NEAR {
+                    continue;
+                }
+                let (ka, kb) = (key(from.1), key(p));
+                let k = (line.up, ka.min(kb), ka.max(kb));
+                let piece = *found.entry(k).or_insert_with(|| {
+                    out.push(Piece {
+                        pts: [from.1, p],
+                        feeds: Vec::new(),
+                        lines: Vec::new(),
+                        s0: walked + from.0,
+                    });
+                    out.len() - 1
+                });
+                // Lines are walked one at a time: this one is on the
+                // piece already if it was the last added.
+                let pc = &mut out[piece];
+                if pc.lines.last() != Some(&li) {
+                    pc.lines.push(li);
+                    pc.feeds.extend(&line.kids);
+                }
+                mine.push(Step {
+                    piece,
+                    s: walked + from.0,
+                    a: from.1,
+                    b: p,
+                });
+                from = (t, p);
+            }
+            walked += len;
+        }
+        steps.push(mine);
+    }
+    (out, steps)
 }
 
 #[cfg(test)]
@@ -1294,6 +1647,270 @@ mod tests {
             for s in r.windows(2) {
                 assert!(s[0].x == s[1].x || s[0].y == s[1].y);
             }
+        }
+    }
+
+    /// internet → gateway → four cards stacked in one column (2..=5).
+    fn column() -> (Map, Layout) {
+        let mut m = tree(&[None, Some(0), Some(1), Some(1), Some(1), Some(1)]);
+        m.nodes[1].zone = Zone::Gateway;
+        let l = layout_in(&m, &|_| true, Mode::Cluster);
+        assert!((2..6).all(|k| l.stacked[k]));
+        (m, l)
+    }
+
+    /// Every segment of every line that runs into a card other than the
+    /// two it joins: (card, line's cards).
+    fn through_cards(
+        m: &Map,
+        lines: &[Line],
+        at: &dyn Fn(usize) -> Option<Pos2>,
+    ) -> Vec<(usize, Vec<usize>)> {
+        let mut hits = Vec::new();
+        for line in lines {
+            for k in (0..m.nodes.len()).filter(|&k| k != line.up && !line.kids.contains(&k)) {
+                let r = card_rect(&m.nodes[k], at(k).unwrap()).shrink(1.0);
+                if line
+                    .pts
+                    .windows(2)
+                    .any(|s| r.intersects(Rect::from_two_pos(s[0], s[1])))
+                {
+                    hits.push((k, line.kids.clone()));
+                }
+            }
+        }
+        hits
+    }
+
+    #[test]
+    fn a_card_nudged_out_of_its_column_stays_on_the_trunk() {
+        let (m, l) = column();
+        let home = l.pos[3].unwrap();
+        let nudged = home + vec2(8.0, 0.0);
+        let at = |k: usize| if k == 3 { Some(nudged) } else { l.pos[k] };
+        // Straight across it would run through the card above.
+        let free = route_free(card(at(1).unwrap()), card(nudged));
+        assert!(
+            blockers(&card_rects(&m, &l, &|k| at(k).map(card)), 1, 3, &free)
+                .next()
+                .is_some()
+        );
+        let lines = lines(&m, &l, &at, &|k| k == 3);
+        assert!(through_cards(&m, &lines, &at).is_empty());
+        let own = lines.iter().find(|x| x.kids == [3]).unwrap();
+        // The column's route, its stub reaching the card where it is now.
+        let mut want = route(card(at(1).unwrap()), card(home), true, None);
+        want.last_mut().unwrap().x = nudged.x;
+        assert_eq!(own.pts, want);
+        let trunk = home.x - INDENT / 2.0;
+        assert_eq!(own.pts[own.pts.len() - 2].x, trunk);
+        assert_eq!(*own.pts.last().unwrap(), nudged + vec2(0.0, CARD.y / 2.0));
+    }
+
+    #[test]
+    fn a_card_dragged_beside_its_column_is_routed_round_the_cards() {
+        let (m, l) = column();
+        // Out beside it either way, and (-20) nudged left onto the column's
+        // trunk: then the cards below it are linked round it too.
+        for d in [
+            vec2(150.0, 0.0),
+            vec2(240.0, 30.0),
+            vec2(-260.0, 10.0),
+            vec2(-20.0, 0.0),
+        ] {
+            let dragged = l.pos[3].unwrap() + d;
+            let at = |k: usize| if k == 3 { Some(dragged) } else { l.pos[k] };
+            let free = route_free(card(at(1).unwrap()), card(dragged));
+            assert!(
+                blockers(&card_rects(&m, &l, &|k| at(k).map(card)), 1, 3, &free)
+                    .next()
+                    .is_some()
+            );
+            let lines = lines(&m, &l, &at, &|k| k == 3);
+            assert!(through_cards(&m, &lines, &at).is_empty(), "{d:?}");
+            let own = lines.iter().find(|x| x.kids == [3]).unwrap();
+            for s in own.pts.windows(2) {
+                assert!(s[0].x == s[1].x || s[0].y == s[1].y, "{:?}", own.pts);
+            }
+            // It ends on the dragged card's edge, clear of its corners.
+            let r = Rect::from_min_size(dragged, CARD);
+            let end = *own.pts.last().unwrap();
+            assert!(r.expand(0.01).contains(end) && !r.shrink(0.5).contains(end));
+            let corners = [
+                r.left_top(),
+                r.right_top(),
+                r.left_bottom(),
+                r.right_bottom(),
+            ];
+            assert!(
+                corners.iter().all(|c| c.distance(end) > 4.0),
+                "{:?}",
+                own.pts
+            );
+        }
+    }
+
+    #[test]
+    fn client_tiles_are_obstacles_of_their_own_size() {
+        // A column of client tiles under the gateway: a card dragged out
+        // beside it is routed round the tiles as they're drawn, and its
+        // route may pass where a full card would have been but a tile isn't.
+        let (mut m, _) = column();
+        for n in &mut m.nodes[2..] {
+            n.zone = Zone::Client;
+            n.client = true;
+        }
+        let l = layout_in(&m, &|_| true, Mode::Cluster);
+        assert!((2..6).all(|k| l.stacked[k]));
+        let tile = card_rect(&m.nodes[4], l.pos[4].unwrap());
+        assert_eq!(tile.height(), TILE.y);
+        let rect = |at: &dyn Fn(usize) -> Option<Pos2>| {
+            let at = |k: usize| at(k).map(|p| card_rect(&m.nodes[k], p));
+            card_rects(&m, &l, &at)
+        };
+        let cards = rect(&|k| l.pos[k]);
+        let r4 = cards.iter().find(|c| c.0 == 4).unwrap().1;
+        assert!((r4.height() - (TILE.y - 2.0)).abs() < 1e-3);
+        // Just below a tile, inside where a full card would reach: clear.
+        let y = tile.bottom() + 4.0;
+        assert!(y < tile.top() + CARD.y);
+        let under = [pos2(tile.left() - 20.0, y), pos2(tile.right() + 20.0, y)];
+        assert!(blockers(&cards, 0, 1, &under).all(|c| c.0 != 4));
+        for d in [vec2(240.0, 0.0), vec2(-260.0, 10.0)] {
+            let dragged = l.pos[3].unwrap() + d;
+            let at = |k: usize| if k == 3 { Some(dragged) } else { l.pos[k] };
+            let lines = lines(&m, &l, &at, &|k| k == 3);
+            assert!(through_cards(&m, &lines, &at).is_empty(), "{d:?}");
+            let own = lines.iter().find(|x| x.kids == [3]).unwrap();
+            let r = card_rect(&m.nodes[3], dragged);
+            let end = *own.pts.last().unwrap();
+            assert!(r.expand(0.01).contains(end), "{:?}", own.pts);
+        }
+    }
+
+    #[test]
+    fn a_card_dragged_above_its_uplink_leaves_the_column() {
+        let (m, l) = column();
+        let dragged = l.pos[3].unwrap() + vec2(8.0, -300.0);
+        let at = |k: usize| if k == 3 { Some(dragged) } else { l.pos[k] };
+        assert!(column_route(&l, &|k| at(k).map(card), 1, 3).is_none());
+        // Up or down a card's height or less, it's still in the column.
+        for dy in [-40.0, 60.0] {
+            let near = l.pos[3].unwrap() + vec2(8.0, dy);
+            let at = |k: usize| if k == 3 { Some(near) } else { l.pos[k] };
+            assert!(
+                column_route(&l, &|k| at(k).map(card), 1, 3).is_some(),
+                "{dy}"
+            );
+        }
+        let lines = lines(&m, &l, &at, &|k| k == 3);
+        assert!(through_cards(&m, &lines, &at).is_empty());
+        let own = lines.iter().find(|x| x.kids == [3]).unwrap();
+        assert!(own.pts.windows(2).all(|s| s[0] != s[1]), "{:?}", own.pts);
+    }
+
+    #[test]
+    fn a_tile_dropped_under_a_row_of_tiles_is_routed_between_them() {
+        // Acme with every client: ACME-WS-205 (a tile stacked under one
+        // access switch) dropped all along under the other switch's row
+        // of tiles, 24 apart. A gutter by the tile's edge mustn't be moved
+        // out into the next tile: wherever the drop is clear, so is its link.
+        let bytes = crate::skills::example(&crate::skills::example_path(0)).expect("example");
+        let doc = crate::mapnetwork::parse(bytes).expect("parses");
+        let m = crate::map::build(&crate::map::Input {
+            mapnetwork: Some(&doc),
+            clients: crate::map::Clients::All,
+            ..Default::default()
+        });
+        let l = layout_in(&m, &|_| true, Mode::Cluster);
+        let k = m
+            .nodes
+            .iter()
+            .position(|n| n.label == "ACME-WS-205")
+            .expect("in the example");
+        let (home, up) = (l.pos[k].unwrap(), m.nodes[k].parent().unwrap());
+        let mut drops = 0;
+        for dx in (-1400..200).step_by(7) {
+            for dy in [-40.0, -26.5, 0.0, 60.0] {
+                let to = home + vec2(dx as f32, dy);
+                let at = |i: usize| if i == k { Some(to) } else { l.pos[i] };
+                let rect = |i: usize| at(i).map(|p| card_rect(&m.nodes[i], p));
+                let r = rect(k).unwrap();
+                if (0..m.nodes.len()).any(|o| o != k && rect(o).is_some_and(|x| x.intersects(r))) {
+                    continue;
+                }
+                drops += 1;
+                let lines = lines(&m, &l, &at, &|i| i == k);
+                let own = lines.iter().find(|x| x.kids == [k]).unwrap();
+                let cards = card_rects(&m, &l, &rect);
+                let hit: Vec<usize> = blockers(&cards, up, k, &own.pts).map(|c| c.0).collect();
+                assert!(hit.is_empty(), "{to:?} runs through {hit:?}: {:?}", own.pts);
+            }
+        }
+        assert!(drops > 100);
+    }
+
+    #[test]
+    fn a_detour_keeps_off_the_edges_and_out_of_the_uplinks_side() {
+        let card = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), CARD);
+        let (p, block) = (card(0.0, 0.0), card(0.0, 200.0));
+        // A column gutter that lands on the card's right edge moves out
+        // beside it, and comes into its side.
+        let c = card(-100.0, 400.0);
+        let pts = detour(p, c, block, c.right() + 2.0, false, false);
+        assert_eq!(*pts.last().unwrap(), c.right_center());
+        assert!(pts[pts.len() - 2].x >= c.right() + GAP_X / 2.0);
+        // Or in over it, clear of its corner, into its top.
+        let pts = detour(p, c, block, c.right() + 2.0, false, true);
+        let end = *pts.last().unwrap();
+        assert_eq!(end.y, c.top());
+        assert!(end.x < c.right() - 8.0 && end.x > c.center().x);
+        // A row below the uplink leaves from its bottom, as a trunk does.
+        let c = card(300.0, 120.0);
+        let g = block.bottom() + STACK_GAP / 2.0;
+        let pts = detour(p, c, block, g, true, false);
+        assert_eq!(pts[0], p.center_bottom());
+        assert_eq!(pts[1], pos2(p.center().x, g));
+        assert_eq!(*pts.last().unwrap(), c.center_bottom());
+    }
+
+    #[test]
+    fn a_stacked_column_cuts_into_pieces_where_its_stubs_leave() {
+        let (m, l) = column();
+        let all = lines(&m, &l, &|k| l.pos[k], &|_| false);
+        let col: Vec<&Line> = all.iter().filter(|x| x.up == 1).collect();
+        assert_eq!(col.len(), 4);
+        let (pieces, steps) = pieces(&col);
+        // Each line's steps join end to end, and each starts where the
+        // last left off along it.
+        for (line, st) in col.iter().zip(&steps) {
+            assert_eq!(st[0].a, line.pts[0]);
+            assert_eq!(st.last().unwrap().b, *line.pts.last().unwrap());
+            for w in st.windows(2) {
+                assert_eq!(w[0].b, w[1].a);
+                assert!((w[0].s + w[0].a.distance(w[0].b) - w[1].s).abs() < 1e-3);
+            }
+        }
+        // Down from the gateway: three pieces (drop, bus, trunk to the first
+        // stub) carry all four, then the trunk carries 3, 2, 1; a stub each.
+        let mut counts: Vec<usize> = pieces.iter().map(|p| p.feeds.len()).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, [1, 1, 1, 1, 1, 2, 3, 4, 4, 4]);
+        let deepest = steps.iter().max_by_key(|s| s.len()).unwrap();
+        let fed: Vec<usize> = deepest
+            .iter()
+            .map(|s| pieces[s.piece].feeds.len())
+            .collect();
+        assert_eq!(fed, [4, 4, 4, 3, 2, 1, 1]);
+        // A shared piece starts as far along every line through it.
+        for st in &steps {
+            for s in st {
+                assert!((pieces[s.piece].s0 - s.s).abs() < 1e-3);
+            }
+        }
+        // A stub is fed by its own card alone.
+        for (line, st) in col.iter().zip(&steps) {
+            assert_eq!(pieces[st.last().unwrap().piece].feeds, line.kids);
         }
     }
 

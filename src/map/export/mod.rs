@@ -29,6 +29,9 @@ pub struct Drawn<'a> {
     /// The legend is shown on the canvas: the pictures (SVG, PNG) put it
     /// under the map.
     pub legend: bool,
+    /// What a saved map says it is when it isn't what was found (a plan,
+    /// a training map): said in the summary line, as above the canvas.
+    pub caption: Option<&'a str>,
 }
 
 impl Drawn<'_> {
@@ -91,6 +94,11 @@ impl Drawn<'_> {
             "" => "Network map",
             t => t,
         }
+    }
+
+    /// The line under the title: the map's summary and the version.
+    fn summary(&self) -> String {
+        format!("{} · is-alive {}", self.map.summary, crate::VERSION)
     }
 
     /// How many cards a box holds, as on screen: a collapsed site says how
@@ -328,6 +336,7 @@ pub(crate) mod tests {
             pos: &lay.pos,
             moved: &[false, false],
             legend: true,
+            caption: None,
         })
     }
 
@@ -377,6 +386,7 @@ pub(crate) mod tests {
             pos: &lay.pos,
             moved: &moved,
             legend: false,
+            caption: None,
         })
     }
 
@@ -395,6 +405,120 @@ pub(crate) mod tests {
             assert_eq!(d.title(), "Acme Distribution LLC — Multi-Site");
             assert!(d.cards().count() > 5);
         });
+    }
+
+    /// A plan or a training map's picture and diagram say what it is, so
+    /// neither is taken for what was found; a map as found says nothing.
+    #[test]
+    fn a_plan_or_training_map_says_so_in_its_picture_and_diagram() {
+        let look = Look::new(&eframe::egui::Visuals::dark(), false);
+        let said = "Training map — made up for practice, not discovered";
+        with_acme(Mode::Sites, |d| {
+            for f in [Format::Svg, Format::DrawIo] {
+                let text = f.text(d, look).expect("text");
+                assert!(!text.contains("not discovered"), "{f:?}");
+                let d = Drawn {
+                    caption: Some(said),
+                    ..*d
+                };
+                let text = f.text(&d, look).expect("text");
+                assert!(text.contains(said), "{f:?}");
+                assert!(text.contains(&d.summary()), "{f:?}");
+                parse_xml(&text);
+            }
+        });
+        // However narrow the map, the picture is wide enough for it.
+        let m = crate::map::Map {
+            nodes: vec![crate::map::Node {
+                id: "internet".into(),
+                zone: Zone::Internet,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let d = Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &[false],
+            legend: false,
+            caption: Some(said),
+        };
+        let w = scene::draw(&d, look).size.x;
+        assert!(w >= 7.0 * said.chars().count() as f32 + 64.0, "{w}");
+    }
+
+    /// A card dragged out of its column: the pictures and diagrams take
+    /// the canvas's routing, so its link goes round the cards in the way
+    /// (client tiles at their own size) rather than through them.
+    #[test]
+    fn a_dragged_cards_link_misses_the_other_cards_in_exports_too() {
+        let m = acme();
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        let shown: Vec<usize> = (0..m.nodes.len())
+            .filter(|&k| lay.pos[k].is_some())
+            .collect();
+        let bottom = shown
+            .iter()
+            .map(|&k| layout::card_rect(&m.nodes[k], lay.pos[k].unwrap()).bottom())
+            .fold(f32::MIN, f32::max);
+        let look = Look::new(&eframe::egui::Visuals::dark(), false);
+        // Each stacked card in turn, dropped under the whole map at its
+        // own x, and beside its column.
+        let stacked: Vec<usize> = shown
+            .iter()
+            .copied()
+            .filter(|&k| lay.stacked[k] && m.nodes[k].parent().is_some())
+            .take(4)
+            .collect();
+        assert!(!stacked.is_empty());
+        for k in stacked {
+            let home = lay.pos[k].unwrap();
+            for to in [
+                eframe::egui::pos2(home.x, bottom + 120.0),
+                home + eframe::egui::vec2(CARD.x + 40.0, 0.0),
+            ] {
+                let mut pos = lay.pos.clone();
+                pos[k] = Some(to);
+                let mut moved = vec![false; m.nodes.len()];
+                moved[k] = true;
+                let d = Drawn {
+                    map: &m,
+                    lay: &lay,
+                    pos: &pos,
+                    moved: &moved,
+                    legend: false,
+                    caption: None,
+                };
+                let own = d
+                    .lines()
+                    .into_iter()
+                    .find(|l| l.kids == [k])
+                    .expect("its link");
+                let r = d.rect(k).unwrap();
+                let end = *own.pts.last().unwrap();
+                assert!(r.expand(0.01).contains(end), "{k}: {:?}", own.pts);
+                // Only where the drop itself sits on a card can't it be clear.
+                let on_card = shown
+                    .iter()
+                    .any(|&o| o != k && d.rect(o).unwrap().intersects(r));
+                if !on_card {
+                    let up = m.nodes[k].parent().unwrap();
+                    for &o in shown.iter().filter(|&&o| o != k && o != up) {
+                        let c = d.rect(o).unwrap().shrink(1.0);
+                        let hit = own
+                            .pts
+                            .windows(2)
+                            .any(|s| c.intersects(Rect::from_two_pos(s[0], s[1])));
+                        assert!(!hit, "{k} to {to:?} runs through {o}: {:?}", own.pts);
+                    }
+                }
+                for f in [Format::Svg, Format::DrawIo] {
+                    parse_xml(&f.text(&d, look).expect("text"));
+                }
+            }
+        }
     }
 
     #[test]
@@ -428,6 +552,7 @@ pub(crate) mod tests {
             pos: &lay.pos,
             moved: &moved,
             legend: false,
+            caption: None,
         };
         let look = Look::new(&eframe::egui::Visuals::dark(), false);
         for f in [Format::Svg, Format::DrawIo] {

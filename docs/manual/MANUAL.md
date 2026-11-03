@@ -651,7 +651,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Legend** and **Export** (the same formats).
-- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow.
+- **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way. Dropped onto other cards' links, it moves them round it the same way.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
 
 ### The legend
@@ -659,7 +659,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 The **Legend** panel in the bottom left corner says what everything on the map means, listing only what this map has, with counts:
 
 - **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
-- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, cards with a note (the small folded sheet), and the chips cards carry (an uplink's port, or a tag such as *inferred*).
+- **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, cards with a note (the small folded sheet), the chips cards carry (an uplink's port, or a tag such as *inferred*), the *drawn* chip of cards drawn by hand on a plan or a training map, and the **+N** and **−** chips of cards with clients to show or hide.
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
@@ -675,7 +675,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
-- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab and above the map, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
+- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, above the map and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its panel. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
@@ -684,6 +684,7 @@ A saved map doesn't change with the files: **Reload** and **Clients** are greyed
 ![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)
 
 - **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link: the route its traffic takes.
+- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing down it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
 - **Trace to WAN**, at the top of the panel, lights every selected card's whole path to the internet instead.
@@ -703,7 +704,7 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 | **Select with its direct children** | This card and the cards straight under it |
 | **Select with everything below it** | This card and every card under it, all the way down |
 | **Add note…** / **Edit note…** / **Remove note** | Write a note on the card, change it or take it off (see *Notes on cards* below). On several selected cards: **Add note to N cards…** puts the same note on each (in place of any they have), and **Remove notes** takes theirs off |
-| **Show 8 more clients** / **Show all N clients** / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
+| **Show 8 more clients** / **Show all N clients** (once some show, **Show the other N clients**) / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
 | **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
 | **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
@@ -1004,7 +1005,7 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
-**Animate** (on by default) lets things move: the Map tab pulses after a Full scan, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Off, the Map tab lights up still instead and the rest holds still. Turn it off on battery or if motion bothers you.
+**Animate** (on by default, in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Everything pauses while the window isn't in front. Off, the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. Turn it off on battery or if motion bothers you.
 
 ### Miami backdrop
 

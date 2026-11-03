@@ -1064,14 +1064,17 @@ pub fn appearance(
         });
         ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
+        // In every theme: the Map tab's glow and the map's packets too.
         let tip = if gpu {
-            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
-             line under the tabs drift (10 frames a second on the GPU, paused while the window \
-             isn't focused). Off, everything holds still."
+            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
+             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
+             (10 frames a second on the GPU, paused while the window isn't focused). Off, \
+             everything holds still; turn it off on battery."
         } else {
-            "Moving effects: the Map tab pulses after a Full scan, and Miami's backdrop and the \
-             line under the tabs drift (10 frames a second, no usable GPU, paused while the \
-             window isn't focused). Off, everything holds still."
+            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
+             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
+             (10 frames a second, no usable GPU, paused while the window isn't focused). Off, \
+             everything holds still; turn it off on battery."
         };
         if ui
             .checkbox(&mut s.animate, "Animate")

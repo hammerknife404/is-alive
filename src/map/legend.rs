@@ -59,6 +59,11 @@ pub enum Swatch {
     Note,
     /// A chip on a card (the uplink's port or a note).
     Chip,
+    /// The "drawn" chip on a card drawn by hand (a plan, a training map).
+    Drawn,
+    /// The +N chip on a card with clients it doesn't draw (and − on one
+    /// stepped open): click for more or fewer.
+    Steps,
     /// A link drawn as this kind.
     Line(Link),
     /// Several links into a box folded into one line, with a count; drawn
@@ -168,6 +173,30 @@ pub fn slots(entries: &[Entry], rows: usize) -> Vec<Slot> {
         row += 1;
     }
     out
+}
+
+/// The +N and − chips on cards with clients they don't draw, `inks` one
+/// for each card wearing one: the last of the Cards section. The canvas's
+/// only (a picture draws no chips), and only it knows which cards have
+/// them, so it adds them to what `entries` lists.
+pub fn add_client_chips(out: &mut Vec<Entry>, inks: &[Ink]) {
+    let Some(ink) = most(inks) else {
+        return;
+    };
+    let at = out
+        .iter()
+        .rposition(|e| matches!(e.section, Section::Roles | Section::Cards))
+        .map_or(0, |k| k + 1);
+    out.insert(
+        at,
+        Entry::new(
+            Section::Cards,
+            Swatch::Steps,
+            ink,
+            "More or fewer clients",
+            Some(inks.len()),
+        ),
+    );
 }
 
 /// The link a line is drawn as: its strongest (one solid uplink makes a
@@ -303,6 +332,22 @@ pub fn entries(
             ink,
             "Port or tag",
             None,
+        ));
+    }
+    // Drawn by hand, the card or its link up: a client's tile draws no
+    // chip, so isn't counted.
+    let drawn: Vec<Ink> = nodes
+        .iter()
+        .filter(|c| !c.client && super::drawn_chip(c).is_some())
+        .map(accent)
+        .collect();
+    if let Some(ink) = most(&drawn) {
+        out.push(Entry::new(
+            Section::Cards,
+            Swatch::Drawn,
+            ink,
+            "Drawn by hand",
+            Some(drawn.len()),
         ));
     }
 
@@ -644,6 +689,33 @@ mod tests {
         }
     }
 
+    /// The +N chips go last in Cards, before Links; with no Cards entry,
+    /// right after the roles.
+    #[test]
+    fn client_chips_end_the_cards_section() {
+        let role = Ink::Role(Zone::Switch);
+        let e = |s, sw| Entry::new(s, sw, role, "x", None);
+        let mut v = vec![
+            e(Section::Roles, Swatch::Card),
+            e(Section::Cards, Swatch::Warn),
+            e(Section::Links, Swatch::Line(Link::Wired)),
+        ];
+        add_client_chips(&mut v, &[]);
+        assert_eq!(v.len(), 3, "no chips: no entry");
+        add_client_chips(&mut v, &[role, Ink::Role(Zone::Wireless), role]);
+        assert_eq!(
+            (v[2].swatch, v[2].ink, v[2].count),
+            (Swatch::Steps, role, Some(3))
+        );
+        assert_eq!(v[2].section, Section::Cards);
+        let mut v = vec![
+            e(Section::Roles, Swatch::Card),
+            e(Section::Links, Swatch::Lit),
+        ];
+        add_client_chips(&mut v, &[role]);
+        assert_eq!(v[1].swatch, Swatch::Steps);
+    }
+
     #[test]
     fn most_is_the_commonest_and_the_one_on_top_on_a_tie() {
         assert_eq!(most::<u8>(&[]), None);
@@ -729,5 +801,39 @@ mod tests {
         assert_eq!((a.ink, a.count), (Ink::Weak, Some(1)));
         assert!(!has(&e, Swatch::Line(Link::Wireless)));
         assert!(!has(&e, Swatch::Chip));
+        assert!(!has(&e, Swatch::Drawn));
+    }
+
+    #[test]
+    fn cards_drawn_by_hand_are_listed_when_any_wear_the_chip() {
+        let mut m = Map {
+            nodes: (0..4)
+                .map(|i| Node {
+                    id: format!("n{i}"),
+                    zone: [Zone::Internet, Zone::Gateway, Zone::Switch, Zone::Client][i],
+                    up: (i > 0).then(|| (i - 1, Link::Wired, None)),
+                    client: i == 3,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let lay = layout_in(&m, &|_| true, Mode::Cluster);
+        let lines = layout::lines(&m, &lay, &|i| lay.pos[i], &|_| false);
+        let drawn = |m: &Map| {
+            entries(m, &lay.boxes, &lines, false, 0, false)
+                .into_iter()
+                .find(|x| x.swatch == Swatch::Drawn)
+                .map(|x| (x.ink, x.count))
+        };
+        assert_eq!(drawn(&m), None);
+        // A client's tile draws no chips: not counted.
+        m.nodes[3].drawn = true;
+        assert_eq!(drawn(&m), None);
+        m.nodes[2].drawn = true;
+        m.nodes[1].drawn_up = true;
+        let (ink, count) = drawn(&m).unwrap();
+        assert_eq!(count, Some(2));
+        assert!(matches!(ink, Ink::Role(Zone::Gateway | Zone::Switch)));
     }
 }

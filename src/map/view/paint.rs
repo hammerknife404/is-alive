@@ -1,6 +1,8 @@
 //! Drawing the map: zones, sites, links with their flow dots, and cards.
 
 use super::*;
+use crate::map::colours;
+use std::cell::RefCell;
 
 impl MapView {
     /// Every line on the map as drawn now (see `layout::lines`).
@@ -137,103 +139,175 @@ impl MapView {
             }
         }
 
-        // Links.
+        // Links: the ones not lit as they always are; then the lit ones,
+        // cut into pieces where they part (see `layout::pieces`), each in
+        // the colour of the cards it leads to, with packets in those colours
+        // flowing down them.
         let glow = glow_strength(vis);
-        let mut flows = false;
-        // One link's line, and a label at its end. True while it flows.
-        let draw = |pts: &[Pos2],
-                    base: Color32,
-                    lit_colour: Color32,
-                    link: Link,
-                    w: f32,
-                    alpha: f32,
-                    on: bool,
-                    label: Option<(Pos2, egui::Align2, &str)>|
-         -> bool {
-            draw_link(&p, pts, base, lit_colour, link, w, alpha, on, z, glow, now);
-            if let Some((pos, align, l)) = label
-                && alpha > 0.3
-            {
-                p.text(
-                    pos,
-                    align,
-                    l,
-                    trunk_font(z),
-                    vis.weak_text_color().gamma_multiply(alpha),
-                );
-            }
-            on
+        let behind = canvas_fill(vis);
+        // Each colour as it's drawn on this canvas, and whether it's grey.
+        let shade: RefCell<HashMap<Color32, (Color32, bool)>> = RefCell::default();
+        let ink = |c: Color32| {
+            *shade
+                .borrow_mut()
+                .entry(c)
+                .or_insert_with(|| colours::packet_look(c, behind))
         };
+        let leg = |c: Color32| ink(c).0;
+        let mut flows = false;
+        // A packet in its card's colour (see `draw_packet`).
+        let packet = |at: Pos2, c: Color32, r: f32, alpha: f32| {
+            let (lc, grey) = ink(c);
+            draw_packet(&p, at, lc, grey, r, alpha, behind);
+        };
+        let gap = packet_gap(z);
+        let travel = packet_travel(now, z);
+        let clip = rect.expand(12.0);
         let width = |link: Link, on: bool| link_width(link, z, on);
         let colour = |n: &Node, link: Link| link_colour(vis, link, self.accent(n));
-        let shared = self.column_colours(lines, &lit_links);
+        let link_of = |k: usize| self.map.nodes[k].link().unwrap_or(Link::Wired);
+        // Lit, a link takes its card's colour (an assumed one too, rather
+        // than grey), so the whole path reads as one.
+        let lit_colour = |k: usize| {
+            let n = &self.map.nodes[k];
+            if n.link() == Some(Link::Backbone) {
+                zone_colour(Zone::Gateway)
+            } else {
+                self.accent(n)
+            }
+        };
+        let is_lit = |line: &layout::Line| line.kids.iter().any(|k| lit_links.contains(k));
+        let screen =
+            |w: &[Pos2]| -> Vec<Pos2> { w.iter().map(|w| self.to_screen(rect, *w)).collect() };
+        // A trunk's ×N count, written over the lines once they're all drawn.
+        let mut counts: Vec<(Pos2, usize, f32)> = Vec::new();
         for line in lines {
-            let on = line.kids.iter().any(|k| lit_links.contains(k));
-            // Inside one box, links would cut across its grid: shown only
-            // while lit.
-            if line.quiet && !on {
+            let on = is_lit(line);
+            // A trunk into a box carries its strongest link: one solid uplink
+            // makes the shared line solid.
+            if let Some(g) = line.into.and_then(|g| self.lay.boxes.get(g)) {
+                let alpha = line
+                    .kids
+                    .iter()
+                    .map(|&k| fade(k).min(fade(line.up)))
+                    .fold(0.0, f32::max);
+                let pts = screen(&line.pts);
+                if line.kids.len() > 1 && alpha > 0.3 {
+                    let end = *pts.last().expect("route has points");
+                    counts.push((end, line.kids.len(), alpha));
+                }
+                // Lit, it's drawn in pieces with the rest (below).
+                if on {
+                    continue;
+                }
+                let first = line
+                    .kids
+                    .iter()
+                    .copied()
+                    .max_by_key(|&k| layout::strength(link_of(k)))
+                    .expect("a line carries a link");
+                let link = link_of(first);
+                let w = width(link, false) + 0.6;
+                let boxed = g
+                    .zone
+                    .map_or_else(|| colour(&self.map.nodes[first], link), zone_colour);
+                draw_link(&p, &pts, boxed, link, w, alpha, z, glow);
                 continue;
             }
-            let alpha = line
-                .kids
-                .iter()
-                .map(|&k| fade(k).min(fade(line.up)))
-                .fold(0.0, f32::max);
-            let pts: Vec<Pos2> = line.pts.iter().map(|w| self.to_screen(rect, *w)).collect();
-            // A trunk carries its strongest link: one solid uplink makes
-            // the shared line solid.
-            let first = line
-                .kids
-                .iter()
-                .map(|&k| &self.map.nodes[k])
-                .max_by_key(|m| m.link().map_or(0, layout::strength))
-                .expect("a line carries a link");
-            let link = first.link().unwrap_or(Link::Wired);
-            let Some(g) = line.into.and_then(|g| self.lay.boxes.get(g)) else {
-                // The link's port or note is a chip on its card (see `card`).
-                let lit_colour = line.kids[..]
-                    .first()
-                    .and_then(|k| shared.get(k).copied())
-                    .unwrap_or_else(|| self.accent(first));
-                flows |= draw(
-                    &pts,
-                    colour(first, link),
-                    lit_colour,
-                    link,
-                    width(link, on),
-                    alpha,
-                    on,
-                    None,
-                );
+            // Inside one box, links would cut across its grid: shown only
+            // while lit.
+            if on || line.quiet {
                 continue;
-            };
-            let count = format!("×{}", line.kids.len());
-            let end = *pts.last().expect("route has points");
-            let label = (line.kids.len() > 1).then(|| {
-                (
-                    end + vec2(5.0, -4.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    count.as_str(),
-                )
-            });
-            let base = g.zone.map_or_else(|| colour(first, link), zone_colour);
-            flows |= draw(
-                &pts,
+            }
+            // The link's port or note is a chip on its card (see `card`).
+            let k = line.kids[0];
+            let link = link_of(k);
+            let alpha = fade(k).min(fade(line.up));
+            let base = colour(&self.map.nodes[k], link);
+            draw_link(
+                &p,
+                &screen(&line.pts),
                 base,
-                self.accent(first),
                 link,
-                width(link, on) + 0.6,
+                width(link, false),
                 alpha,
-                on,
-                label,
+                z,
+                glow,
             );
         }
 
-        let behind = if vis.panel_fill.a() == 255 {
-            vis.panel_fill
-        } else {
-            vis.extreme_bg_color
+        // The lit links, trunks and all, in pieces (a trunk carrying only
+        // its lit cards), each in the colour of the lit cards it leads to.
+        let lit: Vec<layout::Line> = lines
+            .iter()
+            .filter(|l| is_lit(l))
+            .map(|l| layout::Line {
+                kids: l
+                    .kids
+                    .iter()
+                    .copied()
+                    .filter(|k| lit_links.contains(k))
+                    .collect(),
+                ..l.clone()
+            })
+            .collect();
+        let uplink = |up: usize| self.accent(&self.map.nodes[up]);
+        let boxed = |up: usize, g: usize| {
+            let zone = self.lay.boxes.get(g).and_then(|b| b.zone);
+            zone.map_or_else(|| uplink(up), zone_colour)
         };
+        let alpha = |k: usize| {
+            let up = self.map.nodes[k].parent().unwrap_or(k);
+            fade(k).min(fade(up))
+        };
+        let ink = colours::Ink {
+            card: &lit_colour,
+            uplink: &uplink,
+            boxed: &boxed,
+            link: &link_of,
+            alpha: &alpha,
+        };
+        let mut drawn = self.lit_drawn.borrow_mut();
+        drawn.update(lit, &ink);
+        let lit_width = |link: Link, trunk: bool| width(link, true) + if trunk { 0.6 } else { 0.0 };
+        for run in &drawn.runs {
+            let look = run.look;
+            draw_lit(
+                &p,
+                &screen(&run.pts),
+                run.s0 * z,
+                leg(look.colour),
+                look.mixed,
+                look.link,
+                lit_width(look.link, look.trunk),
+                look.alpha,
+                z,
+                glow,
+            );
+        }
+        if self.animate && !drawn.lines.is_empty() {
+            flows = true;
+            for pk in &drawn.packets {
+                let line = &drawn.lines[pk.line];
+                let period = pk.slots as f32 * gap;
+                let phase = travel.rem_euclid(period) + pk.slot as f32 * gap;
+                let r = packet_radius(lit_width(pk.link, line.into.is_some()));
+                for at in along_from(&screen(&line.pts), pk.from * z, phase, period, clip) {
+                    packet(at, pk.colour, r, pk.alpha);
+                }
+            }
+        }
+        drop(drawn);
+        for (end, n, alpha) in counts {
+            p.text(
+                end + vec2(5.0, -4.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("×{n}"),
+                trunk_font(z),
+                vis.weak_text_color().gamma_multiply(alpha),
+            );
+        }
+
         for (at, g, c) in above {
             let back = Rect::from_min_size(at, g.size()).expand2(vec2(2.0, 0.5));
             p.rect_filled(back, 2, behind);
@@ -278,44 +352,6 @@ impl MapView {
                 crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
             }
         }
-    }
-
-    /// The colour a lit link takes when cards stacked in one column share
-    /// its line: lit together, the column takes their colour if they have
-    /// one, else their uplink's, rather than whichever card's link is drawn
-    /// last. Keyed by card; cards lit alone in their column aren't in it.
-    pub(super) fn column_colours(
-        &self,
-        lines: &[layout::Line],
-        lit_links: &HashSet<usize>,
-    ) -> HashMap<usize, Color32> {
-        let mut columns: HashMap<(usize, i32), Vec<usize>> = HashMap::new();
-        for line in lines {
-            if let [k] = line.kids[..]
-                && lit_links.contains(&k)
-                && self.lay.stacked.get(k).copied().unwrap_or(false)
-                && let Some(Some(at)) = self.lay.pos.get(k)
-            {
-                columns.entry((line.up, at.x as i32)).or_default().push(k);
-            }
-        }
-        let mut out = HashMap::new();
-        for ((up, _), kids) in columns {
-            if kids.len() < 2 {
-                continue;
-            }
-            let first = self.accent(&self.map.nodes[kids[0]]);
-            let c = if kids
-                .iter()
-                .all(|&k| self.accent(&self.map.nodes[k]) == first)
-            {
-                first
-            } else {
-                self.accent(&self.map.nodes[up])
-            };
-            out.extend(kids.into_iter().map(|k| (k, c)));
-        }
-        out
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -418,17 +454,10 @@ impl MapView {
         let boxed = self.mode() == Mode::Sites;
         // A +N chip on the card stands in for its count of clients.
         let counted = self.has_more_chip(i);
-        // Drawn by hand (a plan, a training map): said first.
-        let drawn = if n.drawn {
-            Some("drawn")
-        } else if n.drawn_up {
-            Some("drawn link")
-        } else {
-            None
-        };
-        // The site-name filter skips the drawn chip: a site called
-        // "drawn" mustn't make a drawn card look discovered.
-        let chips: Vec<&str> = drawn
+        // Drawn by hand (a plan, a training map): said first. The filters
+        // skip it: a site called "drawn" mustn't make a drawn card look
+        // discovered.
+        let chips: Vec<&str> = super::super::drawn_chip(n)
             .into_iter()
             .chain(
                 uplink
@@ -535,70 +564,139 @@ pub(super) fn trunk_font(z: f32) -> FontId {
     FontId::proportional((10.0 * z).clamp(9.5, 12.0))
 }
 
-/// One link's line at zoom `z`: halo, stroke, and while lit (`on`) the
-/// packets flowing along it. Lit, an assumed link takes its card's colour
-/// (`lit_colour`) rather than grey, so the whole path reads as one.
+/// The canvas behind the map: lit lines and packets are kept legible on
+/// it (`colours::legible`), and a packet is ringed in it.
+pub(super) fn canvas_fill(vis: &egui::Visuals) -> Color32 {
+    if vis.panel_fill.a() == 255 {
+        vis.panel_fill
+    } else {
+        vis.extreme_bg_color
+    }
+}
+
+/// One stretch of line at zoom `z`: its halo, then the stroke, solid,
+/// dashed (wireless) or dotted (assumed). `s0` is how far along its line
+/// it starts, so a line drawn in pieces dashes as one.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_stroke(
+    p: &Painter,
+    pts: &[Pos2],
+    s0: f32,
+    c: Color32,
+    halo: Option<Color32>,
+    link: Link,
+    w: f32,
+    z: f32,
+) {
+    if let Some(h) = halo {
+        let hs = Stroke::new(w + 5.0 * z.clamp(0.6, 1.4), h);
+        if link == Link::Wireless {
+            p.extend(dashes(pts, s0, 7.0 * z, 5.0 * z, hs));
+        } else {
+            p.add(Shape::line(pts.to_vec(), hs));
+        }
+    }
+    let s = Stroke::new(w, c);
+    match link {
+        Link::Wireless => p.extend(dashes(pts, s0, 7.0 * z, 5.0 * z, s)),
+        // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
+        // dots beat against the pixel grid and the line seems to break.
+        Link::Assumed => p.extend(dashes(
+            pts,
+            s0,
+            (2.5 * z).max(2.0).round(),
+            (4.0 * z).max(3.0).round(),
+            Stroke::new(w.max(1.5), c),
+        )),
+        _ => {
+            p.add(Shape::line(pts.to_vec(), s));
+        }
+    }
+}
+
+/// A link that isn't lit, at zoom `z`: in `base` (see `link_colour`), a
+/// little quieter, over a soft halo when the theme glows (none under the
+/// grey assumed ones, which should stay quiet).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_link(
     p: &Painter,
     pts: &[Pos2],
     base: Color32,
-    lit_colour: Color32,
     link: Link,
     w: f32,
     alpha: f32,
-    on: bool,
     z: f32,
     glow: f32,
-    now: f64,
 ) {
-    let base = if on && link == Link::Assumed {
-        lit_colour
+    let halo =
+        (glow > 0.0 && link != Link::Assumed).then(|| base.gamma_multiply(glow.max(0.12) * alpha));
+    draw_stroke(
+        p,
+        pts,
+        0.0,
+        base.gamma_multiply(alpha * 0.85),
+        halo,
+        link,
+        w,
+        z,
+    );
+}
+
+/// A stretch of lit line in `lc` (its colour made legible on the canvas,
+/// see `colours::piece_looks`), over a halo: quieter where its cards'
+/// colours are `mixed`. `s0` as in `draw_stroke`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_lit(
+    p: &Painter,
+    pts: &[Pos2],
+    s0: f32,
+    lc: Color32,
+    mixed: bool,
+    link: Link,
+    w: f32,
+    alpha: f32,
+    z: f32,
+    glow: f32,
+) {
+    let loud = if mixed { 1.0 } else { 1.6 };
+    let halo = lc.gamma_multiply(glow.max(0.12) * alpha * loud);
+    draw_stroke(p, pts, s0, lc.gamma_multiply(alpha), Some(halo), link, w, z);
+}
+
+/// How far apart a lit line's packets run at zoom `z`.
+pub(super) fn packet_gap(z: f32) -> f32 {
+    36.0 * z.max(0.6)
+}
+
+/// How far the packets have travelled by `now`, at zoom `z`.
+pub(super) fn packet_travel(now: f64, z: f32) -> f32 {
+    now as f32 * 60.0 * z.max(0.6)
+}
+
+/// A packet's radius on a lit line `w` wide.
+pub(super) fn packet_radius(w: f32) -> f32 {
+    (w * 0.75).max(1.6)
+}
+
+/// A packet at `at`: a dot in its card's colour as the canvas shows it
+/// (`colours::packet_look`), ringed in the canvas's (`behind`) so it shows
+/// on a line of its own colour; a grey card's (`grey`) is a hollow ring,
+/// which no other colour's dot looks like.
+pub(super) fn draw_packet(
+    p: &Painter,
+    at: Pos2,
+    lc: Color32,
+    grey: bool,
+    r: f32,
+    alpha: f32,
+    behind: Color32,
+) {
+    p.circle_filled(at, r * 2.4, lc.gamma_multiply(0.22 * alpha));
+    p.circle_filled(at, r + 1.0, behind.gamma_multiply(alpha));
+    if grey {
+        p.circle_stroke(at, r - 0.5, Stroke::new(1.5, lc.gamma_multiply(alpha)));
     } else {
-        base
-    };
-    let c = base.gamma_multiply(alpha * if on { 1.0 } else { 0.85 });
-    // A soft halo in the link's colour under it (not under the grey
-    // assumed ones, which should stay quiet unless lit).
-    if (glow > 0.0 || on) && (link != Link::Assumed || on) {
-        let halo = Stroke::new(
-            w + 5.0 * z.clamp(0.6, 1.4),
-            base.gamma_multiply(glow.max(0.12) * alpha * if on { 1.6 } else { 1.0 }),
-        );
-        if link == Link::Wireless {
-            p.extend(Shape::dashed_line(pts, halo, 7.0 * z, 5.0 * z));
-        } else {
-            p.add(Shape::line(pts.to_vec(), halo));
-        }
-    }
-    let stroke = Stroke::new(w, c);
-    match link {
-        Link::Wireless => p.extend(Shape::dashed_line(pts, stroke, 7.0 * z, 5.0 * z)),
-        // Whole pixels, at least 2 on and 3 off: zoomed out, sub-pixel
-        // dots beat against the pixel grid and the line seems to break.
-        Link::Assumed => p.extend(Shape::dashed_line(
-            pts,
-            Stroke::new(stroke.width.max(1.5), stroke.color),
-            (2.5 * z).max(2.0).round(),
-            (4.0 * z).max(3.0).round(),
-        )),
-        _ => {
-            p.add(Shape::line(pts.to_vec(), stroke));
-        }
-    }
-    if on {
-        // Packets flowing away from the internet: glowing dots in a light
-        // tint of the link's colour, moving downstream.
-        let gap = 36.0 * z.max(0.6);
-        let off = (now as f32 * 60.0 * z.max(0.6)).rem_euclid(gap);
-        let core = base
-            .lerp_to_gamma(Color32::WHITE, 0.6)
-            .gamma_multiply(alpha);
-        let r = (w * 0.75).max(1.6);
-        for at in along(pts, off, gap) {
-            p.circle_filled(at, r * 2.4, base.gamma_multiply(0.22 * alpha));
-            p.circle_filled(at, r, core);
-        }
+        p.circle_filled(at, r, lc.gamma_multiply(alpha));
     }
 }
 
@@ -779,4 +877,70 @@ pub(super) fn warn_dot(p: &Painter, r: Rect, a: f32) {
         3.0,
         widgets::warn().gamma_multiply(a),
     );
+}
+
+/// Dashes `on` long, `off` apart along a polyline, the pattern counted from
+/// `s0` before its start: the pieces of one line dash as one. From 0, the
+/// same dashes as `Shape::dashed_line`.
+fn dashes(pts: &[Pos2], s0: f32, on: f32, off: f32, stroke: Stroke) -> Vec<Shape> {
+    let period = on + off;
+    if period <= 0.0 || on <= 0.0 {
+        return vec![Shape::line(pts.to_vec(), stroke)];
+    }
+    let mut out = Vec::new();
+    let mut start = s0.rem_euclid(period);
+    for seg in pts.windows(2) {
+        let (a, b) = (seg[0], seg[1]);
+        let len = a.distance(b);
+        if len <= 0.0 {
+            continue;
+        }
+        let end = start + len;
+        let at = |s: f32| a + (b - a) * ((s - start) / len);
+        let mut d = (start / period).floor() * period;
+        while d < end {
+            let (lo, hi) = (d.max(start), (d + on).min(end));
+            if hi > lo {
+                out.push(Shape::line_segment([at(lo), at(hi)], stroke));
+            }
+            d += period;
+        }
+        start = end;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashes_run_on_across_the_pieces_of_a_line() {
+        let s = Stroke::new(1.0, Color32::WHITE);
+        let ends = |v: Vec<Shape>| -> Vec<[Pos2; 2]> {
+            v.into_iter()
+                .map(|x| match x {
+                    Shape::LineSegment { points, .. } => points,
+                    _ => panic!("a dash"),
+                })
+                .collect()
+        };
+        let line = [pos2(0.0, 0.0), pos2(0.0, 20.0), pos2(10.0, 20.0)];
+        let whole = ends(dashes(&line, 0.0, 4.0, 6.0, s));
+        let theirs = ends(Shape::dashed_line(&line, s, 4.0, 6.0));
+        assert_eq!(whole.len(), theirs.len());
+        for (a, b) in whole.iter().zip(&theirs) {
+            assert!(a[0].distance(b[0]) < 1e-4 && a[1].distance(b[1]) < 1e-4);
+        }
+        // The same line in two pieces, the second told where it starts.
+        let mut halves = ends(dashes(&line[..2], 0.0, 4.0, 6.0, s));
+        halves.extend(ends(dashes(&line[1..], 20.0, 4.0, 6.0, s)));
+        assert_eq!(halves, whole);
+        // Cut mid-dash: the dash is finished, not restarted.
+        let cut = pos2(0.0, 12.0);
+        let mut parts = ends(dashes(&[line[0], cut], 0.0, 4.0, 6.0, s));
+        parts.extend(ends(dashes(&[cut, line[1]], 12.0, 4.0, 6.0, s)));
+        assert_eq!(parts[1], [pos2(0.0, 10.0), cut]);
+        assert_eq!(parts[2], [cut, pos2(0.0, 14.0)]);
+    }
 }

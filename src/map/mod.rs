@@ -5,6 +5,7 @@
 //! the data doesn't show (a sweep can't see switch ports) is drawn as
 //! assumed, never as fact.
 
+pub(crate) mod colours;
 pub mod export;
 pub mod import;
 pub mod layout;
@@ -318,6 +319,9 @@ pub struct Map {
     pub under: HashMap<String, (usize, usize)>,
     /// Clients per uplink the level came to (fewer than asked on a big map).
     pub cap: usize,
+    /// A sweep was loaded but left off: it found nothing the data knows
+    /// (another network).
+    pub sweep_apart: bool,
 }
 
 impl Map {
@@ -1894,6 +1898,7 @@ pub fn build(input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     map.summary = summary;
+    map.sweep_apart = !local && had_sweep;
     // One site unless a multi-site controller says otherwise: the
     // controller's site, the firewall's name, or this network.
     let site = unifi
@@ -1990,6 +1995,19 @@ pub fn fewer_of(stepped: Option<usize>, level: usize) -> Option<usize> {
 /// them by address.
 pub fn is_more(n: &Node) -> bool {
     n.id.starts_with("more:") || import::is_overflow(n)
+}
+
+/// The chip a card drawn by hand (on a plan or a training map) wears
+/// before its others: "drawn", or "drawn link" when only its link up was.
+/// A client's tile draws no chips: its hover and the panel say it.
+pub fn drawn_chip(n: &Node) -> Option<&'static str> {
+    if n.drawn {
+        Some("drawn")
+    } else if n.drawn_up {
+        Some("drawn link")
+    } else {
+        None
+    }
 }
 
 /// The chip on an uplink whose clients aren't drawn: "12 clients".
@@ -2206,6 +2224,7 @@ fn limit(b: B, input: &Input) -> Map {
         closed: BTreeMap::new(),
         under,
         cap,
+        sweep_apart: false,
     }
 }
 
@@ -2863,7 +2882,7 @@ mod tests {
             range: Some("192.168.1.0/24".into()),
             ..Default::default()
         });
-        assert!(at_office.summary.contains("sweep not merged"));
+        assert!(at_office.summary.contains("sweep not merged") && at_office.sweep_apart);
         let gw = |m: &Map| m.nodes.iter().find(|n| n.id == "gateway").unwrap().clone();
         assert_eq!(gw(&at_office).label, "Gateway (not in the data)");
         assert!(
@@ -2880,6 +2899,7 @@ mod tests {
         });
         assert_eq!(gw(&on_site).sub, "192.168.1.1");
         assert!(by_label(&on_site, "Core").seen_by.contains(&"sweep"));
+        assert!(!on_site.sweep_apart);
     }
 
     #[test]

@@ -492,6 +492,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;
+    map.sweep_apart = !local && !input.sweep.is_empty();
     map.title = doc.title.trim().to_string();
     // A map without SITES is one place: the map's own title names it. With
     // SITES, a card the map put at no site stays outside every site's box.
@@ -901,7 +902,7 @@ mod tests {
         };
         let m = build(&doc, &look_alike);
         assert_eq!(by(&m, "sw").seen_by, ["mapnetwork"]);
-        assert!(m.summary.contains("sweep not merged"));
+        assert!(m.summary.contains("sweep not merged") && m.sweep_apart);
 
         let here = Input {
             sweep: vec![
@@ -914,7 +915,7 @@ mod tests {
         let m = build(&doc, &here);
         assert_eq!(by(&m, "fw").seen_by, ["mapnetwork", "sweep"]);
         assert_eq!(by(&m, "sw").seen_by, ["mapnetwork", "sweep"]);
-        assert!(m.summary.contains("1 host(s) not on the map"));
+        assert!(m.summary.contains("1 host(s) not on the map") && !m.sweep_apart);
     }
 
     #[test]
@@ -1189,8 +1190,8 @@ mod tests {
 #[cfg(test)]
 mod examples {
     use super::*;
-    use crate::map::Clients;
     use crate::map::layout::{Mode, layout_in};
+    use crate::map::{Clients, Seen};
 
     /// The built-in examples redraw in every Clients setting and layout,
     /// with every card's uplink pointing at a card that is there.
@@ -1227,6 +1228,47 @@ mod examples {
                 for mode in Mode::ALL {
                     let l = layout_in(&m, &|_| true, mode);
                     assert!(l.pos.iter().all(|p| p.is_some()), "{name} {mode:?}");
+                }
+            }
+        }
+    }
+
+    /// The blank map with a sweep: it lists no MACs, so no sweep shares
+    /// one with it and the sweep is kept apart (not taken for this map's),
+    /// with its +N steps open or not, in every setting and layout.
+    #[test]
+    fn the_blank_map_keeps_a_sweep_apart() {
+        let doc =
+            crate::mapnetwork::parse(crate::skills::example_file(crate::skills::BLANK).unwrap())
+                .unwrap();
+        let sweep: Vec<Seen> = (1..40)
+            .map(|last| Seen {
+                ip: [192, 168, 1, last].into(),
+                mac: Some([0, 0, 0, 0, 1, last]),
+                name: None,
+                rtt: Some(1.0),
+                open: vec![],
+            })
+            .collect();
+        let open: HashMap<String, usize> = [("gateway".to_string(), usize::MAX)].into();
+        for clients in Clients::ALL {
+            for reveal in [None, Some(&open)] {
+                let m = build(
+                    &doc,
+                    &Input {
+                        sweep: sweep.clone(),
+                        gateway: Some([192, 168, 1, 1].into()),
+                        clients,
+                        reveal,
+                        ..Default::default()
+                    },
+                );
+                let ids: Vec<&str> = m.nodes.iter().map(|n| n.id.as_str()).collect();
+                assert_eq!(ids, ["internet", "gateway"], "{clients:?}");
+                assert!(m.summary.contains("sweep not merged"), "{}", m.summary);
+                for mode in Mode::ALL {
+                    let l = layout_in(&m, &|_| true, mode);
+                    assert!(l.pos.iter().all(|p| p.is_some()), "{clients:?} {mode:?}");
                 }
             }
         }

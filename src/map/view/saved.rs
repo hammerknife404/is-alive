@@ -174,6 +174,7 @@ pub fn copy_map(m: &Map) -> Map {
         closed: m.closed.clone(),
         under: m.under.clone(),
         cap: m.cap,
+        sweep_apart: m.sweep_apart,
     }
 }
 
@@ -492,6 +493,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         // A saved map keeps the cards it was saved with: no steps.
         under: Default::default(),
         cap: 0,
+        sweep_apart: false,
     };
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -951,6 +953,7 @@ pub(super) fn sample() -> Snapshot {
         closed: Default::default(),
         under: Default::default(),
         cap: 0,
+        sweep_apart: false,
     };
     let mut edits = Edits {
         mode: Some(Mode::Tree),
@@ -1185,6 +1188,10 @@ mod tests {
             ]
         );
         assert_eq!(r.faults, s.faults);
+        // With the title and the clients stepped open beside them.
+        assert_eq!(r.map.title, "Head office network");
+        assert_eq!(r.edits, s.edits);
+        assert_eq!(r.edits.reveal.get("ap"), Some(&8));
         assert_eq!(to_json(&r), text);
         // Not drawn: left out of the file.
         let plain = to_json(&sample());
