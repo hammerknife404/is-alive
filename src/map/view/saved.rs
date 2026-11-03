@@ -283,6 +283,12 @@ pub fn to_json(s: &Snapshot) -> String {
         .into_iter()
         .map(|(k, p)| (k.clone(), json!([p.x, p.y])))
         .collect();
+    let boxes: Obj<String, Value> = s
+        .edits
+        .boxes
+        .iter()
+        .map(|(k, d)| (k.clone(), json!([d.x, d.y])))
+        .collect();
     let mut faded: Vec<&str> = s.edits.hidden.iter().map(|&z| zone_key(z)).collect();
     faded.sort();
     let camera = s
@@ -311,6 +317,8 @@ pub fn to_json(s: &Snapshot) -> String {
             "collapsed": sorted_strs(s.edits.closed.iter()),
             "faded": faded,
             "reveal": reveal,
+            "boxes": boxes,
+            "links": s.edits.links.key(),
             "camera": camera,
         },
     });
@@ -541,6 +549,21 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .filter(|k| ids.contains(k.as_str()))
             .collect(),
         notes,
+        // A box by its layout and title; one this map hasn't won't match.
+        boxes: match view.get("boxes") {
+            Some(Value::Object(o)) => o
+                .iter()
+                .filter(|(k, _)| k.len() <= TEXT_MAX)
+                .filter_map(|(k, d)| Some((k.clone(), point(d)?.to_vec2())))
+                .take(NODES_MAX)
+                .collect(),
+            _ => BTreeMap::new(),
+        },
+        links: view
+            .get("links")
+            .and_then(Value::as_str)
+            .and_then(Links::from_key)
+            .unwrap_or_default(),
     };
     let camera = view.get("camera").and_then(|c| {
         let pan = point(c.get("pan")?)?;
@@ -966,6 +989,10 @@ pub(super) fn sample() -> Snapshot {
     edits.hidden.insert(Zone::Server);
     edits.reveal.insert("sw".into(), usize::MAX);
     edits.reveal.insert("ap".into(), 8);
+    edits
+        .boxes
+        .insert("zones/Servers / NAS".into(), vec2(-80.0, 140.5));
+    edits.links = Links::Common;
     edits.notes.insert(
         "gw".into(),
         "Spare PSU above the rack\nCall Bob first".into(),

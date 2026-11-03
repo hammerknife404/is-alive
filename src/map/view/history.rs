@@ -35,6 +35,10 @@ pub struct Edits {
     /// Notes on cards, by id, as typed (redacted wherever they leave the
     /// map: a file, an export, a copy).
     pub notes: BTreeMap<String, String>,
+    /// Boxes moved by hand, by `Layout::box_key`: how far.
+    pub boxes: BTreeMap<String, Vec2>,
+    /// Which links are drawn.
+    pub links: Links,
 }
 
 /// Steps to undo and redo, each with what it did ("move 3 cards"), and the
@@ -166,6 +170,9 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
     if a.clients != b.clients {
         return format!("Clients: {}", b.clients.name());
     }
+    if a.links != b.links {
+        return b.links.name().to_lowercase();
+    }
     if a.closed != b.closed {
         let shut: Vec<&String> = sorted(b.closed.difference(&a.closed));
         let opened: Vec<&String> = sorted(a.closed.difference(&b.closed));
@@ -236,6 +243,27 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
             (more, true) => format!("remove notes on {} cards", more.len()),
         };
     }
+    if a.boxes != b.boxes {
+        // A box by its title (the part after the layout's key).
+        let title = |k: &String| k.split_once('/').map_or(k.clone(), |(_, t)| t.to_string());
+        let moved: Vec<&String> = sorted(
+            b.boxes
+                .iter()
+                .filter(|(k, d)| a.boxes.get(*k) != Some(d))
+                .map(|(k, _)| k),
+        );
+        if moved.is_empty() {
+            let back: Vec<&String> = sorted(a.boxes.keys().filter(|k| !b.boxes.contains_key(*k)));
+            return match back.as_slice() {
+                [one] => format!("put back the {} box", title(one)),
+                more => format!("put back {} boxes", more.len()),
+            };
+        }
+        return match moved.as_slice() {
+            [one] => format!("move the {} box", title(one)),
+            more => format!("move {} boxes", more.len()),
+        };
+    }
     if a.placed != b.placed {
         let moved: Vec<&String> = sorted(
             b.placed
@@ -271,6 +299,8 @@ impl MapView {
             hidden: self.hidden.clone(),
             kept: self.kept.clone(),
             notes: self.notes.clone(),
+            boxes: self.shifted.clone(),
+            links: self.links,
         }
     }
 
@@ -285,6 +315,8 @@ impl MapView {
             || self.hidden != e.hidden
             || self.kept != e.kept
             || self.notes != e.notes
+            || self.shifted != e.boxes
+            || self.links != e.links
     }
 
     /// Put edits back (undo, redo, a saved map opened). The map rebuilds
@@ -298,6 +330,8 @@ impl MapView {
         self.hidden.clone_from(&e.hidden);
         self.kept.clone_from(&e.kept);
         self.notes.clone_from(&e.notes);
+        self.shifted.clone_from(&e.boxes);
+        self.links = e.links;
         // A pin put back takes the panel slot its card shows in.
         self.slots.retain(|s, _| e.kept.contains(s));
         for id in &e.kept {
@@ -312,7 +346,7 @@ impl MapView {
     /// After a rebuild: what it changed by itself (a pin on a card that's
     /// gone) isn't the user's. Mid-drag, the drag isn't over yet.
     pub(super) fn settle_edits(&mut self) {
-        if self.drag.is_none() && self.edits_differ(self.history.now()) {
+        if !self.dragging() && self.edits_differ(self.history.now()) {
             self.history.settle(self.edits());
         }
     }
@@ -323,7 +357,7 @@ impl MapView {
         // Re-layout (the toolbar's or the canvas menu's) is named for
         // itself; a card menu's Put back on the only card moved isn't one.
         let relaid = std::mem::take(&mut self.relaid);
-        if self.drag.is_some() || !self.edits_differ(self.history.now()) {
+        if self.dragging() || !self.edits_differ(self.history.now()) {
             return;
         }
         let now = self.edits();
@@ -344,7 +378,7 @@ impl MapView {
 
     /// Undo (or redo) a step, if there's one. Not mid-drag.
     pub(super) fn step(&mut self, back: bool) {
-        if self.drag.is_some() {
+        if self.dragging() {
             return;
         }
         let e = if back {
@@ -514,6 +548,70 @@ mod tests {
         assert!(v.reveal.is_empty());
         v.step(false);
         assert_eq!(v.reveal.get("n0"), Some(&crate::map::STEP));
+    }
+
+    /// internet → gw → 3 clients, laid out in Zones.
+    fn zoned() -> (MapView, usize) {
+        let mut v = tree();
+        v.map.nodes[0].zone = Zone::Gateway;
+        for n in &mut v.map.nodes[1..] {
+            n.zone = Zone::Client;
+        }
+        v.mode = Some(Mode::Zones);
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Zones);
+        let g = v.lay.group[1].unwrap();
+        v.history.settle(v.edits());
+        (v, g)
+    }
+
+    #[test]
+    fn a_box_drag_is_one_step_and_its_cards_go_along() {
+        let (mut v, g) = zoned();
+        let key = v.lay.box_key(Mode::Zones, g).unwrap();
+        let rect = v.lay.boxes[g].rect;
+        let at: Vec<Option<Pos2>> = v.lay.pos.clone();
+        // A card dragged out of the box by hand goes along too.
+        v.placed.insert("n2".into(), pos2(900.0, 900.0));
+        v.history.settle(v.edits());
+        v.box_drag = Some(key.clone());
+        for _ in 0..10 {
+            v.shift_box(g, vec2(5.0, -2.0));
+            v.track_edits();
+            v.settle_edits();
+        }
+        assert_eq!(v.history.len(), (0, 0), "nothing until it's dropped");
+        v.box_drag = None;
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("move the Clients box"));
+        let d = vec2(50.0, -20.0);
+        assert!((v.shifted[&key] - d).length() < 1e-3);
+        assert_eq!(v.lay.boxes[g].rect, rect.translate(d));
+        assert_eq!(v.lay.pos[1], at[1].map(|p| p + d));
+        assert_eq!(v.lay.pos[0], at[0], "the gateway's box stays");
+        assert_eq!(v.placed["n2"], pos2(950.0, 880.0));
+        // Selecting the box selects its cards.
+        v.select_box(g, false);
+        assert_eq!(v.selection().len(), 3);
+        // Undo puts it back (the map rebuilds and lays out again).
+        v.step(true);
+        assert!(v.shifted.is_empty() && v.stale);
+        v.step(false);
+        assert!(v.shifted.contains_key(&key));
+        // Re-layout puts boxes back with the cards, named for itself.
+        v.relayout_all();
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("Re-layout"));
+        assert!(v.shifted.is_empty() && v.placed.is_empty());
+    }
+
+    #[test]
+    fn the_links_view_is_a_step() {
+        let (mut v, _) = zoned();
+        v.links = Links::Common;
+        v.track_edits();
+        assert_eq!(v.history.undo_label(), Some("common links only"));
+        v.step(true);
+        assert_eq!(v.links, Links::All);
     }
 
     fn tree() -> MapView {

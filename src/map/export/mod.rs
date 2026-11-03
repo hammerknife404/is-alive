@@ -55,9 +55,18 @@ impl Drawn<'_> {
 
     /// The lines as the canvas draws them.
     fn lines(&self) -> Vec<Line> {
-        layout::lines(self.map, self.lay, &|i| self.at(i), &|i| {
+        let all = layout::lines(self.map, self.lay, &|i| self.at(i), &|i| {
             self.moved.get(i).copied().unwrap_or(false)
-        })
+        });
+        // The links the canvas's Links view shows, as it shows them.
+        let view = self.lay.links;
+        if view == layout::Links::All {
+            return all;
+        }
+        let below = layout::has_below(self.map);
+        all.into_iter()
+            .filter(|l| view.keeps(self.map, l, &|k| below[k]))
+            .collect()
     }
 
     /// A shown card's uplink, when that's shown too.

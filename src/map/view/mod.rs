@@ -16,7 +16,7 @@ pub(crate) mod saved;
 mod sidebar;
 mod tabs;
 
-use super::layout::{self, CARD, Layout, Mode};
+use super::layout::{self, CARD, Layout, Links, Mode};
 use super::runs::{CardRuns, Out, Run, State, Tool};
 use super::{Clients, Input, Link, Map, Node, Sev, Zone};
 use crate::net::hostinfo::HostInfo;
@@ -28,7 +28,7 @@ use eframe::egui::{
 };
 use interact::title_above;
 use panel::card_text;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 pub use tabs::MapTabs;
 
@@ -198,6 +198,13 @@ pub struct MapView {
     /// Reload or a new sweep starts from an empty map), so a site back in
     /// the data comes back collapsed.
     closed: HashSet<String>,
+    /// Boxes dragged by hand, by `Layout::box_key`: how far from where the
+    /// layout put them. Their cards and lines go along.
+    shifted: BTreeMap<String, Vec2>,
+    /// The box being dragged by its title, by key.
+    box_drag: Option<String>,
+    /// Which links are drawn (the canvas menu's Links).
+    links: Links,
     /// Sites whose title was clicked (or their row in the sidebar, or the
     /// menu): collapse or expand them.
     flip_sites: Vec<String>,
@@ -274,6 +281,8 @@ enum Menu {
     Panel(String),
     /// The empty canvas.
     Background,
+    /// A box's title, by `Layout::box_key`.
+    Box(String),
 }
 
 /// The detail panel's id, and its width until it's dragged.
@@ -642,6 +651,17 @@ impl MapView {
     fn relayout(&mut self, ctx: &egui::Context) {
         self.multi_site = self.map.sites().len() > 1;
         self.lay = layout::layout_in(&self.map, &|_| true, self.mode());
+        self.lay.links = self.links;
+        // Boxes moved by hand stay where they were moved to.
+        for g in 0..self.lay.boxes.len() {
+            if let Some(d) = self
+                .lay
+                .box_key(self.mode(), g)
+                .and_then(|k| self.shifted.get(&k).copied())
+            {
+                self.lay.shift_box(g, d);
+            }
+        }
         let now = ctx.input(|i| i.time);
         // New cards grow out of their parent.
         for (i, n) in self.map.nodes.iter().enumerate() {
@@ -1007,6 +1027,21 @@ impl MapView {
         self.selection().len() > 1 || self.tracing().is_none()
     }
 
+    /// Re-layout: every dragged card and box back where the layout puts it.
+    fn relayout_all(&mut self) {
+        self.placed.clear();
+        if !self.shifted.is_empty() {
+            self.shifted.clear();
+            self.stale = true;
+        }
+        self.relaid = true;
+    }
+
+    /// A card or a box is being dragged.
+    fn dragging(&self) -> bool {
+        self.drag.is_some() || self.box_drag.is_some()
+    }
+
     fn target(&self, i: usize) -> Option<Pos2> {
         let n = &self.map.nodes[i];
         self.placed.get(&n.id).copied().or(self.lay.pos[i])
@@ -1146,8 +1181,9 @@ impl MapView {
         // its end: it's over, and its move a step (or undo would wait for
         // it forever).
         let lost = ctx.dragged_id().is_none() && ctx.drag_stopped_id().is_none();
-        if self.drag.is_some() && lost && !ctx.input(|i| i.pointer.any_down()) {
+        if self.dragging() && lost && !ctx.input(|i| i.pointer.any_down()) {
             self.drag = None;
+            self.box_drag = None;
             self.track_edits();
         }
         self.history_keys(&ctx);
@@ -1345,18 +1381,19 @@ impl MapView {
         ui.add_enabled_ui(!empty, |ui| {
             // Always there, so the buttons after it never move; it
             // has something to do once a card was dragged.
+            let moved = !self.placed.is_empty() || !self.shifted.is_empty();
             if ui
-                .add_enabled(!self.placed.is_empty(), egui::Button::new("Re-layout"))
-                .on_hover_text("Put dragged cards back where the layout had them")
+                .add_enabled(moved, egui::Button::new("Re-layout"))
+                .on_hover_text("Put dragged cards and boxes back where the layout had them")
                 .on_disabled_hover_text(if empty {
                     NOTHING_YET
                 } else {
-                    "Puts dragged cards back where the layout had them: no card was dragged"
+                    "Puts dragged cards and boxes back where the layout had them: nothing \
+                     was dragged"
                 })
                 .clicked()
             {
-                self.placed.clear();
-                self.relaid = true;
+                self.relayout_all();
                 bar.fit = true;
             }
             if ui
@@ -1538,7 +1575,7 @@ impl MapView {
         let wide = self.wide.map_or(rect, |w| w.union(rect));
         if fit {
             self.fit_view(rect);
-        } else if self.follow && self.drag.is_none() {
+        } else if self.follow && !self.dragging() {
             self.fit(wide);
             if let (Some(i), Some((pan, zoom))) = (selected, self.aim)
                 && let Some(p) = self.target(i)
@@ -1603,6 +1640,7 @@ impl MapView {
             self.legend_size = Vec2::ZERO;
         }
         self.zoom_controls(ui, rect);
+        self.links_pill(ui, rect);
         self.bar_toggle(ui, rect);
     }
 }

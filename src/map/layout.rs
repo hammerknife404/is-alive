@@ -60,6 +60,89 @@ impl Mode {
     }
 }
 
+/// Which links the map draws: all of them, or a view that leaves some
+/// out. A selected card's lit path always shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Links {
+    #[default]
+    All,
+    /// Only links more than one device's traffic shares: the backbone.
+    Common,
+    /// Only links the data shows, not the ones a sweep assumed.
+    Confirmed,
+}
+
+impl Links {
+    pub const ALL: [Links; 3] = [Links::All, Links::Common, Links::Confirmed];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Links::All => "All links",
+            Links::Common => "Common links only",
+            Links::Confirmed => "Confirmed links only",
+        }
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            Links::All => "Every link on the map",
+            Links::Common => {
+                "Only the links more than one device's traffic runs over: the backbone from \
+                 the internet to firewalls, switches and access points. Links to end \
+                 devices (servers, printers, clients) are left out"
+            }
+            Links::Confirmed => {
+                "Only the links the data shows (a controller, a firewall, a /mapnetwork \
+                 map): the grey dotted ones a sweep placed by guess are left out"
+            }
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Links::All => "all",
+            Links::Common => "common",
+            Links::Confirmed => "confirmed",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Links> {
+        Links::ALL.into_iter().find(|l| l.key() == k)
+    }
+
+    /// Whether this view draws `line`. `below` says a card has others
+    /// under it (drawn or counted on it).
+    pub fn keeps(self, map: &Map, line: &Line, below: &dyn Fn(usize) -> bool) -> bool {
+        match self {
+            Links::All => true,
+            // A folded line of leaf links (a switch's printers) is still
+            // leaf links: shared means something hangs below.
+            Links::Common => line.kids.iter().any(|&k| below(k)),
+            Links::Confirmed => line
+                .kids
+                .iter()
+                .any(|&k| map.nodes[k].link().is_some_and(|l| l != Link::Assumed)),
+        }
+    }
+}
+
+/// Which cards have others under them: a card drawn below, or clients
+/// counted on it and not drawn. For `Links::keeps`.
+pub fn has_below(map: &Map) -> Vec<bool> {
+    let mut v = vec![false; map.nodes.len()];
+    for n in &map.nodes {
+        if let Some(p) = n.parent() {
+            v[p] = true;
+        }
+    }
+    for (i, n) in map.nodes.iter().enumerate() {
+        if map.under.get(&n.id).is_some_and(|&(_, known)| known > 0) {
+            v[i] = true;
+        }
+    }
+    v
+}
+
 /// A box drawn around a group of cards (Zones and Sites modes).
 #[derive(Clone, Debug)]
 pub struct Group {
@@ -102,6 +185,41 @@ pub struct Layout {
     /// Boxes around groups of cards, and which box each card is in.
     pub boxes: Vec<Group>,
     pub group: Vec<Option<usize>>,
+    /// Which links are drawn (the map's view, kept here so an export
+    /// draws what the canvas does).
+    pub links: Links,
+}
+
+impl Layout {
+    /// Move box `g` by `d`, its cards with it.
+    pub fn shift_box(&mut self, g: usize, d: Vec2) {
+        let Some(b) = self.boxes.get_mut(g) else {
+            return;
+        };
+        b.rect = b.rect.translate(d);
+        for (i, at) in self.group.iter().enumerate() {
+            if *at == Some(g)
+                && let Some(p) = self.pos.get_mut(i).and_then(Option::as_mut)
+            {
+                *p += d;
+            }
+        }
+    }
+
+    /// What box `g` is known by across rebuilds, in `mode`: a box moved by
+    /// hand stays moved while the map is rebuilt.
+    pub fn box_key(&self, mode: Mode, g: usize) -> Option<String> {
+        self.boxes
+            .get(g)
+            .map(|b| format!("{}/{}", mode.key(), b.title))
+    }
+
+    /// The cards in box `g`.
+    pub fn in_box(&self, g: usize) -> Vec<usize> {
+        (0..self.group.len())
+            .filter(|&i| self.group[i] == Some(g) && self.pos[i].is_some())
+            .collect()
+    }
 }
 
 /// The size a card is drawn at: a tile for a client, else a full card.
@@ -152,6 +270,7 @@ fn empty(n: usize) -> Layout {
         size: Vec2::ZERO,
         boxes: Vec::new(),
         group: vec![None; n],
+        links: Links::All,
     }
 }
 
@@ -1310,6 +1429,81 @@ mod tests {
         );
         let trunk = lines.iter().find(|x| x.up == 2 && x.into.is_some());
         assert_eq!(trunk.map(|t| t.kids.len()), Some(2));
+    }
+
+    #[test]
+    fn a_moved_box_takes_its_cards_and_its_trunk_along() {
+        // internet → gw → core → 3 clients: the clients' box moves.
+        let mut m = tree(&[None, Some(0), Some(1), Some(2), Some(2), Some(2)]);
+        m.nodes[1].zone = Zone::Gateway;
+        for n in &mut m.nodes[3..] {
+            n.zone = Zone::Client;
+        }
+        let before = layout_in(&m, &|_| true, Mode::Zones);
+        let g = before.group[3].unwrap();
+        assert_eq!(before.in_box(g), [3, 4, 5]);
+        let key = before.box_key(Mode::Zones, g).unwrap();
+        assert_eq!(key, format!("zones/{}", Zone::Client.name()));
+        let d = vec2(-300.0, 450.0);
+        let mut l = layout_in(&m, &|_| true, Mode::Zones);
+        l.shift_box(g, d);
+        assert_eq!(l.boxes[g].rect, before.boxes[g].rect.translate(d));
+        for i in 0..m.nodes.len() {
+            let want = if l.group[i] == Some(g) {
+                before.pos[i].map(|p| p + d)
+            } else {
+                before.pos[i]
+            };
+            assert_eq!(l.pos[i], want, "card {i}");
+        }
+        // Still one trunk from the core, now ending on the moved box.
+        let lines = lines(&m, &l, &|i| l.pos[i], &|_| false);
+        let trunk = lines
+            .iter()
+            .find(|x| x.up == 2 && x.into == Some(g))
+            .expect("the trunk");
+        assert_eq!(trunk.kids.len(), 3);
+        let end = *trunk.pts.last().unwrap();
+        assert!(l.boxes[g].rect.expand(1.0).contains(end), "{end:?}");
+    }
+
+    #[test]
+    fn links_views_keep_what_they_say() {
+        // internet → gw → core → {ap → phone, printer}, gw ⇢ laptop (assumed).
+        let mut m = tree(&[None, Some(0), Some(1), Some(2), Some(3), Some(2), Some(1)]);
+        m.nodes[1].zone = Zone::Gateway;
+        m.nodes[3].zone = Zone::Wireless;
+        m.nodes[3].up = Some((2, Link::Wired, None));
+        m.nodes[4].zone = Zone::Client;
+        m.nodes[4].up = Some((3, Link::Wireless, None));
+        m.nodes[5].zone = Zone::Device;
+        m.nodes[6].zone = Zone::Client;
+        m.nodes[6].up = Some((1, Link::Assumed, None));
+        let l = layout_in(&m, &|_| true, Mode::Tree);
+        let all = lines(&m, &l, &|i| l.pos[i], &|_| false);
+        let below = has_below(&m);
+        let kept = |v: Links| -> Vec<usize> {
+            let mut k: Vec<usize> = all
+                .iter()
+                .filter(|x| v.keeps(&m, x, &|i| below[i]))
+                .flat_map(|x| x.kids.clone())
+                .collect();
+            k.sort_unstable();
+            k
+        };
+        assert_eq!(kept(Links::All), [1, 2, 3, 4, 5, 6]);
+        // Shared: what the gw, core and AP hang off; not the phone, the
+        // printer or the laptop.
+        assert_eq!(kept(Links::Common), [1, 2, 3]);
+        assert_eq!(kept(Links::Confirmed), [1, 2, 3, 4, 5]);
+        // An AP whose clients aren't drawn, but counted on it, still shares.
+        m.under.insert("3".into(), (0, 12));
+        m.nodes[4].up = None;
+        let below = has_below(&m);
+        assert!(below[3]);
+        for v in Links::ALL {
+            assert_eq!(Links::from_key(v.key()), Some(v));
+        }
     }
 
     #[test]

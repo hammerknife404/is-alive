@@ -4,7 +4,7 @@ use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
-use crate::net::{self, TcpState, ports, targets};
+use crate::net::{self, TcpState, ports, subnet, targets};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
@@ -33,8 +33,13 @@ enum Ev {
     Open(Ipv4Addr, u16),
 }
 
+/// What the box lists: (targets, addresses), or what's wrong with it.
+type Plan = Result<(usize, usize), String>;
+
 pub struct SweepTool {
     range: String,
+    /// `range` as last read for the box's count: (text, targets and addresses).
+    plan: Option<(String, Plan)>,
     detected: bool,
     timeout_ms: u32,
     threads: usize,
@@ -62,6 +67,7 @@ impl Default for SweepTool {
     fn default() -> Self {
         Self {
             range: "192.168.1.0/24".into(),
+            plan: None,
             detected: false,
             timeout_ms: 750,
             threads: widgets::SPEEDS[widgets::DEFAULT_SPEED].1,
@@ -90,6 +96,12 @@ const ARP_EVERY: Duration = Duration::from_secs(3);
 
 const ARP_TIP: &str = "Answered this machine's ARP request but not ping (a firewall or an \
 endpoint that drops ICMP). Only entries the OS has just confirmed count, not stale ones.";
+
+const RANGE_TIP: &str = "One or more networks, separated by spaces, commas, semicolons or new \
+lines:\n\n  10.10.10.0/24   a subnet (or 10.10.10.0 255.255.255.0, or 10.10.10.*)\n  \
+192.168.100.1-50   a range in one subnet (or 192.168.100.1 - 192.168.100.50)\n  \
+172.20.5.12   one address\n  10.0.0.0/28   a small block\n\nOverlaps are swept once; up to \
+65,536 addresses in all. Past a router only ping answers (no ARP, no MACs).";
 
 const PORTS_TIP: &str = "After the sweep, try a TCP connect to each live host's management ports \
 (SSH, telnet, web, UniFi 8080/8443, FortiGate 541, SonicWall 4433, MikroTik 8291) and a few that \
@@ -155,19 +167,24 @@ impl SweepTool {
 
         let mut enter = false;
         ui.horizontal(|ui| {
-            enter |= widgets::field(
+            widgets::lead(ui, "Ranges");
+            // Wide enough for a few targets; it scrolls past that.
+            let w = (ui.available_width() - 260.0).clamp(widgets::MAIN_W, 520.0);
+            let r = widgets::line(
                 ui,
-                "Range",
                 Field::Range,
                 &mut self.range,
-                widgets::MAIN_W,
-                "10.0.0.0/24 or 10.0.0.1-254",
-            );
+                w,
+                &format!("e.g. {}", targets::EXAMPLES),
+            )
+            .on_hover_text(RANGE_TIP);
+            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
                 Action::None => {}
             }
+            self.plan_label(ui);
         });
         ui.horizontal(|ui| {
             widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
@@ -232,7 +249,7 @@ impl SweepTool {
                 widgets::empty_state(
                     ui,
                     "Find what's on a network",
-                    "Enter a CIDR or range and press Enter. Every address is pinged and ARPed, with names, MACs and vendors.",
+                    "Enter one or more subnets, ranges or addresses and press Enter. Every address is pinged and ARPed, with names, MACs and vendors.",
                     &[],
                 );
             }
@@ -415,6 +432,41 @@ impl SweepTool {
             "hosts": hosts,
         });
         serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
+    }
+
+    /// Beside the box: how many targets and addresses it lists, or what's
+    /// wrong with it, read again only when the text changes.
+    fn plan_label(&mut self, ui: &mut Ui) {
+        let fresh = self.plan.as_ref().is_some_and(|(t, _)| *t == self.range);
+        if !fresh {
+            let r = targets::count(&self.range);
+            self.plan = Some((self.range.clone(), r));
+        }
+        let Some((_, r)) = &self.plan else { return };
+        match r {
+            Ok((1, n)) => {
+                ui.weak(format!(
+                    "{} address{}",
+                    subnet::group(*n as u128),
+                    if *n == 1 { "" } else { "es" }
+                ));
+            }
+            Ok((parts, n)) => {
+                ui.weak(format!(
+                    "{parts} targets · {} addresses",
+                    subnet::group(*n as u128)
+                ))
+                .on_hover_text("Overlapping targets are swept once");
+            }
+            Err(_) if self.range.trim().is_empty() => {}
+            Err(e) => {
+                ui.add(
+                    egui::Label::new(RichText::new(format!("⚠ {e}")).color(widgets::warn()))
+                        .truncate(),
+                )
+                .on_hover_text(e.as_str());
+            }
+        }
     }
 
     /// Start a run with the given target (used by the full scan).
