@@ -993,6 +993,24 @@ mod tests {
         cps
     }
 
+    /// Symbols a map's text (a /mapnetwork map, a note) often carries draw
+    /// in proportional text too, not as boxes: arrows, box-drawing lines,
+    /// triangles, dashes.
+    #[test]
+    fn map_symbols_render_in_sans_text() {
+        use eframe::egui::FontFamily;
+        let defs = crate::fonts::definitions();
+        let missing: Vec<char> = "·—–×→←↑↓↔⇄─│├└┌┐┘┬┴┼▲▼◆•…±°µ≤≥"
+            .chars()
+            .filter(|&c| {
+                !defs.families[&FontFamily::Proportional]
+                    .iter()
+                    .any(|name| cmap(&defs.font_data[name].font).contains(&(c as u32)))
+            })
+            .collect();
+        assert!(missing.is_empty(), "no glyph for {missing:?}");
+    }
+
     /// Every character the app writes must exist in egui's bundled fonts,
     /// for both proportional and monospace text, or it shows as a box.
     #[test]
