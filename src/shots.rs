@@ -319,9 +319,11 @@ const MANUAL: &[Scene] = &[
     ),
     scene("subnet-calc", Tab::Calc, nothing, at_once),
     scene("results", Tab::Results, nothing, at_once),
+    // Over the Map, not the Results log: what's behind the window then
+    // doesn't depend on the network the tour ran on.
     scene(
         "site-bundle",
-        Tab::Results,
+        Tab::Map,
         |a, _| a.bundle.open = true,
         at_once,
     ),
