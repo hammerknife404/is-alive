@@ -305,7 +305,72 @@ pub(crate) mod tests {
         })
     }
 
-    /// Parses as XML, or fails the test with where it doesn't.
+    /// A note as hostile as typing allows (a paste from anywhere): a
+    /// formula, markup, quotes, line breaks, a backslash escape and a
+    /// character no file should carry.
+    pub const HOSTILE: &str = "=cmd|' /C calc'!A0\n<script>alert(\"x\")</script> & 'q'\u{FFFE}\\N";
+
+    /// Two cards, the second with the hostile note on it.
+    pub fn with_hostile<R>(f: impl FnOnce(&Drawn) -> R) -> R {
+        let m = Map {
+            nodes: vec![
+                Node {
+                    id: "a".into(),
+                    label: "A".into(),
+                    ..Default::default()
+                },
+                Node {
+                    id: "b".into(),
+                    label: "B".into(),
+                    up: Some((0, Link::Wired, None)),
+                    note: HOSTILE.into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let lay = layout::layout_in(&m, &|_| true, Mode::Cluster);
+        f(&Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &[false, false],
+            legend: true,
+            caption: None,
+        })
+    }
+
+    /// A hostile note stays text: SVG and draw.io still parse, with it
+    /// whole (but for what XML can't hold) on hover.
+    #[test]
+    fn a_hostile_note_stays_text_in_svg_and_drawio() {
+        with_hostile(|d| {
+            let look = Look::new(&eframe::egui::Visuals::light(), true);
+            let svg = Format::Svg.text(d, look).unwrap();
+            let doc = parse_xml(&svg);
+            let title = doc
+                .descendants()
+                .find(|n| n.has_tag_name("title"))
+                .and_then(|n| n.text())
+                .unwrap();
+            assert_eq!(title, format!("B\n{}", HOSTILE.replace('\u{FFFE}', "")));
+            assert!(!doc.descendants().any(|n| n.has_tag_name("script")));
+            // The legend says what the mark is.
+            assert!(svg.contains("Has a note"));
+            let drawio = Format::DrawIo.text(d, look).unwrap();
+            let doc = parse_xml(&drawio);
+            let card = doc
+                .descendants()
+                .find(|n| n.attribute("note").is_some())
+                .unwrap();
+            assert_eq!(
+                card.attribute("note"),
+                Some(HOSTILE.replace('\u{FFFE}', "").as_str())
+            );
+            let tip = card.attribute("tooltip").unwrap();
+            assert!(tip.contains("&lt;script&gt;") && !tip.contains("<script"));
+        });
+    }
     pub fn parse_xml(s: &str) -> roxmltree::Document<'_> {
         roxmltree::Document::parse(s).unwrap_or_else(|e| panic!("not XML: {e}"))
     }

@@ -88,6 +88,14 @@ pub enum Item {
         r: f32,
         rgb: Rgb,
     },
+    /// A filled shape with straight sides.
+    Poly {
+        pts: Vec<Pos2>,
+        rgb: Rgb,
+    },
+    /// What a card's group says on hover (an SVG `<title>`): its note.
+    /// Not drawn.
+    Title(String),
     /// `at` is the baseline's start, or its middle when `middle`.
     Text {
         at: Pos2,
@@ -400,6 +408,58 @@ fn card(n: &crate::map::Node, p: Pos2, sites: bool, ink: &Ink) -> Vec<Item> {
     if !n.flags.is_empty() {
         v.extend(warn_badge(pos2(x + size.x - 12.0, y + 12.0)));
     }
+    // The technician's note (redacted): its mark, as on screen, and its
+    // text on hover.
+    if !n.note.is_empty() {
+        let r = layout::card_rect(n, p);
+        let w = 12.0;
+        let h = w * 1.25;
+        let at = Rect::from_min_size(
+            pos2(r.min.x + r.width() * 0.6, r.min.y - h * 0.4),
+            vec2(w, h),
+        );
+        v.extend(note_glyph(at, ink));
+        v.insert(0, Item::Title(format!("{}\n{}", n.label, n.note)));
+    }
+    v
+}
+
+/// The note mark in `r`: a sheet in the text colour, its top right corner
+/// folded, two lines of "writing" on it.
+fn note_glyph(r: Rect, ink: &Ink) -> Vec<Item> {
+    let f = r.width() * 0.38;
+    let mut v = vec![
+        Item::Poly {
+            pts: vec![
+                r.left_top(),
+                pos2(r.max.x - f, r.min.y),
+                pos2(r.max.x, r.min.y + f),
+                r.right_bottom(),
+                r.left_bottom(),
+            ],
+            rgb: ink.text,
+        },
+        Item::Poly {
+            pts: vec![
+                pos2(r.max.x - f, r.min.y),
+                pos2(r.max.x - f, r.min.y + f),
+                pos2(r.max.x, r.min.y + f),
+            ],
+            rgb: ink.card,
+        },
+    ];
+    for k in [0.55, 0.78] {
+        let y = r.min.y + r.height() * k;
+        v.push(Item::Line {
+            pts: vec![pos2(r.min.x + 2.0, y), pos2(r.max.x - 2.0, y)],
+            stroke: Stroke {
+                rgb: ink.card,
+                alpha: 1.0,
+                width: 1.0,
+                dash: None,
+            },
+        });
+    }
     v
 }
 
@@ -593,6 +653,10 @@ fn draw_legend(entries: &[Entry], plan: &LegendPlan, top: Pos2, ink: &Ink) -> Ve
                 }
             }
             Swatch::Warn => v.extend(warn_badge(pos2(sw.center().x, mid))),
+            Swatch::Note => v.extend(note_glyph(
+                Rect::from_center_size(pos2(sw.center().x, mid), vec2(9.0, 11.0)),
+                ink,
+            )),
             Swatch::Pin => v.push(Item::Text {
                 at: pos2(sw.center().x, mid + 4.0),
                 size: 11.0,

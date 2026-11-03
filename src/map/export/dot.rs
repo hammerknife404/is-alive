@@ -78,9 +78,15 @@ pub fn write(d: &Drawn) -> String {
         } else {
             ""
         };
+        // The technician's note (redacted), on hover in an SVG of it.
+        let tip = if n.note.is_empty() {
+            String::new()
+        } else {
+            format!(", tooltip=\"{}\"", esc(&n.note))
+        };
         let _ = writeln!(
             s,
-            "{indent}n{i} [label=\"{}\", color=\"{colour}\", pos=\"{x:.0},{y:.0}!\"{size}{style}];",
+            "{indent}n{i} [label=\"{}\", color=\"{colour}\", pos=\"{x:.0},{y:.0}!\"{size}{style}{tip}];",
             esc(&label)
         );
     };
@@ -137,6 +143,17 @@ mod tests {
     }
 
     /// Braces and quotes balance outside strings; unescaped quotes pair up.
+    /// A hostile note is one quoted tooltip: the graph stays balanced.
+    #[test]
+    fn a_hostile_note_is_a_quoted_tooltip() {
+        super::super::tests::with_hostile(|d| {
+            let s = write(d);
+            assert!(balanced(&s), "{s}");
+            assert!(s.contains(r#"tooltip="=cmd|' /C calc'!A0\n<script>alert(\"x\")</script>"#));
+            assert!(s.contains(r"\\N"), "the backslash is text: {s}");
+        });
+    }
+
     fn balanced(s: &str) -> bool {
         let (mut depth, mut quoted, mut esc) = (0i32, false, false);
         for line in s.lines().filter(|l| !l.trim_start().starts_with("//")) {

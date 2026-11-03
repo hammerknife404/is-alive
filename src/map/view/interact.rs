@@ -98,7 +98,11 @@ impl MapView {
     pub(super) fn interact(&mut self, ui: &Ui, rect: Rect, resp: &egui::Response) -> Option<usize> {
         let now = ui.input(|i| i.time);
         let pointer = resp.hover_pos();
-        let over = pointer.and_then(|p| self.hit(self.to_world(rect, p)));
+        // A card's note mark sits half above it: it's the card's too.
+        let on_note = pointer.and_then(|p| self.note_hit(rect, p));
+        let over = pointer
+            .and_then(|p| self.hit(self.to_world(rect, p)))
+            .or(on_note);
         let title = if over.is_none() {
             self.site_title_at(rect, pointer)
         } else {
@@ -163,6 +167,11 @@ impl MapView {
             // the click before this one is undone.
             let undo = self.undo.take().filter(|u| now - u.at < 0.6);
             match over {
+                // A double-click on a card's note mark opens its note.
+                Some(i) if on_note == Some(i) => {
+                    self.select(Some(i));
+                    self.open_note(&[i]);
+                }
                 Some(i) => {
                     let id = &self.map.nodes[i].id;
                     if let Some(u) = undo
@@ -359,6 +368,14 @@ impl MapView {
             for d in n.details.iter().take(8) {
                 ui.label(RichText::new(d).small());
             }
+            if !n.note.is_empty() {
+                ui.add_space(2.0);
+                ui.horizontal_top(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(9.0, 11.0), Sense::hover());
+                    paint::note_glyph(ui.painter(), ui.visuals(), r, 1.0);
+                    ui.add(egui::Label::new(notes::first_lines(&n.note)).wrap());
+                });
+            }
             ui.add_space(2.0);
             ui.weak(if picked {
                 "Right-click for more"
@@ -371,12 +388,15 @@ impl MapView {
     /// The right-click menu on card `i`: on one of several selected cards,
     /// every item acts on all of them. A card's ☰ in the detail panel opens
     /// this same menu. Its sections, each shown only when it has items:
-    /// pin and select, select more, clients, test, copy, then the layout.
+    /// pin and select, the note, select more, clients, test, copy, then the
+    /// layout.
     pub(super) fn card_menu(&mut self, ui: &mut Ui, i: usize) {
         let group = self.menu_group(i);
         self.menu_header(ui, i, &group);
         let mut sep = Sep(true);
         self.menu_pick(ui, &mut sep, i, &group);
+        sep.next();
+        self.menu_note(ui, &mut sep, i, &group);
         sep.next();
         self.menu_more(ui, &mut sep, i, &group);
         sep.next();
@@ -496,6 +516,29 @@ impl MapView {
                     .clicked()
             {
                 self.toggle(i);
+                ui.close();
+            }
+        }
+    }
+
+    /// Note: add, edit or remove the card's note; on several cards, the
+    /// same note on each, or theirs taken off.
+    fn menu_note(&mut self, ui: &mut Ui, sep: &mut Sep, i: usize, group: &[usize]) {
+        for (label, tip, remove) in self.note_items(group) {
+            if sep
+                .add(ui, egui::Button::new(label))
+                .on_hover_text(tip)
+                .clicked()
+            {
+                if remove {
+                    self.remove_notes(group);
+                } else {
+                    // The card right-clicked first: its panel shows the
+                    // editor.
+                    let mut cards = vec![i];
+                    cards.extend(group.iter().copied().filter(|&k| k != i));
+                    self.open_note(&cards);
+                }
                 ui.close();
             }
         }
@@ -747,7 +790,7 @@ impl MapView {
         };
         if sep
             .add(ui, egui::Button::new(copy))
-            .on_hover_text("Name, role, flags and details, as text")
+            .on_hover_text("Name, role, flags, details and note, as text")
             .clicked()
         {
             let text: Vec<String> = group

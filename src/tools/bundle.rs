@@ -18,6 +18,8 @@ pub struct Sources<'a> {
     pub log: &'a Log,
     pub info: &'a HostInfo,
     pub notes: &'a NotesTool,
+    /// The live map, for the notes on its cards.
+    pub map: &'a crate::map::view::MapTabs,
 }
 
 struct Saved {
@@ -38,6 +40,7 @@ pub struct BundleTool {
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
+    use_card_notes: bool,
     use_map: bool,
     /// Carry the /unifidump and /mapnetwork skills (`skills/` in the zip).
     use_skills: bool,
@@ -63,6 +66,7 @@ impl Default for BundleTool {
             use_inventory: true,
             use_results: false,
             use_notes: false,
+            use_card_notes: true,
             use_map: true,
             use_skills: true,
             ov: Default::default(),
@@ -88,6 +92,9 @@ const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
+const CARD_NOTES_WHAT: &str = "The technician's notes on cards of the Map tab's live map: each \
+card's name, role, IP and MAC with its note. Sanitized on their machine like notes.md. Observations \
+about those devices; carry what bears on the map into its device notes and findings.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
 machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
 observations; use what bears on the map and its findings.";
@@ -332,6 +339,16 @@ impl BundleTool {
                     }),
                     "Nothing in Notes yet",
                 );
+                let card_notes = src.map.bundle_notes(src.notes.overrides());
+                part_row(
+                    ui,
+                    &mut self.use_card_notes,
+                    "Card notes",
+                    card_notes
+                        .as_ref()
+                        .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
+                    "No notes on the live map's cards",
+                );
                 part_row(
                     ui,
                     &mut self.use_skills,
@@ -350,7 +367,8 @@ impl BundleTool {
             || (self.use_meraki && meraki.is_some())
             || (self.use_inventory && sweep.is_some())
             || (self.use_results && runs > 0)
-            || (self.use_notes && !src.notes.is_empty());
+            || (self.use_notes && !src.notes.is_empty())
+            || (self.use_card_notes && src.map.bundle_notes(src.notes.overrides()).is_some());
         widgets::error(ui, &self.err);
         ui.separator();
 
@@ -494,6 +512,18 @@ impl BundleTool {
                 summary: json!({ "lines": clean.lines().count(), "redacted": hits.len() }),
                 // Without the emoji style marks, like Copy and Save.
                 data: crate::theme::strip_emoji_styles(&clean),
+            });
+        }
+        if self.use_card_notes
+            && let Some((n, data)) = src.map.bundle_notes(src.notes.overrides())
+        {
+            parts.push(Part {
+                file: bundle::CARD_NOTES,
+                source: "Map tab".into(),
+                skill: "/mapnetwork",
+                what: CARD_NOTES_WHAT,
+                summary: json!({ "cards": n }),
+                data,
             });
         }
         let b = Bundle {

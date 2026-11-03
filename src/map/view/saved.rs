@@ -25,12 +25,19 @@
 //!   how many). On any other purpose, or with no purpose, the file is
 //!   refused: an answer key says it's a training map, and one labelled as
 //!   found would pass its planted faults off as evidence.
+//!
+//! The technician's notes: `"note"` on a card, its text redacted as the
+//! Notes tab redacts (the map's notes are written redacted, never as
+//! typed). Read back cleaned and cut as the note editor would (hidden
+//! characters out, at most 2,000 characters); anything but a string is
+//! ignored.
 
 use super::history::Edits;
 use super::*;
 use crate::input;
 use crate::map::Finding;
 use serde_json::{Map as Obj, Value, json};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// What the file says it is.
@@ -252,7 +259,12 @@ fn sorted_strs<'a>(it: impl Iterator<Item = &'a String>) -> Vec<&'a String> {
 
 /// The file's text.
 pub fn to_json(s: &Snapshot) -> String {
-    let nodes: Vec<Value> = s.map.nodes.iter().map(node_json).collect();
+    let nodes: Vec<Value> = s
+        .map
+        .nodes
+        .iter()
+        .map(|n| node_json(n, s.edits.notes.get(&n.id)))
+        .collect();
     let findings: Vec<Value> = s
         .map
         .findings
@@ -314,7 +326,7 @@ pub fn to_json(s: &Snapshot) -> String {
     serde_json::to_string_pretty(&doc).unwrap_or_default()
 }
 
-fn node_json(n: &Node) -> Value {
+fn node_json(n: &Node, note: Option<&String>) -> Value {
     let mut v = json!({
         "id": n.id,
         "zone": zone_key(n.zone),
@@ -344,6 +356,9 @@ fn node_json(n: &Node) -> Value {
     });
     if n.drawn {
         v["drawn"] = json!(true);
+    }
+    if let Some(t) = note.filter(|t| !t.trim().is_empty()) {
+        v["note"] = json!(t);
     }
     v
 }
@@ -429,8 +444,17 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             nodes.len()
         ));
     }
-    let nodes: Vec<Node> = nodes.iter().map(node_of).collect::<Result<_, String>>()?;
+    let mut nodes: Vec<Node> = nodes.iter().map(node_of).collect::<Result<_, String>>()?;
     check_tree(&nodes)?;
+    // Notes go with the user's other changes (the map puts them back on
+    // the cards, redacted).
+    let notes: BTreeMap<String, String> = nodes
+        .iter_mut()
+        .filter_map(|n| {
+            let t = std::mem::take(&mut n.note);
+            (!t.trim().is_empty()).then(|| (n.id.clone(), t))
+        })
+        .collect();
     let findings = match m.get("findings") {
         Some(Value::Array(a)) if a.len() > FINDINGS_MAX => {
             return Err(format!("{} findings (at most {FINDINGS_MAX})", a.len()));
@@ -516,6 +540,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .into_iter()
             .filter(|k| ids.contains(k.as_str()))
             .collect(),
+        notes,
     };
     let camera = view.get("camera").and_then(|c| {
         let pan = point(c.get("pan")?)?;
@@ -670,6 +695,11 @@ fn node_of(v: &Value) -> Result<Node, String> {
             .filter(|s| !s.is_empty()),
         drawn,
         drawn_up,
+        note: v
+            .get("note")
+            .and_then(Value::as_str)
+            .map(|t| input::Field::CardNote.clean(t))
+            .unwrap_or_default(),
         // Not read: a gone card is one a rebuild found missing, and a
         // saved map is never rebuilt from data (a card marked gone in a
         // file would be taken out as if let go, its children cut loose).
@@ -850,12 +880,17 @@ impl MapView {
 
     /// This map as a saved map called `name`. `full` is the map with every
     /// site open (a live map is built again for it).
+    /// Its notes are written redacted.
     pub(super) fn snapshot(&self, name: &str, created: String, full: Map) -> Snapshot {
+        let mut edits = self.edits();
+        for t in edits.notes.values_mut() {
+            *t = notes::clean(t, &self.ov);
+        }
         Snapshot {
             name: name.to_string(),
             created,
             map: full,
-            edits: self.edits(),
+            edits,
             camera: (!self.follow && self.zoom > 0.0).then_some((self.pan, self.zoom)),
             purpose: self.purpose,
             faults: self.faults.clone(),
@@ -873,6 +908,7 @@ impl MapView {
         let mut map = copy_map(full);
         map.close_sites(&self.closed);
         self.map = map;
+        self.built += 1;
         self.relayout(ctx);
     }
 }
@@ -930,6 +966,10 @@ pub(super) fn sample() -> Snapshot {
     edits.hidden.insert(Zone::Server);
     edits.reveal.insert("sw".into(), usize::MAX);
     edits.reveal.insert("ap".into(), 8);
+    edits.notes.insert(
+        "gw".into(),
+        "Spare PSU above the rack\nCall Bob first".into(),
+    );
     Snapshot {
         name: "Head office".into(),
         created: "2026-11-01T10:00:00Z".into(),
@@ -1068,6 +1108,34 @@ mod tests {
             "\"pinned\": [\n      \"nope\"",
         );
         assert!(from_json(&text).unwrap().edits.kept.is_empty());
+    }
+
+    /// A note rides on its card in the file; read back it's cleaned and
+    /// cut as the editor would, and anything but text is ignored.
+    #[test]
+    fn notes_ride_on_their_cards_cleaned_and_cut() {
+        let text = to_json(&sample());
+        let doc: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            doc["map"]["nodes"][1]["note"],
+            "Spare PSU above the rack\nCall Bob first"
+        );
+        assert!(doc["map"]["nodes"][2].get("note").is_none());
+        let mut doc = doc;
+        doc["map"]["nodes"][2]["note"] = json!(format!("a\u{202E}b\u{7}\r\n{}", "x".repeat(3000)));
+        doc["map"]["nodes"][3]["note"] = json!(42);
+        doc["map"]["nodes"][4]["note"] = json!("  \n ");
+        let r = from_json(&doc.to_string()).unwrap();
+        let sw = &r.edits.notes["sw"];
+        assert!(sw.starts_with("ab\nxxx"), "{sw:?}");
+        assert_eq!(sw.chars().count(), input::Field::CardNote.max());
+        assert!(!r.edits.notes.contains_key("ap") && !r.edits.notes.contains_key("nas"));
+        // On the cards only as the map puts them back (redacted).
+        assert!(r.map.nodes.iter().all(|n| n.note.is_empty()));
+        // A note for a card that isn't on the map isn't written.
+        let mut s = sample();
+        s.edits.notes.insert("gone".into(), "lost".into());
+        assert!(!to_json(&s).contains("lost"));
     }
 
     /// A training map: a drawn card, a drawn link, and an answer key.

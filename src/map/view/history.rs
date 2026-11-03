@@ -1,7 +1,7 @@
 //! Undo and redo for what the user changes by hand on a map: cards
 //! dragged or put back, Re-layout, the layout, Clients, pins, sites
 //! collapsed, roles faded out, clients shown or hidden on a card (+N, −,
-//! Show all). Selecting cards
+//! Show all), notes on cards. Selecting cards
 //! isn't a step, as in most editors.
 //!
 //! Each step keeps the whole of that state as it was (a small struct), so
@@ -10,7 +10,7 @@
 //! drag is one step however many frames it takes.
 
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Most steps kept; the oldest go first.
 pub const STEPS: usize = 100;
@@ -32,6 +32,9 @@ pub struct Edits {
     pub hidden: HashSet<Zone>,
     /// Pinned cards.
     pub kept: Vec<String>,
+    /// Notes on cards, by id, as typed (redacted wherever they leave the
+    /// map: a file, an export, a copy).
+    pub notes: BTreeMap<String, String>,
 }
 
 /// Steps to undo and redo, each with what it did ("move 3 cards"), and the
@@ -98,6 +101,38 @@ impl<T> History<T> {
     /// What Redo would do again.
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|s| s.1.as_str())
+    }
+
+    /// Change every step, to undo or redo, and the state now alike: what
+    /// the map changed by itself, which no step should take back. A step
+    /// that no longer changes anything goes.
+    pub fn patch(&mut self, f: impl Fn(&mut T))
+    where
+        T: PartialEq,
+    {
+        for (t, _) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            f(t);
+        }
+        f(&mut self.now);
+        // Undo steps go from each state to the next one (the last to now).
+        let mut i = 0;
+        while i < self.undo.len() {
+            let next = self.undo.get(i + 1).map_or(&self.now, |s| &s.0);
+            if self.undo[i].0 == *next {
+                self.undo.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        // Redo steps go from the one above each (now for the top) to it.
+        let mut j = self.redo.len();
+        while j > 0 {
+            j -= 1;
+            let before = self.redo.get(j + 1).map_or(&self.now, |s| &s.0);
+            if self.redo[j].0 == *before {
+                self.redo.remove(j);
+            }
+        }
     }
 
     /// Forget every step (another map).
@@ -185,6 +220,22 @@ pub fn describe(a: &Edits, b: &Edits, name: &dyn Fn(&str) -> String) -> String {
             _ => "pins".into(),
         };
     }
+    if a.notes != b.notes {
+        let mut changed: Vec<&String> = sorted(
+            a.notes
+                .keys()
+                .chain(b.notes.keys())
+                .filter(|k| a.notes.get(*k) != b.notes.get(*k)),
+        );
+        changed.dedup();
+        let gone = changed.iter().all(|k| !b.notes.contains_key(*k));
+        return match (changed.as_slice(), gone) {
+            ([one], false) => format!("note on {}", name(one)),
+            ([one], true) => format!("remove note on {}", name(one)),
+            (more, false) => format!("notes on {} cards", more.len()),
+            (more, true) => format!("remove notes on {} cards", more.len()),
+        };
+    }
     if a.placed != b.placed {
         let moved: Vec<&String> = sorted(
             b.placed
@@ -219,6 +270,7 @@ impl MapView {
             closed: self.closed.clone(),
             hidden: self.hidden.clone(),
             kept: self.kept.clone(),
+            notes: self.notes.clone(),
         }
     }
 
@@ -232,6 +284,7 @@ impl MapView {
             || self.closed != e.closed
             || self.hidden != e.hidden
             || self.kept != e.kept
+            || self.notes != e.notes
     }
 
     /// Put edits back (undo, redo, a saved map opened). The map rebuilds
@@ -244,6 +297,7 @@ impl MapView {
         self.closed.clone_from(&e.closed);
         self.hidden.clone_from(&e.hidden);
         self.kept.clone_from(&e.kept);
+        self.notes.clone_from(&e.notes);
         // A pin put back takes the panel slot its card shows in.
         self.slots.retain(|s, _| e.kept.contains(s));
         for id in &e.kept {

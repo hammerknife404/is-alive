@@ -13,6 +13,8 @@ pub const MERAKI: &str = "meraki.json";
 pub const INVENTORY: &str = "inventory.json";
 pub const RESULTS: &str = "results.json";
 pub const NOTES: &str = "notes.md";
+/// The technician's notes on the Map's cards.
+pub const CARD_NOTES: &str = "card-notes.json";
 /// The /mapnetwork map from an earlier visit, opened in Config Export.
 pub const MAP: &str = "map.dc.html";
 /// The kickoff prompt, so the bundle carries its own instructions.
@@ -149,7 +151,7 @@ assets/ paths are relative to that folder).\n\n";
         if self.has(UNIFI) {
             inputs.push("the unifidump summary".to_string());
         }
-        for f in [SONICWALL, MERAKI, INVENTORY, RESULTS, NOTES] {
+        for f in [SONICWALL, MERAKI, INVENTORY, RESULTS, NOTES, CARD_NOTES] {
             if self.has(f) {
                 inputs.push(f.to_string());
             }

@@ -5,7 +5,7 @@
 
 use super::paint::{
     canvas_fill, card_frame, chip_pill, draw_box, draw_link, draw_lit, draw_packet, link_width,
-    packet_gap, packet_radius, packet_travel, pin, trunk_font, warn_badge,
+    note_glyph, packet_gap, packet_radius, packet_travel, pin, trunk_font, warn_badge,
 };
 use super::*;
 use crate::map::colours;
@@ -396,7 +396,11 @@ fn tip(s: Swatch) -> &'static str {
         }
         Swatch::Warn => "Hover or select the card for what's wrong",
         Swatch::Pin => "Stays selected while you click others",
-        Swatch::Chip => "The uplink's port, or a note such as inferred, on the card it leads to",
+        Swatch::Note => {
+            "You wrote a note on it: hover for its first lines, select it to read or edit it \
+             (N)"
+        }
+        Swatch::Chip => "The uplink's port, or a tag such as inferred, on the card it leads to",
         Swatch::Drawn => {
             "Drawn by a person (a plan, a training map), not discovered: the card, or \
              \"drawn link\" for just its link up"
@@ -454,6 +458,12 @@ fn swatch(
         }
         Swatch::Warn => warn_badge(p, s.center(), 0.75, a, now),
         Swatch::Pin => pin(p, vis, s.center(), 0.75, a),
+        Swatch::Note => note_glyph(
+            p,
+            vis,
+            Rect::from_center_size(s.center(), vec2(9.0, 11.0)),
+            a,
+        ),
         Swatch::Chip | Swatch::Drawn => {
             let chip = Rect::from_center_size(s.center(), vec2(s.width(), s.height()));
             chip_pill(p, chip, c, a);

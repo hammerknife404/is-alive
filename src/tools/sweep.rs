@@ -54,6 +54,8 @@ pub struct SweepTool {
     err: Option<String>,
     /// Bumped whenever the host list changes, so the map knows to rebuild.
     revision: u64,
+    /// How many sweeps have started.
+    runs: u64,
 }
 
 impl Default for SweepTool {
@@ -76,6 +78,7 @@ impl Default for SweepTool {
             checked_ports: false,
             err: None,
             revision: 0,
+            runs: 0,
         }
     }
 }
@@ -462,9 +465,15 @@ impl SweepTool {
         self.revision
     }
 
+    /// How many sweeps have started (each may be another network).
+    pub fn runs(&self) -> u64 {
+        self.runs
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.revision += 1;
+        self.runs += 1;
         self.alive.clear();
         self.probed = 0;
         let ips = match targets::parse_range(&self.range) {

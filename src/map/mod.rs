@@ -263,6 +263,10 @@ pub struct Node {
     /// Its link up was drawn by a person, not discovered (the card itself
     /// may have been).
     pub drawn_up: bool,
+    /// The technician's note on it, redacted: put on by the Map tab from
+    /// the notes it keeps (never from the data), for the tooltip, search,
+    /// Copy and the exports.
+    pub note: String,
 }
 
 impl Node {

@@ -8,6 +8,7 @@ mod export;
 mod history;
 mod interact;
 mod legend;
+mod notes;
 mod paint;
 mod panel;
 mod reveal;
@@ -54,6 +55,9 @@ pub enum Action {
     Layout(Mode),
     /// The legend was shown or hidden: remember it.
     Legend(bool),
+    /// Redact or keep a value picked in a card note's editor (its text),
+    /// wherever it appears: the Notes tab keeps the lists.
+    NotePick(String, crate::redact::Pick),
 }
 
 /// What a right-click menu item adds to the cards it acts on.
@@ -83,6 +87,8 @@ enum PanelEv {
     Move(usize, usize),
     /// Trace to WAN ticked or not.
     TraceWan(bool),
+    /// A card's note: write, save, cancel, remove, redact.
+    Note(notes::NoteEv),
 }
 
 pub struct Sources<'a> {
@@ -96,6 +102,9 @@ pub struct Sources<'a> {
     pub note: bool,
     /// Show the legend on the map (as saved in Settings).
     pub legend: bool,
+    /// What the Notes tab redacts and keeps (and the loaded backups'
+    /// secrets): card notes are redacted the same way.
+    pub redact: &'a crate::redact::Overrides,
     /// Settings' Animate: packets flow along lit links.
     pub animate: bool,
 }
@@ -229,6 +238,25 @@ pub struct MapView {
     busy: bool,
     /// What a card menu asked of the app (Open in a tab).
     menu_act: Option<Action>,
+    /// Notes on cards, by id, as typed (also in `history`'s steps).
+    notes: std::collections::BTreeMap<String, String>,
+    /// How notes are redacted (the Notes tab's, as of this frame).
+    ov: crate::redact::Overrides,
+    /// The note being written, if one is.
+    note_edit: Option<notes::Edit>,
+    /// What the notes belong to: this saved map, the live map, an example.
+    note_scope: notes::Scope,
+    /// Where the live map keeps notes on this computer (None: a saved map,
+    /// or nowhere to keep them).
+    note_store: Option<notes::Store>,
+    note_synced: notes::Synced,
+    /// How many sweeps had started when the notes were last bound to
+    /// cards: a new one drops the notes on cards known only by IP.
+    note_sweeps: u64,
+    /// What the cards' notes were last put on them with (see `stamp_notes`).
+    stamped: u64,
+    /// Counts the map's rebuilds.
+    built: u64,
     /// Settings' Animate (`Sources::animate`, as of this frame): packets
     /// flow along lit links. Off, lit links still take their cards'
     /// colours, but nothing moves.
@@ -336,6 +364,7 @@ impl MapView {
             legend: true,
             mode,
             clients,
+            note_scope: notes::Scope::Live,
             animate: true,
             ..Default::default()
         }
@@ -478,6 +507,10 @@ impl MapView {
         if let Some(p) = self.pos.remove(from) {
             self.pos.insert(to.to_string(), p);
         }
+        if let Some(t) = self.notes.remove(from) {
+            self.notes.insert(to.to_string(), t);
+        }
+        self.note_synced.rename(from, to);
         self.runs.rename(from, to);
     }
 
@@ -578,6 +611,17 @@ impl MapView {
             self.new_map();
         }
         self.map = map;
+        self.built += 1;
+        let scope = match src.export.mapnetwork() {
+            // The blank map is a start for any site: its cards are no one
+            // network.
+            Some((p, _)) if crate::skills::is_blank(p) => notes::Scope::Blank,
+            Some((p, _)) if crate::skills::example(p).is_some() => {
+                notes::Scope::Example(crate::tools::export::file_name(p))
+            }
+            _ => notes::Scope::Live,
+        };
+        self.notes_rebuilt(scope, src.sweep.runs());
         self.relayout(ctx);
         self.hold_still();
     }
@@ -591,6 +635,7 @@ impl MapView {
         self.raised.clear();
         self.undo = None;
         self.history.clear();
+        self.drop_notes();
         self.select(None);
     }
 
@@ -624,6 +669,14 @@ impl MapView {
         self.slots
             .retain(|s, _| ids.contains(s.as_str()) || map.tucked(s));
         self.runs.keep_only(&ids);
+        if self
+            .note_edit
+            .as_ref()
+            .and_then(|e| e.ids.first())
+            .is_some_and(|id| !ids.contains(id.as_str()))
+        {
+            self.note_edit = None;
+        }
         if self
             .selected
             .as_ref()
@@ -757,6 +810,16 @@ impl MapView {
         });
         if best.is_some() && self.selection().is_empty() {
             self.select(best);
+        }
+        // The tour shows a card's note: on the card, in its panel.
+        if let Some(i) = best
+            && std::env::var_os("IS_ALIVE_SHOTS").is_some()
+            && self.notes.is_empty()
+        {
+            let id = self.map.nodes[i].id.clone();
+            self.notes
+                .insert(id, "Spare PSU on the shelf above the rack.\nAsk Dana before rebooting it: it runs the phones.".into());
+            self.settle_edits();
         }
     }
 
@@ -960,6 +1023,7 @@ impl MapView {
                 .iter()
                 .any(|s| s.to_lowercase().contains(&q))
             || n.details.iter().any(|d| d.to_lowercase().contains(&q))
+            || n.note.to_lowercase().contains(&q)
     }
 
     /// Bounds of the laid-out map, with cards dragged elsewhere.
@@ -1089,6 +1153,7 @@ impl MapView {
         self.history_keys(&ctx);
         self.refresh(&ctx, &src);
         self.settle_edits();
+        self.stamp_notes();
         self.busy = src.busy;
         let empty = self.map.nodes.is_empty();
         let bar = self.toolbar(ui, &src, empty);
@@ -1099,6 +1164,7 @@ impl MapView {
         if empty {
             ui.separator();
             self.track_edits();
+            self.sync_notes();
             return act.or(empty_state(ui, src.info));
         }
         // A narrow window starts with the sidebar shut: the map needs the
@@ -1119,6 +1185,8 @@ impl MapView {
         // Esc next frame closes a menu or leaves a text box: not the map's.
         self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
         self.track_edits();
+        self.sync_notes();
+        self.stamp_notes();
         // A card menu's ask (Open in a tab) when nothing else was asked.
         let act = act.or(self.menu_act.take());
         // An undone or redone layout is the one remembered, as if picked.
@@ -1205,8 +1273,9 @@ impl MapView {
             crate::input::Field::Text,
             &mut self.search,
             width,
-            "Search name, IP, MAC, vendor",
-        );
+            "Search name, IP, MAC, note",
+        )
+        .on_hover_text("Finds cards by name, IP, MAC, vendor, details or note");
         bar.search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if !self.search.is_empty() {
             let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
@@ -1394,13 +1463,15 @@ impl MapView {
         let mut menus = Vec::new();
         let stack = self.ordered();
         let right = ui.available_rect_before_wrap().right();
+        let mut edit = self.note_edit.take();
         egui::Panel::right(PANEL)
             .resizable(true)
             .default_size(PANEL_SIZE)
             .size_range(260.0..=520.0)
             .show_collapsible(ui, &mut open, |ui| {
-                act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus);
+                act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus, &mut edit);
             });
+        self.note_edit = edit;
         self.card_menus(menus);
         self.panel_now = right - ui.available_rect_before_wrap().right();
         self.panel_full = egui::PanelState::load(ui.ctx(), egui::Id::new(PANEL))
@@ -1417,6 +1488,7 @@ impl MapView {
             Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
             Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
             Some(PanelEv::Reveal(p, n)) => self.reveal_step(p, n),
+            Some(PanelEv::Note(e)) => self.note_event(e),
             _ => {}
         }
         act
@@ -1439,6 +1511,14 @@ impl MapView {
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::L))
         {
             self.legend = !self.legend;
+        }
+        // N writes a note on the one card selected.
+        if !self.keys_busy
+            && !ctx.text_edit_focused()
+            && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::N))
+            && let [i] = self.selection()[..]
+        {
+            self.open_note(&[i]);
         }
         if self.zoom == 0.0 {
             self.zoom = 1.0;
@@ -2515,9 +2595,14 @@ mod tests {
             let (mut pick, mut ev, mut menus) = (None, None, Vec::new());
             let panel = Rect::from_min_size(pos2(820.0, 0.0), vec2(320.0, 900.0));
             let stack = v.ordered();
+            let mut edit = v.note_edit.take();
             ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
-                v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus);
+                v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus, &mut edit);
             });
+            v.note_edit = edit;
+            if let Some(PanelEv::Note(e)) = ev.take() {
+                v.note_event(e);
+            }
             let popups: Vec<egui::Id> = menus
                 .iter()
                 .map(|(_, b)| Popup::default_response_id(b))
@@ -2548,7 +2633,7 @@ mod tests {
         });
         out.textures_delta.clear();
         // As the tab does at the end of each frame.
-        v.keys_busy = egui::Popup::is_any_open(ctx);
+        v.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         shown
     }
 
@@ -2910,11 +2995,66 @@ mod tests {
         assert!(has(&menu_on(&mut v, 7), "Collapse Branch"));
     }
 
+    /// Add note… on the menu opens the editor in the card's panel; typed
+    /// and saved with Ctrl+Enter, the note shows there, and the menu
+    /// offers Edit and Remove. Esc leaves an edit as it was.
+    #[test]
+    fn a_note_is_written_from_the_menu_in_the_cards_panel() {
+        let ctx = egui::Context::default();
+        let mut v = on_canvas();
+        let left = egui::PointerButton::Primary;
+        let at = v.pos[&v.map.nodes[4].id] + CARD / 2.0;
+        let rc = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
+        frame(&ctx, &mut v, vec![]);
+        click(&ctx, &mut v, item(&rc.canvas, "Add note…"), left);
+        assert!(v.note_edit.is_some());
+        assert_eq!(v.selection(), [4], "its card shows in the panel");
+        frame(&ctx, &mut v, vec![]);
+        frame(&ctx, &mut v, vec![egui::Event::Text("Spare PSU".into())]);
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        frame(
+            &ctx,
+            &mut v,
+            vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)],
+        );
+        assert_eq!(v.notes.get("n4").map(String::as_str), Some("Spare PSU"));
+        assert!(v.note_edit.is_none());
+        v.stamp_notes();
+        let shown = frame(&ctx, &mut v, vec![]);
+        assert!(
+            has(&words(&shown.detail), "Spare PSU"),
+            "{:?}",
+            words(&shown.detail)
+        );
+        let menu = menu_on(&mut v, 4);
+        assert!(has(&menu, "Edit note…") && has(&menu, "Remove note"));
+        // Edit, type, Esc: as it was.
+        v.open_note(&[4]);
+        frame(&ctx, &mut v, vec![]);
+        frame(&ctx, &mut v, vec![egui::Event::Text(" (gone)".into())]);
+        frame(
+            &ctx,
+            &mut v,
+            vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        );
+        frame(&ctx, &mut v, vec![]);
+        assert!(v.note_edit.is_none());
+        assert_eq!(v.notes["n4"], "Spare PSU");
+        assert_eq!(set(&v.selection()), set(&[4]), "Esc was the editor's");
+    }
+
     #[test]
     fn the_card_menu_sets_sections_apart_with_one_separator() {
         // A card on its own (no uplink, nothing below), no IP: Pin and
-        // Select, then Copy details, with one separator under the title
-        // and one between them, none for the empty sections in between.
+        // Select, Add note…, then Copy details, with one separator under
+        // the title and one between each, none for the empty sections in
+        // between.
         let ctx = egui::Context::default();
         let mut v = on_canvas();
         v.map.nodes[4].up = None;
@@ -2922,9 +3062,9 @@ mod tests {
         let shown = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
         assert_eq!(
             words(&shown.canvas),
-            ["card 4", "Pin", "Select", "Copy details"]
+            ["card 4", "Pin", "Select", "Add note…", "Copy details"]
         );
-        assert_eq!(shown.canvas_lines, 2);
+        assert_eq!(shown.canvas_lines, 3);
     }
 
     #[test]

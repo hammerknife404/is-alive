@@ -235,6 +235,12 @@ fn data(d: &Drawn, i: usize, n: &Node) -> String {
     if !f.is_empty() {
         fields.push(("findings", f.join("; ")));
     }
+    // The technician's note (redacted): in the data, and on hover
+    // (diagrams.net reads a tooltip as HTML: escaped, it shows as typed).
+    if !n.note.is_empty() {
+        fields.push(("note", n.note.clone()));
+        fields.push(("tooltip", html(&n.note).replace('\n', "<br>")));
+    }
     fields
         .iter()
         .map(|(k, v)| format!(r#" {k}="{}""#, xml(v)))

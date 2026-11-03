@@ -430,6 +430,46 @@ pub fn line(
     r
 }
 
+/// What colours the text in an `area` as it's typed.
+pub type Layouter<'a> =
+    &'a mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>;
+
+/// A multi-line text box for `kind`, `rows` lines tall, as `line` is for
+/// one line: its length limit, hidden characters dropped as they're typed
+/// or pasted, and a right-click menu (the clipboard's items, then `more`'s;
+/// `more` returns true when it picked one).
+#[allow(clippy::too_many_arguments)]
+pub fn area(
+    ui: &mut Ui,
+    id: egui::Id,
+    kind: Field,
+    value: &mut String,
+    rows: usize,
+    hint: &str,
+    layouter: Option<Layouter>,
+    more: impl FnOnce(&mut Ui) -> bool,
+) -> egui::Response {
+    let keep = selection_before_right_click(ui.ctx(), id);
+    let mut edit = egui::TextEdit::multiline(value)
+        .id(id)
+        .char_limit(kind.room())
+        .desired_width(f32::INFINITY)
+        .desired_rows(rows)
+        .hint_text(hint);
+    if let Some(l) = layouter {
+        edit = edit.layouter(l);
+    }
+    let r = ui.add(edit);
+    tidy(ui.ctx(), &r, kind, value);
+    restore_selection(ui.ctx(), id, &r, keep);
+    r.context_menu(|ui| {
+        if text_edit_menu(ui, id, true) || more(ui) {
+            ui.close();
+        }
+    });
+    r
+}
+
 /// After text box `r` (holding a `kind`, told it takes `kind.room()`)
 /// changed: drop the characters it doesn't keep, cut it to `kind.max()`
 /// just before the cursor, as the box would have, leave the cursor where it

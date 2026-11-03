@@ -61,6 +61,8 @@ pub struct MapTabs {
     skipped: Vec<String>,
     /// The Map tab has shown, so `skipped` was told once.
     told: bool,
+    /// How card notes are redacted, as every map was last told.
+    ov: crate::redact::Overrides,
 }
 
 impl MapTabs {
@@ -69,7 +71,9 @@ impl MapTabs {
     pub fn new(mode: Option<Mode>) -> Self {
         let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
         let dir = saved::folder().filter(|_| !tour);
-        Self::in_dir(MapView::new(mode), dir)
+        let mut live = MapView::new(mode);
+        live.note_store = Some(super::notes::Store::open());
+        Self::in_dir(live, dir)
     }
 
     fn in_dir(live: MapView, dir: Option<PathBuf>) -> Self {
@@ -86,6 +90,7 @@ impl MapTabs {
             opening: None,
             skipped,
             told: false,
+            ov: Default::default(),
         }
     }
 
@@ -107,6 +112,96 @@ impl MapTabs {
                 false,
             );
         }
+    }
+
+    /// Once a frame, whichever tab shows: card notes are redacted as the
+    /// Notes tab redacts now (every map's, shown or not, as Update writes
+    /// one that isn't). When that changes, what's kept is rewritten at
+    /// once, as notes.md is: the live map's kept notes, and the notes in
+    /// saved maps' files.
+    pub fn redact(&mut self, ov: &crate::redact::Overrides) {
+        if self.ov != *ov {
+            self.ov = ov.clone();
+            self.live.ov = ov.clone();
+            for t in &mut self.saved {
+                t.view.ov = ov.clone();
+            }
+            for i in 0..self.saved.len() {
+                self.redact_file(i);
+            }
+        }
+        self.live.sync_notes();
+    }
+
+    /// Saved map `i`'s file with its notes redacted as now, when that
+    /// changes any. Only the notes: its unsaved changes stay unsaved.
+    fn redact_file(&mut self, i: usize) {
+        let t = &self.saved[i];
+        let ov = &self.ov;
+        let dirty = |n: &String| super::notes::clean(n, ov) != *n;
+        if !t.saved.notes.values().any(dirty) {
+            return;
+        }
+        let Ok(mut s) = saved::read(&t.path) else {
+            return;
+        };
+        if !s.edits.notes.values().any(dirty) {
+            return;
+        }
+        for n in s.edits.notes.values_mut() {
+            *n = super::notes::clean(n, ov);
+        }
+        if let Err(e) = saved::write(&t.path, &s) {
+            widgets::toast(
+                format!("Couldn't redact the notes in \"{}\": {e}", t.name),
+                false,
+            );
+        }
+    }
+
+    /// Every card note's text, on every map and kept for the live one:
+    /// the Notes tab's keep list holds on to values still in one.
+    pub fn note_texts(&self) -> Vec<String> {
+        let mut v = self.live.note_texts();
+        for t in &self.saved {
+            v.extend(t.view.note_texts());
+        }
+        v
+    }
+
+    /// The live map's card notes for the Site Bundle, redacted with `ov`
+    /// (the Notes tab's, as of now) and without emoji style marks, as the
+    /// Notes part: each card's name, role, address and note, as JSON. None
+    /// without any, or when the live map shows an example (its notes are
+    /// about no real site).
+    pub fn bundle_notes(&self, ov: &crate::redact::Overrides) -> Option<(usize, String)> {
+        if matches!(self.live.note_scope, super::notes::Scope::Example(_)) {
+            return None;
+        }
+        let rows: Vec<serde_json::Value> = self
+            .live
+            .map
+            .nodes
+            .iter()
+            .filter_map(|n| Some((n, self.live.notes.get(&n.id)?)))
+            .map(|(n, raw)| {
+                serde_json::json!({
+                    "card": n.id,
+                    "name": n.label,
+                    "kind": n.kind,
+                    "ip": n.ip.map(|ip| ip.to_string()),
+                    "mac": n.mac.as_ref().map(crate::net::mac::fmt),
+                    "site": n.site,
+                    "note": crate::theme::strip_emoji_styles(&super::notes::clean(raw, ov)),
+                })
+            })
+            .collect();
+        (!rows.is_empty()).then(|| {
+            (
+                rows.len(),
+                serde_json::to_string_pretty(&rows).unwrap_or_default(),
+            )
+        })
     }
 
     /// The map on screen: Live or a saved one.
@@ -167,9 +262,16 @@ impl MapTabs {
             return Err("no settings folder to keep saved maps in".into());
         };
         s.name = self.unique_name(&s.name, None);
+        // A file opened from elsewhere: its notes redacted as here.
+        for n in s.edits.notes.values_mut() {
+            *n = super::notes::clean(n, &self.ov);
+        }
         let path = saved::fresh_path(dir, &s.name);
         saved::write(&path, &s).map_err(|e| format!("couldn't save the map: {e}"))?;
         self.saved.push(tab(path, s));
+        if let Some(t) = self.saved.last_mut() {
+            t.view.ov = self.ov.clone();
+        }
         self.shown = Some(self.saved.len() - 1);
         self.bar = true;
         Ok(())
@@ -235,6 +337,7 @@ impl MapTabs {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         self.poll_open();
         self.tell_skipped();
+        self.redact(src.redact);
         if self.bar {
             egui::Panel::bottom("map_saved_bar")
                 .resizable(false)
@@ -547,7 +650,8 @@ impl MapTabs {
             return;
         }
         let t = &mut self.saved[i];
-        t.saved = s.edits;
+        // As the view has them (its notes as typed; the file's redacted).
+        t.saved = t.view.edits();
         widgets::toast(format!("Updated \"{}\"", t.name), true);
     }
 
@@ -565,6 +669,7 @@ impl MapTabs {
         }
         let path = self.saved[i].path.clone();
         self.saved[i] = tab(path, s);
+        self.saved[i].view.ov = self.ov.clone();
         widgets::toast(format!("Replaced \"{name}\""), true);
     }
 
@@ -915,6 +1020,79 @@ mod tests {
         s.name = name.into();
         s.created = created.into();
         s
+    }
+
+    fn secrets() -> crate::redact::Overrides {
+        crate::redact::Overrides {
+            redact: vec!["4471".into()],
+            allow: vec![],
+            known: vec!["Bobcat2019".into()],
+        }
+    }
+
+    /// A saved map's file holds its notes redacted as the Notes tab
+    /// redacts now: a file opened from elsewhere at once, and a value
+    /// redacted later (by hand, or a backup's secret loaded) is rewritten
+    /// in the file at once, leaving its unsaved changes unsaved.
+    #[test]
+    fn saved_maps_files_are_redacted_when_the_redaction_changes() {
+        let dir = temp("redact");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        t.redact(&crate::redact::Overrides {
+            known: vec!["Bobcat2019".into()],
+            ..Default::default()
+        });
+        let mut s = sample("Received", "2026-01-01T00:00:00Z");
+        s.edits
+            .notes
+            .insert("sw".into(), "door code 4471, admin Bobcat2019".into());
+        assert!(t.keep_new(s).is_ok());
+        let path = t.saved[0].path.clone();
+        let file = || std::fs::read_to_string(&path).unwrap();
+        assert!(!file().contains("Bobcat2019"), "opened: redacted as here");
+        assert!(file().contains("4471"));
+        // An unsaved change, then 4471 redacted by hand.
+        t.saved[0].view.kept.push("gw".into());
+        let f = file();
+        t.redact(&secrets());
+        let after = file();
+        assert!(
+            !after.contains("4471") && after.contains("door code"),
+            "{after}"
+        );
+        assert_ne!(f, after);
+        assert!(
+            t.saved[0].view.edits_differ(&t.saved[0].saved),
+            "the pin still unsaved"
+        );
+        assert_eq!(
+            saved::read(&path).unwrap().edits.kept,
+            t.saved[0].saved.kept
+        );
+    }
+
+    /// The Site Bundle's card notes: redacted, without emoji style marks,
+    /// and none from an example.
+    #[test]
+    fn the_bundles_card_notes_are_redacted() {
+        let mut live = MapView::new(None);
+        live.map.nodes = saved::sample().map.nodes;
+        live.notes.insert(
+            "sw".into(),
+            "door code 4471\nadmin Bobcat2019 \u{26A0}\u{FE0F}\u{FE02}".into(),
+        );
+        let t = MapTabs::in_dir(live, None);
+        let (n, json) = t.bundle_notes(&secrets()).expect("a note");
+        assert_eq!(n, 1);
+        assert!(
+            !json.contains("4471") && !json.contains("Bobcat2019"),
+            "{json}"
+        );
+        assert!(json.contains("REDACTED: by hand") && json.contains("REDACTED: from config"));
+        assert!(!json.contains('\u{FE02}') && json.contains('\u{26A0}'));
+        let mut t = t;
+        t.live.note_scope = super::super::notes::Scope::Example("example-Acme.dc.html".into());
+        assert!(t.bundle_notes(&secrets()).is_none());
     }
 
     #[test]

@@ -42,6 +42,8 @@ pub enum Field {
     Notes,
     /// Known problems in the site bundle.
     Problems,
+    /// A note on a map card: a few lines.
+    CardNote,
 }
 
 /// Longest host or domain name DNS can carry.
@@ -62,6 +64,7 @@ impl Field {
             Field::Url => 2048,
             Field::Notes => 1_000_000,
             Field::Problems => 20_000,
+            Field::CardNote => 2_000,
         }
     }
 
@@ -73,13 +76,16 @@ impl Field {
     }
 
     fn multiline(self) -> bool {
-        matches!(self, Field::Notes | Field::Problems)
+        matches!(self, Field::Notes | Field::Problems | Field::CardNote)
     }
 
     /// Free text keeps the zero-width characters and direction marks real
     /// writing uses; a name or number never needs one.
     fn free(self) -> bool {
-        matches!(self, Field::Text | Field::Notes | Field::Problems)
+        matches!(
+            self,
+            Field::Text | Field::Notes | Field::Problems | Field::CardNote
+        )
     }
 
     /// What `c` becomes in this box: itself, a space or line break, or nothing.
@@ -716,6 +722,20 @@ mod tests {
         // Line and paragraph separators.
         assert_eq!(Field::Text.clean("a\u{2028}b"), "a b");
         assert_eq!(Field::Notes.clean("a\u{2029}b"), "a\nb");
+    }
+
+    /// A card's note: a few lines, hidden characters out, 2,000 at most.
+    #[test]
+    fn card_notes_keep_lines_and_drop_hidden_characters() {
+        let k = Field::CardNote;
+        assert_eq!(
+            k.clean("a\r\n\tb\u{202E}c\u{200B}d\u{7}"),
+            "a\n\tbc\u{200B}d"
+        );
+        assert_eq!(k.clean("x\u{2028}y"), "x\ny");
+        assert_eq!(k.clean("👩\u{200D}💻"), "👩\u{200D}💻");
+        assert_eq!(k.clean(&"n".repeat(5000)).chars().count(), 2_000);
+        assert_eq!(k.room(), 8_000);
     }
 
     #[test]

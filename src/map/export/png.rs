@@ -118,6 +118,22 @@ fn draw(ctx: &mut RenderContext, faces: &Faces, item: &Item) {
             }
             stroke_with(ctx, stroke, &path);
         }
+        Item::Poly { pts, rgb } => {
+            let mut path = BezPath::new();
+            for (k, p) in pts.iter().enumerate() {
+                let p = (f64::from(p.x), f64::from(p.y));
+                if k == 0 {
+                    path.move_to(p);
+                } else {
+                    path.line_to(p);
+                }
+            }
+            path.close_path();
+            ctx.set_paint(colour(*rgb, 1.0));
+            ctx.fill_path(&path);
+        }
+        // Words for a pointer to hover: nothing to draw.
+        Item::Title(_) => {}
         Item::Dot { c, r, rgb } => {
             ctx.set_paint(colour(*rgb, 1.0));
             ctx.fill_path(

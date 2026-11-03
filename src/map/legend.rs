@@ -55,6 +55,8 @@ pub enum Swatch {
     Warn,
     /// The pin on a card kept in the selection.
     Pin,
+    /// The note mark on a card the technician wrote a note on.
+    Note,
     /// A chip on a card (the uplink's port or a note).
     Chip,
     /// The "drawn" chip on a card drawn by hand (a plan, a training map).
@@ -301,6 +303,16 @@ pub fn entries(
             Some(flagged),
         ));
     }
+    let noted = count(&|c| !c.note.is_empty());
+    if noted > 0 {
+        out.push(Entry::new(
+            Section::Cards,
+            Swatch::Note,
+            Ink::Weak,
+            "Has a note",
+            Some(noted),
+        ));
+    }
     // A chip: the uplink's port or note, or one of the card's own (in
     // Sites the box names the site, so that chip isn't drawn).
     let chipped: Vec<Ink> = nodes
@@ -318,7 +330,7 @@ pub fn entries(
             Section::Cards,
             Swatch::Chip,
             ink,
-            "Port, note or tag",
+            "Port or tag",
             None,
         ));
     }

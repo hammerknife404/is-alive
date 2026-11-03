@@ -423,6 +423,9 @@ impl MapView {
             if !n.flags.is_empty() {
                 warn_dot(p, r, a);
             }
+            if !n.note.is_empty() {
+                note_glyph(p, vis, note_rect(r, z), a);
+            }
             return;
         }
         let full_badge = z >= 0.6;
@@ -504,6 +507,9 @@ impl MapView {
                 p.galley(pos2(x + 5.0, chip.center().y - g.size().y / 2.0), g, accent);
                 x += w + 4.0;
             }
+        }
+        if !n.note.is_empty() {
+            note_glyph(p, vis, note_rect(r, z), a);
         }
         if !full_badge {
             if !n.flags.is_empty() {
@@ -819,6 +825,49 @@ pub(super) fn warn_badge(p: &Painter, c: Pos2, z: f32, a: f32, now: f64) {
         FontId::proportional(11.0 * z),
         Color32::BLACK.gamma_multiply(a),
     );
+}
+
+/// Where the note mark sits on card `r` at zoom `z`: on its top edge,
+/// right of the middle (clear of the pin and the warning badge at the
+/// right, the chips below and a link coming in at the top's middle),
+/// never smaller than can be seen.
+pub(super) fn note_rect(r: Rect, z: f32) -> Rect {
+    let w = (12.0 * z).clamp(7.0, 14.0);
+    let h = w * 1.25;
+    Rect::from_min_size(
+        pos2(r.min.x + r.width() * 0.6, r.min.y - h * 0.4),
+        vec2(w, h),
+    )
+}
+
+/// The note mark in `r`: a sheet with its top right corner folded, solid
+/// in the text colour so it shows on any card and either theme, with two
+/// lines of "writing" once it's big enough for them.
+pub(super) fn note_glyph(p: &Painter, vis: &egui::Visuals, r: Rect, a: f32) {
+    let ink = vis.strong_text_color().gamma_multiply(a);
+    let paper = vis.window_fill.gamma_multiply(a);
+    let f = r.width() * 0.38;
+    let sheet = vec![
+        r.left_top(),
+        pos2(r.max.x - f, r.min.y),
+        pos2(r.max.x, r.min.y + f),
+        r.right_bottom(),
+        r.left_bottom(),
+    ];
+    p.add(Shape::convex_polygon(sheet, ink, Stroke::new(1.0, paper)));
+    let fold = vec![
+        pos2(r.max.x - f, r.min.y),
+        pos2(r.max.x - f, r.min.y + f),
+        pos2(r.max.x, r.min.y + f),
+    ];
+    p.add(Shape::convex_polygon(fold, paper, Stroke::NONE));
+    if r.height() >= 11.0 {
+        let line = Stroke::new(1.0, paper);
+        for k in [0.55, 0.78] {
+            let y = r.min.y + r.height() * k;
+            p.hline(r.min.x + 2.0..=r.max.x - 2.0, y, line);
+        }
+    }
 }
 
 /// A card too small for the badge: an amber dot in its corner.
