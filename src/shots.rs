@@ -253,7 +253,12 @@ const MANUAL: &[Scene] = &[
         |a| over(a.ports.is_running(), a.ports.error()),
     ),
     scene("traceroute", Tab::Trace, nothing, at_once),
-    scene("subnet-sweep", Tab::Sweep, nothing, at_once),
+    scene(
+        "subnet-sweep",
+        Tab::Sweep,
+        |a, _| a.sweep.show_for_shots(crate::net::targets::EXAMPLES),
+        at_once,
+    ),
     scene(
         "dns-lookup",
         Tab::Dns,
@@ -283,9 +288,26 @@ const MANUAL: &[Scene] = &[
         Ready::Yes
     }),
     scene(
+        "map-zones",
+        Tab::Map,
+        // The legend would cover the boxes beside the panel.
+        |a, _| a.look.map_legend = false,
+        |a| {
+            if a.map.zones_for_shots() {
+                Ready::Yes
+            } else {
+                Ready::Wait
+            }
+        },
+    ),
+    scene(
         "map-sites",
         Tab::Map,
-        |a, ctx| a.export.open_example(ctx, 1),
+        |a, ctx| {
+            a.look.map_legend = true;
+            a.map.default_layout_for_shots();
+            a.export.open_example(ctx, 1)
+        },
         |a| over(a.export.is_running(), None),
     ),
     scene("notes", Tab::Notes, |a, _| a.notes.show_split(), at_once),
@@ -297,9 +319,11 @@ const MANUAL: &[Scene] = &[
     ),
     scene("subnet-calc", Tab::Calc, nothing, at_once),
     scene("results", Tab::Results, nothing, at_once),
+    // Over the Map, not the Results log: what's behind the window then
+    // doesn't depend on the network the tour ran on.
     scene(
         "site-bundle",
-        Tab::Results,
+        Tab::Map,
         |a, _| a.bundle.open = true,
         at_once,
     ),

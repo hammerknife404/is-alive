@@ -357,7 +357,7 @@ How to read it:
 
 ## 7. Subnet Sweep
 
-![Subnet Sweep tab before a run: the Range filled with this computer's subnet, Speed, Resolve names and Check mgmt ports](img/subnet-sweep.png)
+![Subnet Sweep tab before a run: four networks in Ranges, with how many targets and addresses they come to beside Start, then Speed, Resolve names and Check mgmt ports](img/subnet-sweep.png)
 
 **What it's for:** listing every device that's alive on a network, with its name, MAC address and maker. It also feeds the [Map](#11-map) and the Site Bundle's inventory.
 
@@ -661,6 +661,8 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
 
+![The Acme example in the Zones layout with the Access points box selected by its title: the box outlined, its cards in the panel on the right](img/map-zones.png)
+
 - **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
 - **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
 - **Right-click the title** for **Select its N cards**, **Add its N cards to the selection**, **Put the box back** (once it's been moved) and **Links**.
@@ -931,7 +933,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ## 14. Subnet Calc
 
-![Subnet Calc showing 192.168.1.50/24: the block's details, Check address, and Split into /25 with the two halves listed](img/subnet-calc.png)
+![Subnet Calc showing this computer's subnet (here 192.0.2.2/24, an address range kept for documentation): the block's details, Check address, and Split into /25 with the two halves listed](img/subnet-calc.png)
 
 **What it's for:** working out subnets without pen and paper: what a block holds, whether an address is in it, how to split it, and which blocks cover a range. It works offline.
 

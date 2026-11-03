@@ -143,6 +143,14 @@ on every node only if you want a hand-tuned layout.
                                    // an ellipsis rather than reflowing the card.
   label:'File Server',             // card title
   sub:'192.168.1.10',              // IP / accent-coloured subtitle
+  ip:'192.168.1.10',               // OPTIONAL — the device's management IPv4, bare.
+  mac:'f4:e2:c6:12:34:56',         // OPTIONAL — its MAC, colon-separated. Fill both
+                                   // whenever the input gives them (/unifidump's
+                                   // devices, a scan, a firewall's ARP/interfaces):
+                                   // tools that reopen the map (is-alive) match
+                                   // devices, sweeps and notes by them instead of
+                                   // reading addresses out of sub/details. Never
+                                   // invent one; the card doesn't draw them.
   details:[                        // bullet list in the detail panel
     'Windows Server', 'SMB shares', 'Nightly backup to NAS'
   ],
@@ -160,7 +168,7 @@ on every node only if you want a hand-tuned layout.
   // x, y, w, h        // OPTIONAL — omit for auto-layout
 }
 ```
-`details`/`flags`/`chips`/`sub` may be omitted (they default to empty).
+`details`/`flags`/`chips`/`sub`/`ip`/`mac` may be omitted (they default to empty).
 A node with a non-empty `flags` array gets a ⚠ badge and a subtle pulse. The
 header's "action items" count is the site-wide ACTIONS total (below).
 

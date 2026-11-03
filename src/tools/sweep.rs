@@ -391,6 +391,8 @@ impl SweepTool {
 
     /// Site inventory for /mapnetwork: facts only, no role guesses.
     pub fn inventory(&self, info: &HostInfo) -> String {
+        // The segment the scanner sat on when the run started.
+        let lan = self.local.lan.or(info.lan);
         let hosts: Vec<_> = self
             .alive
             .iter()
@@ -410,6 +412,7 @@ impl SweepTool {
                     })).collect::<Vec<_>>()),
                     "is_gateway": self.local.gateway == Some(h.ip),
                     "is_this_machine": self.local.lan.is_some_and(|(ip, _)| ip == h.ip),
+                    "on_scanner_lan": lan.map(|(ip, bits)| same_subnet(ip, h.ip, bits)),
                 })
             })
             .collect();
@@ -417,6 +420,7 @@ impl SweepTool {
             "source": format!("is-alive {} subnet sweep", crate::VERSION),
             "scanned_at": self.run_started.clone().unwrap_or_else(log::now),
             "range": self.range.trim(),
+            "ranges": targets::list(&self.range),
             "scanner": {
                 "lan": self.local.lan.or(info.lan).map(|(ip, bits)| format!("{ip}/{bits}")),
                 "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
@@ -426,6 +430,7 @@ impl SweepTool {
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
                 "mac comes from this machine's ARP table, so only hosts on the scanner's own segment have one; past a router it is null.",
+                "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: no mac or ARP is expected, which is not a sign of an unknown device; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "open_ports is null when ports were not checked.",
             ],
@@ -467,6 +472,12 @@ impl SweepTool {
                 .on_hover_text(e.as_str());
             }
         }
+    }
+
+    /// For the screenshot tour: `spec` in the box, nothing swept.
+    pub fn show_for_shots(&mut self, spec: &str) {
+        self.range = spec.into();
+        self.detected = true;
     }
 
     /// Start a run with the given target (used by the full scan).
@@ -654,6 +665,12 @@ fn port_list(open: &[u16]) -> String {
         .join(" ")
 }
 
+/// `a` and `b` are in the same /`bits` network.
+fn same_subnet(a: Ipv4Addr, b: Ipv4Addr, bits: u32) -> bool {
+    let mask = u32::MAX.checked_shl(32 - bits.min(32)).unwrap_or(0);
+    u32::from(a) & mask == u32::from(b) & mask
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,6 +772,32 @@ mod tests {
         assert!(hosts[0]["open_ports"].is_null(), "ports weren't checked");
         assert_eq!(v["scanner"]["lan"], "10.0.0.50/24");
         assert_eq!(v["range"], "10.0.0.0/24");
+        assert_eq!(v["ranges"], json!(["10.0.0.0/24"]));
+        assert_eq!(hosts[0]["on_scanner_lan"], true);
+
+        // Several networks: a routed host is marked so its missing MAC
+        // isn't read as an unknown device.
+        s.range = "10.0.0.0/24, 172.20.5.0 - 20".into();
+        s.alive.push(host([172, 20, 5, 9], Some(4.0)));
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        assert_eq!(v["ranges"], json!(["10.0.0.0/24", "172.20.5.0-20"]));
+        assert_eq!(v["hosts"][2]["on_scanner_lan"], false);
+        assert!(same_subnet(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 254),
+            24
+        ));
+        assert!(!same_subnet(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 1, 1),
+            24
+        ));
+        assert!(same_subnet(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(99, 0, 0, 1),
+            0
+        ));
 
         s.checked_ports = true;
         let v: serde_json::Value =

@@ -121,6 +121,34 @@ If ambiguous (e.g. they just typed `/mapnetwork` with no attachment and no prior
 map mentioned in this chat), ask one quick question: new site or updating an
 existing map. Don't stall on this — one question, move on.
 
+## Input from an is-alive site bundle
+
+A zip whose `manifest.json` says `"kind": "is-alive site bundle"` comes from
+the is-alive app, made on the technician's machine. Read `manifest.json` first:
+
+- **Skip Step 1.** `mapnetwork_preflight` already answers it (site name, scan,
+  firewall config, known problems, existing map, clients on or off). Don't ask
+  again; `existing_map` set means the **update path**, saved under that name.
+- **Files and their tier** (Step 3's tiers): `unifi.unifidump.json` goes
+  through /unifidump first; `sonicwall.json` / `meraki.json` are **enforced
+  config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
+  `card-notes.json` and the manifest's `known_problems` are the technician's
+  word: context, findings and device notes, never topology on their own.
+  `results.json` (test runs) becomes a finding only where a run shows a problem
+  (loss, a closed port that should be open, a failing mail check).
+- **`inventory.json` hosts:** `found_by: "arp"` means it answered ARP but drops
+  ping (a firewall default, not a fault). `open_ports` is role evidence for the
+  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera).
+  `private_mac: true` is a phone, laptop or VM, never infrastructure.
+  `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
+  is the default gateway. `ranges` lists every network swept;
+  `on_scanner_lan: false` marks a host on a routed network, where **no MAC is
+  expected** — that's not an unidentified device.
+- **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
+  put it in that node's `details` (and `flags` when it reports a problem).
+- **Fill `ip` and `mac` on every node** you can (Step 2's schema): is-alive
+  reopens the map and matches devices, sweeps and notes by them.
+
 ## Step 1 — one pre-build ask
 
 Before building (new map or update), send ONE consolidated prompt, even when

@@ -345,6 +345,18 @@ def _find_cycles(node_ids, edges):
     return cycles
 
 
+def _is_ipv4(v):
+    import ipaddress
+    try:
+        return isinstance(v, str) and isinstance(ipaddress.ip_address(v.strip()), ipaddress.IPv4Address)
+    except ValueError:
+        return False
+
+
+def _is_mac(v):
+    return isinstance(v, str) and re.fullmatch(r"[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}", v.strip()) is not None
+
+
 def validate(data):
     """Return (errors, warnings) for parsed SITE DATA."""
     errors, warnings = [], []
@@ -399,6 +411,14 @@ def validate(data):
             elif site not in sites:
                 errors.append(f"Node '{nid}': site '{site}' is not in SITES "
                               f"(renders under 'Unassigned').")
+        ip = nd.get("ip")
+        if ip is not None and not _is_ipv4(ip):
+            warnings.append(f"Node '{nid}': ip '{ip}' is not a bare IPv4 address "
+                            f"(tools that reopen the map will ignore it).")
+        mac = nd.get("mac")
+        if mac is not None and not _is_mac(mac):
+            warnings.append(f"Node '{nid}': mac '{mac}' is not a MAC like "
+                            f"aa:bb:cc:dd:ee:ff (tools that reopen the map will ignore it).")
         kind = nd.get("kind")
         if isinstance(kind, str) and len(kind) > NODE_KIND_MAX_LEN:
             warnings.append(f"Node '{nid}': kind '{kind}' is {len(kind)} chars "

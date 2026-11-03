@@ -810,6 +810,38 @@ impl MapView {
     }
 
     /// One card selected, the rest let go.
+    /// For the screenshot tour: Zones, with the access points' box selected
+    /// (its title clicked), or the box holding the most cards on a map
+    /// without one. False until the layout is in.
+    pub fn zones_for_shots(&mut self) -> bool {
+        if self.mode != Some(Mode::Zones) {
+            self.mode = Some(Mode::Zones);
+            self.stale = true;
+            return false;
+        }
+        if self.stale || self.lay.boxes.is_empty() {
+            return false;
+        }
+        let aps =
+            (0..self.lay.boxes.len()).find(|&g| self.lay.boxes[g].zone == Some(Zone::Wireless));
+        let pick =
+            aps.or_else(|| (0..self.lay.boxes.len()).max_by_key(|&g| self.lay.in_box(g).len()));
+        if let Some(g) = pick
+            && self.selection().len() != self.lay.in_box(g).len()
+        {
+            self.select(None);
+            self.select_box(g, false);
+        }
+        true
+    }
+
+    /// For the screenshot tour: the map's own layout again, nothing selected.
+    pub fn default_layout_for_shots(&mut self) {
+        self.mode = None;
+        self.select(None);
+        self.stale = true;
+    }
+
     /// For the screenshot tour: select the card most findings name, so the
     /// panel has something in every section.
     /// `IS_ALIVE_SHOTS_SELECT=<card id>` picks the card instead.

@@ -85,6 +85,12 @@ CASES = [
     ("missing ACTIONS", page("this.META = { title:'T' };\nthis.ZONES = {};\nthis.NODES = [];\nthis.EDGES = [];"), 1, "ACTIONS` is missing"),
     ("over hard cap",   site("[" + ",".join(f"{{id:'n{i}',zone:'core',kind:'X',label:'N'}}" for i in range(121)) + "]", "[]"), 1, "hard cap"),
     # ---- warnings (exit 0) ----
+    ("ip and mac fields",  site("[ { id:'a', zone:'core', kind:'X', label:'A', ip:'10.0.0.2', mac:'f4:e2:c6:00:00:02' },"
+                                " { id:'b', zone:'core', kind:'X', label:'B' } ]"), 0, None),
+    ("malformed ip",       site("[ { id:'a', zone:'core', kind:'X', label:'A', ip:'10.0.0.300' },"
+                                " { id:'b', zone:'core', kind:'X', label:'B' } ]"), 0, "is not a bare IPv4"),
+    ("malformed mac",      site("[ { id:'a', zone:'core', kind:'X', label:'A', mac:'f4e2c6000002' },"
+                                " { id:'b', zone:'core', kind:'X', label:'B' } ]"), 0, "is not a MAC"),
     ("kind > 18",       site("[ {id:'a',zone:'core',kind:'SONICWALL (INFERRED)',label:'A'},{id:'b',zone:'core',kind:'X',label:'B'} ]"), 0, "20 chars"),
     ("unknown cls",     site(two(), "[ {id:'e1',from:'a',to:'b',cls:'wireless'} ]"), 0, "cls"),
     ("node w/o site",   site("[ {id:'a',site:'hq',zone:'core',kind:'X',label:'A'},{id:'b',zone:'core',kind:'X',label:'B'} ]",
