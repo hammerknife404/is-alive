@@ -253,7 +253,12 @@ const MANUAL: &[Scene] = &[
         |a| over(a.ports.is_running(), a.ports.error()),
     ),
     scene("traceroute", Tab::Trace, nothing, at_once),
-    scene("subnet-sweep", Tab::Sweep, nothing, at_once),
+    scene(
+        "subnet-sweep",
+        Tab::Sweep,
+        |a, _| a.sweep.show_for_shots(crate::net::targets::EXAMPLES),
+        at_once,
+    ),
     scene(
         "dns-lookup",
         Tab::Dns,
@@ -282,10 +287,20 @@ const MANUAL: &[Scene] = &[
         a.map.select_for_shots();
         Ready::Yes
     }),
+    scene("map-zones", Tab::Map, nothing, |a| {
+        if a.map.zones_for_shots() {
+            Ready::Yes
+        } else {
+            Ready::Wait
+        }
+    }),
     scene(
         "map-sites",
         Tab::Map,
-        |a, ctx| a.export.open_example(ctx, 1),
+        |a, ctx| {
+            a.map.default_layout_for_shots();
+            a.export.open_example(ctx, 1)
+        },
         |a| over(a.export.is_running(), None),
     ),
     scene("notes", Tab::Notes, |a, _| a.notes.show_split(), at_once),

@@ -236,6 +236,17 @@ impl MapTabs {
         self.view().select_for_shots();
     }
 
+    /// For the screenshot tour: the map in Zones with its biggest role box
+    /// selected. False until the Zones layout is in (a frame later).
+    pub fn zones_for_shots(&mut self) -> bool {
+        self.view().zones_for_shots()
+    }
+
+    /// For the screenshot tour: back to the map's own layout.
+    pub fn default_layout_for_shots(&mut self) {
+        self.view().default_layout_for_shots();
+    }
+
     /// A saved map handed over by Config Export (opened or dropped): kept
     /// with the others and shown. Why not, when it couldn't be.
     pub fn open_file(&mut self, path: &Path, data: &[u8]) -> Result<(), String> {

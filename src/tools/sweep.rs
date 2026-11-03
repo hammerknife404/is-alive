@@ -469,6 +469,12 @@ impl SweepTool {
         }
     }
 
+    /// For the screenshot tour: `spec` in the box, nothing swept.
+    pub fn show_for_shots(&mut self, spec: &str) {
+        self.range = spec.into();
+        self.detected = true;
+    }
+
     /// Start a run with the given target (used by the full scan).
     pub fn run(&mut self, ctx: &egui::Context, range: &str) {
         self.range = range.into();
