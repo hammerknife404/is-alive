@@ -14,7 +14,9 @@ pub const MONO: &str = "Mono";
 const ICONS: &str = "is-alive-icons";
 
 /// egui's own fonts with the app's icons ahead of its emoji, for every
-/// text in the app.
+/// text in the app. Proportional text falls back to egui's monospace font
+/// last: its sans (Ubuntu Light) has no arrows (→ ← ↑ ↓ ⇄), box-drawing
+/// lines or ▲ ▼ ◆, which a map's text often carries, and they'd show as boxes.
 pub fn definitions() -> FontDefinitions {
     let mut defs = FontDefinitions::default();
     let icons = FontData::from_static(include_bytes!("../assets/icons.ttf")).tweak(FontTweak {
@@ -30,6 +32,10 @@ pub fn definitions() -> FontDefinitions {
             .position(|n| n == "NotoEmoji-Regular")
             .unwrap_or(chain.len());
         chain.insert(at, ICONS.into());
+    }
+    let sans = defs.families.entry(FontFamily::Proportional).or_default();
+    if !sans.iter().any(|n| n == "Hack") {
+        sans.push("Hack".into());
     }
     defs
 }
