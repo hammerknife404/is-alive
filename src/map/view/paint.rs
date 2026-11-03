@@ -6,13 +6,45 @@ use std::cell::RefCell;
 
 impl MapView {
     /// Every line on the map as drawn now (see `layout::lines`).
+    /// Card `i`'s link is routed on its own, round the cards in its way:
+    /// the card was dragged by hand, or it's the way into a site box
+    /// dragged elsewhere (its usual route would cut through what's now
+    /// between them). A Zones box keeps its folded line, which follows it.
+    pub(super) fn freed(&self, i: usize) -> bool {
+        let n = &self.map.nodes[i];
+        if self.placed.contains_key(&n.id) || self.shifted.is_empty() {
+            return self.placed.contains_key(&n.id);
+        }
+        let group = |k: usize| self.lay.group.get(k).copied().flatten();
+        let Some(g) = group(i) else { return false };
+        let site = self.lay.boxes.get(g).is_some_and(|b| b.tree);
+        let moved = self
+            .lay
+            .box_key(self.mode(), g)
+            .is_some_and(|k| self.shifted.contains_key(&k));
+        site && moved && n.parent().is_some_and(|p| group(p) != Some(g))
+    }
+
+    /// Lines the Links view leaves out are gone, but for a selected
+    /// card's lit path.
     pub(super) fn lines_now(&self) -> Vec<layout::Line> {
-        layout::lines(
+        let all = layout::lines(
             &self.map,
             &self.lay,
             &|i| self.pos.get(&self.map.nodes[i].id).copied(),
-            &|i| self.placed.contains_key(&self.map.nodes[i].id),
-        )
+            &|i| self.freed(i),
+        );
+        if self.links == Links::All {
+            return all;
+        }
+        let below = layout::has_below(&self.map);
+        let lit = self.lit(&self.selection()).1;
+        all.into_iter()
+            .filter(|l| {
+                self.links.keeps(&self.map, l, &|k| below[k])
+                    || l.kids.iter().any(|k| lit.contains(k))
+            })
+            .collect()
     }
 
     /// Draw the map with its `lines` (`lines_now`); `hover` is the card
@@ -69,15 +101,15 @@ impl MapView {
         };
 
         // Boxes (Zones and Sites modes), under everything else.
-        let hot_site = if hover.is_none() {
-            self.site_title_at(rect, ui.input(|i| i.pointer.hover_pos()))
+        let hot_box = if hover.is_none() {
+            self.box_title_at(rect, ui.input(|i| i.pointer.hover_pos()))
         } else {
             None
         };
         // Titles written above their boxes sit in the gap the links run
         // through: drawn after the links, on a patch of the canvas.
         let mut above = Vec::new();
-        for b in &self.lay.boxes {
+        for (g, b) in self.lay.boxes.iter().enumerate() {
             let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
             if !r.intersects(rect) {
                 continue;
@@ -89,8 +121,19 @@ impl MapView {
                 1.0
             };
             draw_box(&p, r, z, c, a);
-            // A site's title folds it: brighter under the pointer.
-            let hot = b.tree && hot_site.as_deref() == Some(b.title.as_str());
+            // Every card in it selected (its title clicked): the box is too.
+            let cards = self.lay.in_box(g);
+            if !cards.is_empty() && cards.iter().all(|i| picked.contains(i)) {
+                p.rect_stroke(
+                    r,
+                    (10.0 * z) as u8,
+                    Stroke::new(2.0, c.gamma_multiply(a)),
+                    StrokeKind::Outside,
+                );
+            }
+            // A title clicks (a site's folds it) and drags the box:
+            // brighter under the pointer.
+            let hot = hot_box == Some(g);
             if title_above(z) {
                 // Too short a title strip to write in: the name sits just
                 // above the box, small, in the gap between boxes.
@@ -134,7 +177,7 @@ impl MapView {
                     egui::Align2::LEFT_CENTER,
                     title,
                     FontId::proportional((11.0 * z).max(9.5)),
-                    c.gamma_multiply(a),
+                    if hot { vis.strong_text_color() } else { c }.gamma_multiply(a),
                 );
             }
         }

@@ -460,8 +460,11 @@ impl SweepTool {
             }
             Err(_) if self.range.trim().is_empty() => {}
             Err(e) => {
-                ui.label(RichText::new("⚠").color(widgets::warn()))
-                    .on_hover_text(e.as_str());
+                ui.add(
+                    egui::Label::new(RichText::new(format!("⚠ {e}")).color(widgets::warn()))
+                        .truncate(),
+                )
+                .on_hover_text(e.as_str());
             }
         }
     }

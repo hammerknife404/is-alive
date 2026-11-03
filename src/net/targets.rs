@@ -55,7 +55,8 @@ fn spans(spec: &str) -> Result<Vec<(u32, u32)>, String> {
     let mut v = Vec::with_capacity(toks.len());
     for t in &toks {
         let (a, z) = one(t).map_err(|e| {
-            if toks.len() > 1 {
+            // Named once: "invalid IPv4 address '10.0.0.300'" already is.
+            if toks.len() > 1 && !e.contains(&format!("'{t}'")) {
                 format!("{t}: {e}")
             } else {
                 e
@@ -267,7 +268,9 @@ mod tests {
     #[test]
     fn a_bad_target_is_named() {
         let e = parse_range("10.0.0.0/24 10.0.0.300 10.0.1.1").unwrap_err();
-        assert!(e.starts_with("10.0.0.300:"), "{e}");
+        assert_eq!(e, "invalid IPv4 address '10.0.0.300'");
+        let e = parse_range("10.0.0.0/24 10.0.0.1-10.0.0.300").unwrap_err();
+        assert!(e.starts_with("10.0.0.1-10.0.0.300: invalid"), "{e}");
         let e = parse_range("10.0.0.0/24 10.0.0.50-10").unwrap_err();
         assert!(e.contains("10.0.0.50-10") && e.contains("after"), "{e}");
         // One target alone says what's wrong without repeating it.

@@ -4,6 +4,37 @@
 use super::*;
 
 impl MapView {
+    /// While a Links view leaves lines out, a pill in the canvas's top
+    /// right corner says so; a click shows them all again.
+    pub(super) fn links_pill(&mut self, ui: &mut Ui, rect: Rect) {
+        if self.links == Links::All {
+            return;
+        }
+        let text = format!("{}  ×", self.links.name());
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let w = ui
+            .painter()
+            .layout_no_wrap(text.clone(), font, Color32::WHITE)
+            .size()
+            .x
+            + 18.0;
+        let r = Rect::from_min_size(pos2(rect.max.x - 10.0 - w, rect.min.y + 8.0), vec2(w, 22.0));
+        if r.min.x < rect.min.x + 40.0 {
+            return;
+        }
+        if ui
+            .put(r, egui::Button::new(text).corner_radius(11))
+            .on_hover_text(format!(
+                "{}.\nClick to show all links again (or right-click the map, Links)",
+                self.links.tip()
+            ))
+            .clicked()
+        {
+            self.links = Links::All;
+            self.lay.links = Links::All;
+        }
+    }
+
     /// − 100% + Fit in the canvas corner, for when there's no wheel.
     pub(super) fn zoom_controls(&mut self, ui: &mut Ui, rect: Rect) {
         let h = 22.0;

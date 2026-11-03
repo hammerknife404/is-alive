@@ -93,6 +93,63 @@ impl MapView {
             .map(|b| b.title.clone())
     }
 
+    /// The box whose title is under the screen point `at`: the one drawn
+    /// on top where moved boxes overlap.
+    pub(super) fn box_title_at(&self, rect: Rect, at: Option<Pos2>) -> Option<usize> {
+        let at = at.filter(|p| rect.contains(*p))?;
+        self.lay
+            .boxes
+            .iter()
+            .rposition(|b| self.title_rect(rect, b).contains(at))
+    }
+
+    /// The box `key` names, in the layout now.
+    pub(super) fn box_index(&self, key: &str) -> Option<usize> {
+        (0..self.lay.boxes.len())
+            .find(|&g| self.lay.box_key(self.mode(), g).as_deref() == Some(key))
+    }
+
+    /// Select box `g`'s cards (`add`: along with what's selected).
+    pub(super) fn select_box(&mut self, g: usize, add: bool) {
+        let cards = self.lay.in_box(g);
+        let Some(&first) = cards.first() else { return };
+        if add {
+            let sel: HashSet<usize> = self.selection().into_iter().collect();
+            for &c in cards.iter().filter(|c| !sel.contains(c)) {
+                self.toggle(c);
+            }
+        } else {
+            self.select_group(first, &cards[1..]);
+        }
+    }
+
+    /// Move box `g` by `d` (world), with its cards and the cards dragged
+    /// out of it by hand, as one: its lines follow, folded as before.
+    pub(super) fn shift_box(&mut self, g: usize, d: Vec2) {
+        let Some(key) = self.lay.box_key(self.mode(), g) else {
+            return;
+        };
+        let cards: Vec<usize> = (0..self.lay.group.len())
+            .filter(|&i| self.lay.group[i] == Some(g))
+            .collect();
+        self.lay.shift_box(g, d);
+        let total = self.shifted.get(&key).copied().unwrap_or(Vec2::ZERO) + d;
+        if total.length() < 0.01 {
+            self.shifted.remove(&key);
+        } else {
+            self.shifted.insert(key, total);
+        }
+        for i in cards {
+            let id = self.map.nodes[i].id.clone();
+            if let Some(p) = self.placed.get_mut(&id) {
+                *p += d;
+            }
+            if let Some(p) = self.pos.get_mut(&id) {
+                *p += d;
+            }
+        }
+    }
+
     /// Pointer and keyboard on the canvas. Returns the card under the
     /// pointer (none while a menu or tooltip covers it).
     pub(super) fn interact(&mut self, ui: &Ui, rect: Rect, resp: &egui::Response) -> Option<usize> {
@@ -108,6 +165,13 @@ impl MapView {
         } else {
             None
         };
+        // A box's title: a click selects its cards (a site's folds it),
+        // a drag moves the box.
+        let boxed = if over.is_none() {
+            self.box_title_at(rect, pointer)
+        } else {
+            None
+        };
         self.drag_cards(ui, rect, resp);
         // A site's title folds it and the boxes move: the second click of
         // a double-click there would land on whatever moved under it.
@@ -117,6 +181,8 @@ impl MapView {
             if let Some(site) = &title {
                 self.flip_sites.push(site.clone());
                 self.flipped_at = now;
+            } else if let Some(g) = boxed {
+                self.select_box(g, add);
             } else {
                 match over {
                     Some(i) if add => self.toggle(i),
@@ -139,9 +205,11 @@ impl MapView {
             }
         }
         if resp.secondary_clicked() {
-            self.menu = Some(match over {
-                Some(i) => Menu::Card(self.map.nodes[i].id.clone()),
-                None => Menu::Background,
+            let key = boxed.and_then(|g| self.lay.box_key(self.mode(), g));
+            self.menu = Some(match (over, key) {
+                (Some(i), _) => Menu::Card(self.map.nodes[i].id.clone()),
+                (None, Some(k)) => Menu::Box(k),
+                (None, None) => Menu::Background,
             });
         }
         // A ☰ menu open in the detail panel is the panel's to show.
@@ -155,6 +223,11 @@ impl MapView {
                     None => ui.close(),
                 },
                 Menu::Background => self.background_menu(ui, rect),
+                Menu::Box(key) => match self.box_index(key) {
+                    Some(g) => self.box_menu(ui, rect, g),
+                    // Gone in a rebuild (another layout).
+                    None => ui.close(),
+                },
                 // Left to the panel, above; never shown here.
                 Menu::Panel(_) => ui.close(),
             });
@@ -209,9 +282,9 @@ impl MapView {
         if !self.keys_busy {
             self.keys(ui, rect);
         }
-        let icon = if self.drag.is_some() || (resp.dragged() && over.is_none()) {
+        let icon = if self.dragging() || (resp.dragged() && over.is_none()) {
             egui::CursorIcon::Grabbing
-        } else if over.is_some() || title.is_some() {
+        } else if over.is_some() || title.is_some() || boxed.is_some() {
             egui::CursorIcon::PointingHand
         } else {
             egui::CursorIcon::Grab
@@ -221,7 +294,7 @@ impl MapView {
         }
         // A +N or − chip shows its own tooltip, not the card's.
         if let Some(i) = over
-            && self.drag.is_none()
+            && !self.dragging()
             && self.menu.is_none()
             && !pointer.is_some_and(|p| self.on_chip(rect, p))
         {
@@ -295,6 +368,15 @@ impl MapView {
                 .or(resp.interact_pointer_pos())
                 .and_then(|p| self.hit(self.to_world(rect, p)))
                 .map(|i| self.map.nodes[i].id.clone());
+            // Not on a card: on a box's title, the box moves.
+            if self.drag.is_none() {
+                let origin = ui
+                    .input(|i| i.pointer.press_origin())
+                    .or(resp.interact_pointer_pos());
+                self.box_drag = self
+                    .box_title_at(rect, origin)
+                    .and_then(|g| self.lay.box_key(self.mode(), g));
+            }
             if let Some(id) = &self.drag {
                 let sel: Vec<String> = self
                     .selection()
@@ -310,7 +392,7 @@ impl MapView {
         }
         if resp.dragged() {
             let mut d = resp.drag_delta();
-            if self.drag.is_some() {
+            if self.dragging() {
                 let at = ui.input(|i| i.pointer.latest_pos());
                 // The cards follow the pointer only as far as the canvas
                 // edge: never under the detail panel or out of the window.
@@ -327,10 +409,14 @@ impl MapView {
                     self.aim = None;
                     ui.ctx().request_repaint();
                 }
-                for id in self.raised.clone() {
-                    let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
-                    self.placed.insert(id.clone(), at);
-                    self.pos.insert(id, at);
+                if let Some(g) = self.box_drag.clone().and_then(|k| self.box_index(&k)) {
+                    self.shift_box(g, d / self.zoom);
+                } else if self.drag.is_some() {
+                    for id in self.raised.clone() {
+                        let at = self.pos.get(&id).copied().unwrap_or_default() + d / self.zoom;
+                        self.placed.insert(id.clone(), at);
+                        self.pos.insert(id, at);
+                    }
                 }
                 self.follow = false;
             } else {
@@ -339,8 +425,11 @@ impl MapView {
                 self.aim = None;
             }
         }
-        if resp.drag_stopped() && self.drag.take().is_some() {
-            self.clear_of_legend(rect, &self.raised.clone());
+        if resp.drag_stopped() {
+            self.box_drag = None;
+            if self.drag.take().is_some() {
+                self.clear_of_legend(rect, &self.raised.clone());
+            }
         }
     }
 
@@ -895,6 +984,76 @@ impl MapView {
 
     /// The right-click menu on the empty canvas: the view, the selection,
     /// the layout, the legend, export.
+    /// The right-click menu on box `g`'s title: select its cards, put it
+    /// back, which links show.
+    fn box_menu(&mut self, ui: &mut Ui, rect: Rect, g: usize) {
+        let Some(b) = self.lay.boxes.get(g).cloned() else {
+            ui.close();
+            return;
+        };
+        ui.label(RichText::new(&b.title).strong());
+        let cards = self.lay.in_box(g);
+        ui.separator();
+        if !cards.is_empty() {
+            let n = cards.len();
+            let s = if n == 1 { "" } else { "s" };
+            if ui
+                .button(format!("Select its {n} card{s}"))
+                .on_hover_text("Or click the box's title (Zones); Ctrl+click adds them")
+                .clicked()
+            {
+                self.select_box(g, false);
+                ui.close();
+            }
+            let sel = self.selection();
+            if !sel.is_empty()
+                && !cards.iter().all(|c| sel.contains(c))
+                && ui
+                    .button(format!("Add its {n} card{s} to the selection"))
+                    .clicked()
+            {
+                self.select_box(g, true);
+                ui.close();
+            }
+        }
+        let key = self.lay.box_key(self.mode(), g);
+        if let Some(d) = key.as_ref().and_then(|k| self.shifted.get(k).copied())
+            && ui
+                .button("Put the box back")
+                .on_hover_text("Back where the layout had it, with its cards")
+                .clicked()
+        {
+            self.shift_box(g, -d);
+            if let Some(k) = &key {
+                self.shifted.remove(k);
+            }
+            self.fit_view(rect);
+            ui.close();
+        }
+        ui.weak("Drag the title to move the box");
+        ui.separator();
+        self.links_menu(ui);
+    }
+
+    /// Which links the map draws, as a submenu.
+    pub(super) fn links_menu(&mut self, ui: &mut Ui) {
+        ui.menu_button("Links", |ui| {
+            for l in Links::ALL {
+                if ui
+                    .add(egui::Button::selectable(self.links == l, l.name()))
+                    .on_hover_text(l.tip())
+                    .clicked()
+                {
+                    self.links = l;
+                    self.lay.links = l;
+                    ui.close();
+                }
+            }
+            ui.separator();
+            ui.weak("A selected card's path always shows");
+        });
+    }
+
     fn background_menu(&mut self, ui: &mut Ui, rect: Rect) {
         if ui
             .add(egui::Button::new("Fit").shortcut_text("F"))
@@ -921,17 +1080,17 @@ impl MapView {
             self.select(None);
             ui.close();
         }
-        if !self.placed.is_empty()
+        if (!self.placed.is_empty() || !self.shifted.is_empty())
             && ui
                 .button("Re-layout")
-                .on_hover_text("Put dragged cards back where the layout had them")
+                .on_hover_text("Put dragged cards and boxes back where the layout had them")
                 .clicked()
         {
-            self.placed.clear();
-            self.relaid = true;
+            self.relayout_all();
             self.fit_view(rect);
             ui.close();
         }
+        self.links_menu(ui);
         if ui
             .add(egui::Button::selectable(self.legend, "Legend").shortcut_text("L"))
             .on_hover_text("Show or hide what the colours, lines and badges mean")

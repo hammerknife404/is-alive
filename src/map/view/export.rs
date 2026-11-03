@@ -65,12 +65,7 @@ impl MapView {
     /// Ask where to save the map in `f`, as it's laid out now.
     fn export(&self, f: Format, vis: &egui::Visuals) {
         let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
-        let moved: Vec<bool> = self
-            .map
-            .nodes
-            .iter()
-            .map(|n| self.placed.contains_key(&n.id))
-            .collect();
+        let moved: Vec<bool> = (0..self.map.nodes.len()).map(|i| self.freed(i)).collect();
         let d = Drawn {
             map: &self.map,
             lay: &self.lay,
