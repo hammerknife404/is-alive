@@ -1,5 +1,6 @@
 //! Small shared UI pieces.
 
+use crate::input::Field;
 use eframe::egui::{self, Color32, RichText, Ui};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -58,8 +59,11 @@ pub fn init(ctx: &egui::Context) {
 }
 
 pub fn toast(text: impl Into<String>, ok: bool) {
+    let text = text.into();
     if let Ok(mut t) = TOASTS.lock() {
-        t.push((text.into(), ok, Instant::now()));
+        // The same message again (a paste repeated) shows once, afresh.
+        t.retain(|x| x.0 != text || x.1 != ok);
+        t.push((text, ok, Instant::now()));
         t.retain(|x| x.2.elapsed().as_secs_f32() < TOAST_FOR);
         let n = t.len();
         if n > 3 {
@@ -188,6 +192,19 @@ pub fn text_selection(
     let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
     let (a, b) = (r.primary.index.0, r.secondary.index.0);
     Some(byte(a.min(b))..byte(a.max(b)))
+}
+
+/// Draws `add` with the popups it opens free to use the window's height:
+/// egui lays a new popup out at most 400 points tall, so a long list in a
+/// drop-down or menu would scroll with room to spare.
+pub fn tall_popups<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let was = ctx.global_style().spacing.default_area_size;
+    let tall = ctx.content_rect().height();
+    ctx.global_style_mut(|s| s.spacing.default_area_size.y = tall);
+    let r = add(ui);
+    ctx.global_style_mut(|s| s.spacing.default_area_size = was);
+    r
 }
 
 /// Busy indicator. egui's own spinner asks for a redraw every frame, which
@@ -379,27 +396,127 @@ pub fn empty_state(
     hit
 }
 
-/// Most characters a field takes. A host, domain or search never needs
-/// more; a paste of a whole log into one is cut off, not carried around.
-pub const FIELD_MAX: usize = 255;
-/// A link (Speed Test's file).
-pub const URL_MAX: usize = 2048;
-/// Notes: about 1 MB of text, far beyond any site's notes.
-pub const NOTES_MAX: usize = 1_000_000;
-/// Known problems in the site bundle.
-pub const PROBLEMS_MAX: usize = 20_000;
-
 /// Single-line text field; returns true if Enter was pressed in it.
-pub fn field(ui: &mut Ui, label: &str, value: &mut String, width: f32, hint: &str) -> bool {
+pub fn field(
+    ui: &mut Ui,
+    label: &str,
+    kind: Field,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> bool {
     lead(ui, label);
+    let r = line(ui, kind, value, width, hint);
+    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+}
+
+/// A single-line text box for `kind`: its length limit, hidden characters
+/// dropped as they're typed or pasted, and a right-click menu.
+pub fn line(
+    ui: &mut Ui,
+    kind: Field,
+    value: &mut String,
+    width: f32,
+    hint: &str,
+) -> egui::Response {
     let r = add_text_edit(
         ui,
         egui::TextEdit::singleline(value)
-            .char_limit(FIELD_MAX)
+            .char_limit(kind.room())
             .desired_width(width)
             .hint_text(hint),
     );
-    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    tidy(ui.ctx(), &r, kind, value);
+    r
+}
+
+/// What colours the text in an `area` as it's typed.
+pub type Layouter<'a> =
+    &'a mut dyn FnMut(&Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley>;
+
+/// A multi-line text box for `kind`, `rows` lines tall, as `line` is for
+/// one line: its length limit, hidden characters dropped as they're typed
+/// or pasted, and a right-click menu (the clipboard's items, then `more`'s;
+/// `more` returns true when it picked one).
+#[allow(clippy::too_many_arguments)]
+pub fn area(
+    ui: &mut Ui,
+    id: egui::Id,
+    kind: Field,
+    value: &mut String,
+    rows: usize,
+    hint: &str,
+    layouter: Option<Layouter>,
+    more: impl FnOnce(&mut Ui) -> bool,
+) -> egui::Response {
+    let keep = selection_before_right_click(ui.ctx(), id);
+    let mut edit = egui::TextEdit::multiline(value)
+        .id(id)
+        .char_limit(kind.room())
+        .desired_width(f32::INFINITY)
+        .desired_rows(rows)
+        .hint_text(hint);
+    if let Some(l) = layouter {
+        edit = edit.layouter(l);
+    }
+    let r = ui.add(edit);
+    tidy(ui.ctx(), &r, kind, value);
+    restore_selection(ui.ctx(), id, &r, keep);
+    r.context_menu(|ui| {
+        if text_edit_menu(ui, id, true) || more(ui) {
+            ui.close();
+        }
+    });
+    r
+}
+
+/// After text box `r` (holding a `kind`, told it takes `kind.room()`)
+/// changed: drop the characters it doesn't keep, cut it to `kind.max()`
+/// just before the cursor, as the box would have, leave the cursor where it
+/// was, and say so when a paste lost hidden characters or was cut.
+pub fn tidy(ctx: &egui::Context, r: &egui::Response, kind: Field, value: &mut String) {
+    if !r.changed() {
+        return;
+    }
+    let pasted = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+    let state = egui::TextEdit::load_state(ctx, r.id);
+    let range = state.as_ref().and_then(|s| s.cursor.char_range());
+    let at = range.map_or(usize::MAX, |c| kind.kept_before(value, c.primary.index.0));
+    let (clean, cut) = kind.fit(value, at);
+    if clean == *value {
+        return;
+    }
+    let dropped = kind.dropped(value);
+    // The box itself stopped the paste at its room: more was lost.
+    let full = value.chars().count() >= kind.room();
+    if let (Some(mut state), Some(mut range)) = (state, range) {
+        for c in [&mut range.primary, &mut range.secondary] {
+            let k = kind.kept_before(value, c.index.0);
+            c.index = egui::text::CharIndex(if k >= cut.end {
+                k - cut.len()
+            } else {
+                k.min(cut.start)
+            });
+        }
+        state.cursor.set_char_range(Some(range));
+        state.store(ctx, r.id);
+    }
+    *value = clean;
+    if pasted && dropped > 0 {
+        toast(
+            format!(
+                "Took out {dropped} invisible or control character{}",
+                if dropped == 1 { "" } else { "s" }
+            ),
+            true,
+        );
+    }
+    if pasted && (!cut.is_empty() || full) {
+        toast(
+            format!("Pasted text cut to {} characters", kind.max()),
+            false,
+        );
+    }
 }
 
 pub fn num<T: egui::emath::Numeric>(
@@ -486,12 +603,27 @@ pub fn safe_path(path: std::path::PathBuf, exts: &[&str]) -> std::path::PathBuf 
 }
 
 pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
+    save_made(file_name, filter, exts, move || Ok(text.into_bytes()));
+}
+
+/// Like `save_file`, with the bytes made once a file is picked, off the
+/// UI thread (a big picture takes a moment).
+pub fn save_made(
+    file_name: String,
+    filter: &'static str,
+    exts: Vec<&'static str>,
+    make: impl FnOnce() -> Result<Vec<u8>, String> + Send + 'static,
+) {
     std::thread::spawn(move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_file_name(&file_name)
-            .add_filter(filter, &exts)
-            .save_file()
-        else {
+        // Scripted runs (IS_ALIVE_SAVE_DIR=<dir>) save there, no dialog.
+        let picked = match std::env::var_os("IS_ALIVE_SAVE_DIR") {
+            Some(dir) => Some(std::path::PathBuf::from(dir).join(&file_name)),
+            None => rfd::FileDialog::new()
+                .set_file_name(&file_name)
+                .add_filter(filter, &exts)
+                .save_file(),
+        };
+        let Some(path) = picked else {
             return;
         };
         let path = safe_path(path, &exts);
@@ -499,7 +631,7 @@ pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        if let Err(e) = std::fs::write(&path, text) {
+        if let Err(e) = make().and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
             toast(format!("Couldn't save {name}"), false);
             rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Error)

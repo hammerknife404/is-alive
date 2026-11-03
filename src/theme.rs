@@ -185,6 +185,30 @@ impl EmojiStyle {
             Self::Neon => "neon",
         }
     }
+
+    fn from_key(v: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|e| e.key() == v.trim())
+            .unwrap_or_default()
+    }
+
+    /// The invisible mark after an emoji in the notes that keeps it in this
+    /// style: variation selectors 1–3, which no emoji defines, so every
+    /// other program ignores them. None for Match theme: an emoji with no
+    /// mark follows the app's style.
+    pub fn marker(self) -> Option<char> {
+        match self {
+            Self::Theme => None,
+            Self::Mono => Some('\u{FE00}'),
+            Self::Color => Some('\u{FE01}'),
+            Self::Neon => Some('\u{FE02}'),
+        }
+    }
+
+    fn from_marker(c: char) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.marker() == Some(c))
+    }
 }
 
 static EMOJI: AtomicU8 = AtomicU8::new(0);
@@ -195,30 +219,41 @@ pub fn set_emoji_style(s: EmojiStyle) {
     EMOJI.store(i as u8, Ordering::Relaxed);
 }
 
-fn emoji_style() -> EmojiStyle {
+/// The app's emoji style, as Settings has it.
+pub fn emoji_style() -> EmojiStyle {
     EmojiStyle::ALL[EMOJI.load(Ordering::Relaxed) as usize % EmojiStyle::ALL.len()]
 }
 
-/// An emoji's colour in the current style: the text's own (monochrome),
-/// one of Miami's neons (the same one every time), or its natural colour.
+/// An emoji's colour in the app's style.
 pub fn emoji_colour(c: char, text: Color32) -> Color32 {
-    let style = match emoji_style() {
+    emoji_colour_in(emoji_style(), c, text)
+}
+
+/// An emoji's colour in `style`: the text's own (monochrome), one of
+/// Miami's neons (the same one every time), or its natural colour.
+pub fn emoji_colour_in(style: EmojiStyle, c: char, text: Color32) -> Color32 {
+    let style = match style {
         EmojiStyle::Theme if matches!(current(), Theme::Miami | Theme::Rgb) => EmojiStyle::Neon,
         EmojiStyle::Theme => EmojiStyle::Mono,
         s => s,
     };
-    match style {
+    let colour = match style {
         EmojiStyle::Neon => {
             const NEON: [Color32; 4] = [PINK, TEAL, SUNSET, Color32::from_rgb(178, 120, 255)];
             NEON[c as usize % NEON.len()]
         }
         EmojiStyle::Color => match natural(c) {
-            // A shade darker on a light background, so yellow still reads.
-            Some(n) if current().is_light() => n.lerp_to_gamma(Color32::BLACK, 0.3),
             Some(n) => n,
-            None => text,
+            None => return text,
         },
-        _ => text,
+        _ => return text,
+    };
+    // A shade darker on a light background, so yellow and teal still read:
+    // emoji in the notes keep their style whatever the theme.
+    if current().is_light() {
+        colour.lerp_to_gamma(Color32::BLACK, 0.3)
+    } else {
+        colour
     }
 }
 
@@ -228,7 +263,7 @@ fn natural(c: char) -> Option<Color32> {
     let rgb = |r, g, b| Some(Color32::from_rgb(r, g, b));
     const YELLOW: (u8, u8, u8) = (250, 200, 50);
     match c {
-        '✅' | '✔' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
+        '✅' | '✔' | '☑' | '🔋' | '🐛' | '➕' | '♻' => rgb(70, 190, 90),
         '❌' | '✖' | '❗' | '⛔' | '🚫' | '🔴' | '📌' | '📍' | '❤' | '💔' | '📅' | '📆' | '⏰'
         | '🚨' | '💯' | '🍎' => rgb(230, 70, 70),
         '❓' | '❔' | '❕' | '➖' => rgb(230, 90, 90),
@@ -236,14 +271,19 @@ fn natural(c: char) -> Option<Color32> {
             rgb(YELLOW.0, YELLOW.1, YELLOW.2)
         }
         '🔥' | '🚧' | '🎃' => rgb(250, 130, 40),
-        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' => rgb(70, 150, 240),
-        '💜' | '🔮' => rgb(170, 110, 240),
-        '📦' | '🗄' => rgb(190, 130, 70),
-        '📝' | '📄' | '📃' | '📋' | '☁' | '⚪' => rgb(225, 225, 225),
-        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' => rgb(150, 165, 185),
-        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' => {
-            rgb(120, 175, 230)
+        '🔵' | '🌐' | '💧' | '🌊' | '💙' | '❄' | '📘' | 'ℹ' | '🔄' | '🆗' => {
+            rgb(70, 150, 240)
         }
+        '☁' => rgb(150, 190, 230),
+        '💜' | '🔮' => rgb(170, 110, 240),
+        '🎉' => rgb(240, 110, 180),
+        '📦' => rgb(190, 130, 70),
+        '📝' | '📄' | '📃' | '⚪' => rgb(225, 225, 225),
+        '🔧' | '🔩' | '🛠' | '⚙' | '🔨' | '🔌' | '📎' | '⛓' | '🗑' | '🔍' | '🛡' | '💬' | '📋' => {
+            rgb(150, 165, 185)
+        }
+        '🖥' | '💻' | '📱' | '📠' | '📞' | '☎' | '⌨' | '🖱' | '📡' | '📶' | '🗄' | '🛜' | '🖧'
+        | '🖶' | '📹' | '💾' | '🖴' => rgb(120, 175, 230),
         '⏳' | '⌛' => rgb(210, 170, 100),
         _ => match c as u32 {
             // Faces and hands.
@@ -263,8 +303,105 @@ fn natural(c: char) -> Option<Color32> {
     }
 }
 
+/// Where the emoji at byte `i` ends, past the U+FE0F and style mark that
+/// belong to it (in either order), and the style the mark asks for.
+pub fn emoji_end(text: &str, i: usize) -> (usize, Option<EmojiStyle>) {
+    let mut end = i + text[i..].chars().next().map_or(0, char::len_utf8);
+    let (mut vs16, mut style) = (false, None);
+    for c in text[end..].chars() {
+        let mark = EmojiStyle::from_marker(c);
+        if c == '\u{FE0F}' && !vs16 {
+            vs16 = true;
+        } else if mark.is_some() && style.is_none() {
+            style = mark;
+        } else {
+            break;
+        }
+        end += c.len_utf8();
+    }
+    (end, style)
+}
+
+/// The emoji at or before byte `at`, as (start, end) in bytes, when `at`
+/// falls between it and its U+FE0F or style mark: a cursor there sits
+/// after the emoji on screen but before marks it can't see.
+pub fn inside_emoji(text: &str, at: usize) -> Option<(usize, usize)> {
+    let mut i = at;
+    for c in text[..at].chars().rev().take(3) {
+        i -= c.len_utf8();
+        if is_emoji(c) {
+            let (end, _) = emoji_end(text, i);
+            return (at < end).then_some((i, end));
+        }
+        if c != '\u{FE0F}' && EmojiStyle::from_marker(c).is_none() {
+            return None;
+        }
+    }
+    None
+}
+
+/// `emoji` with the mark that keeps it in `style` (see `EmojiStyle::marker`).
+pub fn styled_emoji(emoji: &str, style: EmojiStyle) -> String {
+    restyle_emoji(emoji, 0..emoji.len(), style, &[]).0
+}
+
+/// Every emoji that starts in `range` (bytes) set to `style`, except those
+/// inside a `skip` range; returns the new text and how many changed style.
+pub fn restyle_emoji(
+    text: &str,
+    range: std::ops::Range<usize>,
+    style: EmojiStyle,
+    skip: &[std::ops::Range<usize>],
+) -> (String, usize) {
+    let mut out = String::with_capacity(text.len() + 8);
+    let (mut i, mut n) = (0, 0);
+    while let Some(c) = text[i..].chars().next() {
+        let skipped = skip.iter().any(|r| r.contains(&i));
+        if !is_emoji(c) || !range.contains(&i) || skipped {
+            out.push(c);
+            i += c.len_utf8();
+            continue;
+        }
+        let (end, was) = emoji_end(text, i);
+        out.extend(
+            text[i..end]
+                .chars()
+                .filter(|c| EmojiStyle::from_marker(*c).is_none()),
+        );
+        out.extend(style.marker());
+        if was.unwrap_or_default() != style {
+            n += 1;
+        }
+        i = end;
+    }
+    (out, n)
+}
+
+/// `text` without the emoji style marks, for anything that leaves the app
+/// (Copy, Save .md, the Site Bundle): they're invisible, but other programs
+/// get the plain emoji. The autosaved notes keep them.
+pub fn strip_emoji_styles(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        if is_emoji(c) {
+            let (end, _) = emoji_end(text, i);
+            out.extend(
+                text[i..end]
+                    .chars()
+                    .filter(|c| EmojiStyle::from_marker(*c).is_none()),
+            );
+            i = end;
+        } else {
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 /// Append `text` to `job` in `format`, with every emoji a size up and
-/// coloured to match the theme.
+/// coloured in its own style (a mark after it, in the notes) or the app's.
 pub fn append_with_emoji(job: &mut egui::text::LayoutJob, text: &str, format: &egui::TextFormat) {
     let mut start = 0;
     for (i, c) in text.char_indices() {
@@ -274,14 +411,11 @@ pub fn append_with_emoji(job: &mut egui::text::LayoutJob, text: &str, format: &e
         if start < i {
             job.append(&text[start..i], 0.0, format.clone());
         }
-        let end = i + c.len_utf8();
-        // A variation selector belongs to the emoji before it.
-        let end = text[end..]
-            .strip_prefix('\u{FE0F}')
-            .map_or(end, |_| end + '\u{FE0F}'.len_utf8());
+        // Its variation selector and style mark go with it (both draw as nothing).
+        let (end, style) = emoji_end(text, i);
         let mut f = format.clone();
         f.font_id.size *= EMOJI_SCALE;
-        f.color = emoji_colour(c, format.color);
+        f.color = emoji_colour_in(style.unwrap_or_else(emoji_style), c, format.color);
         f.valign = egui::Align::Center;
         job.append(&text[i..end], 0.0, f);
         start = end;
@@ -658,7 +792,8 @@ pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub theme: Theme,
-    /// Miami backdrop and sunset rule move; ignored by the other themes.
+    /// Miami backdrop and sunset rule move (other themes have neither),
+    /// and the Map tab pulses after a full scan rather than lighting up still.
     pub animate: bool,
     /// A soft glow on the bright parts of the Miami backdrop.
     pub glow: bool,
@@ -680,9 +815,17 @@ pub struct Settings {
     pub notes_size: u8,
     /// Share of the width the Notes editor takes in Split view.
     pub notes_split: f32,
+    /// How emoji are drawn across the app.
     pub emoji: EmojiStyle,
+    /// The style emoji picked in the Notes tab are inserted in.
+    pub notes_emoji: EmojiStyle,
     /// Map layout picked (Cluster, Tree, Zones, Sites); None until one is.
     pub map_layout: Option<crate::map::layout::Mode>,
+    /// Show the legend on the map.
+    pub map_legend: bool,
+    /// What draws the window: wgpu once it has opened it here (after
+    /// OpenGL failed, or when asked for); None means OpenGL. See `startup`.
+    pub renderer: Option<eframe::Renderer>,
 }
 
 /// Whether the public IP is looked up at start unless the user says.
@@ -709,8 +852,11 @@ impl Default for Settings {
             notes_size: 13,
             notes_split: 0.5,
             emoji: EmojiStyle::Theme,
+            notes_emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
             map_layout: None,
+            map_legend: true,
+            renderer: None,
         }
     }
 }
@@ -731,25 +877,25 @@ impl Settings {
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
+                "map_legend" => s.map_legend = v.trim() != "0",
+                "renderer" => s.renderer = v.trim().parse().ok(),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
                     s.notes_font = match v.trim() {
                         "sans" => crate::fonts::SANS.into(),
                         "mono" => crate::fonts::MONO.into(),
-                        name => name.into(),
+                        name => crate::input::line(name, 128),
                     }
                 }
                 "notes_split" => {
-                    if let Ok(f) = v.trim().parse::<f32>() {
+                    if let Ok(f) = v.trim().parse::<f32>()
+                        && f.is_finite()
+                    {
                         s.notes_split = f.clamp(0.2, 0.8);
                     }
                 }
-                "emoji" => {
-                    s.emoji = EmojiStyle::ALL
-                        .into_iter()
-                        .find(|e| e.key() == v.trim())
-                        .unwrap_or_default()
-                }
+                "emoji" => s.emoji = EmojiStyle::from_key(v),
+                "notes_emoji" => s.notes_emoji = EmojiStyle::from_key(v),
                 "notes_size" => {
                     if let Ok(n) = v.trim().parse::<u8>() {
                         s.notes_size = n.clamp(8, 32);
@@ -760,12 +906,17 @@ impl Settings {
                         .trim()
                         .split_once('x')
                         .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+                        // A size no screen has (or a typo) opens at the default.
+                        .filter(|&(w, h)| {
+                            (320..=16_384).contains(&w) && (240..=16_384).contains(&h)
+                        })
                 }
                 "backdrop" => {
                     s.backdrop = match v.trim() {
                         "none" => Source::None,
                         v => v
                             .strip_prefix("image:")
+                            .filter(|p| p.len() <= 4096 && !p.chars().any(char::is_control))
                             .map_or(Source::Scene, |p| Source::Image(p.into())),
                     }
                 }
@@ -814,8 +965,17 @@ impl Settings {
         if self.emoji != EmojiStyle::Theme {
             s += &format!("emoji={}\n", self.emoji.key());
         }
+        if self.notes_emoji != EmojiStyle::Theme {
+            s += &format!("notes_emoji={}\n", self.notes_emoji.key());
+        }
         if let Some(m) = self.map_layout {
             s += &format!("map_layout={}\n", m.key());
+        }
+        if !self.map_legend {
+            s += "map_legend=0\n";
+        }
+        if let Some(r) = self.renderer {
+            s += &format!("renderer={r}\n");
         }
         s
     }
@@ -832,7 +992,7 @@ pub enum MenuAction {
 /// Footer "Theme" menu: the themes (the default marked), and Miami's
 /// backdrop and animation.
 /// `renderer` says what draws the backdrop (GPU, or CPU and why).
-/// The appearance section of Settings: theme, and the Miami backdrop.
+/// The appearance section of Settings: theme, emoji style, and the Miami backdrop.
 pub fn appearance(
     ui: &mut egui::Ui,
     s: &mut Settings,
@@ -881,6 +1041,49 @@ pub fn appearance(
             }
         }
         ui.separator();
+        ui.label(egui::RichText::new("Emoji").strong());
+        ui.horizontal_wrapped(|ui| {
+            for e in EmojiStyle::ALL {
+                let tip = match e {
+                    EmojiStyle::Theme => "Monochrome, or neon in Miami and RGB",
+                    EmojiStyle::Mono => "In the text's colour",
+                    EmojiStyle::Color => "Each in its own colour: faces yellow, ticks green…",
+                    EmojiStyle::Neon => "Miami's pink, teal, sunset and violet",
+                };
+                if ui
+                    .radio(s.emoji == e, e.name())
+                    .on_hover_text(tip)
+                    .clicked()
+                    && s.emoji != e
+                {
+                    s.emoji = e;
+                    set_emoji_style(e);
+                    act = Some(MenuAction::Changed);
+                }
+            }
+        });
+        ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
+        ui.separator();
+        // In every theme: the Map tab's glow and the map's packets too.
+        let tip = if gpu {
+            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
+             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
+             (10 frames a second on the GPU, paused while the window isn't focused). Off, \
+             everything holds still; turn it off on battery."
+        } else {
+            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
+             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
+             (10 frames a second, no usable GPU, paused while the window isn't focused). Off, \
+             everything holds still; turn it off on battery."
+        };
+        if ui
+            .checkbox(&mut s.animate, "Animate")
+            .on_hover_text(tip)
+            .changed()
+        {
+            act = Some(MenuAction::Changed);
+        }
+        ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
             ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
@@ -912,18 +1115,6 @@ pub fn appearance(
             if ui.radio(s.backdrop == Source::None, "None").clicked() && s.backdrop != Source::None
             {
                 s.backdrop = Source::None;
-                act = Some(MenuAction::Changed);
-            }
-            let tip = if gpu {
-                "10 frames a second on the GPU, paused while the window isn't focused"
-            } else {
-                "10 frames a second (no usable GPU), paused while the window isn't focused"
-            };
-            if ui
-                .checkbox(&mut s.animate, "Animate")
-                .on_hover_text(tip)
-                .changed()
-            {
                 act = Some(MenuAction::Changed);
             }
             let tip = if gpu {
@@ -997,7 +1188,7 @@ fn settings_path() -> Option<std::path::PathBuf> {
 /// Saved settings, or the defaults. A missing or unreadable file is not an error.
 pub fn load() -> Settings {
     settings_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|p| crate::input::read_capped(&p, 64 * 1024))
         .map(|t| Settings::parse(&t))
         .unwrap_or_default()
 }
@@ -1030,6 +1221,94 @@ mod tests {
         assert!(is_emoji('🔑') && is_emoji('⭐') && !is_emoji('\u{2192}') && !is_emoji('a'));
     }
 
+    /// Colour style gives every picker emoji a colour of its own, and the
+    /// app sizes each one as an emoji.
+    #[test]
+    fn picker_emoji_are_emoji_with_a_natural_colour() {
+        for (e, code, _) in crate::markdown::shortcodes() {
+            let c = e.chars().next().unwrap();
+            assert!(is_emoji(c), ":{code}: isn't sized as an emoji");
+            assert!(natural(c).is_some(), ":{code}: has no natural colour");
+        }
+    }
+
+    #[test]
+    fn each_emoji_keeps_its_own_style_mark() {
+        let fire = |s| styled_emoji("🔥", s);
+        assert_eq!(fire(EmojiStyle::Theme), "🔥");
+        assert_eq!(fire(EmojiStyle::Mono), "🔥\u{FE00}");
+        assert_eq!(fire(EmojiStyle::Color), "🔥\u{FE01}");
+        assert_eq!(fire(EmojiStyle::Neon), "🔥\u{FE02}");
+        // The mark and U+FE0F belong to the emoji, in either order.
+        let t = "⚠\u{FE0F}\u{FE02}x⚠\u{FE01}\u{FE0F}y⚠z";
+        let warn = '⚠'.len_utf8();
+        assert_eq!(emoji_end(t, 0), (warn + 6, Some(EmojiStyle::Neon)));
+        let second = t.find('x').unwrap() + 1;
+        assert_eq!(emoji_end(t, second).1, Some(EmojiStyle::Color));
+        assert_eq!(
+            emoji_end(t, t.find('z').unwrap() - warn),
+            (t.len() - 1, None)
+        );
+        // Plain text for other programs; a VS1 after ordinary text stays.
+        assert_eq!(strip_emoji_styles(t), "⚠\u{FE0F}x⚠\u{FE0F}y⚠z");
+        assert_eq!(
+            strip_emoji_styles("\u{2269}\u{FE00} ok"),
+            "\u{2269}\u{FE00} ok"
+        );
+        // A cursor between an emoji and its marks is inside it.
+        assert_eq!(inside_emoji(t, warn), Some((0, warn + 6)));
+        assert_eq!(inside_emoji(t, warn + 3), Some((0, warn + 6)));
+        assert_eq!(inside_emoji(t, warn + 6), None);
+        assert_eq!(inside_emoji(t, 0), None);
+        assert_eq!(inside_emoji("a⚠", "a⚠".len()), None);
+    }
+
+    #[test]
+    fn restyling_sets_only_the_emoji_asked_for() {
+        let t = "🔥 a ✅\u{FE00} b [🔑 x] ⭐";
+        let marker = t.find('[').unwrap()..t.find(']').unwrap() + 1;
+        let skip = std::slice::from_ref(&marker);
+        let (neon, n) = restyle_emoji(t, 0..t.len(), EmojiStyle::Neon, skip);
+        assert_eq!(n, 3);
+        assert_eq!(neon, "🔥\u{FE02} a ✅\u{FE02} b [🔑 x] ⭐\u{FE02}");
+        // Same as app: the marks go.
+        let (plain, _) = restyle_emoji(&neon, 0..neon.len(), EmojiStyle::Theme, &[]);
+        assert_eq!(plain, "🔥 a ✅ b [🔑 x] ⭐");
+        // Only those that start in the range.
+        let (one, n) = restyle_emoji(t, 0..1, EmojiStyle::Color, &[]);
+        assert_eq!(
+            (one.as_str(), n),
+            ("🔥\u{FE01} a ✅\u{FE00} b [🔑 x] ⭐", 1)
+        );
+    }
+
+    #[test]
+    fn emoji_are_drawn_in_their_own_style() {
+        let mut job = egui::text::LayoutJob::default();
+        let text = Color32::from_rgb(1, 2, 3);
+        let f = egui::TextFormat::simple(egui::FontId::proportional(10.0), text);
+        let t = "🔥\u{FE00} 🔥\u{FE01} 🔥\u{FE02}\u{FE0F}";
+        append_with_emoji(&mut job, t, &f);
+        // The marks stay in the text (so the editor's cursor counts them)
+        // and in their emoji's section.
+        assert_eq!(job.text, t);
+        let emoji: Vec<_> = job
+            .sections
+            .iter()
+            .filter(|s| s.format.font_id.size > 10.0)
+            .collect();
+        assert_eq!(emoji.len(), 3);
+        let span = |i: usize| emoji[i].byte_range.start.0..emoji[i].byte_range.end.0;
+        assert_eq!(
+            [0, 1, 2].map(|i| &job.text[span(i)]),
+            ["🔥\u{FE00}", "🔥\u{FE01}", "🔥\u{FE02}\u{FE0F}"]
+        );
+        let [mono, colour, neon] = [0, 1, 2].map(|i| emoji[i].format.color);
+        assert_eq!(mono, text);
+        assert_eq!(neon, emoji_colour_in(EmojiStyle::Neon, '🔥', text));
+        assert!(colour != text && colour != neon, "{colour:?}");
+    }
+
     #[test]
     fn keys_round_trip() {
         for t in Theme::ALL {
@@ -1054,14 +1333,36 @@ mod tests {
             notes_size: 16,
             notes_split: 0.625,
             emoji: EmojiStyle::Color,
+            notes_emoji: EmojiStyle::Neon,
             map_layout: Some(crate::map::layout::Mode::Zones),
+            map_legend: false,
+            renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);
+        // The map's legend: on unless turned off, and only the off is written.
+        assert!(Settings::default().map_legend);
+        assert!(!Settings::default().text().contains("map_legend"));
+        assert!(s.text().contains("map_legend=0\n"));
+        assert!(Settings::parse("map_legend=1\n").map_legend);
+        assert!(!Settings::parse("map_legend=0\n").map_legend);
+        assert_eq!(Settings::parse("renderer=vulkan\n").renderer, None);
         assert_eq!(
             Settings::parse("notes_font=sans\n").notes_font,
             crate::fonts::SANS
         );
         assert_eq!(Settings::parse(""), Settings::default());
+        // Values edited by hand into nonsense fall back to the defaults.
+        let odd = Settings::parse("notes_split=NaN\nsize=0x99999\nnotes_font=a\u{202E}b\n");
+        assert_eq!(odd.notes_split, Settings::default().notes_split);
+        assert_eq!(odd.size, None);
+        assert_eq!(odd.notes_font, "ab");
+        // The notes' emoji style is its own setting.
+        let n = Settings::parse("emoji=mono\nnotes_emoji=color\n");
+        assert_eq!(
+            (n.emoji, n.notes_emoji),
+            (EmojiStyle::Mono, EmojiStyle::Color)
+        );
+        assert!(!Settings::default().text().contains("emoji"));
         // A file from 0.10.0 had only the theme line.
         let old = Settings::parse("theme=miami\n");
         assert_eq!(

@@ -5,10 +5,12 @@
 //! the data doesn't show (a sweep can't see switch ports) is drawn as
 //! assumed, never as fact.
 
+pub(crate) mod colours;
+pub mod export;
 pub mod import;
 pub mod layout;
+pub mod legend;
 pub mod runs;
-pub mod svg;
 pub mod view;
 
 use crate::net::mac::{self, Mac};
@@ -22,6 +24,67 @@ use std::net::Ipv4Addr;
 pub const BUDGET: usize = 120;
 /// Clients shown under one switch or AP before the rest fold into a card.
 const PER_UPLINK: usize = 10;
+/// More: clients per uplink, and the most cards before that tightens.
+const MORE_PER_UPLINK: usize = 30;
+const MORE_BUDGET: usize = 400;
+/// Clients a +N on a card adds each click.
+pub const STEP: usize = 8;
+
+/// Which end devices get cards: the level the toolbar steps through.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum Clients {
+    #[default]
+    Off,
+    /// Up to 10 per switch or AP, the rest in a +N more card, fewer per
+    /// uplink on a big map.
+    Some,
+    /// Up to 30 per uplink, on a map of up to 400 cards.
+    More,
+    /// A card for every one.
+    All,
+}
+
+impl Clients {
+    pub const ALL: [Clients; 4] = [Clients::Off, Clients::Some, Clients::More, Clients::All];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Clients::Off => "Off",
+            Clients::Some => "Some",
+            Clients::More => "More",
+            Clients::All => "All",
+        }
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            Clients::Off => {
+                "No end devices: a count on each switch or AP instead (+N on a card shows its \
+                 clients a few at a time)"
+            }
+            Clients::Some => {
+                "Up to 10 per switch or AP, the rest in a +N more card, fewer on a big map. \
+                 Ones with a warning, printers, cameras, phones and named devices come first"
+            }
+            Clients::More => "Up to 30 per switch or AP, on a map of up to 400 cards",
+            Clients::All => {
+                "A card for every end device. A big site can mean hundreds of cards; Zones \
+                 keeps them tidy"
+            }
+        }
+    }
+
+    /// Clients under each uplink, and the most cards on the map before
+    /// that count tightens.
+    fn caps(self) -> (usize, usize) {
+        match self {
+            Clients::Off => (0, BUDGET),
+            Clients::Some => (PER_UPLINK, BUDGET),
+            Clients::More => (MORE_PER_UPLINK, MORE_BUDGET),
+            Clients::All => (usize::MAX, usize::MAX),
+        }
+    }
+}
 
 /// Role, which is the map's only colour channel.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Default)]
@@ -186,13 +249,24 @@ pub struct Node {
     /// Parent, link and a label for the link (the parent's port). None only
     /// for the internet.
     pub up: Option<(usize, Link, Option<String>)>,
-    /// Ranks clients for the per-uplink cap: lower shows first.
+    /// Ranks clients within a reveal tier: (0 named, 1 vendor only, 2
+    /// anonymous; then lower is seen more recently).
     rank: (u8, u64),
     /// The site it's at, when the source has sites (/mapnetwork maps).
     pub site: Option<String>,
     /// Pinned, then missing from the latest data: kept on the map, marked,
     /// for the user to review.
     pub gone: bool,
+    /// Drawn by a person (on a plan or a training map), not discovered.
+    /// Only a saved map's file carries it.
+    pub drawn: bool,
+    /// Its link up was drawn by a person, not discovered (the card itself
+    /// may have been).
+    pub drawn_up: bool,
+    /// The technician's note on it, redacted: put on by the Map tab from
+    /// the notes it keeps (never from the data), for the tooltip, search,
+    /// Copy and the exports.
+    pub note: String,
 }
 
 impl Node {
@@ -227,17 +301,27 @@ pub struct Finding {
 
 #[derive(Default)]
 pub struct Map {
+    /// The map's own title (a /mapnetwork map's); empty for the rest.
+    pub title: String,
     pub nodes: Vec<Node>,
     pub findings: Vec<Finding>,
     /// What the map was built from, for under the title.
     pub summary: String,
-    /// Clients known but not drawn.
+    /// Clients known but not drawn as their own card: in a count on their
+    /// uplink, or in a +N more card.
     pub hidden: usize,
     /// Ids of the cards left out to keep the map readable (clients off, or
     /// past the per-uplink cap): still in the data, just not drawn.
     pub folded: HashSet<String>,
     /// Sites collapsed into one card, with the ids of the cards inside.
     pub closed: BTreeMap<String, Vec<String>>,
+    /// Each uplink with clients, by id: (clients drawn, clients known).
+    pub under: HashMap<String, (usize, usize)>,
+    /// Clients per uplink the level came to (fewer than asked on a big map).
+    pub cap: usize,
+    /// A sweep was loaded but left off: it found nothing the data knows
+    /// (another network).
+    pub sweep_apart: bool,
 }
 
 impl Map {
@@ -281,6 +365,15 @@ impl Map {
                 .or_else(|| site_below(&self.nodes, &kids, i))
                 .unwrap_or_else(|| default.to_string());
             self.nodes[i].site = Some(site);
+        }
+    }
+
+    /// " · N clients not drawn", for under the title, when any aren't.
+    fn hidden_note(&self) -> String {
+        match self.hidden {
+            0 => String::new(),
+            1 => " · 1 client not drawn".into(),
+            n => format!(" · {n} clients not drawn"),
         }
     }
 
@@ -386,22 +479,29 @@ impl Map {
         }
         let ids: Vec<String> = inside.iter().map(|&i| self.nodes[i].id.clone()).collect();
 
-        // Reindex: the cards inside become the site's card.
+        // Reindex: the cards inside become the site's card, where the
+        // first of them was, so the site keeps its place in the sidebar
+        // and the layout.
+        let first = inside.iter().copied().min().unwrap_or(n);
         let mut map_to = vec![usize::MAX; n];
         let mut out = Vec::with_capacity(n - inside.len() + 1);
+        let mut card = Some(card);
         for (i, node) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            if i == first {
+                out.extend(card.take());
+            }
             if !member[i] {
                 map_to[i] = out.len();
                 out.push(node);
             }
         }
-        let at = out.len();
+        let at = first.min(out.len());
+        out.extend(card.take());
         for (i, m) in member.iter().enumerate() {
             if *m {
                 map_to[i] = at;
             }
         }
-        out.push(card);
         for node in &mut out {
             if let Some(u) = &mut node.up {
                 u.0 = map_to[u.0];
@@ -476,12 +576,10 @@ pub struct Input<'a> {
     pub sonicwall: Option<&'a str>,
     /// A /mapnetwork map: when loaded, it is the map.
     pub mapnetwork: Option<&'a crate::mapnetwork::Doc>,
-    pub clients: bool,
-    /// Every client gets a card: no per-uplink cap, no budget.
-    pub all_clients: bool,
-    /// Ids of uplinks whose clients are all shown ("Show all" on a
-    /// +N more card), whatever the cap.
-    pub open: Option<&'a HashSet<String>>,
+    pub clients: Clients,
+    /// Uplinks stepped on their own (+N or − on the card, Show all), by
+    /// id: how many clients each shows, whatever the level.
+    pub reveal: Option<&'a HashMap<String, usize>>,
 }
 
 impl Input<'_> {
@@ -902,6 +1000,102 @@ fn port_names(open: &[u16]) -> String {
         .map(|p| format!("{p} {}", crate::net::ports::service_name(*p)))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// A card for a host the sweep found, not yet hung anywhere. `this`: the
+/// machine the sweep ran from.
+fn sweep_card(s: &Seen, this: bool) -> Node {
+    let vendor = s.mac.as_ref().and_then(mac::vendor);
+    let private = s.mac.as_ref().is_some_and(mac::local_admin);
+    let (zone, kind, client) = if this {
+        (Zone::Client, "THIS MACHINE".into(), false)
+    } else {
+        classify(vendor, private, &s.open)
+    };
+    let label = match (&s.name, this) {
+        (_, true) => "This machine".into(),
+        (Some(n), _) => n.split('.').next().unwrap_or(n).to_string(),
+        (None, _) => match vendor {
+            Some(v) => format!(
+                "{} device",
+                short_vendor(v).to_lowercase().replace_first_upper()
+            ),
+            None => format!("Host {}", s.ip),
+        },
+    };
+    let mut n = Node {
+        id: format!("ip:{}", s.ip),
+        zone,
+        kind,
+        label,
+        mac: s.mac,
+        client,
+        rank: (
+            known(s.name.as_deref(), vendor.is_some()),
+            u32::from(s.ip) as u64,
+        ),
+        ..Default::default()
+    };
+    if let Some(m) = &s.mac {
+        n.details.push(
+            format!("MAC {} {}", mac::fmt(m), mac::vendor_label(m))
+                .trim_end()
+                .to_string(),
+        );
+    } else if !this {
+        n.details
+            .push("No MAC: past a router, or this machine".into());
+    }
+    if zone == Zone::Gear || zone == Zone::Server {
+        n.chip("inferred");
+        n.details
+            .push("Role inferred from vendor and open ports".into());
+    }
+    n
+}
+
+/// A card for a UniFi client, not yet hung anywhere. Its name is what the
+/// backup holds: a client-xxxxxxxx token when Config Export anonymized it.
+fn unifi_client_card(c: &UClient) -> Node {
+    let vendor = c.oui.as_deref();
+    // Infrastructure hiding in the client table (an unadopted AP,
+    // a NAS) is shown even with clients off.
+    let (zone, kind, client) = match classify(vendor, false, &[]) {
+        (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
+        r => r,
+    };
+    let mut n = Node {
+        id: format!("mac:{}", mac::fmt(&c.mac)),
+        zone,
+        kind,
+        label: c.name.clone().unwrap_or_else(|| mac::fmt(&c.mac)),
+        sub: c.ip.map(|i| i.to_string()).unwrap_or_default(),
+        ip: c.ip,
+        mac: Some(c.mac),
+        client,
+        seen_by: vec!["UniFi"],
+        rank: (
+            known(c.name.as_deref(), vendor.is_some()),
+            u64::MAX - c.last_seen.max(0) as u64,
+        ),
+        ..Default::default()
+    };
+    n.details.push(format!("MAC {}", mac::fmt(&c.mac)));
+    if let Some(v) = vendor {
+        n.details.push(format!("Vendor {v} (UniFi)"));
+    }
+    n.details
+        .push(if c.wired { "Wired" } else { "Wireless" }.into());
+    if c.guest {
+        n.chip("guest");
+    }
+    if !client {
+        n.chip("in client table");
+    }
+    if c.blocked {
+        n.flags.push("Blocked in the controller".into());
+    }
+    n
 }
 
 // ------------------------------------------------------------------- build
@@ -1404,7 +1598,13 @@ impl B {
                         ip: h.ip,
                         mac: h.mac,
                         client: zone == Zone::Client,
-                        rank: (1, h.ip.map_or(u64::MAX, |ip| u32::from(ip) as u64)),
+                        rank: (
+                            known(
+                                h.name.as_deref(),
+                                h.mac.as_ref().and_then(mac::vendor).is_some(),
+                            ),
+                            h.ip.map_or(u64::MAX, |ip| u32::from(ip) as u64),
+                        ),
                         up: Some((gw, link, (!h.lltd).then_some(at))),
                         ..Default::default()
                     };
@@ -1447,56 +1647,13 @@ impl B {
                 continue;
             }
             let this = Some(s.ip) == input.this;
-            let vendor = s.mac.as_ref().and_then(mac::vendor);
-            let private = s.mac.as_ref().is_some_and(mac::local_admin);
-            let (zone, kind, client) = if this {
-                (Zone::Client, "THIS MACHINE".into(), false)
-            } else {
-                classify(vendor, private, &s.open)
-            };
+            let mut n = sweep_card(s, this);
             // A client UniFi knows becomes its card below, under its AP or switch.
-            if client && s.mac.is_some_and(|m| unifi_client.contains(&m)) {
+            if n.client && s.mac.is_some_and(|m| unifi_client.contains(&m)) {
                 deferred.push(s);
                 continue;
             }
-            let label = match (&s.name, this) {
-                (_, true) => "This machine".into(),
-                (Some(n), _) => n.split('.').next().unwrap_or(n).to_string(),
-                (None, _) => match vendor {
-                    Some(v) => format!(
-                        "{} device",
-                        short_vendor(v).to_lowercase().replace_first_upper()
-                    ),
-                    None => format!("Host {}", s.ip),
-                },
-            };
-            let mut n = Node {
-                id: format!("ip:{}", s.ip),
-                zone,
-                kind,
-                label,
-                sub: String::new(),
-                mac: s.mac,
-                client,
-                up: Some((gw, Link::Assumed, None)),
-                rank: (if s.name.is_some() { 1 } else { 2 }, u32::from(s.ip) as u64),
-                ..Default::default()
-            };
-            if let Some(m) = &s.mac {
-                n.details.push(
-                    format!("MAC {} {}", mac::fmt(m), mac::vendor_label(m))
-                        .trim_end()
-                        .to_string(),
-                );
-            } else if !this {
-                n.details
-                    .push("No MAC: past a router, or this machine".into());
-            }
-            if zone == Zone::Gear || zone == Zone::Server {
-                n.chip("inferred");
-                n.details
-                    .push("Role inferred from vendor and open ports".into());
-            }
+            n.up = Some((gw, Link::Assumed, None));
             let i = self.add(n);
             self.merge_seen(i, s);
         }
@@ -1519,19 +1676,26 @@ impl B {
         deferred
     }
 
+    /// The card a UniFi client was last seen on (its AP or switch, when
+    /// that's on the map), how it joins it, and the port.
+    fn unifi_uplink(&self, c: &UClient) -> (Option<usize>, Link, Option<String>) {
+        let parent = c.up.and_then(|(m, _)| self.by_mac.get(&m).copied());
+        let link = match (parent, c.wired) {
+            (None, _) => Link::Assumed,
+            (Some(_), true) => Link::Wired,
+            (Some(_), false) => Link::Wireless,
+        };
+        let port =
+            c.up.and_then(|(_, p)| p)
+                .filter(|p| *p > 0 && c.wired)
+                .map(|p| format!("port {p}"));
+        (parent, link, port)
+    }
+
     /// UniFi clients: placed under the AP or switch they were last seen on.
     fn unifi_clients(&mut self, u: &Unifi, gw: usize, deferred: &[&Seen]) {
         for c in &u.clients {
-            let parent = c.up.and_then(|(m, _)| self.by_mac.get(&m).copied());
-            let link = match (parent, c.wired) {
-                (None, _) => Link::Assumed,
-                (Some(_), true) => Link::Wired,
-                (Some(_), false) => Link::Wireless,
-            };
-            let port =
-                c.up.and_then(|(_, p)| p)
-                    .filter(|p| *p > 0 && c.wired)
-                    .map(|p| format!("port {p}"));
+            let (parent, link, port) = self.unifi_uplink(c);
             let up = Some((parent.unwrap_or(gw), link, port));
             if let Some(i) = self.find(Some(c.mac), None) {
                 // Already a card (the sweep's): now we know where it plugs in.
@@ -1541,55 +1705,13 @@ impl B {
                 self.nodes[i].seen("UniFi");
                 continue;
             }
-            let vendor = c.oui.as_deref();
-            // Infrastructure hiding in the client table (an unadopted AP,
-            // a NAS) is shown even with clients off.
-            let (zone, kind, client) = match classify(vendor, false, &[]) {
-                (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
-                r => r,
-            };
-            let mut n = Node {
-                id: format!("mac:{}", mac::fmt(&c.mac)),
-                zone,
-                kind,
-                label: c.name.clone().unwrap_or_else(|| mac::fmt(&c.mac)),
-                sub: c.ip.map(|i| i.to_string()).unwrap_or_default(),
-                ip: c.ip,
-                mac: Some(c.mac),
-                client,
-                seen_by: vec!["UniFi"],
-                up,
-                rank: (
-                    if c.blocked {
-                        0
-                    } else if c.name.is_some() {
-                        1
-                    } else {
-                        2
-                    },
-                    u64::MAX - c.last_seen.max(0) as u64,
-                ),
-                ..Default::default()
-            };
-            n.details.push(format!("MAC {}", mac::fmt(&c.mac)));
-            if let Some(v) = vendor {
-                n.details.push(format!("Vendor {v} (UniFi)"));
-            }
-            n.details
-                .push(if c.wired { "Wired" } else { "Wireless" }.into());
-            if c.guest {
-                n.chip("guest");
-            }
-            if !client {
-                n.chip("in client table");
-            }
-            if c.blocked {
-                n.flags.push("Blocked in the controller".into());
-            }
+            let mut n = unifi_client_card(c);
+            n.up = up;
             let i = self.add(n);
             if let Some(s) = deferred.iter().find(|s| s.mac == Some(c.mac)) {
                 self.merge_seen(i, s);
-                self.nodes[i].rank.0 = self.nodes[i].rank.0.min(1);
+                // It answered just now.
+                self.nodes[i].rank.1 = 0;
             }
         }
     }
@@ -1722,8 +1844,7 @@ pub fn build(input: &Input) -> Map {
             unifi: input.unifi,
             sonicwall: input.sonicwall,
             clients: input.clients,
-            all_clients: input.all_clients,
-            open: input.open,
+            reveal: input.reveal,
             ..Default::default()
         };
         &away
@@ -1777,6 +1898,7 @@ pub fn build(input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     map.summary = summary;
+    map.sweep_apart = !local && had_sweep;
     // One site unless a multi-site controller says otherwise: the
     // controller's site, the firewall's name, or this network.
     let site = unifi
@@ -1785,9 +1907,7 @@ pub fn build(input: &Input) -> Map {
         .or_else(|| sonic.as_ref().and_then(|s| s.name.clone()))
         .unwrap_or_else(|| "This network".into());
     map.fill_sites(&site);
-    if map.hidden > 0 && !input.clients {
-        map.summary += &format!(" · {} clients hidden", map.hidden);
-    }
+    map.summary += &map.hidden_note();
     map
 }
 
@@ -1850,70 +1970,179 @@ fn summary(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> Strin
     parts.join(" · ")
 }
 
-/// Clients off: fold them into a count on their parent. On: at most
-/// PER_UPLINK under each parent and the rest in one card, tightening until
-/// the map fits the budget; uplinks opened with Show all, or every one with
-/// all clients, show them all.
+/// Clients an uplink shows after a click on its +N: the next STEP, or all
+/// of them (usize::MAX) when only a few would be left.
+pub fn more_of(shown: usize, total: usize) -> usize {
+    let next = shown.saturating_add(STEP);
+    if next + STEP / 2 >= total {
+        usize::MAX
+    } else {
+        next
+    }
+}
+
+/// What − on an uplink leaves: the level's count again when it was
+/// stepped past that (None: follow the level), else none of its clients.
+pub fn fewer_of(stepped: Option<usize>, level: usize) -> Option<usize> {
+    match stepped {
+        Some(s) if s > level => None,
+        _ => Some(0),
+    }
+}
+
+/// Whether a card stands in for clients not drawn one by one: this app's
+/// +N more card, or a /mapnetwork map's own "+7 more" that lists none of
+/// them by address.
+pub fn is_more(n: &Node) -> bool {
+    n.id.starts_with("more:") || import::is_overflow(n)
+}
+
+/// The chip a card drawn by hand (on a plan or a training map) wears
+/// before its others: "drawn", or "drawn link" when only its link up was.
+/// A client's tile draws no chips: its hover and the panel say it.
+pub fn drawn_chip(n: &Node) -> Option<&'static str> {
+    if n.drawn {
+        Some("drawn")
+    } else if n.drawn_up {
+        Some("drawn link")
+    } else {
+        None
+    }
+}
+
+/// The chip on an uplink whose clients aren't drawn: "12 clients".
+fn count_chip(n: usize) -> String {
+    match n {
+        1 => "1 client".into(),
+        n => format!("{n} clients"),
+    }
+}
+
+/// Whether a card's chip is its count of clients not drawn.
+pub fn is_count_chip(c: &str) -> bool {
+    c.strip_suffix(" clients")
+        .or_else(|| c.strip_suffix(" client"))
+        .is_some_and(|n| n.parse::<usize>().is_ok())
+}
+
+/// A client's name that's really an anonymized token (Config Export's
+/// "UniFi clients: anonymized"): no more telling than no name.
+fn is_token(name: &str) -> bool {
+    name.strip_prefix("client-")
+        .is_some_and(|h| h.len() == 8 && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// How much a client's source knows about it, for `Node::rank`: 0 a name,
+/// 1 only a vendor, 2 nothing.
+fn known(name: Option<&str>, vendor: bool) -> u8 {
+    match name {
+        Some(n) if !is_token(n) => 0,
+        _ if vendor => 1,
+        _ => 2,
+    }
+}
+
+/// The order clients show in under an uplink: something to say first (a
+/// warning, then a role such as a printer, camera or phone), then named,
+/// then a vendor, anonymous last; the most recently seen first in each.
+/// A card standing for more of them comes after them all.
+fn reveal_key(n: &Node) -> (u8, u8, u64) {
+    let role = n.zone != Zone::Client
+        || ["PHONE", "WINDOWS HOST"]
+            .iter()
+            .any(|k| n.kind.starts_with(k));
+    let tier = if is_more(n) {
+        3
+    } else if !n.flags.is_empty() {
+        0
+    } else if role {
+        1
+    } else {
+        2
+    };
+    (tier, n.rank.0, n.rank.1)
+}
+
+/// Clients per uplink as the level says (or as the user stepped that
+/// uplink), best first, tightening until the map fits the level's budget;
+/// the rest go in a +N more card, or with none shown (Off) into a count on
+/// the uplink.
 fn limit(b: B, input: &Input) -> Map {
-    let clients = input.clients || input.all_clients;
+    let (level, budget) = input.clients.caps();
     let B {
         mut nodes,
         findings,
         ..
     } = b;
     let n = nodes.len();
-    let open: HashSet<usize> = (0..n)
-        .filter(|&p| {
-            clients && (input.all_clients || input.open.is_some_and(|o| o.contains(&nodes[p].id)))
-        })
+    let stepped: Vec<Option<usize>> = nodes
+        .iter()
+        .map(|p| input.reveal.and_then(|r| r.get(&p.id).copied()))
         .collect();
+    // A client with cards under it stays: they'd hang off nothing.
+    let mut has_kids = vec![false; n];
+    for node in &nodes {
+        if let Some(p) = node.parent() {
+            has_kids[p] = true;
+        }
+    }
     let mut by_parent: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, node) in nodes.iter().enumerate() {
         if node.client
+            && !has_kids[i]
             && let Some(p) = node.parent()
         {
             by_parent.entry(p).or_default().push(i);
         }
     }
     for kids in by_parent.values_mut() {
-        kids.sort_by_key(|&i| nodes[i].rank);
+        kids.sort_by_key(|&i| reveal_key(&nodes[i]));
     }
     let infra = n - by_parent.values().map(Vec::len).sum::<usize>();
-    let mut cap = if clients { PER_UPLINK } else { 0 };
-    let cap_of = |p: usize, cap: usize| if open.contains(&p) { usize::MAX } else { cap };
+    let cap_of = |p: usize, cap: usize| stepped[p].unwrap_or(cap);
+    // Shows a +N more card for the rest: any uplink showing clients, and
+    // every one once the level is past Off.
+    let wants_more =
+        |p: usize, cap: usize| cap_of(p, cap) > 0 || (level > 0 && stepped[p].is_none());
     let cost = |cap: usize| {
         infra
             + by_parent
                 .iter()
                 .map(|(&p, k)| {
-                    let c = cap_of(p, cap);
-                    k.len().min(c) + usize::from(k.len() > c && clients)
+                    let c = k.len().min(cap_of(p, cap));
+                    c + usize::from(k.len() > c && wants_more(p, cap))
                 })
                 .sum::<usize>()
     };
-    // Shown in full on request, so the budget only tightens the rest.
-    while cap > 0 && cost(cap) > BUDGET && !input.all_clients {
+    // Uplinks stepped by hand keep theirs, so the budget only tightens the rest.
+    let mut cap = level;
+    while cap > 0 && cost(cap) > budget {
         cap = match cap {
+            c if c > PER_UPLINK => PER_UPLINK,
             c if c > 5 => 5,
             c if c > 3 => 3,
             c => c - 1,
         };
     }
+    let fits = cost(cap) <= budget;
     let mut keep = vec![true; n];
     let mut folded = HashSet::new();
+    let mut under = HashMap::new();
     let mut extra = Vec::new();
     let mut hidden = 0;
     for (&p, kids) in &by_parent {
-        let rest = &kids[kids.len().min(cap_of(p, cap))..];
+        let shown = kids.len().min(cap_of(p, cap));
+        under.insert(nodes[p].id.clone(), (shown, kids.len()));
+        let rest = &kids[shown..];
         if rest.is_empty() {
             continue;
         }
-        hidden += rest.len();
         for &i in rest {
             keep[i] = false;
             folded.insert(nodes[i].id.clone());
         }
-        if clients && (cost(cap) <= BUDGET || open.contains(&p)) {
+        hidden += rest.len();
+        if wants_more(p, cap) && (fits || stepped[p].is_some()) {
             let mut more = Node {
                 id: format!("more:{}", nodes[p].id),
                 zone: Zone::Client,
@@ -1922,6 +2151,8 @@ fn limit(b: B, input: &Input) -> Map {
                 sub: format!("via {}", nodes[p].label),
                 client: true,
                 up: Some((p, Link::Assumed, None)),
+                // In its uplink's site box, with the clients it follows on from.
+                site: nodes[p].site.clone(),
                 ..Default::default()
             };
             more.chips = vec!["collapsed".into(), format!("{} devices", rest.len())];
@@ -1942,10 +2173,8 @@ fn limit(b: B, input: &Input) -> Map {
                 more.details.push(format!("…and {} more", rest.len() - 60));
             }
             extra.push(more);
-            hidden -= rest.len();
         } else {
-            let c = format!("{} clients", kids.len());
-            nodes[p].chip(c);
+            nodes[p].chip(count_chip(kids.len()));
         }
     }
     // Reindex.
@@ -1986,12 +2215,16 @@ fn limit(b: B, input: &Input) -> Map {
         .collect();
     findings.sort_by_key(|f| f.sev);
     Map {
+        title: String::new(),
         nodes: out,
         findings,
         summary: String::new(),
         hidden,
         folded,
         closed: BTreeMap::new(),
+        under,
+        cap,
+        sweep_apart: false,
     }
 }
 
@@ -2151,7 +2384,7 @@ mod tests {
         assert!(m.findings[0].text.contains("Telnet"));
 
         let m = build(&Input {
-            clients: true,
+            clients: Clients::Some,
             ..input
         });
         assert!(m.nodes.iter().any(|n| n.kind == "PRINTER"));
@@ -2227,7 +2460,10 @@ mod tests {
     fn a_closed_site_is_one_card_where_the_site_hangs() {
         let mut m = two_sites();
         m.fill_sites("Elsewhere");
+        let sites = m.sites();
         m.close_sites(&HashSet::from(["Branch".to_string()]));
+        // Where the site's first card was: the site keeps its place.
+        assert_eq!(m.sites(), sites);
         let card = by_label(&m, "Branch");
         assert_eq!(
             (card.id.as_str(), card.kind.as_str()),
@@ -2299,7 +2535,7 @@ mod tests {
         );
         let m = build(&Input {
             unifi: Some(&j),
-            clients: true,
+            clients: Clients::Some,
             ..Default::default()
         });
         let kids = m
@@ -2322,8 +2558,7 @@ mod tests {
         };
         let all = build(&Input {
             unifi: Some(&j),
-            clients: true,
-            all_clients: true,
+            clients: Clients::All,
             ..Default::default()
         });
         assert_eq!(count(&all), 300);
@@ -2331,11 +2566,11 @@ mod tests {
         assert!(all.folded.is_empty());
         // Show all on the +N more card opens just that uplink.
         let core = m.nodes[more.parent().unwrap()].id.clone();
-        let open: HashSet<String> = [core].into();
+        let open: HashMap<String, usize> = [(core, usize::MAX)].into();
         let opened = build(&Input {
             unifi: Some(&j),
-            clients: true,
-            open: Some(&open),
+            clients: Clients::Some,
+            reveal: Some(&open),
             ..Default::default()
         });
         assert_eq!(count(&opened), 300);
@@ -2350,6 +2585,189 @@ mod tests {
                 .chips
                 .contains(&"300 clients".to_string())
         );
+    }
+
+    /// One switch with `users` as its UniFi clients.
+    fn switch_with(users: &[Value]) -> String {
+        unifi(
+            &[dev("Core", "usw", "00:00:00:00:00:01", "10.0.0.2", None)],
+            users,
+        )
+    }
+
+    fn user(i: usize, name: Option<&str>, oui: Option<&str>, last_seen: i64) -> Value {
+        let mut u = json!({"mac": format!("00:11:22:33:44:{i:02x}"),
+            "last_uplink_mac": "00:00:00:00:00:01", "is_wired": true, "last_seen": last_seen});
+        if let Some(n) = name {
+            u["hostname"] = json!(n);
+        }
+        if let Some(o) = oui {
+            u["oui"] = json!(o);
+        }
+        u
+    }
+
+    #[test]
+    fn clients_reveal_best_first() {
+        let j = switch_with(&[
+            user(1, None, None, 900),
+            user(2, Some("client-1a2b3c4d"), None, 800),
+            user(3, None, Some("Apple, Inc."), 700),
+            user(4, Some("old-laptop"), None, 100),
+            user(5, Some("new-laptop"), None, 600),
+            user(6, None, Some("Brother Industries"), 50),
+            json!({"mac": "00:11:22:33:44:07", "last_uplink_mac": "00:00:00:00:00:01",
+                "is_wired": true, "blocked": true, "last_seen": 1}),
+        ]);
+        let mut b = B::default();
+        let u = parse_unifi(&j);
+        let gw = b.add(Node::default());
+        b.add(Node {
+            id: "core".into(),
+            mac: Some(u.devices[0].mac),
+            zone: Zone::Switch,
+            up: Some((gw, Link::Wired, None)),
+            ..Default::default()
+        });
+        b.unifi_clients(&u, gw, &[]);
+        let mut kids: Vec<&Node> = b.nodes.iter().filter(|n| n.client).collect();
+        kids.sort_by_key(|n| reveal_key(n));
+        let order: Vec<&str> = kids.iter().map(|n| n.label.as_str()).collect();
+        // Blocked (a warning), the printer (a role), the named ones newest
+        // first, a vendor, then nothing known: an anonymized token is no name.
+        assert_eq!(
+            order,
+            [
+                "00:11:22:33:44:07",
+                "00:11:22:33:44:06",
+                "new-laptop",
+                "old-laptop",
+                "00:11:22:33:44:03",
+                "00:11:22:33:44:01",
+                "client-1a2b3c4d",
+            ]
+        );
+        // The token is kept as the name: anonymized stays anonymized.
+        assert!(by_label_in(&b.nodes, "client-1a2b3c4d").is_some());
+    }
+
+    fn by_label_in<'a>(nodes: &'a [Node], l: &str) -> Option<&'a Node> {
+        nodes.iter().find(|n| n.label == l)
+    }
+
+    #[test]
+    fn steps_show_the_next_few_then_all() {
+        assert_eq!(more_of(0, 40), STEP);
+        assert_eq!(more_of(8, 40), 16);
+        // Only a few would be left: all of them.
+        assert_eq!(more_of(32, 40), usize::MAX);
+        assert_eq!(more_of(0, 5), usize::MAX);
+        assert_eq!(more_of(3, 300), 11);
+        // − on an uplink stepped past the level: back to the level.
+        assert_eq!(fewer_of(Some(16), 0), None);
+        assert_eq!(fewer_of(Some(usize::MAX), 10), None);
+        // On one the level opened (or stepped below it): none.
+        assert_eq!(fewer_of(None, 10), Some(0));
+        assert_eq!(fewer_of(Some(4), 10), Some(0));
+        assert!(is_count_chip(&count_chip(1)) && is_count_chip(&count_chip(40)));
+        assert!(!is_count_chip("guest") && !is_count_chip("many clients"));
+    }
+
+    #[test]
+    fn one_uplink_steps_open_while_clients_are_off() {
+        let users: Vec<Value> = (0..40)
+            .map(|i| user(i, Some(&format!("pc{i}")), None, i as i64))
+            .collect();
+        let j = switch_with(&users);
+        let build_with = |clients, reveal: &HashMap<String, usize>| {
+            build(&Input {
+                unifi: Some(&j),
+                clients,
+                reveal: Some(reveal),
+                ..Default::default()
+            })
+        };
+        let none = HashMap::new();
+        let off = build_with(Clients::Off, &none);
+        let core = by_label(&off, "Core").id.clone();
+        assert_eq!(off.under.get(&core), Some(&(0, 40)));
+        assert!(
+            off.summary.ends_with("40 clients not drawn"),
+            "{}",
+            off.summary
+        );
+        // +N on the card: the eight newest, and a +32 more card.
+        let step: HashMap<String, usize> = [(core.clone(), more_of(0, 40))].into();
+        let m = build_with(Clients::Off, &step);
+        assert_eq!(m.under.get(&core), Some(&(8, 40)));
+        let shown: Vec<&str> = m
+            .nodes
+            .iter()
+            .filter(|n| n.client && n.kind != "MORE CLIENTS")
+            .map(|n| n.label.as_str())
+            .collect();
+        assert_eq!(shown.len(), 8);
+        assert!(shown.contains(&"pc39") && !shown.contains(&"pc31"));
+        assert_eq!(by_label(&m, "+32 more").kind, "MORE CLIENTS");
+        // The summary counts them as the chip does: 32 not drawn.
+        assert_eq!(m.hidden, 32);
+        assert!(m.summary.ends_with("32 clients not drawn"), "{}", m.summary);
+        // Stepped to none under Some: a count again, no cards.
+        let fold: HashMap<String, usize> = [(core.clone(), 0)].into();
+        let m = build_with(Clients::Some, &fold);
+        assert!(m.nodes.iter().all(|n| !n.client));
+        assert!(
+            by_label(&m, "Core")
+                .chips
+                .contains(&"40 clients".to_string())
+        );
+        // More shows up to 30, All every one.
+        let more = build_with(Clients::More, &none);
+        assert_eq!(more.under.get(&core), Some(&(30, 40)));
+        let all = build_with(Clients::All, &none);
+        assert_eq!(all.under.get(&core), Some(&(40, 40)));
+    }
+
+    #[test]
+    fn a_big_sweep_steps_open_within_the_budget() {
+        let sweep: Vec<Seen> = (0..3000u32)
+            .map(|i| Seen {
+                ip: Ipv4Addr::from(0x0a00_0000 + 2 + i),
+                mac: None,
+                name: (i % 3 == 0).then(|| format!("host{i}")),
+                rtt: Some(1.0),
+                open: Vec::new(),
+            })
+            .collect();
+        let make = |clients, reveal| {
+            build(&Input {
+                sweep: sweep.clone(),
+                range: Some("10.0.0.0/20".into()),
+                gateway: Some("10.0.0.1".parse().unwrap()),
+                clients,
+                reveal,
+                ..Default::default()
+            })
+        };
+        let some = make(Clients::Some, None);
+        assert!(some.nodes.len() <= BUDGET, "{}", some.nodes.len());
+        let gw = some.nodes[1].id.clone();
+        let (shown, total) = some.under[&gw];
+        assert_eq!((shown, total), (PER_UPLINK, 3000));
+        // Named hosts come first.
+        assert!(
+            some.nodes
+                .iter()
+                .filter(|n| n.client && n.kind != "MORE CLIENTS")
+                .all(|n| n.label.starts_with("host"))
+        );
+        let step: HashMap<String, usize> = [(gw.clone(), more_of(shown, total))].into();
+        let more = make(Clients::Some, Some(&step));
+        assert_eq!(more.under[&gw], (18, 3000));
+        let all = make(Clients::All, None);
+        assert_eq!(all.under[&gw], (3000, 3000));
+        let l = layout::layout_in(&all, &|_| true, layout::Mode::Cluster);
+        assert!(l.pos.iter().all(Option::is_some));
     }
 
     #[test]
@@ -2375,7 +2793,7 @@ mod tests {
         let m = build(&Input {
             unifi: Some(&j),
             sonicwall: Some(&sw),
-            clients: true,
+            clients: Clients::Some,
             ..Default::default()
         });
         let gw = m.nodes[1].label.clone();
@@ -2464,7 +2882,7 @@ mod tests {
             range: Some("192.168.1.0/24".into()),
             ..Default::default()
         });
-        assert!(at_office.summary.contains("sweep not merged"));
+        assert!(at_office.summary.contains("sweep not merged") && at_office.sweep_apart);
         let gw = |m: &Map| m.nodes.iter().find(|n| n.id == "gateway").unwrap().clone();
         assert_eq!(gw(&at_office).label, "Gateway (not in the data)");
         assert!(
@@ -2481,6 +2899,7 @@ mod tests {
         });
         assert_eq!(gw(&on_site).sub, "192.168.1.1");
         assert!(by_label(&on_site, "Core").seen_by.contains(&"sweep"));
+        assert!(!on_site.sweep_apart);
     }
 
     #[test]

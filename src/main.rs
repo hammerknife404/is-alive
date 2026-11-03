@@ -4,6 +4,7 @@ mod backdrop;
 mod bundle;
 mod chrome;
 mod fonts;
+mod input;
 mod job;
 mod log;
 mod map;
@@ -15,6 +16,7 @@ mod redact;
 mod shots;
 mod skills;
 mod sonicwall;
+mod startup;
 mod theme;
 mod tools;
 mod unifi;
@@ -118,7 +120,7 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
-    map: map::view::MapView,
+    map: map::view::MapTabs,
     notes: tools::notes::NotesTool,
     log: log::Log,
     info: HostInfo,
@@ -133,6 +135,11 @@ struct App {
     update_asked: bool,
     /// The sweep was running last frame (to see one start).
     was_sweeping: bool,
+    /// The tabs whose full-scan run is still going: when the last ends,
+    /// the Map tab calls for attention. A run started there by hand after
+    /// the scan's own ended doesn't count.
+    scanning: Vec<Tab>,
+    map_call: chrome::MapCall,
     /// Results tab filter; matches tool name or output, case-insensitive.
     filter: String,
     /// ((filter, log stamp), matching entries) for the last frame.
@@ -153,12 +160,16 @@ struct App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        startup::running(ui.ctx(), &mut self.look);
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
         let now = ui.input(|i| i.time);
         if self.tab != self.shown_tab {
             self.shown_tab = self.tab;
             self.tab_since = now;
+        }
+        if self.tab == Tab::Map {
+            self.map_call.seen();
         }
         self.size = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         self.poll_all(ui.ctx(), now);
@@ -184,6 +195,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.notes.set_elsewhere(self.map.note_texts());
         self.notes.flush();
         widgets::clear_own_clipboard();
         let size = self
@@ -216,13 +228,16 @@ impl App {
     }
 
     /// The screenshot tour (IS_ALIVE_SHOTS): every tab, then the Map with a
-    /// card selected, then Settings.
+    /// card selected, then Settings; or the user manual's pictures.
     fn shots_step(&mut self, ctx: &egui::Context) {
+        if self.shots.as_ref().is_some_and(shots::Shots::manual) {
+            return self.manual_shots_step(ctx);
+        }
         if let Some(s) = &mut self.shots {
             // Every tab, then the Map again with a card selected.
             let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
             names.extend(["Map panel", "Settings"]);
-            match s.step(ctx, &names) {
+            match s.step(ctx, &names, true) {
                 Some(i) if i < TABS.len() => self.tab = TABS[i].0,
                 Some(i) if i == TABS.len() => {
                     self.tab = crate::Tab::Map;
@@ -253,6 +268,13 @@ impl App {
         self.dns.poll();
         self.advanced.poll();
         self.export.poll();
+        // A saved map opened in Config Export or dropped: the Map shows it.
+        for (path, data) in self.export.take_saved_maps() {
+            match self.map.open_file(&path, &data) {
+                Ok(()) => self.tab = Tab::Map,
+                Err(e) => self.export.refused(&path, &e),
+            }
+        }
         if self.reloading && !self.export.is_running() {
             self.reloading = false;
             let failed = self.export.failed();
@@ -269,7 +291,34 @@ impl App {
                 );
             }
         }
+        // The full scan is done: what its sweep found is on the Map now
+        // (not when the map's files leave it off as another network's).
+        if !self.scanning.is_empty() {
+            let mut left = std::mem::take(&mut self.scanning);
+            left.retain(|t| self.tab_running(*t));
+            self.scanning = left;
+            if self.scanning.is_empty()
+                && self.sweep.finished().is_some_and(|(_, n)| n > 0)
+                && self.map.shows_sweep(&map::view::Sources {
+                    sweep: &self.sweep,
+                    export: &self.export,
+                    info: &self.info,
+                    busy: false,
+                    note: self.look.map_note,
+                    legend: self.look.map_legend,
+                    redact: self.notes.overrides(),
+                    animate: self.look.animate,
+                })
+            {
+                self.map_call.start(now, self.tab == Tab::Map);
+            }
+        }
         self.notes.set_known(self.export.secrets(), now);
+        self.map.redact(self.notes.overrides());
+        // Before an autosave trims the keep list to values still in use.
+        if self.notes.saving() {
+            self.notes.set_elsewhere(self.map.note_texts());
+        }
         self.notes.poll(ctx);
         self.collect();
         self.dropped_files(ctx);
@@ -322,6 +371,7 @@ impl App {
             log,
             info,
             notes,
+            map,
             ..
         } = self;
         bundle.window(
@@ -332,6 +382,7 @@ impl App {
                 log,
                 info,
                 notes,
+                map,
             },
         );
     }
@@ -357,6 +408,9 @@ impl App {
                         info: &self.info,
                         busy,
                         note: self.look.map_note,
+                        legend: self.look.map_legend,
+                        redact: self.notes.overrides(),
+                        animate: self.look.animate,
                     },
                 );
                 self.map_action(ui.ctx(), act);
@@ -404,7 +458,7 @@ impl App {
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop a UniFi backup, SonicWall export or report, or /mapnetwork map",
+                "Drop a UniFi backup, SonicWall export or report, /mapnetwork map, or saved map",
                 egui::FontId::proportional(18.0),
                 egui::Color32::WHITE.gamma_multiply(fade),
             );
@@ -446,6 +500,15 @@ impl App {
             Some(Action::Layout(m)) => {
                 self.look.map_layout = Some(m);
                 theme::save(&self.look);
+            }
+            Some(Action::Legend(on)) => {
+                self.look.map_legend = on;
+                theme::save(&self.look);
+            }
+            Some(Action::NotePick(text, pick)) => {
+                let now = ctx.input(|i| i.time);
+                self.notes.set_elsewhere(self.map.note_texts());
+                self.notes.apply_pick(&text, pick, now);
             }
             Some(Action::Reload) => {
                 let files = self.export.map_sources();
@@ -522,14 +585,21 @@ impl App {
 
         let gw = local.gateway.map(|g| g.to_string());
         self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
+        self.scanning = vec![Tab::Ping, Tab::Trace, Tab::Dns];
         if let Some(gw) = &gw {
             self.ports.run(ctx, gw);
+            self.scanning.push(Tab::Ports);
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
+            self.scanning.push(Tab::Sweep);
+        } else {
+            // Only the sweep puts anything on the Map.
+            self.scanning.clear();
         }
+        self.map_call.seen();
         self.tab = Tab::Results;
         // Show the new runs: a leftover filter could hide them, and the
         // view may be scrolled up on older ones.
@@ -625,12 +695,12 @@ impl App {
         let mut clear = false;
         ui.horizontal(|ui| {
             widgets::lead(ui, "Filter");
-            crate::widgets::add_text_edit(
+            widgets::line(
                 ui,
-                egui::TextEdit::singleline(&mut self.filter)
-                    .char_limit(widgets::FIELD_MAX)
-                    .desired_width(240.0)
-                    .hint_text("tool or text, e.g. FAIL, 443, timeout"),
+                input::Field::Text,
+                &mut self.filter,
+                240.0,
+                "tool or text, e.g. FAIL, 443, timeout",
             )
             .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
             if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
@@ -785,10 +855,16 @@ fn close_inherited_fds_on_exec() {
     }
 }
 
-fn main() -> eframe::Result {
+fn main() {
+    // First, so nothing after it can end the app without a word.
+    startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
     let look = theme::load();
+    let plan = match startup::plan(look.renderer) {
+        Ok(p) => p,
+        Err(e) => startup::bad_arguments(&e),
+    };
     theme::set_emoji_style(look.emoji);
     let size = look
         .size
@@ -801,12 +877,18 @@ fn main() -> eframe::Result {
             .with_min_inner_size([620.0, 400.0])
             .with_drag_and_drop(true)
             .with_icon(icon()),
+        renderer: plan.renderer,
+        wgpu_options: startup::wgpu_options(),
         ..Default::default()
     };
-    eframe::run_native(
+    startup::begin(&plan);
+    let files = plan.files;
+    let run = eframe::run_native(
         "is-alive",
         options,
         Box::new(|cc| {
+            startup::created(cc);
+            cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
@@ -825,13 +907,15 @@ fn main() -> eframe::Result {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
-                map: map::view::MapView::new(look.map_layout),
+                map: map::view::MapTabs::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
                 info: HostInfo::local(),
                 info_job: None,
                 wan_asked: false,
                 was_sweeping: false,
+                scanning: Vec::new(),
+                map_call: Default::default(),
                 update_job: None,
                 update: None,
                 update_asked: false,
@@ -852,15 +936,20 @@ fn main() -> eframe::Result {
                 app.check_updates(&cc.egui_ctx, false);
             }
             // Files named on the command line ("Open with") go to Config Export.
-            let files: Vec<std::path::PathBuf> =
-                std::env::args_os().skip(1).map(Into::into).collect();
             if !files.is_empty() {
                 app.tab = Tab::Export;
                 app.export.open(&cc.egui_ctx, files);
             }
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let Err(e) = run {
+        startup::failed(&e);
+    }
+    // A screenshot tour with a picture that isn't what it should be.
+    if shots::failed() {
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
@@ -908,8 +997,8 @@ mod tests {
     /// for both proportional and monospace text, or it shows as a box.
     #[test]
     fn every_glyph_in_the_source_renders() {
-        use eframe::egui::{FontDefinitions, FontFamily};
-        let defs = FontDefinitions::default();
+        use eframe::egui::FontFamily;
+        let defs = crate::fonts::definitions();
         let covers = |fam: &FontFamily, c: char| {
             defs.families[fam]
                 .iter()

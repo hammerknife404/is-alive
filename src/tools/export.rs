@@ -2,7 +2,7 @@ use crate::job::{Job, pump};
 use crate::widgets;
 use crate::{mapnetwork, meraki, sonicwall, unifi};
 use eframe::egui::{self, Ui};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A converted config, by what the file turned out to be.
 enum Export {
@@ -148,6 +148,10 @@ impl Slot {
 enum Ev {
     Picked(PathBuf),
     Done(PathBuf, Box<Result<Export, String>>),
+    /// A saved map (is-alive's own): the Map tab keeps it.
+    SavedMap(PathBuf, Vec<u8>),
+    /// A problem with no one file to name.
+    Failed(String),
 }
 
 #[derive(Default)]
@@ -171,9 +175,41 @@ pub struct ExportTool {
     generation: u64,
     /// Files the last load couldn't read or convert.
     failed: Vec<String>,
+    /// Saved maps opened here or dropped, for the Map tab to take.
+    saved_maps: Vec<(PathBuf, Vec<u8>)>,
+}
+
+/// Largest SonicWall, Meraki or map file read; only a UniFi backup (whose
+/// database can run to hundreds of MB) may be bigger.
+const TEXT_MAX: usize = 256 << 20;
+
+/// Most files converted from one pick or drop: one of each kind is shown.
+const OPEN_MAX: usize = 16;
+
+/// Add a line to the errors shown.
+fn add_err(err: &mut Option<String>, e: String) {
+    *err = Some(match err.take() {
+        Some(prev) => format!("{prev}\n{e}"),
+        None => e,
+    });
 }
 
 fn convert(data: Vec<u8>, clients: unifi::Clients) -> Result<Export, String> {
+    if data.len() > TEXT_MAX {
+        return unifi::convert(data, clients)
+            .map(Export::Unifi)
+            .map_err(|e| {
+                if e.starts_with("not a UniFi backup") {
+                    format!(
+                        "not a UniFi backup, and larger ({} MB) than any SonicWall, Meraki or map \
+file this reads",
+                        TEXT_MAX >> 20
+                    )
+                } else {
+                    e
+                }
+            });
+    }
     if mapnetwork::sniff(&data) {
         return mapnetwork::parse(&data).map(|d| Export::Map(Box::new(d)));
     }
@@ -353,13 +389,11 @@ impl ExportTool {
                 }
                 Err(e) => {
                     self.failed.push(file_name(&path));
-                    let e = format!("{}: {e}", file_name(&path));
-                    self.err = Some(match self.err.take() {
-                        Some(prev) => format!("{prev}\n{e}"),
-                        None => e,
-                    });
+                    add_err(&mut self.err, format!("{}: {e}", file_name(&path)));
                 }
             },
+            Ev::Failed(e) => add_err(&mut self.err, e),
+            Ev::SavedMap(path, data) => self.saved_maps.push((path, data)),
         });
         if loaded {
             self.gather_secrets();
@@ -369,6 +403,17 @@ impl ExportTool {
             self.pending = None;
         }
         running
+    }
+
+    /// A saved map the Map couldn't open: said here with the other files
+    /// that couldn't be read.
+    pub fn refused(&mut self, path: &Path, e: &str) {
+        add_err(&mut self.err, format!("{}: {e}", file_name(path)));
+    }
+
+    /// Saved maps opened or dropped since last asked, for the Map tab.
+    pub fn take_saved_maps(&mut self) -> Vec<(PathBuf, Vec<u8>)> {
+        std::mem::take(&mut self.saved_maps)
     }
 
     /// Take the example maps out (a scan of a real network is starting, or
@@ -384,6 +429,18 @@ impl ExportTool {
         self.gather_secrets();
         self.generation += 1;
         true
+    }
+
+    /// For tests elsewhere: example `i` open, as Map → Examples opens it.
+    #[cfg(test)]
+    pub fn with_example(i: usize) -> Self {
+        let mut t = Self::default();
+        let path = crate::skills::example_path(i);
+        let data = crate::skills::example(&path).expect("example").to_vec();
+        let export = convert(data, t.clients).expect("example converts");
+        t.shown = land(&mut t.slots, path, export);
+        t.generation += 1;
+        t
     }
 
     /// An example map is open.
@@ -426,10 +483,23 @@ impl ExportTool {
             }) else {
                 return;
             };
-            for path in paths {
+            let more = paths.len().saturating_sub(OPEN_MAX);
+            for path in paths.into_iter().take(OPEN_MAX) {
                 tx.send(Ev::Picked(path.clone()));
-                let r = read_input(&path).and_then(|data| convert(data, clients));
+                let r = match read_input(&path) {
+                    Ok(data) if crate::map::view::saved::sniff(&data) => {
+                        tx.send(Ev::SavedMap(path, data));
+                        continue;
+                    }
+                    r => r.and_then(|data| convert(data, clients)),
+                };
                 tx.send(Ev::Done(path, Box::new(r)));
+            }
+            if more > 0 {
+                tx.send(Ev::Failed(format!(
+                    "{more} more file{} not opened: at most {OPEN_MAX} at a time",
+                    if more == 1 { "" } else { "s" }
+                )));
             }
         }));
     }

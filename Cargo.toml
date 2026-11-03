@@ -1,12 +1,12 @@
 [package]
 name = "is-alive"
-version = "0.24.2"
+version = "0.25.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, speed test with jitter, subnet sweep, DNS, domain/mail health, network map"
 license-file = "LICENSE.md"
 
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu_no_default_features", "wayland", "x11"] }
 dns-lookup = "4"
 socket2 = "0.6"
 if-addrs = "0.15"
@@ -22,12 +22,22 @@ flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 regex = "1"
 arboard = { version = "3", default-features = false }
+# The map's PNG export: the CPU renderer and font reader egui already uses
+# for its text, so no new crates (pure Rust, nothing for the C runtime).
+vello_cpu = { version = "0.1", default-features = false, features = ["std", "u8_pipeline"] }
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# Tests check the SVG and draw.io exports parse as XML.
+roxmltree = "0.20"
 
 [build-dependencies]
 winresource = "0.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# The window's second renderer, for when OpenGL can't start (see src/startup.rs).
+wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -36,7 +46,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }
+# The window's second renderer, for when OpenGL can't start (see src/startup.rs):
+# Direct3D 12, with Windows' own software renderer (WARP) where there's no GPU.
+wgpu = { version = "30", default-features = false, features = ["dx12"] }
 
 [profile.release]
 opt-level = 3

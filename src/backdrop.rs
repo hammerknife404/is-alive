@@ -92,7 +92,10 @@ impl Backdrop {
         let mode = std::env::var("IS_ALIVE_GPU").unwrap_or_default();
         let gpu = match (gl, mode.as_str()) {
             (_, "off") => Err("turned off (IS_ALIVE_GPU=off)".to_string()),
-            (None, _) => Err("no OpenGL context".to_string()),
+            // The wgpu renderer (see startup.rs) has no OpenGL to share.
+            (None, _) => {
+                Err("the window is drawn with wgpu; the GPU scene needs OpenGL".to_string())
+            }
             (Some(gl), m) => gpu::Gpu::new(gl, m == "force"),
         };
         let renderer = match &gpu {

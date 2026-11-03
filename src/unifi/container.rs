@@ -136,17 +136,35 @@ fn read_full(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 /// all the memory.
 pub const MAX_UNPACKED: usize = 2 << 30;
 
+/// Most a file picked out of a zip by name (a map, a manifest) unpacks to.
+const FIND_MAX: usize = 64 << 20;
+/// Most all the files `zip_all` reads unpack to together.
+const ALL_MAX: usize = 512 << 20;
+/// Most a backup's `version` entry may be; a real one is a line.
+const VERSION_MAX: usize = 4096;
+
 /// Read to the end, but no further than MAX_UNPACKED.
 fn read_capped(r: impl Read, what: &str) -> Result<Vec<u8>, String> {
+    read_upto(r, what, MAX_UNPACKED)
+}
+
+/// Read to the end, but no further than `max` bytes.
+fn read_upto(r: impl Read, what: &str, max: usize) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    r.take(MAX_UNPACKED as u64 + 1)
+    r.take(max as u64 + 1)
         .read_to_end(&mut out)
         .map_err(|e| format!("{what}: {e}"))?;
-    if out.len() > MAX_UNPACKED {
-        return Err(format!(
-            "{what} unpacks to more than {} GB: not a UniFi backup",
-            MAX_UNPACKED >> 30
-        ));
+    if out.len() > max {
+        return Err(if max >= 1 << 30 {
+            format!(
+                "{what} unpacks to more than {} GB: not a UniFi backup",
+                max >> 30
+            )
+        } else if max >= 1 << 20 {
+            format!("{what} unpacks to more than {} MB", max >> 20)
+        } else {
+            format!("{what} unpacks to more than {max} bytes")
+        });
     }
     Ok(out)
 }
@@ -194,7 +212,7 @@ fn take_entry(
         }
         Want::Version => {
             let v = read()?;
-            d.version = Some(String::from_utf8_lossy(&v).trim().to_string());
+            d.version = Some(crate::input::line(&String::from_utf8_lossy(&v), 64));
             None
         }
         Want::Nested => {
@@ -270,6 +288,11 @@ fn zip_entries(b: &[u8]) -> Result<Vec<ZipEntry>, String> {
 }
 
 fn zip_read(b: &[u8], e: &ZipEntry) -> Result<Vec<u8>, String> {
+    zip_read_upto(b, e, MAX_UNPACKED)
+}
+
+/// An entry's bytes, unpacked to no more than `max`.
+fn zip_read_upto(b: &[u8], e: &ZipEntry, max: usize) -> Result<Vec<u8>, String> {
     let bad = || format!("zip: {} damaged", e.name);
     let h = b.get(e.local..e.local + 30).ok_or_else(bad)?;
     if &h[..4] != ZIP_LOCAL {
@@ -278,13 +301,18 @@ fn zip_read(b: &[u8], e: &ZipEntry) -> Result<Vec<u8>, String> {
     let start = e.local + 30 + u16le(h, 26) + u16le(h, 28);
     let raw = b.get(start..start + e.size).ok_or_else(bad)?;
     match e.method {
+        0 if raw.len() > max && max >= 1 << 20 => {
+            Err(format!("zip: {} is more than {} MB", e.name, max >> 20))
+        }
+        0 if raw.len() > max => Err(format!("zip: {} is more than {max} bytes", e.name)),
         0 => Ok(raw.to_vec()),
-        8 => read_capped(DeflateDecoder::new(raw), &format!("zip: {}", e.name)),
+        8 => read_upto(DeflateDecoder::new(raw), &format!("zip: {}", e.name), max),
         m => Err(format!("zip: {} uses unsupported compression {m}", e.name)),
     }
 }
 
-/// The first file in a zip whose name `pick` accepts, as (name, bytes).
+/// The first file in a zip whose name `pick` accepts, as (name, bytes);
+/// one that unpacks past 64 MB is an error.
 pub fn zip_find(
     b: &[u8],
     pick: impl Fn(&str) -> bool,
@@ -293,13 +321,13 @@ pub fn zip_find(
         return Ok(None);
     }
     match zip_entries(b)?.into_iter().find(|e| pick(&e.name)) {
-        Some(e) => zip_read(b, &e).map(|d| Some((e.name, d))),
+        Some(e) => zip_read_upto(b, &e, FIND_MAX).map(|d| Some((e.name, d))),
         None => Ok(None),
     }
 }
 
 /// Every file in a zip whose name `pick` accepts, as (name, bytes); at most
-/// `max` of them.
+/// `max` of them, unpacking to 512 MB together.
 pub fn zip_all(
     b: &[u8],
     pick: impl Fn(&str) -> bool,
@@ -308,22 +336,30 @@ pub fn zip_all(
     if !b.starts_with(ZIP_LOCAL) {
         return Ok(Vec::new());
     }
+    // A budget for them all, so many small entries that each inflate a
+    // long way can't add up to all the memory.
+    let mut left = ALL_MAX;
     zip_entries(b)?
         .into_iter()
         .filter(|e| pick(&e.name))
         .take(max)
-        .map(|e| zip_read(b, &e).map(|d| (e.name, d)))
+        .map(|e| {
+            let d = zip_read_upto(b, &e, left)?;
+            left -= d.len();
+            Ok((e.name, d))
+        })
         .collect()
 }
 
 fn from_zip(b: &[u8], d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
     let entries = zip_entries(b)?;
-    // Version first so it's known even when the dump sits in a nested backup.
+    // Version first so it's known even when the dump sits in a nested
+    // backup; only these and skipped entries are left, so it's a line at most.
     for e in entries
         .iter()
         .filter(|e| !matches!(want(&e.name), Want::Dump | Want::Nested))
     {
-        take_entry(&e.name, || zip_read(b, e), d, depth)?;
+        take_entry(&e.name, || zip_read_upto(b, e, VERSION_MAX), d, depth)?;
     }
     let mut dumps: Vec<_> = entries
         .iter()
@@ -375,6 +411,9 @@ fn from_tar(mut r: impl Read, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String
             Ok(v)
         };
         if h[156] == b'L' {
+            if size > 64 * 1024 {
+                return Err("tar: long file name of more than 64 KB".into());
+            }
             long_name = Some(cfield(&read_body(&mut r)?));
             continue;
         }
@@ -396,6 +435,11 @@ fn from_tar(mut r: impl Read, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String
             Want::Nested => true,
             Want::Skip => false,
         };
+        if file && take && matches!(want(&name), Want::Version) && size > VERSION_MAX {
+            return Err(format!(
+                "tar: version entry of {size} bytes: not a UniFi backup"
+            ));
+        }
         if file && take {
             if let Some(bson) = take_entry(&name, || read_body(&mut r), d, depth)? {
                 return Ok(bson);
@@ -555,5 +599,34 @@ pub mod tests {
         assert!(open(b"[{\"__cmd\":\"select\"}]".to_vec()).is_err());
         assert!(open(vec![0; 64]).is_err());
         assert!(open(zip(&[("a.txt", b"x")], false)).is_err());
+    }
+
+    #[test]
+    fn inflating_past_the_cap_stops() {
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), Compression::best());
+        e.write_all(&vec![0u8; 8 << 20]).unwrap();
+        let bomb = e.finish().unwrap();
+        assert!(bomb.len() < 64 << 10);
+        let read = |max| read_upto(DeflateDecoder::new(&bomb[..]), "x", max);
+        assert!(read(1 << 20).unwrap_err().contains("1 MB"));
+        assert_eq!(read(8 << 20).unwrap().len(), 8 << 20);
+    }
+
+    #[test]
+    fn versions_are_one_clean_line() {
+        let z = zip(
+            &[("version", b"9.0.114\n\x1b[2J"), ("db.gz", &gz(BSON))],
+            false,
+        );
+        assert_eq!(open(z).unwrap().version.as_deref(), Some("9.0.114 [2J"));
+    }
+
+    #[test]
+    fn a_huge_version_is_not_read() {
+        let big = vec![b'9'; VERSION_MAX + 1];
+        let z = zip(&[("version", &big), ("db.gz", &gz(BSON))], false);
+        assert!(open(z).err().unwrap().contains("version"));
+        let t = tar(&[("network/version", &big), ("network/db.gz", &gz(BSON))]);
+        assert!(open(unifi(gz(&t))).err().unwrap().contains("version"));
     }
 }

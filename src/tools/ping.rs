@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::icmp::{self, EchoStatus};
@@ -125,6 +126,7 @@ impl PingTool {
             enter |= widgets::field(
                 ui,
                 "Host",
+                Field::Host,
                 &mut self.host,
                 widgets::MAIN_W,
                 "hostname or IP",
@@ -284,8 +286,21 @@ impl PingTool {
         self.launch(ctx, Mode::Icmp, count);
     }
 
+    /// `count` ICMP pings to `host` with the tab showing that count (the
+    /// user manual's screenshot tour).
+    pub fn run_shown(&mut self, ctx: &egui::Context, host: &str, count: u32) {
+        self.mode = Mode::Icmp;
+        self.count = count;
+        self.run(ctx, host, count);
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Why the last run stopped short, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.err.as_deref()
     }
 
     fn start(&mut self, ctx: &egui::Context) {
@@ -299,11 +314,17 @@ impl PingTool {
         self.rows.clear();
         self.samples.clear();
         self.stats = Stats::default();
-        let host = self.host.trim().to_string();
-        if host.is_empty() {
-            self.err = Some("enter a host".into());
-            return;
+        let target = match crate::input::host(&self.host) {
+            Ok(t) => t,
+            Err(e) => return self.err = Some(e),
+        };
+        // A port typed with the host (host:8443, a link) is the one TCP times.
+        if let Some(p) = target.port
+            && mode == Mode::Tcp
+        {
+            self.port = p;
         }
+        let host = target.host;
         let (port, size, v6) = (self.port, self.size, self.prefer_v6);
         let interval = Duration::from_millis(self.interval_ms as u64);
         let timeout = self.timeout_ms;

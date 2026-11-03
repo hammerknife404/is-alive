@@ -1,14 +1,38 @@
 //! Fonts for Notes and the text viewer: egui's own Sans and Mono, plus the
 //! log-friendly monospace fonts this computer already has (Consolas,
-//! Cascadia Mono, DejaVu Sans Mono…). Nothing is bundled; a font is read
-//! from disk only when it's picked.
+//! Cascadia Mono, DejaVu Sans Mono…), read from disk only when picked.
+//! The one font bundled is two emoji egui's lack: 🛜 Wi-Fi and 🗄 drawn as
+//! a server rack (scripts/make-icon-font.py draws them).
 
-use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
+use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontTweak};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 pub const SANS: &str = "Sans";
 pub const MONO: &str = "Mono";
+
+const ICONS: &str = "is-alive-icons";
+
+/// egui's own fonts with the app's icons ahead of its emoji, for every
+/// text in the app.
+pub fn definitions() -> FontDefinitions {
+    let mut defs = FontDefinitions::default();
+    let icons = FontData::from_static(include_bytes!("../assets/icons.ttf")).tweak(FontTweak {
+        // As egui's Noto Emoji, whose sizes the icons are drawn to.
+        scale: 0.81,
+        ..Default::default()
+    });
+    defs.font_data.insert(ICONS.into(), icons.into());
+    for fam in [FontFamily::Proportional, FontFamily::Monospace] {
+        let chain = defs.families.entry(fam).or_default();
+        let at = chain
+            .iter()
+            .position(|n| n == "NotoEmoji-Regular")
+            .unwrap_or(chain.len());
+        chain.insert(at, ICONS.into());
+    }
+    defs
+}
 
 /// (name shown, file names it ships as), in menu order.
 const KNOWN: &[(&str, &[&str])] = &[
@@ -140,10 +164,12 @@ pub fn family(ctx: &egui::Context, name: &str) -> FontFamily {
     let Some((_, path)) = installed().iter().find(|(n, _)| *n == name) else {
         return FontFamily::Monospace;
     };
-    let Ok(bytes) = std::fs::read(path) else {
+    // A font, not a device or a pipe, and not absurdly big.
+    let font_file = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 64 << 20);
+    let Some(bytes) = font_file.then(|| std::fs::read(path).ok()).flatten() else {
         return FontFamily::Monospace;
     };
-    let mut defs = FontDefinitions::default();
+    let mut defs = definitions();
     defs.font_data
         .insert(name.into(), FontData::from_owned(bytes).into());
     // Its own glyphs first, then egui's for anything it lacks (emoji too).

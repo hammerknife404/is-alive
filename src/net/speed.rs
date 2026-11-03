@@ -287,7 +287,10 @@ pub fn file_host(url: &str) -> Result<String, String> {
     if host.is_empty() {
         return Err("the URL has no host".into());
     }
-    Ok(host.to_string())
+    if url.chars().any(char::is_whitespace) {
+        return Err("the URL can't contain spaces (write them as %20)".into());
+    }
+    crate::input::host(host).map(|t| t.host)
 }
 
 /// The port an http(s) URL connects to: its own, else 443 or 80.
@@ -1069,6 +1072,8 @@ pub(crate) mod tests {
         assert_eq!(file_host("http://u:p@10.0.0.5/f").unwrap(), "10.0.0.5");
         assert!(file_host("ftp://x/y").is_err());
         assert!(file_host("https:///y").is_err());
+        assert!(file_host("https://speed.example.net/a file.bin").is_err());
+        assert!(file_host("https://bad_host!/f").is_err());
     }
 
     #[test]

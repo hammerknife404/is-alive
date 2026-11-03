@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::dnsq::{self, Client};
@@ -78,6 +79,7 @@ impl AdvancedTool {
             enter |= widgets::field(
                 ui,
                 "Domain",
+                Field::Domain,
                 &mut self.domain,
                 widgets::MAIN_W,
                 "example.com",
@@ -90,10 +92,23 @@ impl AdvancedTool {
         });
         ui.horizontal(|ui| {
             // Enter here starts a run too; the Start button above has already been drawn.
-            let mut enter =
-                widgets::field(ui, "Resolver", &mut self.resolver, 110.0, DEFAULT_RESOLVER);
+            let mut enter = widgets::field(
+                ui,
+                "Resolver",
+                Field::Resolver,
+                &mut self.resolver,
+                110.0,
+                DEFAULT_RESOLVER,
+            );
             ui.separator();
-            enter |= widgets::field(ui, "DKIM", &mut self.selectors, 160.0, "s1024, mykey");
+            enter |= widgets::field(
+                ui,
+                "DKIM",
+                Field::Selectors,
+                &mut self.selectors,
+                160.0,
+                "s1024, mykey",
+            );
             ui.weak("extra selectors; common ones are always probed")
                 .on_hover_text(domain::SELECTORS.join(", "));
             if enter && !running {
@@ -254,15 +269,36 @@ impl AdvancedTool {
         self.job.is_some()
     }
 
+    /// Why the last run stopped short, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.err.as_deref()
+    }
+
+    /// Check `domain` with the resolver and DKIM selectors as they are
+    /// (the user manual's screenshot tour).
+    pub fn run(&mut self, ctx: &egui::Context, domain: &str) {
+        self.domain = domain.into();
+        self.start(ctx);
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.took = None;
         self.checks.clear();
-        let d = domain::normalize(&self.domain);
-        if let Some(why) = domain::invalid(&d) {
+        let shown = domain::normalize(&self.domain);
+        if let Some(why) = domain::invalid(&shown) {
             self.err = Some(why.into());
             return;
         }
+        // The box keeps the name as typed (bücher.de); the run uses its xn-- form.
+        let d = match crate::input::dns_name(&shown) {
+            Ok(d) => d,
+            Err(e) => return self.err = Some(e),
+        };
+        let selectors = match crate::input::selectors(&self.selectors) {
+            Ok(s) => s,
+            Err(e) => return self.err = Some(e),
+        };
         let res = if self.resolver.trim().is_empty() {
             DEFAULT_RESOLVER
         } else {
@@ -272,15 +308,9 @@ impl AdvancedTool {
             self.err = Some(format!("resolver must be an IP address, got '{res}'"));
             return;
         };
-        self.domain = d.clone();
+        self.domain = shown;
         self.ran = (d.clone(), server.ip().to_string());
         self.checks = vec![None; NAMES.len()];
-        let selectors: Vec<String> = self
-            .selectors
-            .split([',', ' ', ';'])
-            .map(|s| s.trim().trim_end_matches("._domainkey").to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
         self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();

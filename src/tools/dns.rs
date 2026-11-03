@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::{self, dnsq};
@@ -111,6 +112,7 @@ impl DnsTool {
             enter |= widgets::field(
                 ui,
                 "Name or IP",
+                Field::Name,
                 &mut self.query,
                 widgets::MAIN_W,
                 "example.com or 8.8.8.8",
@@ -274,16 +276,20 @@ impl DnsTool {
         self.job.is_some()
     }
 
+    /// Why the last run stopped short, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.err.as_deref()
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
         self.took = None;
         self.records.clear();
         self.notes.clear();
-        let q = self.query.trim().trim_end_matches('.').to_ascii_lowercase();
-        if q.is_empty() {
-            self.err = Some("enter a name or IP".into());
-            return;
-        }
+        let q = match crate::input::dns_name(&self.query) {
+            Ok(q) => q,
+            Err(e) => return self.err = Some(e),
+        };
         // An IP is always a reverse (PTR) lookup.
         let types: Vec<u16> = if q.parse::<IpAddr>().is_ok() {
             vec![dnsq::PTR]

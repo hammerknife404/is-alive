@@ -18,6 +18,8 @@ pub struct Sources<'a> {
     pub log: &'a Log,
     pub info: &'a HostInfo,
     pub notes: &'a NotesTool,
+    /// The live map, for the notes on its cards.
+    pub map: &'a crate::map::view::MapTabs,
 }
 
 struct Saved {
@@ -38,6 +40,7 @@ pub struct BundleTool {
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
+    use_card_notes: bool,
     use_map: bool,
     /// Carry the /unifidump and /mapnetwork skills (`skills/` in the zip).
     use_skills: bool,
@@ -63,6 +66,7 @@ impl Default for BundleTool {
             use_inventory: true,
             use_results: false,
             use_notes: false,
+            use_card_notes: true,
             use_map: true,
             use_skills: true,
             ov: Default::default(),
@@ -88,6 +92,9 @@ const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
+const CARD_NOTES_WHAT: &str = "The technician's notes on cards of the Map tab's live map: each \
+card's name, role, IP and MAC with its note. Sanitized on their machine like notes.md. Observations \
+about those devices; carry what bears on the map into its device notes and findings.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
 machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
 observations; use what bears on the map and its findings.";
@@ -124,7 +131,8 @@ impl BundleTool {
             && let Some((_, r)) = src.export.unifi()
             && let Some(name) = r.sites.first()
         {
-            self.site = name.clone();
+            // From the backup: cleaned and cut like a typed name.
+            self.site = crate::input::line(name, crate::input::Field::Text.max());
         }
         let mut open = self.open;
         widgets::compact_title(ctx, || {
@@ -146,12 +154,12 @@ impl BundleTool {
             .spacing([8.0, 6.0])
             .show(ui, |ui| {
                 ui.label("Site name");
-                crate::widgets::add_text_edit(
+                widgets::line(
                     ui,
-                    egui::TextEdit::singleline(&mut self.site)
-                        .char_limit(widgets::FIELD_MAX)
-                        .desired_width(380.0)
-                        .hint_text("Client or site name"),
+                    crate::input::Field::Text,
+                    &mut self.site,
+                    380.0,
+                    "Client or site name",
                 );
                 ui.end_row();
                 ui.label("Known problems");
@@ -176,12 +184,18 @@ impl BundleTool {
                     let keep = widgets::selection_before_right_click(ui.ctx(), id);
                     let edit = egui::TextEdit::multiline(&mut self.notes)
                         .id(id)
-                        .char_limit(widgets::PROBLEMS_MAX)
+                        .char_limit(crate::input::Field::Problems.room())
                         .desired_rows(2)
                         .desired_width(380.0)
                         .hint_text("Optional. Goes straight into /mapnetwork's findings.")
                         .layouter(&mut layouter)
                         .show(ui);
+                    widgets::tidy(
+                        ui.ctx(),
+                        &edit.response,
+                        crate::input::Field::Problems,
+                        &mut self.notes,
+                    );
                     widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
                     edit.response.context_menu(|ui| {
                         if widgets::text_edit_menu(ui, id, true) {
@@ -325,6 +339,16 @@ impl BundleTool {
                     }),
                     "Nothing in Notes yet",
                 );
+                let card_notes = src.map.bundle_notes(src.notes.overrides());
+                part_row(
+                    ui,
+                    &mut self.use_card_notes,
+                    "Card notes",
+                    card_notes
+                        .as_ref()
+                        .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
+                    "No notes on the live map's cards",
+                );
                 part_row(
                     ui,
                     &mut self.use_skills,
@@ -343,7 +367,8 @@ impl BundleTool {
             || (self.use_meraki && meraki.is_some())
             || (self.use_inventory && sweep.is_some())
             || (self.use_results && runs > 0)
-            || (self.use_notes && !src.notes.is_empty());
+            || (self.use_notes && !src.notes.is_empty())
+            || (self.use_card_notes && src.map.bundle_notes(src.notes.overrides()).is_some());
         widgets::error(ui, &self.err);
         ui.separator();
 
@@ -485,17 +510,30 @@ impl BundleTool {
                 skill: "/mapnetwork",
                 what: NOTES_WHAT,
                 summary: json!({ "lines": clean.lines().count(), "redacted": hits.len() }),
-                data: clean,
+                // Without the emoji style marks, like Copy and Save.
+                data: crate::theme::strip_emoji_styles(&clean),
+            });
+        }
+        if self.use_card_notes
+            && let Some((n, data)) = src.map.bundle_notes(src.notes.overrides())
+        {
+            parts.push(Part {
+                file: bundle::CARD_NOTES,
+                source: "Map tab".into(),
+                skill: "/mapnetwork",
+                what: CARD_NOTES_WHAT,
+                summary: json!({ "cards": n }),
+                data,
             });
         }
         let b = Bundle {
             site: self.site.trim().to_string(),
-            // Same rules as the notes: nothing redactable goes in the zip.
-            notes: crate::redact::sanitize_with(
-                &self.notes,
-                &src.notes.overrides().merged(&self.ov),
-            )
-            .0,
+            // Same rules as the notes: nothing redactable goes in the zip,
+            // nor emoji style marks pasted in from them.
+            notes: crate::theme::strip_emoji_styles(
+                &crate::redact::sanitize_with(&self.notes, &src.notes.overrides().merged(&self.ov))
+                    .0,
+            ),
             clients: self.clients,
             map_clients: self.map_clients,
             scanner: src.info.clone(),

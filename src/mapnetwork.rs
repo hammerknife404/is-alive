@@ -60,7 +60,20 @@ pub fn sniff(data: &[u8]) -> bool {
     text.contains("this.NODES") && (text.contains(START) || text.contains("<html"))
 }
 
+/// Largest map read: a /mapnetwork map of a big site is a few MB.
+const MAP_MAX: usize = 64 << 20;
+/// Most devices and links a map may hold and still be drawn.
+const NODES_MAX: usize = 10_000;
+const EDGES_MAX: usize = 50_000;
+
 pub fn parse(data: &[u8]) -> Result<Doc, String> {
+    if data.len() > MAP_MAX {
+        return Err(format!(
+            "{} MB is far bigger than any /mapnetwork map (at most {} MB)",
+            data.len() >> 20,
+            MAP_MAX >> 20
+        ));
+    }
     let text = std::str::from_utf8(data).map_err(|_| "map file isn't UTF-8 text")?;
     let block = match text.find(START) {
         Some(s) => {
@@ -83,6 +96,15 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
     if nodes.is_empty() {
         return Err("no devices (this.NODES) found: is this a /mapnetwork map?".into());
     }
+    let edges: Vec<Value> = list("edges");
+    if nodes.len() > NODES_MAX || edges.len() > EDGES_MAX {
+        return Err(format!(
+            "{} devices and {} links: a map opens with up to {NODES_MAX} devices and \
+{EDGES_MAX} links",
+            nodes.len(),
+            edges.len()
+        ));
+    }
     let str_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let meta = data.get("meta").cloned().unwrap_or(json!({}));
     let sites = match data.get("sites") {
@@ -104,7 +126,7 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
         subtitle: str_of(&meta, "subtitle"),
         sites,
         zones,
-        edges: list("edges"),
+        edges,
         actions: list("actions"),
         nodes,
         json: serde_json::to_string_pretty(&Value::Object(data)).unwrap_or_default(),
@@ -430,5 +452,16 @@ this.NODES = this.NODES || [];\nthis.NODES = [ { id:'a', label:'A' } ];";
         for n in (0..PAGE.len()).step_by(37) {
             let _ = parse(&PAGE.as_bytes()[..n]);
         }
+    }
+
+    #[test]
+    fn refuses_maps_too_big_to_draw() {
+        let many = format!(
+            "this.NODES = [{}];",
+            vec!["{\"id\":\"a\"}"; NODES_MAX + 1].join(",")
+        );
+        assert!(parse(many.as_bytes()).is_err_and(|e| e.contains("devices")));
+        let fits = format!("this.NODES = [{}];", vec!["{\"id\":\"a\"}"; 50].join(","));
+        assert_eq!(parse(fits.as_bytes()).unwrap().nodes.len(), 50);
     }
 }

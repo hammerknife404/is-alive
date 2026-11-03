@@ -5,49 +5,101 @@
 
 use eframe::egui::{self, FontFamily, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
 
-/// The emoji picker's emoji with their Markdown shortcodes (GitHub's names)
-/// and what they're for. Preview draws `:fire:` as the emoji.
-pub const SHORTCODES: &[(&str, &str, &str)] = &[
-    ("✅", "white_check_mark", "Done / OK"),
-    ("❌", "x", "Failed / no"),
-    ("⚠", "warning", "Warning"),
-    ("❗", "exclamation", "Important"),
-    ("❓", "question", "Question / unknown"),
-    ("⭐", "star", "Star"),
-    ("👍", "+1", "Thumbs up"),
-    ("👎", "-1", "Thumbs down"),
-    ("🔥", "fire", "Fire / urgent"),
-    ("💡", "bulb", "Idea"),
-    ("📌", "pushpin", "Pinned"),
-    ("📝", "memo", "Note"),
-    ("🔒", "lock", "Locked"),
-    ("🔓", "unlock", "Unlocked"),
-    ("🔑", "key", "Key / credential"),
-    ("🔧", "wrench", "Fix / config"),
-    ("🖥", "desktop_computer", "Desktop"),
-    ("💻", "computer", "Laptop"),
-    ("📱", "iphone", "Phone"),
-    ("📠", "fax", "Fax / printer"),
-    ("📞", "telephone_receiver", "Call"),
-    ("🌐", "globe_with_meridians", "Internet / web"),
-    ("📶", "signal_strength", "Signal / Wi-Fi"),
-    ("🔌", "electric_plug", "Power / cable"),
-    ("🔋", "battery", "Battery / UPS"),
-    ("📦", "package", "Package / install"),
-    ("📅", "date", "Date"),
-    ("⏰", "alarm_clock", "Time / reminder"),
-    ("🐛", "bug", "Bug"),
-    ("🚧", "construction", "Work in progress"),
-    ("✨", "sparkles", "New"),
-    ("☺", "relaxed", "Smile"),
+/// (emoji, Markdown shortcode, what it's for).
+pub type Shortcode = (&'static str, &'static str, &'static str);
+
+/// The emoji picker's emoji by group, with their shortcodes (GitHub's
+/// names, where GitHub has one). Preview draws `:fire:` as the emoji.
+pub const SHORTCODES: &[(&str, &[Shortcode])] = &[
+    (
+        "Status",
+        &[
+            ("✅", "white_check_mark", "Done / OK"),
+            ("☑", "ballot_box_with_check", "Ticked / approved"),
+            ("❌", "x", "Failed / no"),
+            ("⚠", "warning", "Warning"),
+            ("❗", "exclamation", "Important"),
+            ("❓", "question", "Question / unknown"),
+            ("🚫", "no_entry_sign", "Blocked / not allowed"),
+            ("⏳", "hourglass_flowing_sand", "Waiting / in progress"),
+            ("🔄", "arrows_counterclockwise", "Restart / sync / retry"),
+            ("🆗", "ok", "OK"),
+            ("🚧", "construction", "Work in progress"),
+            ("🐛", "bug", "Bug"),
+            ("🔥", "fire", "Fire / urgent"),
+        ],
+    ),
+    (
+        "People",
+        &[
+            ("👍", "+1", "Thumbs up"),
+            ("👎", "-1", "Thumbs down"),
+            ("🙏", "pray", "Thanks / please"),
+            ("🎉", "tada", "Celebrate / fixed"),
+            ("☺", "relaxed", "Smile"),
+            ("💬", "speech_balloon", "Said / comment"),
+            ("❤", "heart", "Love"),
+        ],
+    ),
+    (
+        "Notes",
+        &[
+            ("⭐", "star", "Star"),
+            ("✨", "sparkles", "New"),
+            ("💡", "bulb", "Idea"),
+            ("📌", "pushpin", "Pinned"),
+            ("📝", "memo", "Note"),
+            ("📋", "clipboard", "Checklist / clipboard"),
+            ("📎", "paperclip", "Attachment"),
+            ("🗑", "wastebasket", "Remove / delete"),
+            ("📦", "package", "Package / install"),
+            ("📅", "date", "Date"),
+            ("⏰", "alarm_clock", "Time / reminder"),
+            ("🔒", "lock", "Locked"),
+            ("🔓", "unlock", "Unlocked"),
+            ("🔑", "key", "Key / credential"),
+            ("🔧", "wrench", "Fix / config"),
+            ("🔍", "mag", "Look into / search"),
+        ],
+    ),
+    (
+        "Tech",
+        &[
+            ("🗄", "file_cabinet", "Server rack"),
+            ("🛜", "wireless", "Wi-Fi"),
+            ("🖧", "network", "Network / LAN"),
+            ("🌐", "globe_with_meridians", "Internet / web"),
+            ("☁", "cloud", "Cloud"),
+            ("🛡", "shield", "Firewall / security"),
+            ("📶", "signal_strength", "Signal strength"),
+            ("📡", "satellite", "Antenna / wireless link"),
+            ("🖥", "desktop_computer", "Desktop"),
+            ("💻", "computer", "Laptop"),
+            ("📱", "iphone", "Phone"),
+            ("🖶", "printer", "Printer"),
+            ("📠", "fax", "Fax / printer"),
+            ("📞", "telephone_receiver", "Call"),
+            ("📹", "video_camera", "Camera / CCTV"),
+            ("⌨", "keyboard", "Keyboard"),
+            ("🖱", "computer_mouse", "Mouse"),
+            ("🔌", "electric_plug", "Power / cable"),
+            ("🔋", "battery", "Battery / UPS"),
+            ("💾", "floppy_disk", "Save / backup"),
+            ("🖴", "hard_disk", "Disk / storage"),
+        ],
+    ),
 ];
+
+/// Every picker emoji as (emoji, shortcode, what it's for).
+pub fn shortcodes() -> impl Iterator<Item = &'static Shortcode> {
+    SHORTCODES.iter().flat_map(|g| g.1)
+}
 
 /// The emoji for the shortcode `rest` starts with, and the code's length.
 fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
     let end = rest[1..].find(':')? + 2;
     let code = &rest[1..end - 1];
-    SHORTCODES
-        .iter()
+    shortcodes()
         .find(|(_, c, _)| *c == code)
         .map(|(e, ..)| (*e, end))
 }
@@ -326,10 +378,16 @@ mod tests {
         assert_eq!(shortcode("10:30"), None);
         assert_eq!(shortcode(":"), None);
         // Every picker emoji has one code, and no code is used twice.
-        let mut codes: Vec<_> = SHORTCODES.iter().map(|s| s.1).collect();
+        let mut codes: Vec<_> = shortcodes().map(|s| s.1).collect();
+        let n = codes.len();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), SHORTCODES.len());
+        assert_eq!(codes.len(), n);
+        let mut emoji: Vec<_> = shortcodes().map(|s| s.0).collect();
+        emoji.sort_unstable();
+        emoji.dedup();
+        assert_eq!(emoji.len(), n, "an emoji is in the picker twice");
+        assert_eq!(shortcode(":wireless:"), Some(("🛜", 10)));
     }
 
     #[test]

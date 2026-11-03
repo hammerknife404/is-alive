@@ -230,7 +230,11 @@ pub fn gateway() -> Option<Ipv4Addr> {
 }
 
 /// Public IPv4 via OpenDNS: `myip.opendns.com` resolves to the asker's address.
+/// Never during a screenshot tour, so no picture can show it.
 pub fn wan() -> Option<Ipv4Addr> {
+    if std::env::var_os("IS_ALIVE_SHOTS").is_some() {
+        return None;
+    }
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
     let id = std::process::id() as u16;

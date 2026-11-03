@@ -1,3 +1,4 @@
+use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net;
@@ -75,6 +76,7 @@ impl TraceTool {
             enter |= widgets::field(
                 ui,
                 "Host",
+                Field::Host,
                 &mut self.host,
                 widgets::MAIN_W,
                 "hostname or IP",
@@ -234,11 +236,10 @@ impl TraceTool {
         self.target = None;
         self.reached = None;
         self.hops.clear();
-        let host = self.host.trim().to_string();
-        if host.is_empty() {
-            self.err = Some("enter a host".into());
-            return;
-        }
+        let host = match crate::input::host(&self.host) {
+            Ok(t) => t.host,
+            Err(e) => return self.err = Some(e),
+        };
         let (max, timeout, names, v6) = (
             self.max_hops,
             self.timeout_ms,

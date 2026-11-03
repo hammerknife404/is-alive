@@ -2,7 +2,7 @@
 
 > **Attending a demo?** Start with the plain-language **[follow-along guide](FOLLOW-ALONG.md)**: download, open, and try it step by step. No technical background needed.
 
-**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it.
+**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it. For one document to read through or print, the **[user manual](docs/manual/MANUAL.md)** covers every tab and control with worked examples, troubleshooting and a glossary.
 
 A native network tester for site visits, written in Rust. One portable `.exe` on Windows, one `.AppImage` on Linux: no installer, no admin rights. **[Download the latest release](https://github.com/hammerknife404/is-alive/releases/latest).**
 
@@ -11,7 +11,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Ping](https://github.com/hammerknife404/is-alive/wiki/Ping) | ICMP or TCP ping with a live latency graph, loss and min/avg/max |
 | [Port Check](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names |
 | [Traceroute](https://github.com/hammerknife404/is-alive/wiki/Traceroute) | Every router to a host, three probes per hop |
-| [Subnet Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on a subnet, with names, MACs, vendors and an Inventory for /mapnetwork |
+| [Subnet Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names, MACs, vendors and an Inventory for /mapnetwork |
 | [DNS Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | Any record type from any resolver, or every resolver compared |
 | [Advanced](https://github.com/hammerknife404/is-alive/wiki/Advanced) | Mail and domain health: MX, SPF, DMARC, DKIM, SMTP, blacklists, DNSSEC and more |
 | [Config Export](https://github.com/hammerknife404/is-alive/wiki/Config-Export) | UniFi, SonicWall and Meraki configs to sanitized JSON, offline; /mapnetwork maps back in |
@@ -31,6 +31,15 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 
 Built for sites with regulated data. Nothing is sent unless you run something, apart from one DNS query to OpenDNS for the public IP and one request to GitHub for the latest release when it starts (both off in Settings; an update is only linked, never downloaded); there's no telemetry, update check or account. Configs are sanitized on this machine before they're saved or shared, notes are redacted, and copies stay out of Windows clipboard history. See [Privacy and security](https://github.com/hammerknife404/is-alive/wiki/Privacy-and-security).
 
+## If the window doesn't open
+
+- **"Windows protected your PC"** (a blue SmartScreen box): click **More info**, then **Run anyway**. Windows shows it for new programs that aren't from a large publisher.
+- **Nothing happens on Windows:** right-click `is-alive.exe` → **Properties**, tick **Unblock** at the bottom (if it's there), then **OK**. Windows may block files downloaded from the internet; some antivirus software also holds back new programs, so check its quarantine.
+- **No graphics driver, or a virtual machine without 3D:** is-alive draws its window with OpenGL. Where that can't start it starts itself again with Direct3D 12 on Windows, which works without a graphics card, or Vulkan on Linux, and keeps using that. If nothing works it says why in a message box.
+- **To choose yourself** (also if the window opens but stays blank), start it once from a command prompt or a shortcut with `is-alive.exe --renderer=wgpu` (Direct3D or Vulkan; kept for later starts) or `--renderer=glow` (OpenGL, the default), or set `IS_ALIVE_RENDERER`.
+
+Each start is written to `startup.log`: `%APPDATA%\is-alive\startup.log` on Windows (paste that into Explorer's address bar), `~/.config/is-alive/startup.log` on Linux. Attach it to an [issue](https://github.com/hammerknife404/is-alive/issues) if it still won't start.
+
 ## Build
 
 ```sh
@@ -40,7 +49,7 @@ packaging/linux/build-appimage.sh
 # -> target/appimage/is-alive-x86_64.AppImage
 ```
 
-Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes).
+Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes). The user manual's screenshots are remade for full releases (x.y.0) only, with `scripts/manual-shots.sh` (see the manual's [last chapter](docs/manual/MANUAL.md#22-updating-this-manual)).
 
 ## License
 
