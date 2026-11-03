@@ -933,7 +933,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ## 14. Subnet Calc
 
-![Subnet Calc showing 192.168.1.50/24: the block's details, Check address, and Split into /25 with the two halves listed](img/subnet-calc.png)
+![Subnet Calc showing this computer's subnet (here 192.0.2.2/24, an address range kept for documentation): the block's details, Check address, and Split into /25 with the two halves listed](img/subnet-calc.png)
 
 **What it's for:** working out subnets without pen and paper: what a block holds, whether an address is in it, how to split it, and which blocks cover a range. It works offline.
 
