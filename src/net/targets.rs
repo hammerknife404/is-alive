@@ -34,6 +34,12 @@ pub fn parse_range(spec: &str) -> Result<Vec<Ipv4Addr>, String> {
         .collect())
 }
 
+/// The targets `spec` lists, one string each as the sweep reads them
+/// (`10.0.0.1 - 50` becomes `10.0.0.1-50`), for an inventory.
+pub fn list(spec: &str) -> Vec<String> {
+    tokens(spec)
+}
+
 /// How many targets `spec` lists and how many addresses they come to
 /// (overlaps counted once), without listing them.
 pub fn count(spec: &str) -> Result<(usize, usize), String> {
@@ -249,6 +255,19 @@ mod tests {
             assert!(v.contains(&Ipv4Addr::new(192, 168, 100, 50)));
             assert!(!v.contains(&Ipv4Addr::new(192, 168, 100, 51)));
         }
+    }
+
+    #[test]
+    fn the_list_is_the_targets_as_read() {
+        assert_eq!(
+            list("10.0.0.0 / 24, 10.0.1.1 - 50;10.0.2.5 10.0.3.0 255.255.255.0"),
+            [
+                "10.0.0.0/24",
+                "10.0.1.1-50",
+                "10.0.2.5",
+                "10.0.3.0/255.255.255.0"
+            ]
+        );
     }
 
     #[test]

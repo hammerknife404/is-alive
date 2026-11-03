@@ -238,12 +238,16 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
             zone,
             kind: caps(s(v, "kind")),
             label: s(v, "label").to_string(),
-            ip: first_ip(&sub),
-            mac: first_mac(
-                std::iter::once(sub.as_str())
-                    .chain(chips.iter().map(String::as_str))
-                    .chain(details.iter().map(String::as_str)),
-            ),
+            // The node's own ip/mac fields first; older maps only write
+            // them into the text.
+            ip: s(v, "ip").trim().parse().ok().or_else(|| first_ip(&sub)),
+            mac: mac::parse_mac(s(v, "mac").trim()).or_else(|| {
+                first_mac(
+                    std::iter::once(sub.as_str())
+                        .chain(chips.iter().map(String::as_str))
+                        .chain(details.iter().map(String::as_str)),
+                )
+            }),
             sub,
             flags: strings(v, "flags"),
             client: zone == Zone::Client,
@@ -884,6 +888,51 @@ mod tests {
         let off = build(&doc, &Input::default());
         assert!(off.nodes.iter().all(|n| n.id != "ws"));
         assert!(off.summary.ends_with("not drawn"), "{}", off.summary);
+    }
+
+    /// A node's own ip and mac fields win over what its text says; a
+    /// malformed one falls back to the text.
+    #[test]
+    fn a_nodes_ip_and_mac_fields_come_first() {
+        let page = r#"
+        /* ===================== SITE DATA ===================== */
+        this.META = { title:'T' };
+        this.ZONES = { core:{ name:'Core' } };
+        this.NODES = [
+          { id:'internet', zone:'core', kind:'WAN', label:'Internet' },
+          { id:'sw', zone:'core', kind:'SWITCH', label:'USW', sub:'Core switch',
+            ip:'10.0.0.2', mac:'F4:E2:C6:00:00:02' },
+          { id:'ap', zone:'core', kind:'WIFI AP', label:'AP', sub:'10.0.0.10',
+            ip:'10.0.0.11', details:['f4:e2:c6:00:00:0a'] },
+          { id:'bad', zone:'core', kind:'SWITCH', label:'Old', sub:'10.0.0.3',
+            ip:'not an ip', mac:'nope', chips:['f4:e2:c6:00:00:03'] },
+        ];
+        this.EDGES = [
+          { id:'a', from:'internet', to:'sw' }, { id:'b', from:'sw', to:'ap' },
+          { id:'c', from:'sw', to:'bad' },
+        ];
+        this.ACTIONS = [];
+        /* =================== END SITE DATA =================== */"#;
+        let doc = crate::mapnetwork::parse(page.as_bytes()).unwrap();
+        let m = build(&doc, &Input::default());
+        let mac = |s: &str| mac::parse_mac(s);
+        let sw = by(&m, "sw");
+        assert_eq!(
+            sw.ip,
+            Some(Ipv4Addr::new(10, 0, 0, 2)),
+            "nothing in the text"
+        );
+        assert_eq!(sw.mac, mac("f4:e2:c6:00:00:02"));
+        let ap = by(&m, "ap");
+        assert_eq!(
+            ap.ip,
+            Some(Ipv4Addr::new(10, 0, 0, 11)),
+            "the field, not sub"
+        );
+        assert_eq!(ap.mac, mac("f4:e2:c6:00:00:0a"));
+        let bad = by(&m, "bad");
+        assert_eq!(bad.ip, Some(Ipv4Addr::new(10, 0, 0, 3)));
+        assert_eq!(bad.mac, mac("f4:e2:c6:00:00:03"));
     }
 
     #[test]
