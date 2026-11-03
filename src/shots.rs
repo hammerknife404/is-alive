@@ -287,17 +287,24 @@ const MANUAL: &[Scene] = &[
         a.map.select_for_shots();
         Ready::Yes
     }),
-    scene("map-zones", Tab::Map, nothing, |a| {
-        if a.map.zones_for_shots() {
-            Ready::Yes
-        } else {
-            Ready::Wait
-        }
-    }),
+    scene(
+        "map-zones",
+        Tab::Map,
+        // The legend would cover the boxes beside the panel.
+        |a, _| a.look.map_legend = false,
+        |a| {
+            if a.map.zones_for_shots() {
+                Ready::Yes
+            } else {
+                Ready::Wait
+            }
+        },
+    ),
     scene(
         "map-sites",
         Tab::Map,
         |a, ctx| {
+            a.look.map_legend = true;
             a.map.default_layout_for_shots();
             a.export.open_example(ctx, 1)
         },

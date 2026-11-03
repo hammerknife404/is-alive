@@ -236,7 +236,7 @@ impl MapTabs {
         self.view().select_for_shots();
     }
 
-    /// For the screenshot tour: the map in Zones with its biggest role box
+    /// For the screenshot tour: the map in Zones with its access points' box
     /// selected. False until the Zones layout is in (a frame later).
     pub fn zones_for_shots(&mut self) -> bool {
         self.view().zones_for_shots()

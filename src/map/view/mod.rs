@@ -810,8 +810,9 @@ impl MapView {
     }
 
     /// One card selected, the rest let go.
-    /// For the screenshot tour: Zones, with the box holding the most cards
-    /// selected (its title clicked). False until the layout is in.
+    /// For the screenshot tour: Zones, with the access points' box selected
+    /// (its title clicked), or the box holding the most cards on a map
+    /// without one. False until the layout is in.
     pub fn zones_for_shots(&mut self) -> bool {
         if self.mode != Some(Mode::Zones) {
             self.mode = Some(Mode::Zones);
@@ -821,8 +822,11 @@ impl MapView {
         if self.stale || self.lay.boxes.is_empty() {
             return false;
         }
-        let biggest = (0..self.lay.boxes.len()).max_by_key(|&g| self.lay.in_box(g).len());
-        if let Some(g) = biggest
+        let aps =
+            (0..self.lay.boxes.len()).find(|&g| self.lay.boxes[g].zone == Some(Zone::Wireless));
+        let pick =
+            aps.or_else(|| (0..self.lay.boxes.len()).max_by_key(|&g| self.lay.in_box(g).len()));
+        if let Some(g) = pick
             && self.selection().len() != self.lay.in_box(g).len()
         {
             self.select(None);
