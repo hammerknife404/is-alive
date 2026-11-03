@@ -365,7 +365,7 @@ How to read it:
 
 | Control | What it does |
 |---|---|
-| **Range** | What to sweep. Filled in with this computer's subnet the first time you open the tab. Takes a subnet (`192.168.1.0/24`), a short range (`192.168.1.1-254`) or a full range (`10.0.0.10-10.0.1.20`), up to 65,536 addresses |
+| **Ranges** | What to sweep: one network or several. Filled in with this computer's subnet the first time you open the tab. Each can be a subnet (`192.168.1.0/24`, `192.168.1.0 255.255.255.0` or `192.168.1.*`), a short range (`192.168.1.1-254`), a full range (`10.0.0.10-10.0.1.20`, or `10.0.0.10 to 10.0.1.20`) or one address. Separate them with spaces, commas, semicolons or new lines: `10.10.10.0/24 192.168.100.1-50 172.20.5.12 10.0.0.0/28` sweeps all four. Spaces around `-` and `/` and a dash pasted from a document are fine. Beside **Start** it says how many targets and addresses that is (overlaps are swept once), or what's wrong with an entry. Up to 65,536 addresses in all |
 | **Timeout** | How long to wait for each address (default 750 ms) |
 | **Speed** | As in [Port Check](#5-port-check) |
 | **Resolve names** | Look up each device's name (on by default) |
@@ -376,7 +376,7 @@ How to read it:
 
 Every address is pinged. On your own network segment, pinging an address also makes this computer ask "who has this address?" (ARP), and almost every device answers that even when it ignores ping. So the sweep also lists devices that answered ARP but not ping: their **Time** says *no ping*, and the status row counts them as *ARP only*. Only devices the computer has just heard from count, not ones that left minutes ago.
 
-Past a router there's no ARP, so on a remote subnet only devices that answer ping are found.
+Past a router there's no ARP, so on a remote subnet only devices that answer ping are found. Sweeping several networks at once works the same way: your own segment gets ARP and MACs, the others ping only.
 
 **MAC** comes from this computer's ARP table, so only devices on your own segment have one. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
@@ -404,6 +404,8 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 - **"No hosts answered"** on a remote subnet: firewalls often drop ping, and ARP doesn't cross routers. Try Port Check on a device you know is there.
 - **Fewer devices than expected**: devices asleep, or on another VLAN. A sweep only sees what's reachable from where you're plugged in.
 - **Linux, no ARP-only devices**: finding devices that answer ARP but not ping needs the `ip` command (iproute2), present on almost every distribution. MACs come from `/proc/net/arp` and don't need it.
+
+- **"invalid IPv4 address"** beside Start: one of the ranges has a typo; it's named, the rest are fine.
 
 **CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (`ping` or `arp`).
 
@@ -629,7 +631,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 | **Search** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
 | **Clients: Off / Some / More / All** | End devices, drawn as small tiles: **Off** shows none; **Some** shows up to 10 under each switch or AP (fewer on a big map) and folds the rest into a **+N more** card; **More** up to 30, on a map of up to 400 cards; **All** gives every client its own card. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
-| **Re-layout** | (After you've dragged cards) Put every card back where the layout had it |
+| **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
@@ -650,9 +652,30 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
-- **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Legend** and **Export** (the same formats).
+- **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links** (below), **Legend** and **Export** (the same formats).
 - **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way. Dropped onto other cards' links, it moves them round it the same way.
+- **Drag a box by its title** (a role's box in Zones, a site's in Sites) to move it with its cards; cards you dragged out of it come along too. In Zones the folded **×N** line into it follows it; the way into a moved site's box takes its own route, round the cards in its way. **Re-layout** puts boxes back too.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
+
+### Boxes
+
+In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
+
+- **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
+- **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
+- **Right-click the title** for **Select its N cards**, **Add its N cards to the selection**, **Put the box back** (once it's been moved) and **Links**.
+
+### Links
+
+**Right-click the background or a box's title › Links** picks which links the map draws:
+
+| View | Draws |
+|---|---|
+| **All links** | Every link (the default) |
+| **Common links only** | The backbone: links that more than one device's traffic runs over, from the internet to firewalls, switches and access points. A link to an end device (a server, a printer, a laptop) is left out; an access point whose clients aren't drawn but counted on it still counts |
+| **Confirmed links only** | The links the data shows (a controller, a firewall, a /mapnetwork map); the grey dotted ones a sweep placed by guess are left out |
+
+A selected card's lit path always shows, whatever the view. While a view other than **All links** is on, a pill in the map's top right corner says which; click it to show all links again. The legend lists only the lines drawn, and **Export ⏷** draws what the map shows. The view is an undo step and is kept in saved maps.
 
 ### The legend
 
@@ -667,7 +690,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 
 ### Undo and saved maps
 
-**Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards dragged (a whole drag is one step) or put back, **Re-layout**, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
+**Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards or boxes dragged (a whole drag is one step) or put back, **Re-layout**, the **Links** view, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
 
 **Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
 
@@ -1075,6 +1098,9 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Right-click a card (or ☰ on it in the panel) | Map | Pin, add a note, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
 | Drag a card | Map | Move it (and the rest of the selection with it) |
 | Click a site's title | Map | Collapse or expand the site |
+| Click a role box's title (Zones) | Map | Select its cards (Ctrl/Shift+click: add them) |
+| Drag a box's title | Map | Move the box with its cards |
+| Right-click a box's title | Map | Select its cards, put the box back, Links |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
 | Drop a file on the window | Anywhere | Open it in Config Export |
 
