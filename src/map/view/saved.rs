@@ -936,6 +936,23 @@ impl MapView {
     }
 }
 
+/// The live map preference is separate from each saved snapshot's view.
+pub(super) fn live_clients(dir: &Path) -> Clients {
+    crate::input::read_capped(&dir.join("map-clients.txt"), 32)
+        .and_then(|s| {
+            Clients::ALL
+                .into_iter()
+                .find(|c| c.name().eq_ignore_ascii_case(s.trim()))
+        })
+        .unwrap_or(Clients::Off)
+}
+pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join("map-clients.tmp");
+    std::fs::write(&tmp, clients.name())?;
+    std::fs::rename(tmp, dir.join("map-clients.txt"))
+}
+
 /// internet - gateway - {switch - ap, server}, at two sites.
 #[cfg(test)]
 pub(super) fn sample() -> Snapshot {
@@ -1011,6 +1028,19 @@ pub(super) fn sample() -> Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_and_saved_client_visibility_survive_reload() {
+        let dir = std::env::temp_dir().join(format!("is-alive-clients-{}", std::process::id()));
+        for clients in Clients::ALL {
+            save_live_clients(&dir, clients).unwrap();
+            assert_eq!(live_clients(&dir), clients);
+            let mut snapshot = sample();
+            snapshot.edits.clients = clients;
+            let restored = MapView::from_saved(parse(to_json(&snapshot).as_bytes()).unwrap());
+            assert_eq!(restored.clients, clients);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn a_saved_map_reads_back_as_it_was_written() {

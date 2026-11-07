@@ -55,6 +55,7 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: python3 skills/mapnetwork/scripts/test_engine_contract.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       # Bundled into the AppImage; see build-appimage.sh.

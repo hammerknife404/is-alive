@@ -1628,7 +1628,8 @@
     @keyframes riskpulseLight{0%,100%{box-shadow:0 4px 14px rgba(20,30,50,0.10),0 0 0 0 rgba(205,58,46,0);}50%{box-shadow:0 4px 14px rgba(20,30,50,0.10),0 0 0 4px rgba(205,58,46,0.20);}}
     @keyframes flowDash{to{stroke-dashoffset:-18;}}
     @keyframes rgbRail{to{background-position:-200% 0;}}
-    @media (prefers-reduced-motion: reduce){[data-rgb-rail]{animation:none !important;}}
+    @media (prefers-reduced-motion: reduce){[style*="animation:"]{animation:none !important;transition:none !important;}}
+    html.map-paused [style*="animation:"]{animation-play-state:paused !important;}
   </style>
 </helmet>
 <div ref="{{ rootRef }}" style="{{ appStyle }}">
@@ -4106,6 +4107,9 @@ class Component extends DCLogic {
   }
 
   componentDidMount(){
+    this._motionVisibility = () => document.documentElement.classList.toggle('map-paused', document.hidden);
+    document.addEventListener('visibilitychange', this._motionVisibility);
+    this._motionVisibility();
     // Native listeners (not React synthetic) so {passive:false} sticks on Android.
     if(this.viewportEl){
       this.viewportEl.addEventListener('pointerdown', this.onPointerDown, { passive:false });
@@ -4126,6 +4130,8 @@ class Component extends DCLogic {
     this._fitT2 = setTimeout(() => this.fitView(), 420);
   }
   componentWillUnmount(){
+    document.removeEventListener('visibilitychange', this._motionVisibility);
+    document.documentElement.classList.remove('map-paused');
     if(this.viewportEl){
       this.viewportEl.removeEventListener('pointerdown', this.onPointerDown);
       this.viewportEl.removeEventListener('wheel', this.onWheel);
@@ -4172,7 +4178,17 @@ class Component extends DCLogic {
   // ----- theme palette -----
   themeDefs(){
     if(this._themeDefs) return this._themeDefs;
-    const Z = (a) => ({ core:a[0], server:a[1], trusted:a[2], iot:a[3], guest:a[4] });
+    const Z = (a) => {
+      const colors = { core:a[0], server:a[1], trusted:a[2], iot:a[3], guest:a[4] };
+      // Match semantic palette colors, not historical zone names. Custom
+      // gateway/distribution/access keys retain the same native role colors.
+      const palette = ['#5b9dff','#a98bff','#5fcf8a','#f0944a','#e0b34d'];
+      Object.entries(this.ZONES).forEach(([key, zone]) => {
+        const slot = palette.indexOf(String(zone.dark || '').toLowerCase());
+        if(slot >= 0) colors[key] = a[slot];
+      });
+      return colors;
+    };
     const list = [
       { id:'dark', name:'Dark', base:'dark' },
       { id:'slate', name:'Slate', base:'dark', zones:Z(['#7aa7ff','#b8a2ff','#72d49c','#f2a566','#e6c36a']), tok:{
@@ -4816,7 +4832,7 @@ class Component extends DCLogic {
       }
       if(q) dimmedE = true;
 
-      // edges touching the focused node animate a subtle root->leaf flow
+      // edges touching the focused node animate a subtle leaf->uplink flow
       const touchesFocus = animFocus && (e.from === animFocus || e.to === animFocus || (memSet && memSet.has(animFocus)));
       const touchesGroup = groupSet && (groupSet.has(e.from) || groupSet.has(e.to) ||
         (memSet && [...memSet].some(id => groupSet.has(id))));
@@ -4831,9 +4847,9 @@ class Component extends DCLogic {
         const dFrom = this.depth[e.from] === undefined ? 99 : this.depth[e.from];  // eslint-disable-line
         const dTo = this.depth[e.to] === undefined ? 99 : this.depth[e.to];
         // path is drawn from -> to; negative dashoffset flows toward "to".
-        // flow should always head downstream (deeper), so reverse when "to" is upstream.
+        // flow heads toward the uplink (shallower), matching the native map.
         const downstream = dTo >= dFrom;
-        style = `animation:flowDash 0.85s linear infinite;` + (downstream ? '' : 'animation-direction:reverse;');
+        style = `animation:flowDash 0.85s linear infinite;` + (downstream ? 'animation-direction:reverse;' : '');
         const gb = t.rgb ? 4 : (t.light ? 2 : 3), ga = t.rgb ? 0.85 : (t.light ? 0.35 : 0.6);
         if(/^#[0-9a-f]{6}$/i.test(color)) style += `filter:drop-shadow(0 0 ${gb}px ${this.hexA(color, ga)});`;
       }

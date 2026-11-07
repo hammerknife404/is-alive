@@ -642,7 +642,7 @@ pub fn pick(text: &str, sel: Range<usize>, hits: &[Hit]) -> Option<Pick> {
 
 /// Everything the pattern rules would redact, in order, without overlaps.
 pub fn find(text: &str) -> Vec<Hit> {
-    detect(text)
+    photo_safe_hits(text, detect(text))
 }
 
 /// What the technician asked for: hand picks and the loaded
@@ -688,7 +688,7 @@ pub fn find_with(text: &str, ov: &Overrides) -> Vec<Hit> {
             }
         }
     }
-    merge(hits)
+    photo_safe_hits(text, hits)
 }
 
 fn detect(text: &str) -> Vec<Hit> {
@@ -802,6 +802,20 @@ pub fn summary(hits: &[Hit]) -> String {
         .map(|(k, n)| format!("{n} {}", if *n == 1 { k.label() } else { k.plural() }))
         .collect();
     format!("{} redacted: {}", hits.len(), parts.join(", "))
+}
+
+fn photo_safe_hits(text: &str, mut hits: Vec<Hit>) -> Vec<Hit> {
+    // Encoded photo pixels are binary content, not text credentials.
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        if crate::photos::payload(line.trim()).is_some() {
+            let start = offset + line.find("base64,").unwrap() + 7;
+            let end = offset + line.trim_end().len() - 1;
+            hits.retain(|h| h.span.end <= start || h.span.start >= end);
+        }
+        offset += line.len();
+    }
+    merge(hits)
 }
 
 #[cfg(test)]

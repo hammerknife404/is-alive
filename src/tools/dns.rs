@@ -62,6 +62,8 @@ enum Ev {
 }
 
 pub struct DnsTool {
+    whois: super::whois::Whois,
+    registration: bool,
     query: String,
     rtype: &'static str,
     source: Source,
@@ -78,6 +80,8 @@ pub struct DnsTool {
 impl Default for DnsTool {
     fn default() -> Self {
         Self {
+            whois: Default::default(),
+            registration: false,
             query: String::new(),
             rtype: ADDRS,
             source: Source::System,
@@ -105,10 +109,19 @@ impl DnsTool {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.registration, false, "DNS records");
+            ui.selectable_value(&mut self.registration, true, "WHOIS registration");
+        });
+        ui.separator();
+        if self.registration {
+            self.whois.ui(ui);
+            return;
+        }
         let running = self.poll();
 
         let mut enter = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             enter |= widgets::field(
                 ui,
                 "Name or IP",

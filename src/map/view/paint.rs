@@ -185,7 +185,7 @@ impl MapView {
         // Links: the ones not lit as they always are; then the lit ones,
         // cut into pieces where they part (see `layout::pieces`), each in
         // the colour of the cards it leads to, with packets in those colours
-        // flowing down them.
+        // flowing toward the uplink.
         let glow = glow_strength(vis);
         let behind = canvas_fill(vis);
         // Each colour as it's drawn on this canvas, and whether it's grey.
@@ -333,7 +333,7 @@ impl MapView {
             for pk in &drawn.packets {
                 let line = &drawn.lines[pk.line];
                 let period = pk.slots as f32 * gap;
-                let phase = travel.rem_euclid(period) + pk.slot as f32 * gap;
+                let phase = uplink_phase(travel, period) + pk.slot as f32 * gap;
                 let r = packet_radius(lit_width(pk.link, line.into.is_some()));
                 for at in along_from(&screen(&line.pts), pk.from * z, phase, period, clip) {
                     packet(at, pk.colour, r, pk.alpha);
@@ -716,6 +716,10 @@ pub(super) fn packet_travel(now: f64, z: f32) -> f32 {
     now as f32 * 60.0 * z.max(0.6)
 }
 
+fn uplink_phase(travel: f32, period: f32) -> f32 {
+    (-travel).rem_euclid(period)
+}
+
 /// A packet's radius on a lit line `w` wide.
 pub(super) fn packet_radius(w: f32) -> f32 {
     (w * 0.75).max(1.6)
@@ -956,6 +960,15 @@ fn dashes(pts: &[Pos2], s0: f32, on: f32, off: f32, stroke: Stroke) -> Vec<Shape
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_packets_move_toward_the_uplink() {
+        let line = [pos2(0.0, 0.0), pos2(0.0, 100.0)];
+        let clip = Rect::from_min_max(pos2(-1.0, -1.0), pos2(1.0, 101.0));
+        let before = along_from(&line, 0.0, uplink_phase(10.0, 100.0), 100.0, clip);
+        let after = along_from(&line, 0.0, uplink_phase(20.0, 100.0), 100.0, clip);
+        assert_eq!(before[0].y, 90.0);
+        assert_eq!(after[0].y, 80.0);
+    }
 
     #[test]
     fn dashes_run_on_across_the_pieces_of_a_line() {
