@@ -2993,6 +2993,58 @@ mod tests {
         shown
     }
 
+    /// Boxes cover most of the map in Zones and Sites, so a right-click
+    /// on a box's empty background gives the box's items and the map's
+    /// own (Fit, Legend, Export) too.
+    #[test]
+    fn a_boxs_background_menu_keeps_the_maps_items() {
+        let mut v = on_canvas();
+        v.mode = Some(Mode::Zones);
+        v.lay.boxes.push(crate::map::layout::Group {
+            rect: Rect::from_min_max(pos2(0.0, 400.0), pos2(780.0, 495.0)),
+            title: "Access points".into(),
+            zone: Some(Zone::Wireless),
+            count: 0,
+            tree: false,
+        });
+        let ctx = egui::Context::default();
+        let menu = words(
+            &click(
+                &ctx,
+                &mut v,
+                pos2(400.0, 450.0),
+                egui::PointerButton::Secondary,
+            )
+            .canvas,
+        );
+        for item in [
+            "Access points",
+            "Move group",
+            "Copy group name",
+            "Fit",
+            "Center",
+            "Links",
+            "Legend",
+            "Export",
+        ] {
+            assert!(has(&menu, item), "no {item:?} in {menu:?}");
+        }
+        // Outside every box: the map's own menu, as before.
+        let menu = words(
+            &click(
+                &egui::Context::default(),
+                &mut v,
+                pos2(790.0, 450.0),
+                egui::PointerButton::Secondary,
+            )
+            .canvas,
+        );
+        assert!(
+            has(&menu, "Fit") && !has(&menu, "Copy group name"),
+            "{menu:?}"
+        );
+    }
+
     #[test]
     fn a_test_from_the_menu_scrolls_the_panel_to_its_result() {
         let ctx = egui::Context::default();

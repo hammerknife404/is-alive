@@ -528,6 +528,20 @@ impl SweepTool {
         self.revision
     }
 
+    /// Map → Clear map: stop a run and forget what was found. The ranges
+    /// and options stay as set.
+    pub fn clear_results(&mut self) {
+        self.job = None;
+        self.run_started = None;
+        self.total = 0;
+        self.probed = 0;
+        self.alive.clear();
+        self.local = HostInfo::default();
+        self.checked_ports = false;
+        self.err = None;
+        self.revision += 1;
+    }
+
     /// How many sweeps have started (each may be another network).
     pub fn runs(&self) -> u64 {
         self.runs

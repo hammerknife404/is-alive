@@ -1049,15 +1049,17 @@ impl MapView {
                     ui.close();
                 }
             }
-            ui.weak("Or drag the group title for free placement");
+            ui.weak("Or drag the box by its title");
         });
         if ui.button("Copy group name").clicked() {
             ui.ctx().copy_text(b.title.clone());
             ui.close();
         }
-        ui.weak("Drag the title to move the box");
+        // The box's empty background opens this menu too, and in Sites and
+        // Zones boxes cover most of the map: the map's own items follow,
+        // so Fit, Legend and Export are a right-click away anywhere.
         ui.separator();
-        self.links_menu(ui);
+        self.background_menu(ui, rect);
     }
 
     /// Which links the map draws, as a submenu.

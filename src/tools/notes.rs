@@ -278,14 +278,23 @@ impl NotesTool {
         }
     }
 
-    /// Secret values from the loaded backups and exports. When they change,
-    /// the saved notes are rewritten so none of them stays on disk.
+    /// Secret values from the loaded backups and exports. They're kept for
+    /// the session: closing a file (or Map → Clear map) doesn't bring a
+    /// pasted Wi-Fi key back into the saved notes. When one is added, the
+    /// saved notes are rewritten so none of them stays on disk.
     pub fn set_known(&mut self, known: &[String], now: f64) {
-        if self.ov.known != known {
-            self.ov.known = known.to_vec();
-            if !self.text.is_empty() {
-                self.changed(now);
-            }
+        let new: Vec<String> = known
+            .iter()
+            .filter(|k| !self.ov.known.contains(k))
+            .cloned()
+            .collect();
+        if new.is_empty() {
+            return;
+        }
+        self.ov.known.extend(new);
+        self.ov.known.sort();
+        if !self.text.is_empty() {
+            self.changed(now);
         }
     }
 
@@ -1721,6 +1730,22 @@ mod tests {
             "{clean}"
         );
         assert!(clean.contains("[🔑 REDACTED: from config]"));
+    }
+
+    /// Closing the backup (or Map → Clear map) empties Config Export's
+    /// list, but a secret seen this session stays hidden: the next
+    /// autosave mustn't write it out.
+    #[test]
+    fn a_secret_stays_redacted_after_its_file_is_closed() {
+        let mut n = notes("staff wifi Bobcat2019");
+        n.set_known(&["Bobcat2019".into()], 1.0);
+        n.dirty = None;
+        n.set_known(&[], 2.0);
+        assert!(n.dirty.is_none(), "nothing to rewrite");
+        assert!(!n.sanitized().0.contains("Bobcat2019"));
+        n.set_known(&["s3cr3t-ppsk".into()], 3.0);
+        assert_eq!(n.overrides().known, ["Bobcat2019", "s3cr3t-ppsk"]);
+        assert!(n.dirty.is_some(), "a new one rewrites the saved copy");
     }
 
     /// Kept in a card note on the Map, a value stays on the keep list

@@ -636,7 +636,7 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 ### The toolbar
 
-A row above the toolbar says which map is showing. On the live map it has **Clear map…**, which asks first, then clears the configs opened and the sweep results of this session; saved maps and the files on disk are kept. On a saved map it has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first. **Saved maps** opens the saved maps bar (below).
+A row above the toolbar says which map is showing. On the live map it has **Clear map…** (click it twice): it closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. It's greyed out while there's nothing to clear. On a saved map it has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first. **Saved maps** opens the saved maps bar (below).
 
 | Control | What it does |
 |---|---|
@@ -677,7 +677,7 @@ In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, 
 
 - **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
 - **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
-- **Right-click the title, or the box's empty background,** for **Select its N cards**, **Add its N cards to the selection**, **Put back in the layout** (cards you dragged), **Collapse** or **Expand** its site (in Sites), **Put the box back** (once it's been moved), **Move group** (left, right, up or down a step; drag the title to place it freely), **Copy group name** and **Links**.
+- **Right-click the title, or the box's empty background,** for **Select its N cards**, **Add its N cards to the selection**, **Put back in the layout** (cards you dragged), **Collapse** or **Expand** its site (in Sites), **Put the box back** (once it's been moved), **Move group** (left, right, up or down a step; drag the title to place it freely) and **Copy group name**, then the map's own items: **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links**, **Legend** and **Export**. Boxes cover most of the map in Zones and Sites, so those stay a right-click away.
 
 ### Links
 
@@ -857,7 +857,7 @@ Notes save themselves every couple of seconds to your profile folder (see [Setti
 Notes never get scanned and mangled: only what you mark, and the secrets of the configs you've opened, are hidden.
 
 - **By hand:** select a password (or anything private) and click **Redact** (**Ctrl+R**). It's hidden there and everywhere else it appears, as a `[🔑 REDACTED: …]` marker. With the cursor on a redacted value, the button becomes **Unredact**. **By hand (n)** lists them, with × to undo.
-- **From configs:** every password, pre-shared key and secret that Config Export removed from a loaded backup or export is held in memory and hidden wherever it appears in Notes, so the staff Wi-Fi password can't slip into a note you send.
+- **From configs:** every password, pre-shared key and secret that Config Export removed from a loaded backup or export is held in memory and hidden wherever it appears in Notes, so the staff Wi-Fi password can't slip into a note you send. They stay hidden until is-alive closes, even after the file is closed or the map cleared.
 
 Autosave, **Copy**, **Save .md…** and the Site Bundle all get the redacted text. Only **Raw copy** gives the original.
 
