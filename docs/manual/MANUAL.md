@@ -112,8 +112,8 @@ When is-alive starts, it asks GitHub whether a newer release is out (you can tur
 
 ### The tab bar (top)
 
-- **is-alive** (top left) opens **Settings**: theme, network options and the list of shortcuts. See [Settings and themes](#16-settings-and-themes).
-- **The tabs:** Ping, Port Check, Traceroute, Subnet Sweep, DNS Lookup, Advanced, Config Export, Map, Notes, Speed Test, Subnet Calc and Results. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results). In a narrow window the tabs wrap onto a second row.
+- **is-alive ▾** (top left) opens **Settings**: theme, network options and the list of shortcuts. See [Settings and themes](#16-settings-and-themes).
+- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results). In a narrow window the tabs wrap onto a second row.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Site Bundle…** (top right) zips the visit's results for Claude. See [Site Bundle and Claude](#18-site-bundle-and-claude).
 
@@ -415,7 +415,9 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 
 ![DNS Lookup of example.com: two A and two AAAA records from the system resolver](img/dns-lookup.png)
 
-**What it's for:** checking that names turn into the right addresses, seeing any DNS record, and spotting when different DNS servers give different answers.
+**What it's for:** checking that names turn into the right addresses, seeing any DNS record, spotting when different DNS servers give different answers, and looking up who a domain is registered with.
+
+**DNS records** and **WHOIS registration** at the top of the tab switch between the two. **DNS records** is the lookup described here; **WHOIS registration** is [below](#whois-registration).
 
 ### Controls
 
@@ -433,6 +435,14 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 | **Compare all** | All of the above side by side, with a warning wherever answers differ |
 
 The line under the toolbar reminds you what the chosen resolver means. The status row counts the records and how long it took.
+
+### WHOIS registration
+
+Type a domain (or an address) and click **Look up** or press **Enter**. is-alive asks IANA's WHOIS server which registry holds it, then asks that registry, and shows its answer with the server's name at the top. If the registry can't be reached, IANA's own answer is shown with the reason. **Copy** and **Save…** keep the text.
+
+- WHOIS needs outbound TCP port 43, which some office and guest networks block.
+- Registries often hide contact details, and some no longer answer WHOIS at all.
+- Each server gets 8 seconds, and an answer over 256 KiB is refused.
 
 ### Example 1: where does a domain's email go?
 
@@ -626,10 +636,12 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 ### The toolbar
 
+A row above the toolbar says which map is showing. On the live map it has **Clear map…**, which asks first, then clears the configs opened and the sweep results of this session; saved maps and the files on disk are kept. On a saved map it has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first. **Saved maps** opens the saved maps bar (below).
+
 | Control | What it does |
 |---|---|
 | **Search** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
-| **Clients: Off / Some / More / All** | End devices, drawn as small tiles: **Off** shows none; **Some** shows up to 10 under each switch or AP (fewer on a big map) and folds the rest into a **+N more** card; **More** up to 30, on a map of up to 400 cards; **All** gives every client its own card. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
+| **Clients: …** ⏷ | End devices, drawn as small tiles. The menu offers **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
@@ -665,7 +677,7 @@ In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, 
 
 - **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
 - **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
-- **Right-click the title** for **Select its N cards**, **Add its N cards to the selection**, **Put the box back** (once it's been moved) and **Links**.
+- **Right-click the title, or the box's empty background,** for **Select its N cards**, **Add its N cards to the selection**, **Put back in the layout** (cards you dragged), **Collapse** or **Expand** its site (in Sites), **Put the box back** (once it's been moved), **Move group** (left, right, up or down a step; drag the title to place it freely), **Copy group name** and **Links**.
 
 ### Links
 
@@ -708,8 +720,8 @@ A saved map doesn't change with the files: **Reload** and **Clients** are greyed
 
 ![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)
 
-- **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link: the route its traffic takes.
-- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing down it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
+- **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes.
+- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing up it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
 - **Trace to WAN**, at the top of the panel, lights every selected card's whole path to the internet instead.
@@ -823,13 +835,22 @@ The status row under the toolbar shows the word and line count, what's redacted,
 
 | Button | What it does |
 |---|---|
-| **Open…** | Open a text or config file (up to 5 MB) in a read-only tab beside Notes, with line numbers. It's never saved, redacted or bundled |
+| **Open…** | Add a photo (below), or open a text or config file (up to 5 MB) in a read-only tab beside Notes, with line numbers. A file opened to read is never saved, redacted or bundled |
 | **Copy** | Copy the notes, redacted |
 | **Raw copy** | Copy them exactly as written, secrets included (click twice) |
 | **Save .md…** | Save as Markdown, redacted, as `notes-<date>.md` |
 | **Clear** | Empty the notes (click twice) |
 
 Notes save themselves every couple of seconds to your profile folder (see [Settings](#16-settings-and-themes)) and are there next time you open the app.
+
+### Photos
+
+**Open…** also takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save .md…** and the Site Bundle carry it along.
+
+- In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
+- Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.
+- A photo that would take the notes past their size limit is refused.
+- **Photos aren't redacted.** Check what's in the picture (names, screens, labels with passwords) before you share the notes.
 
 ### Redaction
 
@@ -1008,7 +1029,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ![Settings, opened from the app's name: themes with their map colours, the Miami backdrop, Network options, the Map note, Keyboard and mouse, and where settings are kept](img/settings.png)
 
-Click **is-alive** at the top left to open Settings. Changes apply at once and are remembered.
+Click **is-alive ▾** at the top left to open Settings. Changes apply at once and are remembered.
 
 ### Theme
 
@@ -1160,7 +1181,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. Links (Help, the update link, a card's Web button) open in your own browser.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
@@ -1206,6 +1227,7 @@ sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 | Port Check: everything *filtered* | A firewall between you and the device, or the device is off |
 | Sweep finds few devices on a remote subnet | Only ping counts past a router, and firewalls drop it |
 | Advanced: SMTP says port 25 is probably blocked | The ISP or office firewall blocks outbound mail: normal, not the domain's fault |
+| DNS Lookup's WHOIS: *Cannot reach …:43* | The network blocks outbound TCP port 43: try from another network |
 | Advanced: blacklists *couldn't check* | Those lists refuse public resolvers: set **Resolver** to the office's DNS |
 | Speed Test blocked or 403 | Web filtering, or Cloudflare rate-limiting: use **Download a file** with a server from **Servers** |
 | Map empty | Nothing seen yet: **Scan this network**, or open a backup in Config Export |
@@ -1289,15 +1311,3 @@ The pictures are rendered into `docs/manual/img/.incoming` first. A run that fai
 The names the tour writes are the ones this manual links to, and a test (`manual_shows_every_picture_the_tour_takes`) fails if the two lists differ. To add a picture, add a scene to `MANUAL` in `src/shots.rs` and link `img/<name>.png` here.
 
 On a full-release tag, the **manual screenshots** workflow (`.github/workflows/manual-shots.yml`, also runnable by hand) produces the same set as an artifact. GitHub's runners don't pass ping, so the committed pictures come from the local run.
-
-## Lookup and photo notes (development preview)
-
-**Lookup** contains **DNS records** and **WHOIS registration**. WHOIS asks IANA for the responsible registry, then shows that registry's response with its server name. Copy or save the response from the same workspace. Registries may redact contact details or discontinue WHOIS; outbound TCP port 43 must be available.
-
-In **Notes**, **Open…** accepts PNG, JPEG and WebP alongside text/config files. Photos are added to Notes and opened in Preview. The photo is resized, stripped of metadata and embedded directly in the Markdown; Split and Preview display it inline. Autosave, Copy, Save and Site Bundle retain the embedded photo. Some external Markdown viewers disable data images. Delete the photo's Markdown line to remove it. The editor shows a short Photo attachment marker; move or delete that marker to move or remove the image. Split and Preview render the picture, and saved/exported Markdown embeds its bytes. A photo that would exceed the notes capacity is refused. Photos are not automatically redacted: review visible names, screens and labels before sharing.
-
-The is-alive ▾ button opens Settings. Close map returns to Live without deleting the saved map; Delete saved map asks before removing its saved copy. Clear map asks before clearing session imports and sweep results, keeping saved maps and source files. Selected map packets travel toward the uplink. Compact windows retain wrapped navigation; opened photos use Preview.
-
-Navigation now groups related tools with separators, and the Map's client visibility choices share one dropdown. The existing animated tab underline, activity pulses, map reveal and directional link flows remain in place.
-
-Live map client visibility is remembered between app starts and reloads; saved maps retain the visibility captured in their snapshot. Right-click a Site or Zone title or empty group background for selection, movement, restoring placement, copying its name and link-display options. Site groups also offer applicable collapse/expand actions.
