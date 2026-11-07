@@ -20,7 +20,7 @@ impl App {
                 // The app's name, drawn as a title; it opens Settings.
                 let name = ui
                     .add(
-                        egui::Button::new(egui::RichText::new("is-alive").heading().strong())
+                        egui::Button::new(egui::RichText::new("is-alive ▾").heading().strong())
                             .frame(false),
                     )
                     .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));

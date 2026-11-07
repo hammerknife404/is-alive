@@ -51,6 +51,8 @@ pub enum Action {
     Example(usize),
     /// Close the example map, back to this network.
     CloseExample,
+    /// Explicitly clear live imported and discovered map data.
+    ClearLive,
     /// A layout mode was picked: remember it.
     Layout(Mode),
     /// The legend was shown or hidden: remember it.

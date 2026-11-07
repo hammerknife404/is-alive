@@ -345,7 +345,29 @@ impl MapTabs {
         }
     }
 
+    pub fn clear_live(&mut self) {
+        self.live = MapView::default();
+        self.shown = None;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
+        let mut clear = false;
+        ui.horizontal_wrapped(|ui| {
+            if let Some(i) = self.shown {
+                ui.strong(&self.saved[i].name);
+                if ui.button("Close map").on_hover_text("Return to the live map; keep the saved copy").clicked() {
+                    self.shown = None;
+                }
+                if ui.button("Delete saved map…").clicked() { self.asking = Some(Ask::Delete(i)); }
+            } else {
+                ui.weak("Live map");
+                clear = widgets::confirm_button(ui, "clear_live_map", true, "Clear map…", "Clear imported configs and sweep results from this session. Saved maps and source files are kept.");
+            }
+            if ui.button("Saved maps").clicked() { self.bar = !self.bar; }
+        });
+        if clear {
+            return Some(Action::ClearLive);
+        }
         self.poll_open();
         self.tell_skipped();
         self.redact(src.redact);

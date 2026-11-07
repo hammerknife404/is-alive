@@ -491,6 +491,11 @@ impl App {
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::Example(i)) => self.export.open_example(ctx, i),
+            Some(Action::ClearLive) => {
+                self.export = Default::default();
+                self.sweep = Default::default();
+                self.map.clear_live();
+            }
             Some(Action::CloseExample) => {
                 self.export.close_examples();
             }
