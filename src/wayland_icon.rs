@@ -76,11 +76,12 @@ fn try_set(cc: &eframe::CreationContext<'_>, icon: &eframe::egui::IconData) -> O
 /// RGBA as wl_shm's ARGB8888: alpha premultiplied, and the 32-bit pixel
 /// little-endian, so B, G, R, A in memory.
 fn argb8888(rgba: &[u8]) -> Vec<u8> {
-    rgba.chunks_exact(4)
-        .flat_map(|p| {
-            let a = u16::from(p[3]);
-            let pre = |c: u8| ((u16::from(c) * a + 127) / 255) as u8;
-            [pre(p[2]), pre(p[1]), pre(p[0]), p[3]]
+    let (pixels, _) = rgba.as_chunks::<4>();
+    pixels
+        .iter()
+        .flat_map(|&[r, g, b, a]| {
+            let pre = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+            [pre(b), pre(g), pre(r), a]
         })
         .collect()
 }
