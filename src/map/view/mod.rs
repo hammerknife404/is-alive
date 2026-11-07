@@ -51,6 +51,8 @@ pub enum Action {
     Example(usize),
     /// Close the example map, back to this network.
     CloseExample,
+    /// Explicitly clear live imported and discovered map data.
+    ClearLive,
     /// A layout mode was picked: remember it.
     Layout(Mode),
     /// The legend was shown or hidden: remember it.
@@ -365,7 +367,15 @@ impl MapView {
             Ok("some") => Clients::Some,
             Ok("more") => Clients::More,
             Ok("all") => Clients::All,
-            _ => Clients::Off,
+            _ => {
+                if cfg!(test) || std::env::var_os("IS_ALIVE_SHOTS").is_some() {
+                    Clients::Off
+                } else {
+                    crate::theme::data_dir()
+                        .map(|dir| saved::live_clients(&dir))
+                        .unwrap_or(Clients::Off)
+                }
+            }
         };
         Self {
             follow: true,
@@ -1300,7 +1310,11 @@ impl MapView {
                     if k == BAR_LAYOUTS && n > 0 {
                         ui.separator();
                     }
-                    let r = ui.horizontal(|ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar));
+                    let r = ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        |ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar),
+                    );
                     self.bar_w[k] = r.response.rect.width();
                 }
             });
@@ -1357,23 +1371,38 @@ impl MapView {
         // /mapnetwork map) has nothing for the switch to show or hide.
         let any = empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
         ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
-            ui.label("Clients");
-            for c in Clients::ALL {
-                if ui
-                    .selectable_label(self.clients == c, c.name())
-                    .on_hover_text(c.tip())
-                    .on_disabled_hover_text(if self.frozen.is_some() {
-                        "A saved map keeps the clients it was saved with"
-                    } else {
-                        reveal::no_clients_why(src)
-                    })
-                    .clicked()
-                {
-                    self.clients = c;
-                    // The level sets every uplink again.
-                    self.reveal.clear();
-                }
-            }
+            egui::ComboBox::from_id_salt("map-client-visibility")
+                .selected_text(format!("Clients: {}", self.clients.name()))
+                .show_ui(ui, |ui| {
+                    for c in Clients::ALL {
+                        if ui
+                            .selectable_label(self.clients == c, c.name())
+                            .on_hover_text(c.tip())
+                            .on_disabled_hover_text(if self.frozen.is_some() {
+                                "A saved map keeps the clients it was saved with"
+                            } else {
+                                reveal::no_clients_why(src)
+                            })
+                            .clicked()
+                        {
+                            self.clients = c;
+                            if !cfg!(test)
+                                && std::env::var_os("IS_ALIVE_SHOTS").is_none()
+                                && let Some(dir) = crate::theme::data_dir()
+                            {
+                                let result = saved::save_live_clients(&dir, c);
+                                if let Err(e) = result {
+                                    widgets::toast(
+                                        format!("Could not save client visibility: {e}"),
+                                        false,
+                                    );
+                                }
+                            }
+                            // The level sets every uplink again.
+                            self.reveal.clear();
+                        }
+                    }
+                });
         });
         if empty {
             return;
@@ -2962,6 +2991,58 @@ mod tests {
             shown = frame(ctx, v, vec![]);
         }
         shown
+    }
+
+    /// Boxes cover most of the map in Zones and Sites, so a right-click
+    /// on a box's empty background gives the box's items and the map's
+    /// own (Fit, Legend, Export) too.
+    #[test]
+    fn a_boxs_background_menu_keeps_the_maps_items() {
+        let mut v = on_canvas();
+        v.mode = Some(Mode::Zones);
+        v.lay.boxes.push(crate::map::layout::Group {
+            rect: Rect::from_min_max(pos2(0.0, 400.0), pos2(780.0, 495.0)),
+            title: "Access points".into(),
+            zone: Some(Zone::Wireless),
+            count: 0,
+            tree: false,
+        });
+        let ctx = egui::Context::default();
+        let menu = words(
+            &click(
+                &ctx,
+                &mut v,
+                pos2(400.0, 450.0),
+                egui::PointerButton::Secondary,
+            )
+            .canvas,
+        );
+        for item in [
+            "Access points",
+            "Move group",
+            "Copy group name",
+            "Fit",
+            "Center",
+            "Links",
+            "Legend",
+            "Export",
+        ] {
+            assert!(has(&menu, item), "no {item:?} in {menu:?}");
+        }
+        // Outside every box: the map's own menu, as before.
+        let menu = words(
+            &click(
+                &egui::Context::default(),
+                &mut v,
+                pos2(790.0, 450.0),
+                egui::PointerButton::Secondary,
+            )
+            .canvas,
+        );
+        assert!(
+            has(&menu, "Fit") && !has(&menu, "Copy group name"),
+            "{menu:?}"
+        );
     }
 
     #[test]

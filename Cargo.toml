@@ -1,11 +1,12 @@
 [package]
 name = "is-alive"
-version = "0.25.2"
+version = "0.26.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, speed test with jitter, subnet sweep, DNS, domain/mail health, network map"
 license-file = "LICENSE.md"
 
 [dependencies]
+base64 = "0.23"
 eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu_no_default_features", "wayland", "x11"] }
 dns-lookup = "4"
 socket2 = "0.6"
@@ -38,6 +39,12 @@ winresource = "0.1"
 libc = "0.2"
 # The window's second renderer, for when OpenGL can't start (see src/startup.rs).
 wgpu = { version = "30", default-features = false, features = ["vulkan"] }
+# The window's icon on Wayland (see src/wayland_icon.rs). eframe already
+# builds all four with these features, so no new crates.
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland"] }
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

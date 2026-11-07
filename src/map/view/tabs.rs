@@ -345,7 +345,59 @@ impl MapTabs {
         }
     }
 
+    /// Map → Clear map, once the files and the sweep are cleared: the live
+    /// map starts over (cards, pins, moves, undo), as on a fresh start.
+    /// What's the user's, not the network's, carries over: the layout,
+    /// Clients, the side panel and legend, how notes are redacted, and the
+    /// card notes kept on this computer.
+    pub fn clear_live(&mut self) {
+        let old = std::mem::replace(&mut self.live, MapView::new(None));
+        self.live.mode = old.mode;
+        self.live.clients = old.clients;
+        self.live.side = old.side;
+        self.live.legend = old.legend;
+        self.live.ov = old.ov;
+        self.live.note_store = old.note_store;
+        self.shown = None;
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
+        let mut clear = false;
+        ui.horizontal_wrapped(|ui| {
+            if let Some(i) = self.shown {
+                ui.strong(&self.saved[i].name);
+                if ui
+                    .button("Close map")
+                    .on_hover_text("Back to the live map; the saved map stays in Saved maps")
+                    .clicked()
+                {
+                    self.shown = None;
+                }
+                if ui.button("Delete saved map…").clicked() {
+                    self.asking = Some(Ask::Delete(i));
+                }
+            } else {
+                ui.weak("Live map");
+                let any = src.export.has_files()
+                    || src.sweep.is_running()
+                    || src.sweep.finished().is_some();
+                clear = widgets::confirm_button(
+                    ui,
+                    "clear_live_map",
+                    any,
+                    "Clear map…",
+                    "Close the configs opened and forget the sweep's results, for this session. \
+                     Saved maps and the files on disk are kept, and Notes keeps hiding the \
+                     configs' secrets",
+                );
+            }
+            if ui.button("Saved maps").clicked() {
+                self.bar = !self.bar;
+            }
+        });
+        if clear {
+            return Some(Action::ClearLive);
+        }
         self.poll_open();
         self.tell_skipped();
         self.redact(src.redact);
@@ -1273,5 +1325,32 @@ mod tests {
         assert!(t.skipped[0].starts_with("garbage.json"));
         assert!(t.bar && !t.told, "the bar shows the note");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Map → Clear map starts the live map over but keeps what's the
+    /// user's: the layout, Clients, panels, redaction and the notes store.
+    #[test]
+    fn clear_map_keeps_the_users_settings() {
+        let mut live = MapView::new(Some(Mode::Zones));
+        live.clients = Clients::All;
+        live.side = false;
+        live.legend = false;
+        live.ov.known = vec!["Bobcat2019".into()];
+        live.note_store = Some(crate::map::view::notes::Store::at(None));
+        live.notes.insert("gw".into(), "spare in closet 2".into());
+        live.placed.insert("gw".into(), egui::pos2(1.0, 2.0));
+        let mut t = MapTabs::in_dir(live, None);
+        t.clear_live();
+        let v = &t.live;
+        assert_eq!(v.mode, Some(Mode::Zones));
+        assert_eq!(v.clients, Clients::All);
+        assert!(!v.side && !v.legend);
+        assert_eq!(v.ov.known, ["Bobcat2019"]);
+        assert!(v.note_store.is_some(), "card notes are still kept");
+        assert!(
+            v.notes.is_empty() && v.placed.is_empty(),
+            "the map starts over"
+        );
+        assert_eq!(t.shown, None);
     }
 }

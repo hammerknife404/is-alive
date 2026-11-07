@@ -9,3 +9,4 @@ pub mod ports;
 pub mod speed;
 pub mod sweep;
 pub mod trace;
+pub mod whois;

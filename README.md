@@ -9,15 +9,15 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | Tab | What it does |
 |---|---|
 | [Ping](https://github.com/hammerknife404/is-alive/wiki/Ping) | ICMP or TCP ping with a live latency graph, loss and min/avg/max |
-| [Port Check](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names |
+| [Ports](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names |
 | [Traceroute](https://github.com/hammerknife404/is-alive/wiki/Traceroute) | Every router to a host, three probes per hop |
-| [Subnet Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names, MACs, vendors and an Inventory for /mapnetwork |
-| [DNS Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | Any record type from any resolver, or every resolver compared |
-| [Advanced](https://github.com/hammerknife404/is-alive/wiki/Advanced) | Mail and domain health: MX, SPF, DMARC, DKIM, SMTP, blacklists, DNSSEC and more |
-| [Config Export](https://github.com/hammerknife404/is-alive/wiki/Config-Export) | UniFi, SonicWall and Meraki configs to sanitized JSON, offline; /mapnetwork maps back in |
+| [Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names, MACs, vendors and an Inventory for /mapnetwork |
+| [Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | DNS: any record type from any resolver, or every resolver compared; WHOIS registration |
+| [Domains](https://github.com/hammerknife404/is-alive/wiki/Advanced) | Mail and domain health: MX, SPF, DMARC, DKIM, SMTP, blacklists, DNSSEC and more |
+| [Configs](https://github.com/hammerknife404/is-alive/wiki/Config-Export) | UniFi, SonicWall and Meraki configs to sanitized JSON, offline; /mapnetwork maps back in |
 | [Map](https://github.com/hammerknife404/is-alive/wiki/Map) | The network drawn from the sweep, configs or a /mapnetwork map, with findings |
-| [Notes](https://github.com/hammerknife404/is-alive/wiki/Notes) | Markdown notes for the visit, with redaction |
-| [Speed Test](https://github.com/hammerknife404/is-alive/wiki/Speed-Test) | Throughput, latency, jitter and loss under load, bufferbloat grade and VoIP MOS |
+| [Notes](https://github.com/hammerknife404/is-alive/wiki/Notes) | Markdown notes for the visit, with photos and redaction |
+| [Speed](https://github.com/hammerknife404/is-alive/wiki/Speed-Test) | Throughput, latency, jitter and loss under load, bufferbloat grade and VoIP MOS |
 | [Subnet Calc](https://github.com/hammerknife404/is-alive/wiki/Subnet-Calc) | IPv4 and IPv6 subnet calculator: details, address check, split, ranges to CIDR |
 | [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run, with Filter and Export to CSV, JSON, Markdown or HTML |
 

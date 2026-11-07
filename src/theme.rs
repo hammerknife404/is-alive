@@ -472,8 +472,8 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
 /// One set of spacing for every theme, so a tab is laid out the same in
 /// each: rows and buttons don't change size with the colours.
 fn spacing(s: &mut egui::style::Spacing) {
-    s.item_spacing = egui::vec2(8.0, 4.0);
-    s.button_padding = egui::vec2(5.0, 2.0);
+    s.item_spacing = egui::vec2(8.0, 6.0);
+    s.button_padding = egui::vec2(5.0, 4.0);
     s.window_margin = egui::Margin::same(12);
     s.menu_margin = egui::Margin::same(6);
 }

@@ -12,6 +12,7 @@ mod mapnetwork;
 mod markdown;
 mod meraki;
 mod net;
+mod photos;
 mod redact;
 mod shots;
 mod skills;
@@ -21,6 +22,8 @@ mod theme;
 mod tools;
 mod unifi;
 mod update;
+#[cfg(target_os = "linux")]
+mod wayland_icon;
 mod widgets;
 
 use eframe::egui;
@@ -58,26 +61,26 @@ const TABS: &[(Tab, &str, &str)] = &[
         "Ping",
         "ICMP or TCP ping with a live latency graph",
     ),
-    (Tab::Ports, "Port Check", "Find open TCP ports on a host"),
+    (Tab::Ports, "Ports", "Find open TCP ports on a host"),
     (Tab::Trace, "Traceroute", "Show each router hop to a host"),
     (
         Tab::Sweep,
-        "Subnet Sweep",
+        "Sweep",
         "Find live hosts on a subnet, with name, MAC and vendor",
     ),
     (
         Tab::Dns,
-        "DNS Lookup",
+        "Lookup",
         "Look up DNS records; Compare all spots split DNS and stale caches",
     ),
     (
         Tab::Advanced,
-        "Advanced",
+        "Domains",
         "Mail and domain health: MX, SPF, DMARC, DKIM, blacklists and more",
     ),
     (
         Tab::Export,
-        "Config Export",
+        "Configs",
         "Convert UniFi and SonicWall configs to JSON for the skills; open /mapnetwork maps",
     ),
     (
@@ -88,7 +91,7 @@ const TABS: &[(Tab, &str, &str)] = &[
     (Tab::Notes, "Notes", "Site notes in Markdown, autosaved"),
     (
         Tab::Speed,
-        "Speed Test",
+        "Speed",
         "Speed, latency, bufferbloat and VoIP quality",
     ),
     (
@@ -490,6 +493,11 @@ impl App {
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::Example(i)) => self.export.open_example(ctx, i),
+            Some(Action::ClearLive) => {
+                self.export.clear();
+                self.sweep.clear_results();
+                self.map.clear_live();
+            }
             Some(Action::CloseExample) => {
                 self.export.close_examples();
             }
@@ -615,8 +623,8 @@ impl App {
             ("Traceroute", self.trace.take_finished()),
             ("Speed Test", self.speed.take_finished()),
             ("Subnet Sweep", self.sweep.take_finished()),
-            ("DNS Lookup", self.dns.take_finished()),
-            ("Advanced", self.advanced.take_finished()),
+            ("Lookup", self.dns.take_finished()),
+            ("Domain Health", self.advanced.take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -655,9 +663,9 @@ impl App {
                 self.sweep.running_since(),
                 self.sweep.output(),
             ),
-            ("DNS Lookup", self.dns.running_since(), self.dns.output()),
+            ("Lookup", self.dns.running_since(), self.dns.output()),
             (
-                "Advanced",
+                "Domain Health",
                 self.advanced.running_since(),
                 self.advanced.output(),
             ),
@@ -888,6 +896,8 @@ fn main() {
         options,
         Box::new(|cc| {
             startup::created(cc);
+            #[cfg(target_os = "linux")]
+            wayland_icon::set(cc, &icon());
             cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);

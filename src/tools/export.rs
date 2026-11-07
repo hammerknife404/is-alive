@@ -416,6 +416,25 @@ impl ExportTool {
         std::mem::take(&mut self.saved_maps)
     }
 
+    /// Something is open (or being read): Map → Clear map has work to do.
+    pub fn has_files(&self) -> bool {
+        !self.slots.is_empty() || self.job.is_some()
+    }
+
+    /// Map → Clear map: close every file (examples too) and drop a read
+    /// under way. The UniFi client setting stays; Notes keeps hiding the
+    /// secrets it was told of.
+    pub fn clear(&mut self) {
+        self.job = None;
+        self.pending = None;
+        self.slots.clear();
+        self.shown = 0;
+        self.err = None;
+        self.failed.clear();
+        self.gather_secrets();
+        self.generation += 1;
+    }
+
     /// Take the example maps out (a scan of a real network is starting, or
     /// the Examples menu's Close). True if one was open.
     pub fn close_examples(&mut self) -> bool {

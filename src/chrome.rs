@@ -13,14 +13,14 @@ impl App {
     /// The tab bar.
     pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(8.0);
             // Wraps to a second row when the window (or display scaling)
             // leaves too little width, so every tab stays reachable.
             ui.horizontal_wrapped(|ui| {
                 // The app's name, drawn as a title; it opens Settings.
                 let name = ui
                     .add(
-                        egui::Button::new(egui::RichText::new("is-alive").heading().strong())
+                        egui::Button::new(egui::RichText::new("is-alive ▾").heading().strong())
                             .frame(false),
                     )
                     .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
@@ -29,7 +29,19 @@ impl App {
                 }
                 egui::Popup::menu(&name)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| self.settings_ui(ui));
+                    .show(|ui| {
+                        // A menu stops at the window's edge: scroll rather
+                        // than cut off Keyboard and mouse and the folder at
+                        // the default window size. The popup starts at
+                        // egui's default area size (400 high), so the height
+                        // is asked for: down to the footer, or the content's
+                        // own where that's less.
+                        let room = (ui.ctx().content_rect().height() - 90.0).max(200.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(room)
+                            .min_scrolled_height(room)
+                            .show(ui, |ui| self.settings_ui(ui));
+                    });
                 ui.separator();
                 // The selected tab is marked by a sliding underline rather
                 // than a filled box; running jobs get a pulsing dot that
@@ -44,6 +56,9 @@ impl App {
                 let mut dots = Vec::new();
                 let call = self.map_call(ui);
                 for (n, (tab, name, tip)) in TABS.iter().enumerate() {
+                    if matches!(tab, Tab::Dns | Tab::Export | Tab::Notes | Tab::Results) {
+                        ui.separator();
+                    }
                     let on = self.tab == *tab;
                     let mut text = egui::RichText::new(*name);
                     if on {
