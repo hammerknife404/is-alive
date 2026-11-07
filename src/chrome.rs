@@ -13,7 +13,7 @@ impl App {
     /// The tab bar.
     pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
         let tabs = egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(4.0);
+            ui.add_space(8.0);
             // Wraps to a second row when the window (or display scaling)
             // leaves too little width, so every tab stays reachable.
             ui.horizontal_wrapped(|ui| {
@@ -44,6 +44,9 @@ impl App {
                 let mut dots = Vec::new();
                 let call = self.map_call(ui);
                 for (n, (tab, name, tip)) in TABS.iter().enumerate() {
+                    if matches!(tab, Tab::Dns | Tab::Export | Tab::Notes | Tab::Results) {
+                        ui.separator();
+                    }
                     let on = self.tab == *tab;
                     let mut text = egui::RichText::new(*name);
                     if on {

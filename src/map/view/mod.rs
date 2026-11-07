@@ -1357,23 +1357,26 @@ impl MapView {
         // /mapnetwork map) has nothing for the switch to show or hide.
         let any = empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
         ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
-            ui.label("Clients");
-            for c in Clients::ALL {
-                if ui
-                    .selectable_label(self.clients == c, c.name())
-                    .on_hover_text(c.tip())
-                    .on_disabled_hover_text(if self.frozen.is_some() {
-                        "A saved map keeps the clients it was saved with"
-                    } else {
-                        reveal::no_clients_why(src)
-                    })
-                    .clicked()
-                {
-                    self.clients = c;
-                    // The level sets every uplink again.
-                    self.reveal.clear();
-                }
-            }
+            egui::ComboBox::from_id_salt("map-client-visibility")
+                .selected_text(format!("Clients: {}", self.clients.name()))
+                .show_ui(ui, |ui| {
+                    for c in Clients::ALL {
+                        if ui
+                            .selectable_label(self.clients == c, c.name())
+                            .on_hover_text(c.tip())
+                            .on_disabled_hover_text(if self.frozen.is_some() {
+                                "A saved map keeps the clients it was saved with"
+                            } else {
+                                reveal::no_clients_why(src)
+                            })
+                            .clicked()
+                        {
+                            self.clients = c;
+                            // The level sets every uplink again.
+                            self.reveal.clear();
+                        }
+                    }
+                });
         });
         if empty {
             return;

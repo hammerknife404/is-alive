@@ -1289,3 +1289,11 @@ The pictures are rendered into `docs/manual/img/.incoming` first. A run that fai
 The names the tour writes are the ones this manual links to, and a test (`manual_shows_every_picture_the_tour_takes`) fails if the two lists differ. To add a picture, add a scene to `MANUAL` in `src/shots.rs` and link `img/<name>.png` here.
 
 On a full-release tag, the **manual screenshots** workflow (`.github/workflows/manual-shots.yml`, also runnable by hand) produces the same set as an artifact. GitHub's runners don't pass ping, so the committed pictures come from the local run.
+
+## Lookup and photo notes (development preview)
+
+**Lookup** contains **DNS records** and **WHOIS registration**. WHOIS asks IANA for the responsible registry, then shows that registry's response with its server name. Copy or save the response from the same workspace. Registries may redact contact details or discontinue WHOIS; outbound TCP port 43 must be available.
+
+In **Notes**, **Add photo…** accepts PNG, JPEG and WebP. The photo is resized, stripped of metadata and embedded directly in the Markdown; Split and Preview display it inline. Autosave, Copy, Save and Site Bundle retain the embedded photo. Some external Markdown viewers disable data images. Delete the photo's Markdown line to remove it. The editor shows the embedded Markdown data; use Split or Preview to inspect the picture. A photo that would exceed the notes capacity is refused. Photos are not automatically redacted: review visible names, screens and labels before sharing.
+
+Navigation now groups related tools with separators, and the Map's client visibility choices share one dropdown. The existing animated tab underline, activity pulses, map reveal and directional link flows remain in place.

@@ -35,6 +35,7 @@ const SAVE_AFTER: f64 = 1.5;
 const EDITOR_ID: &str = "tech_notes_editor";
 
 pub struct NotesTool {
+    photo_job: Option<Job<Result<String, String>>>,
     text: String,
     view: View,
     show_hits: bool,
@@ -159,6 +160,7 @@ impl Default for NotesTool {
         // older build) is rewritten sanitized at once, not on the next edit.
         let unclean = !redact::find_with(&text, &ov).is_empty();
         let mut notes = Self {
+            photo_job: None,
             text,
             ov,
             view: View::Edit,
@@ -530,6 +532,23 @@ impl NotesTool {
     /// Autosave; called every frame whichever tab is showing, so leaving
     /// Notes right after typing still saves.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let mut photo = None;
+        crate::job::pump(&mut self.photo_job, |r| photo = Some(r));
+        if let Some(result) = photo {
+            match result {
+                Ok(markdown) => {
+                    if self.text.chars().count() + markdown.len() > crate::input::Field::Notes.max()
+                    {
+                        self.err = Some("This photo exceeds the notes capacity. Choose a smaller image or remove an existing photo.".into());
+                        return;
+                    }
+                    self.text.push_str(&markdown);
+                    self.changed(ctx.input(|i| i.time));
+                    self.view = View::Split;
+                }
+                Err(e) => self.err = Some(e),
+            }
+        }
         let now = ctx.input(|i| i.time);
         if self.dirty.is_some_and(|t| now - t >= SAVE_AFTER) {
             self.write();
@@ -681,6 +700,16 @@ impl NotesTool {
         let ctx = ui.ctx().clone();
         // Wraps onto a second row when the window is narrow.
         ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(self.photo_job.is_none(), egui::Button::new("Add photo…"))
+                .on_hover_text("Embed a photo in notes and exports. Photos are not automatically redacted; review visible sensitive information before sharing.")
+                .clicked() {
+                self.photo_job = Some(Job::spawn(&ctx, |tx| {
+                    if let Some(path) = rfd::FileDialog::new().add_filter("Photos", &["png", "jpg", "jpeg", "webp"]).pick_file() {
+                        tx.send(crate::photos::import(&path));
+                    }
+                }));
+            }
+            ui.separator();
             for (v, name, tip) in [
                 (View::Edit, "Edit", "Editor only"),
                 (View::Split, "Split", "Editor and preview"),
@@ -1564,6 +1593,7 @@ mod tests {
 
     fn notes(text: &str) -> NotesTool {
         NotesTool {
+            photo_job: None,
             text: text.into(),
             view: View::Split,
             show_hits: true,

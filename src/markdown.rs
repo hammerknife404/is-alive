@@ -227,6 +227,9 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
     let mut lines = text.lines().enumerate().peekable();
     while let Some((n, line)) = lines.next() {
         let t = line.trim_start();
+        if crate::photos::render(ui, t) {
+            continue;
+        }
         if t.starts_with("```") {
             let mut code = Vec::new();
             for (_, l) in lines.by_ref() {
