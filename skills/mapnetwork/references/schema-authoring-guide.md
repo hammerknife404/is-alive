@@ -288,7 +288,7 @@ Links between nodes. Direction matters for the flow animation: list `from` as th
 ```
 - `cls`: `'backbone'` (thick, always blue — internet→gateway spine) ·
   `'wired'` (zone-coloured solid) · `'wifi'` (zone-coloured, use with `dashed:true`)
-- `dashed:true` — dashed line (wireless)
+- `dashed:true` — dashed line. With `cls:'wifi'` this is wireless; with `cls:'wired'` it means an assumed/inferred link, matching is-alive.
 - `label` — optional small text on the line (port, link name)
 - `anchor:'L'`/`'R'` — optional, fan two edges to the left/right of the same target
   (used when one device has two NICs into a switch)
@@ -386,3 +386,24 @@ These come from the engine, so every new map inherits them from the template; ne
 - **Findings band:** collapsed on load; header click toggles. Keep ACTIONS severity-sorted and honest — the band's chips still show the counts while collapsed.
 - **Sidebar sections:** Sites, Zones, VLANs and Action items each have a hide/show button; hidden state is session-only.
 - **Panel collapse (desktop):** left sidebar → 44px rail (‹/›, map refits); right detail panel → header-only (▴/▾). Mobile keeps its drawer/sheet behavior.
+
+
+## Shared native / HTML presentation contract
+
+The bundled template and both examples use the same engine rules. Keep changes to
+these rules synchronized with is-alive's native map and all three HTML files.
+
+- Edges are authored upstream → downstream; selection animation travels in the
+  opposite direction, toward the uplink. Never reverse the data to change animation.
+- Gateway blue, switch purple, access point green, server amber, device orange,
+  and unidentified grey use the approved dark/light palette above. Use zones
+  for roles and sites for geography. Alternate themes resolve custom zone keys
+  through their approved palette color, rather than requiring legacy key names.
+- The native importer derives device roles from kind/label/zone, rather than
+  executing the HTML or importing arbitrary CSS. Use explicit device kinds;
+  a mixed-role security zone does not override a native device's role color.
+- Native layouts recalculate positions; HTML x/y/w/h and BANDS are presentation
+  hints, not portable constraints. IDs, sites, device facts, links and findings
+  are the interchange contract. Extra links remain in native device details.
+- HTML honors reduced-motion preferences and pauses animation in hidden tabs.
+  Native animation honors Settings and suspends flow repaint requests when unfocused.

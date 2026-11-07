@@ -35,6 +35,7 @@ const SAVE_AFTER: f64 = 1.5;
 const EDITOR_ID: &str = "tech_notes_editor";
 
 pub struct NotesTool {
+    photos: crate::photos::Attachments,
     text: String,
     view: View,
     show_hits: bool,
@@ -55,7 +56,7 @@ pub struct NotesTool {
     /// A text file opened to read, and whether its tab is showing.
     file: Option<Viewed>,
     on_file: bool,
-    opening: Option<Job<Result<Viewed, String>>>,
+    opening: Option<Job<Result<Opened, String>>>,
     /// Give the editor the keyboard back once it's drawn: a toolbar click
     /// would take it away again in the same frame.
     refocus: bool,
@@ -72,8 +73,13 @@ pub struct NotesTool {
     elsewhere: Vec<String>,
 }
 
-/// A text or config file open in the viewer: read-only, never saved or
-/// bundled with the notes.
+/// An Open dialog result: read-only text or a portable photo for Notes.
+enum Opened {
+    Text(Viewed),
+    Photo(String),
+}
+
+/// Read-only text/config viewer content; never bundled with notes.
 struct Viewed {
     path: PathBuf,
     text: String,
@@ -139,8 +145,9 @@ impl Default for NotesTool {
         // Read no more than the editor holds, without its hidden characters.
         let text = path()
             .and_then(|p| crate::input::read_capped(&p, NOTES_FILE_MAX))
-            .map(|t| crate::input::Field::Notes.clean(&t))
             .unwrap_or_default();
+        let mut photos = crate::photos::Attachments::default();
+        let text = crate::input::Field::Notes.clean(&photos.compact(&text));
         let ov = redact::Overrides {
             redact: Vec::new(),
             allow: allow_path()
@@ -159,6 +166,7 @@ impl Default for NotesTool {
         // older build) is rewritten sanitized at once, not on the next edit.
         let unclean = !redact::find_with(&text, &ov).is_empty();
         let mut notes = Self {
+            photos,
             text,
             ov,
             view: View::Edit,
@@ -218,7 +226,8 @@ impl NotesTool {
         if c.0 != h {
             *c = (h, redact::sanitize_with(&self.text, &self.ov));
         }
-        c.1.clone()
+        let (text, hits) = &c.1;
+        (self.photos.expand(text), hits.clone())
     }
 
     /// The sanitized notes for other programs: no emoji style marks.
@@ -557,9 +566,23 @@ impl NotesTool {
         let mut opened = None;
         crate::job::pump(&mut self.opening, |r| opened = Some(r));
         match opened {
-            Some(Ok(v)) => {
+            Some(Ok(Opened::Text(v))) => {
                 self.file = Some(v);
                 self.on_file = true;
+            }
+            Some(Ok(Opened::Photo(markdown))) => {
+                if self.photos.expand(&self.text).chars().count() + markdown.len()
+                    > crate::input::Field::Notes.max()
+                {
+                    self.err = Some(
+                        "This photo exceeds the notes capacity. Choose a smaller image.".into(),
+                    );
+                } else {
+                    self.text.push_str(&self.photos.compact(&markdown));
+                    self.changed(now);
+                    self.on_file = false;
+                    self.view = View::Preview;
+                }
             }
             Some(Err(e)) => self.err = Some(e),
             None => {}
@@ -935,7 +958,8 @@ impl NotesTool {
         self.err = None;
         self.opening = Some(Job::spawn(ctx, |tx| {
             let picked = rfd::FileDialog::new()
-                .set_title("Open a text file")
+                .set_title("Open notes, a photo, or a config file")
+                .add_filter("Photos", &["png", "jpg", "jpeg", "webp"])
                 .add_filter(
                     "Text and config files",
                     &[
@@ -946,7 +970,14 @@ impl NotesTool {
                 .add_filter("All files", &["*"])
                 .pick_file();
             if let Some(p) = picked {
-                tx.send(read_text(&p));
+                let photo = p.extension().and_then(|s| s.to_str()).is_some_and(|s| {
+                    ["png", "jpg", "jpeg", "webp"].contains(&s.to_ascii_lowercase().as_str())
+                });
+                tx.send(if photo {
+                    crate::photos::import(&p).map(Opened::Photo)
+                } else {
+                    read_text(&p).map(Opened::Text)
+                });
             }
         }));
     }
@@ -975,7 +1006,7 @@ impl NotesTool {
                 }
                 open = ui
                     .button("Open…")
-                    .on_hover_text("Open another text file")
+                    .on_hover_text("Open a photo, text or config file")
                     .clicked();
             });
         });
@@ -1063,7 +1094,7 @@ impl NotesTool {
                         "Raw copy",
                         "Copy as written, nothing hidden",
                     ) {
-                        widgets::copy(ui.ctx(), crate::theme::strip_emoji_styles(&self.text));
+                        widgets::copy(ui.ctx(), crate::theme::strip_emoji_styles(&self.photos.expand(&self.text)));
                         widgets::toast("Copied unredacted", false);
                     }
                     if ui.button("Copy").on_hover_text("Copy, redacted").clicked() {
@@ -1073,7 +1104,7 @@ impl NotesTool {
                 });
                 if ui
                     .button("Open…")
-                    .on_hover_text("Open a text or config file to read")
+                    .on_hover_text("Open a photo to add to Notes, or a text/config file to read. Photos are not automatically redacted; review them before sharing.")
                     .clicked()
                 {
                     self.open(ui.ctx());
@@ -1562,8 +1593,23 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontI
 mod tests {
     use super::*;
 
+    #[test]
+    fn editor_photo_markers_export_and_reload_as_images() {
+        let raw = "before\n![Photo](data:image/png;base64,AAAA)\nafter";
+        let mut n = notes("");
+        n.text = n.photos.compact(raw);
+        assert!(!n.text.contains("base64"));
+        assert_eq!(n.sanitized_plain(), raw);
+        n.text = n.text.replace("before", "changed");
+        assert_eq!(n.sanitized_plain(), raw.replace("before", "changed"));
+        let mut reopened = notes("");
+        reopened.text = reopened.photos.compact(&n.sanitized_plain());
+        assert_eq!(reopened.sanitized_plain(), n.sanitized_plain());
+    }
+
     fn notes(text: &str) -> NotesTool {
         NotesTool {
+            photos: Default::default(),
             text: text.into(),
             view: View::Split,
             show_hits: true,

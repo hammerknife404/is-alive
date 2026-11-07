@@ -1568,6 +1568,7 @@ version = "0.25.3"
 dependencies = [
  "aes",
  "arboard",
+ "base64",
  "cbc",
  "chrono",
  "dns-lookup",
