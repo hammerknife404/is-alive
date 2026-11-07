@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "is-alive"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "aes",
  "arboard",
@@ -1586,8 +1586,12 @@ dependencies = [
  "socket2",
  "ureq",
  "vello_cpu",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "wgpu",
  "windows-sys 0.61.2",
+ "winit",
  "winresource",
 ]
 
