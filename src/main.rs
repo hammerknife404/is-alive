@@ -21,6 +21,8 @@ mod theme;
 mod tools;
 mod unifi;
 mod update;
+#[cfg(target_os = "linux")]
+mod wayland_icon;
 mod widgets;
 
 use eframe::egui;
@@ -888,6 +890,8 @@ fn main() {
         options,
         Box::new(|cc| {
             startup::created(cc);
+            #[cfg(target_os = "linux")]
+            wayland_icon::set(cc, &icon());
             cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);

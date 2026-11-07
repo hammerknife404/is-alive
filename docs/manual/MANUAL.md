@@ -1190,6 +1190,10 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **"FUSE" or "libfuse.so.2" errors:** run it with `./is-alive-x86_64.AppImage --appimage-extract-and-run`, or install your distribution's FUSE 2 package (`libfuse2` on Ubuntu and Debian).
 - **"GLIBC_2.35 not found":** the system is older than Ubuntu 22.04 / Debian 12.
 
+### A generic icon in the title bar (Linux)
+
+On Wayland, is-alive hands its icon to the desktop itself, because an AppImage installs no menu entry for the desktop to take it from. Recent KDE Plasma and other desktops that take icons this way show it in the title bar and task switcher. Where the desktop doesn't (older ones, or GNOME, which shows no title-bar icons), it shows its own placeholder; nothing else changes. On X11 the icon always shows.
+
 ### Ping doesn't work on Linux
 
 is-alive pings without root using the kernel's unprivileged ping sockets, which most distributions allow. If yours doesn't (`net.ipv4.ping_group_range` doesn't include your group), it falls back to the system `ping` command; if that's missing too, every ping says so. Allow it with:
