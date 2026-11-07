@@ -29,7 +29,19 @@ impl App {
                 }
                 egui::Popup::menu(&name)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| self.settings_ui(ui));
+                    .show(|ui| {
+                        // A menu stops at the window's edge: scroll rather
+                        // than cut off Keyboard and mouse and the folder at
+                        // the default window size. The popup starts at
+                        // egui's default area size (400 high), so the height
+                        // is asked for: down to the footer, or the content's
+                        // own where that's less.
+                        let room = (ui.ctx().content_rect().height() - 90.0).max(200.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(room)
+                            .min_scrolled_height(room)
+                            .show(ui, |ui| self.settings_ui(ui));
+                    });
                 ui.separator();
                 // The selected tab is marked by a sliding underline rather
                 // than a filled box; running jobs get a pulsing dot that

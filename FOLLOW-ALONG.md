@@ -20,9 +20,9 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 
 > **Nothing opens, or the window stays blank?** See [If the window doesn't open](README.md#if-the-window-doesnt-open): what to try, and where the app writes down why.
 
-You'll see a row of tabs across the top: **Ping**, **Port Check**, **Traceroute**, **Subnet Sweep**, **DNS Lookup**, **Advanced**, **Config Export**, **Map**, **Notes**, **Speed Test**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** (or the **F1** key) opens the is-alive wiki, a page per tab, in your browser. Clicking **is-alive** at the top left opens Settings (theme and the like).
+You'll see a row of tabs across the top: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** (or the **F1** key) opens the is-alive wiki, a page per tab, in your browser. Clicking **is-alive ▾** at the top left opens Settings (theme and the like).
 
-> **Please watch, don't run, the Port Check and Subnet Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
+> **Please watch, don't run, the Ports and Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
 ---
 
@@ -36,7 +36,7 @@ The presenter clicks **Full scan** at the bottom right. Several checks start at 
 | **Ping** | Your router answers, and how fast (in milliseconds; lower is better) |
 | **Port Check** | Which services the router offers (for example, web pages on 443) |
 | **Traceroute** | Every stop your traffic makes on the way to the internet |
-| **DNS Lookup** | Website names are being turned into addresses correctly |
+| **Lookup** | Website names are being turned into addresses correctly |
 | **Subnet Sweep** | Every device currently on the local network |
 
 **Takeaway:** in about 15 seconds you know whether the problem is your computer, your router, or the internet beyond it.
@@ -54,11 +54,11 @@ The presenter clicks **Full scan** at the bottom right. Several checks start at 
 
 ---
 
-## 4. Try it yourself: DNS Lookup
+## 4. Try it yourself: DNS (the Lookup tab)
 
 DNS is the internet's phone book: it turns names like `gmail.com` into the numeric addresses computers use.
 
-1. Click the **DNS Lookup** tab.
+1. Click the **Lookup** tab. It opens on **DNS records**.
 2. Type `gmail.com` in **Name or IP**.
 3. Set **Type** to **MX** and **Resolver** to **Cloudflare 1.1.1.1**, then press **Enter**.
 4. You'll see five mail servers. MX records tell the world where to deliver email for a domain.
@@ -67,11 +67,11 @@ DNS is the internet's phone book: it turns names like `gmail.com` into the numer
 
 ---
 
-## 5. Try it yourself: email health check (Advanced)
+## 5. Try it yourself: email health check (Domains)
 
 This tab checks a company's email security settings, the same ones that decide whether its emails land in the inbox or the spam folder.
 
-1. Click the **Advanced** tab.
+1. Click the **Domains** tab.
 2. Type `gmail.com` in **Domain** and press **Enter**.
 3. About 15 checks appear within a second or two. Each has a label:
 

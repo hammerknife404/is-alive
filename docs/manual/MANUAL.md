@@ -1027,9 +1027,9 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ## 16. Settings and themes
 
-![Settings, opened from the app's name: themes with their map colours, the Miami backdrop, Network options, the Map note, Keyboard and mouse, and where settings are kept](img/settings.png)
+![Settings, opened from the app's name: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note, Keyboard and mouse and the settings folder are further down](img/settings.png)
 
-Click **is-alive ▾** at the top left to open Settings. Changes apply at once and are remembered.
+Click **is-alive ▾** at the top left to open Settings. Changes apply at once and are remembered. In a small window, scroll it for the rest.
 
 ### Theme
 
