@@ -35,6 +35,7 @@ const SAVE_AFTER: f64 = 1.5;
 const EDITOR_ID: &str = "tech_notes_editor";
 
 pub struct NotesTool {
+    photos: crate::photos::Attachments,
     text: String,
     view: View,
     show_hits: bool,
@@ -144,8 +145,9 @@ impl Default for NotesTool {
         // Read no more than the editor holds, without its hidden characters.
         let text = path()
             .and_then(|p| crate::input::read_capped(&p, NOTES_FILE_MAX))
-            .map(|t| crate::input::Field::Notes.clean(&t))
             .unwrap_or_default();
+        let mut photos = crate::photos::Attachments::default();
+        let text = crate::input::Field::Notes.clean(&photos.compact(&text));
         let ov = redact::Overrides {
             redact: Vec::new(),
             allow: allow_path()
@@ -164,6 +166,7 @@ impl Default for NotesTool {
         // older build) is rewritten sanitized at once, not on the next edit.
         let unclean = !redact::find_with(&text, &ov).is_empty();
         let mut notes = Self {
+            photos,
             text,
             ov,
             view: View::Edit,
@@ -223,7 +226,8 @@ impl NotesTool {
         if c.0 != h {
             *c = (h, redact::sanitize_with(&self.text, &self.ov));
         }
-        c.1.clone()
+        let (text, hits) = &c.1;
+        (self.photos.expand(text), hits.clone())
     }
 
     /// The sanitized notes for other programs: no emoji style marks.
@@ -567,12 +571,14 @@ impl NotesTool {
                 self.on_file = true;
             }
             Some(Ok(Opened::Photo(markdown))) => {
-                if self.text.chars().count() + markdown.len() > crate::input::Field::Notes.max() {
+                if self.photos.expand(&self.text).chars().count() + markdown.len()
+                    > crate::input::Field::Notes.max()
+                {
                     self.err = Some(
                         "This photo exceeds the notes capacity. Choose a smaller image.".into(),
                     );
                 } else {
-                    self.text.push_str(&markdown);
+                    self.text.push_str(&self.photos.compact(&markdown));
                     self.changed(now);
                     self.on_file = false;
                     self.view = View::Preview;
@@ -1088,7 +1094,7 @@ impl NotesTool {
                         "Raw copy",
                         "Copy as written, nothing hidden",
                     ) {
-                        widgets::copy(ui.ctx(), crate::theme::strip_emoji_styles(&self.text));
+                        widgets::copy(ui.ctx(), crate::theme::strip_emoji_styles(&self.photos.expand(&self.text)));
                         widgets::toast("Copied unredacted", false);
                     }
                     if ui.button("Copy").on_hover_text("Copy, redacted").clicked() {
@@ -1587,8 +1593,23 @@ pub(crate) fn highlight(ui: &Ui, text: &str, hits: &[Range<usize>], font: &FontI
 mod tests {
     use super::*;
 
+    #[test]
+    fn editor_photo_markers_export_and_reload_as_images() {
+        let raw = "before\n![Photo](data:image/png;base64,AAAA)\nafter";
+        let mut n = notes("");
+        n.text = n.photos.compact(raw);
+        assert!(!n.text.contains("base64"));
+        assert_eq!(n.sanitized_plain(), raw);
+        n.text = n.text.replace("before", "changed");
+        assert_eq!(n.sanitized_plain(), raw.replace("before", "changed"));
+        let mut reopened = notes("");
+        reopened.text = reopened.photos.compact(&n.sanitized_plain());
+        assert_eq!(reopened.sanitized_plain(), n.sanitized_plain());
+    }
+
     fn notes(text: &str) -> NotesTool {
         NotesTool {
+            photos: Default::default(),
             text: text.into(),
             view: View::Split,
             show_hits: true,

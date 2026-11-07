@@ -346,7 +346,9 @@ impl MapTabs {
     }
 
     pub fn clear_live(&mut self) {
-        self.live = MapView::default();
+        let clients = self.live.clients;
+        self.live = MapView::new(None);
+        self.live.clients = clients;
         self.shown = None;
     }
 

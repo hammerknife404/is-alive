@@ -367,7 +367,15 @@ impl MapView {
             Ok("some") => Clients::Some,
             Ok("more") => Clients::More,
             Ok("all") => Clients::All,
-            _ => Clients::Off,
+            _ => {
+                if cfg!(test) || std::env::var_os("IS_ALIVE_SHOTS").is_some() {
+                    Clients::Off
+                } else {
+                    crate::theme::data_dir()
+                        .map(|dir| saved::live_clients(&dir))
+                        .unwrap_or(Clients::Off)
+                }
+            }
         };
         Self {
             follow: true,
@@ -1302,7 +1310,11 @@ impl MapView {
                     if k == BAR_LAYOUTS && n > 0 {
                         ui.separator();
                     }
-                    let r = ui.horizontal(|ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar));
+                    let r = ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        |ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar),
+                    );
                     self.bar_w[k] = r.response.rect.width();
                 }
             });
@@ -1374,6 +1386,18 @@ impl MapView {
                             .clicked()
                         {
                             self.clients = c;
+                            if !cfg!(test)
+                                && std::env::var_os("IS_ALIVE_SHOTS").is_none()
+                                && let Some(dir) = crate::theme::data_dir()
+                            {
+                                let result = saved::save_live_clients(&dir, c);
+                                if let Err(e) = result {
+                                    widgets::toast(
+                                        format!("Could not save client visibility: {e}"),
+                                        false,
+                                    );
+                                }
+                            }
                             // The level sets every uplink again.
                             self.reveal.clear();
                         }

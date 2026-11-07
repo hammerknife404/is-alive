@@ -205,7 +205,13 @@ impl MapView {
             }
         }
         if resp.secondary_clicked() {
-            let key = boxed.and_then(|g| self.lay.box_key(self.mode(), g));
+            let group = boxed.or_else(|| {
+                pointer.filter(|p| rect.contains(*p)).and_then(|p| {
+                    let world = self.to_world(rect, p);
+                    self.lay.boxes.iter().rposition(|b| b.rect.contains(world))
+                })
+            });
+            let key = group.and_then(|g| self.lay.box_key(self.mode(), g));
             self.menu = Some(match (over, key) {
                 (Some(i), _) => Menu::Card(self.map.nodes[i].id.clone()),
                 (None, Some(k)) => Menu::Box(k),
@@ -1016,6 +1022,7 @@ impl MapView {
                 ui.close();
             }
         }
+        self.menu_layout(ui, &mut Sep(true), &cards);
         let key = self.lay.box_key(self.mode(), g);
         if let Some(d) = key.as_ref().and_then(|k| self.shifted.get(k).copied())
             && ui
@@ -1028,6 +1035,24 @@ impl MapView {
                 self.shifted.remove(k);
             }
             self.fit_view(rect);
+            ui.close();
+        }
+        ui.menu_button("Move group", |ui| {
+            for (label, delta) in [
+                ("Left", vec2(-40.0, 0.0)),
+                ("Right", vec2(40.0, 0.0)),
+                ("Up", vec2(0.0, -40.0)),
+                ("Down", vec2(0.0, 40.0)),
+            ] {
+                if ui.button(label).clicked() {
+                    self.shift_box(g, delta);
+                    ui.close();
+                }
+            }
+            ui.weak("Or drag the group title for free placement");
+        });
+        if ui.button("Copy group name").clicked() {
+            ui.ctx().copy_text(b.title.clone());
             ui.close();
         }
         ui.weak("Drag the title to move the box");

@@ -76,9 +76,61 @@ pub fn render(ui: &mut egui::Ui, line: &str) -> bool {
     }
     true
 }
+
+/// Keep portable image bytes outside the editable text. Markers can be moved or
+/// deleted like ordinary Markdown; expansion happens only for preview/save/export.
+#[derive(Default)]
+pub struct Attachments(std::collections::BTreeMap<String, String>);
+impl Attachments {
+    pub fn compact(&mut self, text: &str) -> String {
+        let mut out = String::new();
+        for line in text.split_inclusive('\n') {
+            if payload(line.trim()).is_some() {
+                let mut n = self.0.len() + 1;
+                let marker = loop {
+                    let marker = format!("![Photo {n}](attachment:is-alive-photo-{n})");
+                    if !self.0.contains_key(&marker) && !text.contains(&marker) {
+                        break marker;
+                    }
+                    n += 1;
+                };
+                self.0.insert(marker.clone(), line.trim().to_string());
+                out.push_str(&marker);
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+            } else {
+                out.push_str(line);
+            }
+        }
+        out
+    }
+    pub fn expand(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for (marker, image) in &self.0 {
+            out = out.replace(marker, image);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn attachment_edits_and_reopen_preserve_photo_bytes() {
+        let raw = "before\n![Photo](data:image/png;base64,AAAA)\nafter";
+        let mut attachments = Attachments::default();
+        let compact = attachments.compact(raw);
+        assert!(!compact.contains("base64"));
+        assert_eq!(attachments.expand(&compact), raw);
+        let edited = compact.replace("before", "edited");
+        let saved = attachments.expand(&edited);
+        let mut reopened = Attachments::default();
+        let editor = reopened.compact(&saved);
+        assert_eq!(reopened.expand(&editor), saved);
+        assert_eq!(attachments.expand("deleted the photo"), "deleted the photo");
+    }
     #[test]
     fn photo_round_trip() {
         let p = std::env::temp_dir().join(format!("is-alive-photo-{}.png", std::process::id()));
