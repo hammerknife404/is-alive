@@ -2,7 +2,11 @@
 
 > **Attending a demo?** Start with the plain-language **[follow-along guide](FOLLOW-ALONG.md)**: download, open, and try it step by step. No technical background needed.
 
-**📖 Full documentation: the [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki)**, with a page per tab and guides for the Site Bundle, settings, privacy and development. In the app, **Help** in the footer (or F1) opens it. For one document to read through or print, the **[user manual](docs/manual/MANUAL.md)** covers every tab and control with worked examples, troubleshooting and a glossary.
+**📖 Documentation**, three ways in, each linking the others:
+
+- **[Wiki](https://github.com/hammerknife404/is-alive/wiki)**: a short page per tab, and guides for the Site Bundle, settings, privacy and development.
+- **[User manual](docs/manual/MANUAL.md)**: one document to read through or print. Every tab and control, worked examples, troubleshooting and a glossary. It's also built into the app: **Help** at the bottom right, or **F1** for the tab you're on.
+- **[Follow-along guide](FOLLOW-ALONG.md)**: a 20-minute walk-through for people new to networking.
 
 A native network tester for site visits, written in Rust. One portable `.exe` on Windows, one `.AppImage` on Linux: no installer, no admin rights. **[Download the latest release](https://github.com/hammerknife404/is-alive/releases/latest).**
 
@@ -21,7 +25,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Subnet Calc](https://github.com/hammerknife404/is-alive/wiki/Subnet-Calc) | IPv4 and IPv6 subnet calculator: details, address check, split, ranges to CIDR |
 | [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run, with Filter and Export to CSV, JSON, Markdown or HTML |
 
-**Full scan** (bottom right) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Settings** opens from the app's name at the top left: nine themes, the Miami backdrop and keyboard shortcuts. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
+**Full scan** (bottom right) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Settings** opens from the app's name at the top left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
 
 ## With Claude
 

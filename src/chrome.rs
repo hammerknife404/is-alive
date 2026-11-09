@@ -6,9 +6,6 @@ use crate::job::Job;
 use crate::{App, FULL_SCAN_TIP, TABS, Tab, VERSION, tab_key, theme, widgets};
 use eframe::egui;
 
-/// The wiki's front page: Help and F1 open it.
-pub const WIKI: &str = "https://github.com/hammerknife404/is-alive/wiki";
-
 impl App {
     /// The tab bar.
     pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
@@ -222,12 +219,22 @@ impl App {
                     ui.separator();
                     ui.weak(format!("v{VERSION}"));
                     ui.separator();
-                    if ui
-                        .add(egui::Button::new("Help").small())
-                        .on_hover_text("Open the is-alive wiki in the browser (F1)")
-                        .clicked()
-                    {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(WIKI));
+                    let help = ui.add(egui::Button::new("Help ▴").small()).on_hover_text(
+                        "The manual (built in, works offline), the wiki, release notes \
+                             and where to report a problem. F1 opens this tab's chapter.",
+                    );
+                    if self.shots_help {
+                        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&help));
+                    }
+                    let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1);
+                    let tab = self.tab;
+                    let picked = egui::Popup::menu(&help)
+                        .align(egui::RectAlign::TOP_END)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| crate::help::menu(ui, tab, name))
+                        .and_then(|r| r.inner);
+                    if let Some(i) = picked {
+                        self.manual.show(i);
                     }
                     if self.look.theme == theme::Theme::Miami
                         && let Some(e) = &self.backdrop.err
@@ -240,22 +247,13 @@ impl App {
         });
     }
 
-    /// Settings, opened from the app's name: appearance, the Map, keyboard
-    /// shortcuts and where the app keeps its files.
+    /// Settings, opened from the app's name: appearance, the network, the
+    /// Map and where the app keeps its files.
     pub(crate) fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(320.0);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("is-alive").heading().strong());
             ui.weak(format!("v{VERSION}"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(framed(ui, egui::Button::new("Help wiki")))
-                    .on_hover_text("Open the is-alive wiki in the browser: a page per tab (F1)")
-                    .clicked()
-                {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(WIKI));
-                }
-            });
         });
         ui.separator();
         match theme::appearance(
@@ -349,8 +347,6 @@ impl App {
             theme::save(&self.look);
         }
         ui.separator();
-        ui.collapsing("Keyboard and mouse", shortcuts);
-        ui.separator();
         if let Some(dir) = theme::data_dir() {
             ui.weak("Settings and autosaved notes are kept in");
             ui.label(
@@ -362,7 +358,6 @@ impl App {
     }
 }
 
-/// Keyboard and mouse tips, in Settings.
 /// A button inside a menu drawn as the app's other buttons are: menus make
 /// buttons frameless and see-through, so a real button there reads as text.
 fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
@@ -374,42 +369,6 @@ fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
         .inactive
         .weak_bg_fill;
     b.frame(true).fill(fill)
-}
-
-fn shortcuts(ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new("Keyboard").strong());
-    egui::Grid::new("keys")
-        .num_columns(2)
-        .spacing([16.0, 4.0])
-        .show(ui, |ui| {
-            for (k, what) in [
-                ("Ctrl+1 … Ctrl+9", "Switch to the first nine tabs, in order"),
-                ("Ctrl+0", "Results"),
-                ("Enter / Esc", "Start / stop the run in a tool's field"),
-                ("Ctrl+B / Ctrl+I", "Bold / italic in Notes"),
-                ("Ctrl+R", "Redact / unredact in Notes"),
-                (
-                    "Enter in a list",
-                    "Next item in Notes (twice ends the list)",
-                ),
-                ("Esc", "Clear the selection on the Map"),
-                ("F1", "Open the is-alive wiki (Help)"),
-            ] {
-                ui.label(egui::RichText::new(k).monospace());
-                ui.label(what);
-                ui.end_row();
-            }
-        });
-    ui.separator();
-    ui.label(egui::RichText::new("Mouse").strong());
-    for tip in [
-        "Map: drag to pan, scroll to zoom, double-click to fit, drag a card to move it",
-        "Drop a UniFi backup, SonicWall .exp / .wri or /mapnetwork map anywhere to open it",
-        "Full scan (bottom right) pings, traces and sweeps this network in one go",
-        "The Map is a quick picture: for an accurate one, make a Site Bundle and run /mapnetwork in Claude",
-    ] {
-        ui.label(format!("• {tip}"));
-    }
 }
 
 /// Underline under the selected tab, sliding to the new one on a switch.

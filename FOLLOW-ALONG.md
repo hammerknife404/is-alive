@@ -20,7 +20,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 
 > **Nothing opens, or the window stays blank?** See [If the window doesn't open](README.md#if-the-window-doesnt-open): what to try, and where the app writes down why.
 
-You'll see a row of tabs across the top: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** (or the **F1** key) opens the is-alive wiki, a page per tab, in your browser. Clicking **is-alive ▾** at the top left opens Settings (theme and the like).
+You'll see a row of tabs across the top: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Clicking **is-alive ▾** at the top left opens Settings (theme and the like).
 
 > **Please watch, don't run, the Ports and Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -149,4 +149,4 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 ## Questions after the demo?
 
-Ask the presenter, or open the app again later: everything in this guide works the same on your own. **Help** at the bottom right opens the wiki, which explains every tab. The [user manual](docs/manual/MANUAL.md) goes further: every control on every tab, worked examples, and what to do when something doesn't look right.
+Ask the presenter, or open the app again later: everything in this guide works the same on your own. The [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki) has a short page explaining each tab. The [user manual](docs/manual/MANUAL.md) goes further: every control on every tab, worked examples, and what to do when something doesn't look right. It's built into the app too: **Help** at the bottom right, or **F1**.

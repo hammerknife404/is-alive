@@ -3,10 +3,13 @@
 mod backdrop;
 mod bundle;
 mod chrome;
+mod connect;
 mod fonts;
+mod help;
 mod input;
 mod job;
 mod log;
+mod manual;
 mod map;
 mod mapnetwork;
 mod markdown;
@@ -158,9 +161,16 @@ struct App {
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
+    /// The user manual, built in: Help and F1 open it.
+    manual: manual::Manual,
     shots: Option<shots::Shots>,
-    /// The screenshot tour's last step: Settings open.
+    /// The screenshot tour's last steps: Settings open, then Help.
     shots_settings: bool,
+    shots_help: bool,
+    /// Closing waits on "Save the notes?" (autosave off, changes unsaved).
+    close_asked: bool,
+    /// The user answered it: close without asking again.
+    close_anyway: bool,
     /// The open site's name, for the header ("Scratch": none).
     site_name: String,
     /// The sites, read when the switcher opens.
@@ -177,6 +187,14 @@ struct App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
+        if ui.input(|i| i.viewport().close_requested())
+            && self.notes.unsaved()
+            && !self.close_anyway
+        {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_asked = true;
+        }
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
         let now = ui.input(|i| i.time);
@@ -204,6 +222,8 @@ impl eframe::App for App {
         self.central(ui, now);
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
+        self.manual.window(ui.ctx());
+        self.close_dialog(ui.ctx());
         self.site_dialog(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
@@ -228,11 +248,11 @@ impl eframe::App for App {
 
 impl App {
     /// Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results; F1
-    /// opens the wiki.
+    /// opens the manual at this tab's chapter.
     fn tab_keys(&mut self, ui: &mut egui::Ui) {
         use egui::Key::*;
         if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, F1)) {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(chrome::WIKI));
+            self.manual.show(manual::chapter_of(self.tab));
         }
         let keys = [Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9];
         for (n, (tab, ..)) in TABS.iter().enumerate() {
@@ -245,7 +265,7 @@ impl App {
     }
 
     /// The screenshot tour (IS_ALIVE_SHOTS): every tab, then the Map with a
-    /// card selected, then Settings; or the user manual's pictures.
+    /// card selected, then Settings, Help and the manual; or the user manual's pictures.
     fn shots_step(&mut self, ctx: &egui::Context) {
         if self.shots.as_ref().is_some_and(shots::Shots::manual) {
             return self.manual_shots_step(ctx);
@@ -253,14 +273,32 @@ impl App {
         if let Some(s) = &mut self.shots {
             // Every tab, then the Map again with a card selected.
             let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
-            names.extend(["Map panel", "Settings"]);
+            names.extend(["Map panel", "Settings", "Help", "Manual", "Manual keys"]);
             match s.step(ctx, &names, true) {
                 Some(i) if i < TABS.len() => self.tab = TABS[i].0,
                 Some(i) if i == TABS.len() => {
                     self.tab = crate::Tab::Map;
                     self.map.select_for_shots();
                 }
-                Some(_) => self.shots_settings = true,
+                Some(i) if i == TABS.len() + 1 => self.shots_settings = true,
+                Some(i) if i == TABS.len() + 2 => {
+                    self.shots_settings = false;
+                    self.shots_help = true;
+                }
+                Some(i) if i == TABS.len() + 3 => {
+                    if self.shots_help {
+                        self.shots_help = false;
+                        egui::Popup::close_all(ctx);
+                        self.tab = crate::Tab::Ping;
+                        self.manual.show(manual::chapter_of(self.tab));
+                    }
+                }
+                Some(_) => {
+                    let keys = manual::chapter_named("Keyboard and mouse");
+                    if self.manual.chapter() != keys {
+                        self.manual.show(keys);
+                    }
+                }
                 None => {}
             }
         }
@@ -381,6 +419,52 @@ impl App {
     }
 
     /// The Site Bundle window, over everything when it's open.
+    /// Closing with autosave off and the notes changed: save them first?
+    fn close_dialog(&mut self, ctx: &egui::Context) {
+        if !self.close_asked {
+            return;
+        }
+        let mut choice = None;
+        let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
+            ui.set_max_width(340.0);
+            ui.strong("Save the notes before closing?");
+            ui.label("Autosave is off, and the notes have changes that aren't saved.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    choice = Some(true);
+                }
+                if ui
+                    .button(egui::RichText::new("Don't save").color(widgets::bad()))
+                    .clicked()
+                {
+                    choice = Some(false);
+                }
+                if ui.button("Cancel").clicked() {
+                    ui.close();
+                }
+            });
+        });
+        match choice {
+            Some(save) => {
+                if save {
+                    self.notes.set_elsewhere(self.map.note_texts());
+                    if !self.notes.save_now() {
+                        // The error shows in Notes; the window stays open.
+                        self.close_asked = false;
+                        self.tab = Tab::Notes;
+                        return;
+                    }
+                }
+                self.close_anyway = true;
+                self.close_asked = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            None if r.should_close() => self.close_asked = false,
+            None => {}
+        }
+    }
+
     fn bundle_window(&mut self, ctx: &egui::Context) {
         let App {
             bundle,
@@ -960,14 +1044,19 @@ fn main() {
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
                 reloading: false,
+                manual: Default::default(),
                 shots: shots::Shots::from_env(),
                 shots_settings: false,
+                shots_help: false,
+                close_asked: false,
+                close_anyway: false,
                 site_name: site::name(),
                 sites: Vec::new(),
                 site_ask: None,
                 site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
                 site_missing: Vec::new(),
             };
+            app.notes.set_autosave(app.look.notes_autosave);
             // The site opens as it was left: its configs read again.
             if app.shots.is_none() && files.is_empty() {
                 app.reopen_site_configs(&cc.egui_ctx);

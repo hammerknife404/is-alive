@@ -809,6 +809,9 @@ pub struct Settings {
     pub wan_on_start: bool,
     /// Ask GitHub for a newer release when the app starts.
     pub updates_on_start: bool,
+    /// Notes save themselves a moment after each change. Off: only Save
+    /// (Ctrl+S) writes them.
+    pub notes_autosave: bool,
     /// The site open when the app last closed (its folder name); None is
     /// Scratch.
     pub site: Option<String>,
@@ -851,6 +854,7 @@ impl Default for Settings {
             map_note: true,
             wan_on_start: WAN_ON_START,
             updates_on_start: UPDATES_ON_START,
+            notes_autosave: true,
             site: None,
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
@@ -880,6 +884,7 @@ impl Settings {
                 "map_note" => s.map_note = v.trim() != "0",
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
+                "notes_autosave" => s.notes_autosave = v.trim() != "0",
                 "site" => {
                     let f = v.trim();
                     if !f.is_empty()
@@ -963,6 +968,9 @@ impl Settings {
         }
         if self.updates_on_start != UPDATES_ON_START {
             s += &format!("updates_on_start={}\n", self.updates_on_start as u8);
+        }
+        if !self.notes_autosave {
+            s += "notes_autosave=0\n";
         }
         if let Some(site) = &self.site {
             s += &format!("site={site}\n");
@@ -1345,6 +1353,7 @@ mod tests {
             map_note: false,
             wan_on_start: !WAN_ON_START,
             updates_on_start: !UPDATES_ON_START,
+            notes_autosave: false,
             site: Some("harbor-dental".into()),
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_font: "DejaVu Sans Mono".into(),

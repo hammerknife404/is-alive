@@ -550,6 +550,28 @@ impl MapView {
                             widgets::open_url(url);
                         }
                     }
+                    // SSH and RDP only when the port was found open and this
+                    // computer has a client for it.
+                    if let Some(ip) = n.ip {
+                        for kind in [crate::connect::Kind::Ssh, crate::connect::Kind::Rdp] {
+                            if !n.open.contains(&kind.port()) {
+                                continue;
+                            }
+                            let Some(plan) = crate::connect::plan(kind, ip) else {
+                                continue;
+                            };
+                            if ui
+                                .small_button(kind.label())
+                                .on_hover_text(format!(
+                                    "Opens {}. It asks for the log-in; nothing is stored.",
+                                    plan.what
+                                ))
+                                .clicked()
+                            {
+                                crate::connect::launch(plan);
+                            }
+                        }
+                    }
                     if ui
                         .small_button("Copy")
                         .on_hover_text("Copy this card's details as text")

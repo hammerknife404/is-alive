@@ -188,6 +188,8 @@ impl App {
             return;
         }
         let busy = self.any_running();
+        // Autosave is off and the notes changed: a switch would drop them.
+        let unsaved_notes = self.notes.unsaved();
         let unsaved = self.map.unsaved();
         let here = self.site_name.clone();
         let remembered = self.site_configs.len();
@@ -236,13 +238,35 @@ impl App {
                             ),
                         );
                     }
+                    if unsaved_notes {
+                        ui.colored_label(
+                            widgets::warn(),
+                            format!("The notes have changes not saved (Autosave is off). Save them in {here} first?"),
+                        );
+                    }
                     if busy {
                         ui.colored_label(widgets::warn(), "Stop the running tools first.");
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.add_enabled(!busy, egui::Button::new("Switch")).clicked() {
-                            done = Some((to.clone(), false));
+                        if unsaved_notes {
+                            if ui
+                                .add_enabled(!busy, egui::Button::new("Save notes and switch"))
+                                .clicked()
+                            {
+                                done = Some((to.clone(), false, true));
+                            }
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new(RichText::new("Switch, don't save").color(widgets::bad())),
+                                )
+                                .clicked()
+                            {
+                                done = Some((to.clone(), false, false));
+                            }
+                        } else if ui.add_enabled(!busy, egui::Button::new("Switch")).clicked() {
+                            done = Some((to.clone(), false, false));
                         }
                         if ui.button("Cancel").clicked() {
                             close = true;
@@ -272,13 +296,16 @@ impl App {
                     if !*carry && busy {
                         ui.colored_label(widgets::warn(), "Stop the running tools first, or start with what's open.");
                     }
+                    if !*carry && unsaved_notes {
+                        ui.weak(format!("The notes' changes not saved (Autosave is off) are saved in {here} first."));
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let ok = !name.trim().is_empty() && (*carry || !busy);
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if ui.add_enabled(ok, egui::Button::new("Create and open")).clicked() || (ok && enter) {
                             match site::create(name) {
-                                Ok(folder) => done = Some((Some(folder), *carry)),
+                                Ok(folder) => done = Some((Some(folder), *carry, !*carry)),
                                 Err(e) => *err = Some(e),
                             }
                         }
@@ -341,19 +368,31 @@ impl App {
             self.site_name = site::name();
             self.retitle(ctx);
         }
-        if let Some((to, carry)) = done {
+        if let Some((to, carry, save_notes)) = done {
             self.site_ask = None;
-            self.switch_site(ctx, to, carry);
+            self.switch_site(ctx, to, carry, save_notes);
         }
     }
 
     /// Save the open site, clear what's in memory, and open `to` (None:
     /// Scratch). With `carry`, a new site takes what's open along instead.
-    pub(crate) fn switch_site(&mut self, ctx: &egui::Context, to: Option<String>, carry: bool) {
+    /// `save_notes`: write the notes first even with Autosave off (the user
+    /// chose to); otherwise they're saved only if Autosave is on.
+    pub(crate) fn switch_site(
+        &mut self,
+        ctx: &egui::Context,
+        to: Option<String>,
+        carry: bool,
+        save_notes: bool,
+    ) {
         let now = ctx.input(|i| i.time);
         // What's open is saved where it belongs first.
         self.notes.set_elsewhere(self.map.note_texts());
-        self.notes.flush();
+        if save_notes {
+            self.notes.save_now();
+        } else {
+            self.notes.flush();
+        }
         self.remember_site_configs();
         site::set_current(to);
         site::touch();
@@ -370,6 +409,8 @@ impl App {
             self.sweep.clear_results();
             self.log.clear();
             self.notes = Default::default();
+            // A fresh Notes starts with Autosave on: keep the user's choice.
+            self.notes.set_autosave(self.look.notes_autosave);
             self.map.switch_site(false);
             self.site_missing.clear();
             self.site_configs = site::meta().map(|m| m.configs).unwrap_or_default();
