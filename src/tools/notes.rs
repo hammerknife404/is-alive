@@ -236,7 +236,7 @@ fn read_text(path: &std::path::Path) -> Result<Viewed, String> {
 }
 
 fn path() -> Option<PathBuf> {
-    Some(crate::theme::data_dir()?.join("notes.md"))
+    Some(crate::site::dir()?.join("notes.md"))
 }
 
 /// Most of the autosaved notes and keep-list files read back: four bytes
@@ -245,7 +245,7 @@ const NOTES_FILE_MAX: u64 = 4 * crate::input::Field::Notes.max() as u64;
 
 /// Values the technician said to keep, as a JSON list of strings.
 fn allow_path() -> Option<PathBuf> {
-    Some(crate::theme::data_dir()?.join("notes-allow.json"))
+    Some(crate::site::dir()?.join("notes-allow.json"))
 }
 
 impl Default for NotesTool {
@@ -472,6 +472,12 @@ impl NotesTool {
             Err(m) => return widgets::toast(m, false),
         }
         self.changed(ctx.input(|i| i.time));
+    }
+
+    /// A new site was made from what's open: these notes are its own now,
+    /// written into its folder at the next save.
+    pub fn rehome(&mut self, now: f64) {
+        self.changed(now);
     }
 
     /// Save now if there are unsaved changes (on exit), unless autosave is

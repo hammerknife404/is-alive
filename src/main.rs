@@ -19,6 +19,8 @@ mod net;
 mod photos;
 mod redact;
 mod shots;
+mod site;
+mod site_ui;
 mod skills;
 mod sonicwall;
 mod startup;
@@ -170,6 +172,17 @@ struct App {
     close_asked: bool,
     /// The user answered it: close without asking again.
     close_anyway: bool,
+    /// The open site's name, for the header ("Scratch": none).
+    site_name: String,
+    /// The sites, read when the switcher opens.
+    sites: Vec<site::Info>,
+    /// What the site dialog is asking.
+    site_ask: Option<site_ui::SiteAsk>,
+    /// The configs the open site remembers, as last written.
+    site_configs: Vec<std::path::PathBuf>,
+    /// Configs it remembers that weren't found when it opened: kept on its
+    /// list until Clear map.
+    site_missing: Vec<std::path::PathBuf>,
 }
 
 impl eframe::App for App {
@@ -212,6 +225,7 @@ impl eframe::App for App {
         self.bundle_window(ui.ctx());
         self.manual.window(ui.ctx());
         self.close_dialog(ui.ctx());
+        self.site_dialog(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
@@ -364,6 +378,7 @@ impl App {
             self.notes.set_elsewhere(self.map.note_texts());
         }
         self.notes.poll(ctx);
+        self.remember_site_configs();
         self.collect();
         self.dropped_files(ctx);
         pump(&mut self.info_job, |i| self.info = i);
@@ -581,6 +596,8 @@ impl App {
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::Example(i)) => self.export.open_example(ctx, i),
             Some(Action::ClearLive) => {
+                // The site forgets its configs too, found or not.
+                self.site_missing.clear();
                 self.export.clear();
                 self.sweep.clear_results();
                 self.map.clear_live();
@@ -956,6 +973,13 @@ fn main() {
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
     let look = theme::load();
+    // The site open last time (none for the screenshot tours, which show
+    // the app as a new user sees it).
+    site::set_current(
+        look.site
+            .clone()
+            .filter(|_| std::env::var_os("IS_ALIVE_SHOTS").is_none()),
+    );
     let plan = match startup::plan(look.renderer) {
         Ok(p) => p,
         Err(e) => startup::bad_arguments(&e),
@@ -1029,8 +1053,19 @@ fn main() {
                 shots_help: false,
                 close_asked: false,
                 close_anyway: false,
+                site_name: site::name(),
+                sites: Vec::new(),
+                site_ask: None,
+                site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
+                site_missing: Vec::new(),
             };
             app.notes.set_autosave(app.look.notes_autosave);
+            // The site opens as it was left: its configs read again.
+            if app.shots.is_none() && files.is_empty() {
+                app.reopen_site_configs(&cc.egui_ctx);
+                site::touch();
+            }
+            app.retitle(&cc.egui_ctx);
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
             }

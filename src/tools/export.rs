@@ -417,6 +417,18 @@ impl ExportTool {
     }
 
     /// Something is open (or being read): Map → Clear map has work to do.
+    /// The files open here, examples left out: what a site remembers.
+    pub fn open_paths(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = self
+            .slots
+            .iter()
+            .map(|s| s.path.clone())
+            .filter(|p| crate::skills::example(p).is_none())
+            .collect();
+        v.dedup();
+        v
+    }
+
     pub fn has_files(&self) -> bool {
         !self.slots.is_empty() || self.job.is_some()
     }

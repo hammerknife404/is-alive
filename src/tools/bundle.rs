@@ -122,6 +122,17 @@ impl BundleTool {
 
     /// The Site Bundle window; call every frame, open or not, so a save
     /// started before closing it still finishes.
+    /// Another site opened: its name, and nothing typed for the last one.
+    pub fn for_site(&mut self, name: Option<&str>) {
+        self.site = name
+            .map(|n| crate::input::line(n, crate::input::Field::Text.max()))
+            .unwrap_or_default();
+        self.notes.clear();
+        self.ov = Default::default();
+        self.saved = None;
+        self.err = None;
+    }
+
     pub fn window(&mut self, ctx: &egui::Context, src: Sources) {
         let running = self.poll(ctx);
         if !self.open {

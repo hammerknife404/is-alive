@@ -908,6 +908,9 @@ pub struct Settings {
     /// Notes save themselves a moment after each change. Off: only Save
     /// (Ctrl+S) writes them.
     pub notes_autosave: bool,
+    /// The site open when the app last closed (its folder name); None is
+    /// Scratch.
+    pub site: Option<String>,
     pub backdrop: Source,
     /// Notes and text-viewer font (see `fonts`) and size in points.
     pub notes_font: String,
@@ -948,6 +951,7 @@ impl Default for Settings {
             wan_on_start: WAN_ON_START,
             updates_on_start: UPDATES_ON_START,
             notes_autosave: true,
+            site: None,
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
             notes_split: 0.5,
@@ -977,6 +981,16 @@ impl Settings {
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "notes_autosave" => s.notes_autosave = v.trim() != "0",
+                "site" => {
+                    let f = v.trim();
+                    if !f.is_empty()
+                        && f.len() <= 64
+                        && f.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    {
+                        s.site = Some(f.to_string());
+                    }
+                }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 "map_legend" => s.map_legend = v.trim() != "0",
                 "renderer" => s.renderer = v.trim().parse().ok(),
@@ -1053,6 +1067,9 @@ impl Settings {
         }
         if !self.notes_autosave {
             s += "notes_autosave=0\n";
+        }
+        if let Some(site) = &self.site {
+            s += &format!("site={site}\n");
         }
         if !self.vhs {
             s += "vhs=0\n";
@@ -1437,6 +1454,7 @@ mod tests {
             wan_on_start: !WAN_ON_START,
             updates_on_start: !UPDATES_ON_START,
             notes_autosave: false,
+            site: Some("harbor-dental".into()),
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_font: "DejaVu Sans Mono".into(),
             notes_size: 16,
