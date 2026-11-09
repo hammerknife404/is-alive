@@ -7,6 +7,8 @@ mod smtp;
 mod zone;
 
 use super::dnsq::{self, Client};
+/// DER reading, shared with the certificate check.
+use super::tls::tlv;
 use blacklist::blacklists;
 use mail::{autodiscover, bimi, dkim, dmarc, mta_sts, mx, mx_ptr, spf, tls_rpt};
 use smtp::smtp;
@@ -266,26 +268,6 @@ fn addrs(c: &Client, host: &str) -> io::Result<(Vec<IpAddr>, Option<String>)> {
     let mut ips = a.ips();
     ips.extend(c.ask(host, dnsq::AAAA)?.ips());
     Ok((ips, cname))
-}
-
-/// One DER element: (tag, contents, rest).
-fn tlv(b: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let tag = *b.first()?;
-    let l = *b.get(1)? as usize;
-    let (len, h) = if l < 0x80 {
-        (l, 2)
-    } else {
-        let n = l & 0x7f;
-        if n == 0 || n > 3 {
-            return None;
-        }
-        let len = b
-            .get(2..2 + n)?
-            .iter()
-            .fold(0usize, |a, &x| a << 8 | x as usize);
-        (len, 2 + n)
-    };
-    Some((tag, b.get(h..h + len)?, &b[h + len..]))
 }
 
 /// TXT records at `name` that start with `prefix` (case-insensitive).

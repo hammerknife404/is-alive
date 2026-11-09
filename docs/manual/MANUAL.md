@@ -265,6 +265,7 @@ How to read it:
 | **Speed** | How fast to probe: **Gentle**, **Normal** (default), **Fast**, **Unthrottled**. The two numbers beside it are the rate (probes per second, 0 = no limit) and how many run at once; change them by hand for *Custom* |
 | **Show closed/filtered** | List every port, not just the open ones |
 | **Prefer IPv6** | Use the device's IPv6 address when it has both |
+| **Certificates** | Read the TLS certificate on each open port that speaks TLS (on by default; see *Certificates* below) |
 
 **Presets:**
 
@@ -297,6 +298,24 @@ Gentle is least likely to set off intrusion detection; Fast and Unthrottled will
 
 The status row counts **open** ports and how many were scanned; a progress bar shows rate and time left while it runs.
 
+### Certificates
+
+With **Certificates** ticked, each open port that speaks TLS gets a **Certificate** column: who the certificate is for, who issued it, how long it has left, and whether this computer trusts it. These ports are read: HTTPS (443, 8443, 9443), SSL-VPN portals (4433, 4443, 10443), LDAPS (636, 3269), mail over TLS (465, 993, 995), DNS over TLS (853), WinRM over HTTPS (5986), and the web admin of a Synology (5001) or Proxmox (8006). An open port that isn't a known service is tried as well and shows a certificate only if it answers in TLS. Known plain-text services (SSH, HTTP, SMB, RDP) aren't tried, and nor is SMTP on 25 or 587, which only starts TLS after a command (the **Domains** tab's SMTP check covers that).
+
+| The cell reads | Meaning |
+|---|---|
+| 🔒 **64 days left** · *name* · *issuer* (green) | Trusted by this computer for the name you typed, and not near its end |
+| ⚠ **Expires in 12 days** (amber) | Under 30 days left. A certificate that renews itself (Let's Encrypt and the like) does so with about 30 days to go, so this one has stopped renewing |
+| ⚠ **Self-signed: not trusted** (amber) | Issued by itself, as on most switches, APs, printers and firewalls out of the box. Normal on a LAN device; wrong on anything the public reaches |
+| ⚠ **Not trusted: an issuer this computer doesn't know…** (amber) | A private CA (an internal one, or a firewall inspecting TLS), or the server doesn't send its intermediate certificate |
+| ⚠ **Not valid for** *name* (amber) | The certificate is for another name. Scanning by IP usually shows this: type the name users type (`vpn.example.com`) to check that |
+| ✖ **Expired** *N days* **ago**, **Not valid yet**, **Revoked** (red) | Browsers and VPN clients refuse it |
+| **No TLS reply** (grey) | An HTTPS-type port that didn't complete a TLS handshake; hover for why. A server that only offers TLS 1.0 or 1.1 ends up here |
+
+**Click a certificate** for its details: the full status, the names it's valid for, the issuer, the dates, the TLS version and cipher, and the chain the server sent (server first). **Copy** copies them. Trust is checked against this computer's own certificate store, as its browser would, so a CA your company pushes by Group Policy counts as trusted here too. Only the handshake is made: nothing else is sent, and nothing is stored.
+
+**Example: is the SSL-VPN's certificate about to lapse?** Type `vpn.example.com:4433` in **Host** (the port replaces the list) and press **Enter**. The row for 4433 shows the days left, and **Not valid for** if the name doesn't match the certificate.
+
 ### Example: what does the router offer?
 
 1. Type the gateway's address (from the footer), say `192.168.1.1`, in **Host**.
@@ -321,7 +340,7 @@ How to read it: DNS (53) means the router answers name lookups for the office; 8
 
 A device you expect to see with nothing open and every port *filtered* (tick **Show closed/filtered**) is either down or behind a firewall that drops everything.
 
-**CSV columns:** host, ip, port, state, service, rtt_ms, error (closed and filtered ports included).
+**CSV columns:** host, ip, port, state, service, rtt_ms, error, tls_status, tls_issued_to, tls_issued_by, tls_expires (closed and filtered ports included; the tls_ columns are empty where no certificate was read). The text report and **Copy** add each certificate's details under its port.
 
 ---
 
