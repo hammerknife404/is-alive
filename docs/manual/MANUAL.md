@@ -821,7 +821,10 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 ### Writing
 
 - **Edit / Split / Preview**: the editor only (default), the editor and the formatted preview side by side, or the preview only. In Split, drag the divider (double-click it for half and half).
-- **B**, ***I***, **</>** make the selection bold, italic or code (**Ctrl+B**, **Ctrl+I**); **H** makes the line a heading, **•** a bullet, **☐** a task box you can tick in the preview.
+- **B**, ***I***, **S** (strikethrough), **</>** (code) format the selection (**Ctrl+B**, **Ctrl+I**, **Ctrl+E** for code). **H ▾** makes the line a heading, level 1 to 3, or plain text again (**Ctrl+Alt+1**, **2**, **3**, **0**).
+- **•** starts a bullet, **1.** a numbered item, **☐** a task box you can tick in the preview, **“** a quote.
+- **🔗** (**Ctrl+K**) makes the selection a link: `[text](https://)` with the cursor in the address; a selected address becomes `[](address)` with the cursor on the text. **▦** inserts a table to fill in (`| Device | IP | Note |`) and **—** a dividing line. Preview draws tables as a grid.
+- **Undo** and **redo**: **Ctrl+Z** and **Ctrl+Y** (or **Ctrl+Shift+Z**).
 - **Lists continue**: press **Enter** at the end of a list item and the next one starts; Enter on an empty item ends the list.
 - **☺** opens the emoji menu, grouped into Status, People, Notes and Tech (a server rack, Wi-Fi, network, firewall, printer, camera, disk and more). Hover an emoji to see what it's for and its shortcode (`:white_check_mark:`, `:fire:`, `:wireless:`); typing the shortcode works too, and Preview draws it as the emoji. The server rack is the file cabinet emoji (🗄, `:file_cabinet:`): Unicode has no server, so other apps show a cabinet.
 - **Time** inserts the date and time with the time zone and where this computer's clock syncs from (useful when comparing with device logs). **Host info** inserts this computer's name, domain, LAN, MAC, gateway and WAN.
@@ -829,23 +832,27 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 
 **Emoji styles.** Emoji are drawn a size up in one of four styles: **Match theme** (monochrome; neon in the Miami and RGB themes), **Monochrome**, **Colour** (each emoji in its own colour: faces yellow, ✅ green, ❌ red) and **Miami neon**. The **Style** row at the top of the emoji menu offers **Same as app** (follows Settings), **Monochrome**, **Colour** and **Miami neon**, for the emoji you insert from then on (with emoji selected, it restyles those too), so one note can mix styles. Emoji inserted in a style of their own keep it. Emoji inserted with **Same as app** follow the **Emoji** setting in Settings, so with *Match theme* they change with the theme.
 
+### Find and replace
+
+**Ctrl+F** opens **Find** above the notes (with the selected words, if any); **Ctrl+H** opens it with **Replace**. Every match is tinted and the selected one stronger, with *3 of 12* beside the field. **Enter** goes to the next, **Shift+Enter** (or **↑**) to the one before, and the editor scrolls to it and selects it, so **Ctrl+R** can redact it at once. **Aa** matches case. **Replace** swaps the selected match and moves to the next; **Replace all** swaps every one. **Esc** or **×** closes it.
+
 ### Getting it out
 
 The status row under the toolbar shows the word and line count, what's redacted, **Autosave** and when the notes were last saved, with:
 
 | Button | What it does |
 |---|---|
-| **Open…** | Add a photo (below), or open a text or config file (up to 5 MB) in a read-only tab beside Notes, with line numbers. A file opened to read is never saved, redacted or bundled |
+| **Open…** (**Ctrl+O**) | Open notes (`.md` or `.txt`, up to 5 MB): **Replace the notes** with them, **Add at the end**, or **Read only**. Add a photo (below). Or open a config file or log in a read-only tab beside Notes, with line numbers. A file opened to read is never saved, redacted or bundled |
 | **Copy** | Copy the notes, redacted |
 | **Raw copy** | Copy them exactly as written, secrets included (click twice) |
-| **Save .md…** | Save as Markdown, redacted, as `notes-<date>.md` |
+| **Save as ▾** | Save a copy, redacted, dated `notes-<date>`: **Markdown (.md)** as written (**Ctrl+Shift+S**); **Plain text (.txt)** with the marks taken out, headings underlined and tables lined up, for a ticket or an email; **Web page (.html)** formatted, photos included, to send or to print as PDF from the browser. Nothing in the notes becomes code in the page: every character is escaped, and only `http`, `https` and `mailto` links stay links |
 | **Clear** | Empty the notes (click twice) |
 
 **Autosave** (on by default): the notes save themselves, redacted, a moment after each change to your profile folder (see [Settings](#16-settings-and-themes)), and are there next time you open the app. Untick it to save only when you choose: the status row then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
-**Open…** also takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save .md…** and the Site Bundle carry it along.
+**Open…** also takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
 
 - In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
 - Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.
@@ -859,7 +866,7 @@ Notes never get scanned and mangled: only what you mark, and the secrets of the 
 - **By hand:** select a password (or anything private) and click **Redact** (**Ctrl+R**). It's hidden there and everywhere else it appears, as a `[🔑 REDACTED: …]` marker. With the cursor on a redacted value, the button becomes **Unredact**. **By hand (n)** lists them, with × to undo.
 - **From configs:** every password, pre-shared key and secret that Config Export removed from a loaded backup or export is held in memory and hidden wherever it appears in Notes, so the staff Wi-Fi password can't slip into a note you send. They stay hidden until is-alive closes, even after the file is closed or the map cleared.
 
-Autosave, **Copy**, **Save .md…** and the Site Bundle all get the redacted text. Only **Raw copy** gives the original.
+Autosave, **Copy**, **Save as** and the Site Bundle all get the redacted text. Only **Raw copy** gives the original.
 
 Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting.
 
@@ -1099,7 +1106,12 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Enter** | A tool's field | Start the run |
 | **Esc** | While a tool runs | Stop the run |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
-| **Ctrl+B / Ctrl+I** | Notes | Bold / italic |
+| **Ctrl+B / Ctrl+I / Ctrl+E** | Notes | Bold / italic / code |
+| **Ctrl+K** | Notes | Link |
+| **Ctrl+Alt+1 / 2 / 3 / 0** | Notes | Heading 1, 2, 3 / plain text |
+| **Ctrl+F / Ctrl+H** | Notes | Find / find and replace (**Enter** next, **Shift+Enter** previous, **Esc** closes) |
+| **Ctrl+O** | Notes | Open notes, a photo or a file to read |
+| **Ctrl+Shift+S** | Notes | Save a copy as Markdown |
 | **Ctrl+S** | Notes | Save the notes now (with Autosave off, the only way they're saved) |
 | **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
