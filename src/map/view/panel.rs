@@ -572,6 +572,19 @@ impl MapView {
                             }
                         }
                     }
+                    // Wake when its card's MAC is known and a real one.
+                    if let Some(mac) = n.mac.filter(crate::net::wol::wakeable)
+                        && ui
+                            .small_button("Wake")
+                            .on_hover_text(format!(
+                                "Send a Wake-on-LAN packet to {}. It wakes if Wake-on-LAN is \
+                                 on in its BIOS and network card; Ping it a minute later.",
+                                crate::net::mac::fmt(&mac)
+                            ))
+                            .clicked()
+                    {
+                        crate::net::wol::wake_all(vec![(mac, n.ip)]);
+                    }
                     if ui
                         .small_button("Copy")
                         .on_hover_text("Copy this card's details as text")
