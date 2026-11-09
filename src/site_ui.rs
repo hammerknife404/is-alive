@@ -283,8 +283,11 @@ impl App {
                         440.0,
                         "Client and building, e.g. Harbor Dental front office",
                     );
+                    // Enter while the name has (or just had) the keyboard.
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        && (r.has_focus() || r.lost_focus());
                     // The name has the keyboard when the dialog opens.
-                    if ui.memory(|m| m.focused().is_none()) {
+                    if !enter && ui.memory(|m| m.focused().is_none()) {
                         r.request_focus();
                     }
                     ui.add_space(4.0);
@@ -302,7 +305,6 @@ impl App {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let ok = !name.trim().is_empty() && (*carry || !busy);
-                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if ui.add_enabled(ok, egui::Button::new("Create and open")).clicked() || (ok && enter) {
                             match site::create(name) {
                                 Ok(folder) => done = Some((Some(folder), *carry, !*carry)),
@@ -317,10 +319,11 @@ impl App {
                 SiteAsk::Rename { name, err } => {
                     ui.heading("Rename this site");
                     let r = widgets::line(ui, crate::input::Field::Text, name, 440.0, "Site name");
-                    if ui.memory(|m| m.focused().is_none()) {
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        && (r.has_focus() || r.lost_focus());
+                    if !enter && ui.memory(|m| m.focused().is_none()) {
                         r.request_focus();
                     }
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     widgets::error(ui, err);
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
