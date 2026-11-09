@@ -19,7 +19,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | DNS: any record type from any resolver, or every resolver compared; WHOIS registration |
 | [Domains](https://github.com/hammerknife404/is-alive/wiki/Advanced) | Mail and domain health: MX, SPF, DMARC, DKIM, SMTP, blacklists, DNSSEC and more |
 | [Configs](https://github.com/hammerknife404/is-alive/wiki/Config-Export) | UniFi, SonicWall and Meraki configs to sanitized JSON, offline; /mapnetwork maps back in |
-| [Map](https://github.com/hammerknife404/is-alive/wiki/Map) | The network drawn from the sweep, configs or a /mapnetwork map, with findings |
+| [Map](https://github.com/hammerknife404/is-alive/wiki/Map) | The network drawn from the sweep, configs or a /mapnetwork map, with findings; compared with the last visit (new, changed, gone) |
 | [Notes](https://github.com/hammerknife404/is-alive/wiki/Notes) | Markdown notes for the visit, with photos and redaction |
 | [Speed](https://github.com/hammerknife404/is-alive/wiki/Speed-Test) | Throughput, latency, jitter and loss under load, bufferbloat grade and VoIP MOS |
 | [Subnet Calc](https://github.com/hammerknife404/is-alive/wiki/Subnet-Calc) | IPv4 and IPv6 subnet calculator: details, address check, split, ranges to CIDR |

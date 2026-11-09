@@ -132,6 +132,7 @@ impl MapView {
             .collect();
         findings.sort_by_key(|f| f.0);
         let (mut hide, mut flip) = (false, None);
+        let mut since_ev = None;
         egui::Panel::left("map_side")
             .resizable(true)
             .default_size(230.0)
@@ -153,6 +154,9 @@ impl MapView {
                     .id_salt("map_side_scroll")
                     .auto_shrink(false)
                     .show(ui, |ui| {
+                        if let Some(s) = &self.since {
+                            since_ev = super::since::since_side(ui, s, &self.map);
+                        }
                         if !sites.is_empty() {
                             egui::CollapsingHeader::new(
                                 RichText::new(format!("SITES ({})", sites.len()))
@@ -354,6 +358,11 @@ impl MapView {
             });
         if hide {
             self.side = false;
+        }
+        match since_ev {
+            Some(super::since::SinceEv::Focus(v)) => *focus = Some(v),
+            Some(super::since::SinceEv::Stop) => self.since = None,
+            None => {}
         }
         match flip_all {
             Some(true) => {

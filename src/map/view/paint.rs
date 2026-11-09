@@ -413,6 +413,9 @@ impl MapView {
         let z = self.zoom;
         let accent = self.accent(n);
         card_frame(p, vis, r, z, accent, a, selected, hovered, n.gone);
+        if let Some(m) = self.since_mark_of(i) {
+            super::since::mark(p, r, z, a, m);
+        }
         let text = |s: &str, font: FontId, colour: Color32, rows: usize, width: f32| {
             let mut job =
                 LayoutJob::single_section(s.to_string(), egui::TextFormat::simple(font, colour));

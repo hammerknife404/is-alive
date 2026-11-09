@@ -749,6 +749,24 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
+### Compare with the last visit
+
+Back at a site, **Compare ⏷** (beside **Saved maps**, on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
+
+- **NEW** on a card (green) is a device that wasn't on the saved map; **CHANGED** (amber) is one whose address, open ports or name changed. Zoomed far out, each is a dot on the card's corner.
+- **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
+- A selected card's panel says the same under **Since** *date*.
+
+**How devices are matched:** by MAC first, so a device DHCP moved is the same device with a new IP, not one gone and one new. A device with no MAC (known only by IP, past a router) is matched by IP, then by its card (a /mapnetwork card keeps its id when its address changes). Two devices at one IP with different MACs are one gone and one new.
+
+**What isn't compared, and why:**
+
+- **Open ports**, unless both maps had ports checked (a sweep with **Check mgmt ports**, or a backup or map that lists them). Otherwise every port would read as *no longer open*.
+- **New clients** (phones, laptops), unless the saved map was saved with **Clients: All**: a map holds only the clients it shows, so one saved with **Some** can't say whether a client is new. Clients gone or changed are still listed, since the live map is compared with every client, whatever **Clients** shows now. To compare clients next time, set **Clients: All** before **+ Save current**.
+- Only maps marked **As found** are offered (not a plan or a training map), and not on an example. Opening another site stops the comparison.
+
+**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **Compare ⏷ › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
+
 ### Selecting cards
 
 ![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)

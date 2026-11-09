@@ -371,6 +371,8 @@ impl MapTabs {
         let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
         let mut live = std::mem::replace(&mut self.live, MapView::new(None));
         live.note_store = Some(super::notes::Store::open());
+        // The saved map it was compared with is another site's.
+        live.since = None;
         *self = Self::in_dir(live, saved::folder().filter(|_| !tour));
     }
 
@@ -415,6 +417,9 @@ impl MapTabs {
             }
             if ui.button("Saved maps").clicked() {
                 self.bar = !self.bar;
+            }
+            if self.shown.is_none() {
+                self.compare_menu(ui);
             }
         });
         if clear {
@@ -463,6 +468,89 @@ impl MapTabs {
             // A saved map's layout isn't the one new maps start with.
             Some(Action::Layout(_)) if saved => None,
             act => act,
+        }
+    }
+
+    /// Compare ⏷: the live map against a saved map of this site, newest
+    /// first (as found only: a plan or a training map is no visit).
+    fn compare_menu(&mut self, ui: &mut Ui) {
+        let live = &self.live;
+        let example = matches!(
+            live.note_scope,
+            super::notes::Scope::Example(_) | super::notes::Scope::Blank
+        );
+        if live.map.nodes.is_empty() || example {
+            return;
+        }
+        let mut found: Vec<usize> = (0..self.saved.len())
+            .filter(|&j| self.saved[j].view.purpose == Purpose::AsFound)
+            .collect();
+        found.sort_by(|&a, &b| self.saved[b].created.cmp(&self.saved[a].created));
+        let label = match &live.since {
+            Some(s) => format!("Since {} ⏷", short(&s.name)),
+            None => "Compare ⏷".to_string(),
+        };
+        let mut pick = None;
+        let mut stop = false;
+        let b = ui.add(egui::Button::new(label).selected(live.since.is_some()));
+        let b = b.on_hover_text(
+            "Mark what's new, changed or gone since a saved map of this site: the last \
+             visit, say",
+        );
+        egui::Popup::menu(&b).show(|ui| {
+            ui.set_min_width(260.0);
+            ui.weak("Compare the live map with:");
+            for &j in &found {
+                let t = &self.saved[j];
+                let on = live
+                    .since
+                    .as_ref()
+                    .is_some_and(|s| s.name == t.name && s.created == t.created);
+                if ui
+                    .add(
+                        egui::Button::new(format!(
+                            "{} · {}",
+                            short(&t.name),
+                            super::since::day(&t.created)
+                        ))
+                        .selected(on),
+                    )
+                    .on_hover_text(&t.name)
+                    .clicked()
+                {
+                    pick = Some(j);
+                    ui.close();
+                }
+            }
+            if found.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "No saved map of this site yet. + Save current in Saved maps keeps \
+                             this one, to compare with on the next visit.",
+                        )
+                        .weak(),
+                    )
+                    .wrap(),
+                );
+            }
+            if live.since.is_some() {
+                ui.separator();
+                if ui.button("Stop comparing").clicked() {
+                    stop = true;
+                    ui.close();
+                }
+            }
+        });
+        if stop {
+            self.live.since = None;
+        }
+        if let Some(j) = pick {
+            let t = &self.saved[j];
+            let was = saved::copy_map(t.view.frozen.as_deref().unwrap_or(&t.view.map));
+            let was_all = t.saved.clients == Clients::All;
+            let s = super::since::Since::new(t.name.clone(), t.created.clone(), was, was_all);
+            self.live.compare_with(s);
         }
     }
 
