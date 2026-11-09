@@ -43,10 +43,11 @@ exec "$here/usr/bin/is-alive" "$@"
 RUN
 chmod 755 "$appdir/AppRun"
 
-# GitHub's release downloads fail now and then (a 504 for a few minutes):
-# try again rather than fail the build.
+# GitHub's release downloads fail now and then (a 504 for minutes at a
+# time): try again, waiting twice as long each time (1 s, 2 s … 128 s:
+# about four minutes in all) rather than fail the build.
 fetch() {
-    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$1.part" "$2"
+    curl -fsSL --retry 8 --retry-all-errors --retry-max-time 600 -o "$1.part" "$2"
     mv "$1.part" "$1"
 }
 
