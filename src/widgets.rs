@@ -981,27 +981,31 @@ fn launch(url: &str) -> Result<(), String> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    // Run from an AppImage, LD_LIBRARY_PATH leads with the AppImage's own
-    // libraries; a browser started with them can fail to load. Hand on the
-    // user's own value only.
-    let appdir = std::env::var("APPDIR").ok();
-    match std::env::var("LD_LIBRARY_PATH") {
-        Ok(v) => match host_library_path(&v, appdir.as_deref()) {
-            Some(keep) => cmd.env("LD_LIBRARY_PATH", keep),
-            None => cmd.env_remove("LD_LIBRARY_PATH"),
-        },
-        Err(_) => &mut cmd,
-    };
+    host_libraries(&mut cmd);
     let s = cmd.status().map_err(|e| e.to_string())?;
     s.success()
         .then_some(())
         .ok_or_else(|| format!("xdg-open exited with {s}"))
 }
 
+/// Run from an AppImage, LD_LIBRARY_PATH leads with the AppImage's own
+/// libraries; a browser or terminal started with them can fail to load.
+/// Hand on the user's own value only.
+#[cfg(not(windows))]
+pub fn host_libraries(cmd: &mut std::process::Command) {
+    let appdir = std::env::var("APPDIR").ok();
+    if let Ok(v) = std::env::var("LD_LIBRARY_PATH") {
+        match host_library_path(&v, appdir.as_deref()) {
+            Some(keep) => cmd.env("LD_LIBRARY_PATH", keep),
+            None => cmd.env_remove("LD_LIBRARY_PATH"),
+        };
+    }
+}
+
 /// `LD_LIBRARY_PATH` without the AppImage's entries (those under `appdir`,
 /// or any `.mount_*` AppImage mount when `appdir` isn't known); None when
 /// nothing is left.
-#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+#[cfg_attr(windows, allow(dead_code))]
 fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
     let keep: Vec<&str> = value
         .split(':')
