@@ -67,8 +67,10 @@ const SERVICES: &[(u16, &str)] = &[
     (3306, "mysql"),
     (3389, "rdp"),
     (4433, "sslvpn"),
+    (4443, "https-alt"),
     (4500, "ipsec-nat-t"),
     (5000, "upnp-dsm"),
+    (5001, "dsm-https"),
     (5060, "sip"),
     (5432, "postgres"),
     (5900, "vnc"),
@@ -76,6 +78,7 @@ const SERVICES: &[(u16, &str)] = &[
     (5986, "winrm-https"),
     (6379, "redis"),
     (8000, "http-alt"),
+    (8006, "proxmox"),
     (8008, "http-alt"),
     (8080, "http-proxy"),
     (8291, "winbox"),
@@ -83,10 +86,42 @@ const SERVICES: &[(u16, &str)] = &[
     (8888, "http-alt"),
     (9100, "jetdirect"),
     (9389, "ad-web-svc"),
+    (9443, "https-alt"),
     (10443, "fortinet-sslvpn"),
     (25565, "minecraft"),
     (27017, "mongodb"),
 ];
+
+/// Whether a port's service speaks TLS from its first byte, for the Ports
+/// tab's certificate read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tls {
+    /// HTTPS, LDAPS, IMAPS, SSL-VPN portals and the like: read, and a
+    /// failure is shown.
+    Yes,
+    /// A known service that doesn't (SSH, HTTP, SMB, RDP...), or only after
+    /// a STARTTLS: not tried.
+    No,
+    /// Not a known port: tried, and shown only if it answers in TLS.
+    Maybe,
+}
+
+/// Ports whose service is TLS from the start: the HTTPS family, the
+/// implicit-TLS mail and directory ports, SSL-VPN portals and the web
+/// admin pages of common appliances (Synology 5001, Proxmox 8006).
+const TLS_PORTS: &[u16] = &[
+    443, 465, 636, 853, 993, 995, 3269, 4433, 4443, 5001, 5986, 8006, 8443, 9443, 10443,
+];
+
+pub fn tls(port: u16) -> Tls {
+    if TLS_PORTS.contains(&port) {
+        Tls::Yes
+    } else if service_name(port).is_empty() {
+        Tls::Maybe
+    } else {
+        Tls::No
+    }
+}
 
 pub fn service_name(port: u16) -> &'static str {
     SERVICES
@@ -152,6 +187,22 @@ mod tests {
         assert_eq!(service_name(12345), "");
         assert!(INFRA.windows(2).all(|w| w[0] < w[1]));
         assert!(INFRA.iter().all(|&p| !service_name(p).is_empty()));
+    }
+
+    #[test]
+    fn which_ports_are_read_for_a_certificate() {
+        assert_eq!(tls(443), Tls::Yes);
+        assert_eq!(tls(4433), Tls::Yes);
+        assert_eq!(tls(5001), Tls::Yes);
+        // Known and not TLS: SSH, HTTP, SMB, RDP, and SMTP (STARTTLS).
+        for p in [22, 80, 445, 3389, 25, 587] {
+            assert_eq!(tls(p), Tls::No, "{p}");
+        }
+        assert_eq!(tls(7443), Tls::Maybe);
+        // Every TLS port has a name in the list, so the table shows it.
+        for p in TLS_PORTS {
+            assert!(!service_name(*p).is_empty(), "{p}");
+        }
     }
 
     #[test]

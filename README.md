@@ -13,7 +13,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | Tab | What it does |
 |---|---|
 | [Ping](https://github.com/hammerknife404/is-alive/wiki/Ping) | ICMP or TCP ping with a live latency graph, loss and min/avg/max |
-| [Ports](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names |
+| [Ports](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names, and the TLS certificate on HTTPS and SSL-VPN ports (expiry, issuer, trust) |
 | [Traceroute](https://github.com/hammerknife404/is-alive/wiki/Traceroute) | Every router to a host, three probes per hop |
 | [Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names, MACs, vendors and an Inventory for /mapnetwork |
 | [Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | DNS: any record type from any resolver, or every resolver compared; WHOIS registration |
