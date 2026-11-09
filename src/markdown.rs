@@ -96,7 +96,7 @@ pub fn shortcodes() -> impl Iterator<Item = &'static Shortcode> {
 }
 
 /// The emoji for the shortcode `rest` starts with, and the code's length.
-fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
+pub(crate) fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
     let end = rest[1..].find(':')? + 2;
     let code = &rest[1..end - 1];
     shortcodes()
@@ -123,7 +123,8 @@ pub(crate) fn inline(
     let mut rest = text;
     let mut bold = false;
     let mut italic = false;
-    let push = |job: &mut LayoutJob, s: &str, bold: bool, italic: bool| {
+    let mut strike = false;
+    let push = |job: &mut LayoutJob, s: &str, bold: bool, italic: bool, strike: bool| {
         if s.is_empty() {
             return;
         }
@@ -132,26 +133,32 @@ pub(crate) fn inline(
             f.color = vis.strong_text_color();
         }
         f.italics = italic;
+        if strike {
+            f.strikethrough = Stroke::new(1.0, f.color);
+        }
         crate::theme::append_with_emoji(job, s, &f);
     };
     while !rest.is_empty() {
         let next = rest
             .char_indices()
-            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '[' | ':'))
+            .find(|(_, c)| matches!(c, '*' | '_' | '`' | '[' | ':' | '~'))
             .map(|(i, _)| i);
         let Some(i) = next else {
-            push(&mut job, rest, bold, italic);
+            push(&mut job, rest, bold, italic, strike);
             break;
         };
-        push(&mut job, &rest[..i], bold, italic);
+        push(&mut job, &rest[..i], bold, italic, strike);
         rest = &rest[i..];
         if let Some(r) = rest.strip_prefix("**") {
             bold = !bold;
             rest = r;
+        } else if let Some(r) = rest.strip_prefix("~~") {
+            strike = !strike;
+            rest = r;
         } else if rest.starts_with(':')
             && let Some((emoji, len)) = shortcode(rest)
         {
-            push(&mut job, emoji, bold, italic);
+            push(&mut job, emoji, bold, italic, strike);
             rest = &rest[len..];
         } else if let Some(r) = rest.strip_prefix('`')
             && let Some(end) = r.find('`')
@@ -191,7 +198,7 @@ pub(crate) fn inline(
             italic = !italic;
             rest = &rest[1..];
         } else {
-            push(&mut job, &rest[..1], bold, italic);
+            push(&mut job, &rest[..1], bold, italic, strike);
             rest = &rest[1..];
         }
     }
@@ -252,6 +259,17 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
                     ui.set_width(ui.available_width());
                     ui.label(RichText::new(code.join("\n")).monospace().size(body * 0.95));
                 });
+            continue;
+        }
+        if t.starts_with('|') {
+            let mut rows = vec![t];
+            while let Some((_, next)) = lines.peek()
+                && next.trim_start().starts_with('|')
+            {
+                rows.push(next.trim_start());
+                lines.next();
+            }
+            table(ui, &rows, font);
             continue;
         }
         if t.is_empty() {
@@ -323,6 +341,63 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
         ui.label(inline(ui, line, body, false, &font.family));
     }
     toggled
+}
+
+/// The cells of a table row: `| a | b |` is `["a", "b"]`.
+fn cells(row: &str) -> Vec<&str> {
+    let row = row.trim().trim_start_matches('|').trim_end_matches('|');
+    row.split('|').map(str::trim).collect()
+}
+
+/// A Markdown table as a striped grid: the first row as its header, the
+/// `|---|` row left out, text wrapped to share the width.
+fn table(ui: &mut Ui, rows: &[&str], font: &FontId) {
+    let Some((head, rest)) = rows.split_first() else {
+        return;
+    };
+    let head = cells(head);
+    let body: Vec<Vec<&str>> = rest
+        .iter()
+        .map(|r| cells(r))
+        .filter(|c| {
+            !c.iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':')))
+        })
+        .collect();
+    let n = head.len().max(1);
+    let gap = 12.0;
+    // Kept clear of the edge: a table as wide as its panel would widen it.
+    let w = (ui.available_width() - gap * (n as f32 - 1.0) - 24.0).max(40.0 * n as f32);
+    let widths: Vec<f32> = if n == 2 {
+        vec![w * 0.3, w * 0.7]
+    } else {
+        vec![w / n as f32; n]
+    };
+    ui.add_space(2.0);
+    egui::Grid::new(ui.next_auto_id())
+        .num_columns(n)
+        .striped(true)
+        .spacing([gap, 5.0])
+        .show(ui, |ui| {
+            for (row, strong) in
+                std::iter::once((&head, true)).chain(body.iter().map(|r| (r, false)))
+            {
+                for (i, w) in widths.iter().enumerate() {
+                    let cell = row.get(i).copied().unwrap_or("");
+                    ui.scope(|ui| {
+                        ui.set_max_width(*w);
+                        // A grid's cells sit in a row, where text runs on
+                        // unless told to wrap.
+                        ui.add(
+                            egui::Label::new(inline(ui, cell, font.size, strong, &font.family))
+                                .wrap(),
+                        );
+                    });
+                }
+                ui.end_row();
+            }
+        });
+    ui.add_space(6.0);
 }
 
 /// Flip the task box on `line` of `text`.
