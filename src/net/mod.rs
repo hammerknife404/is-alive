@@ -9,6 +9,7 @@ pub mod speed;
 pub mod subnet;
 pub mod targets;
 pub mod tls;
+pub mod wol;
 
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
