@@ -13,6 +13,7 @@ mod manual;
 mod map;
 mod mapnetwork;
 mod markdown;
+mod markdown_out;
 mod meraki;
 mod net;
 mod photos;
@@ -256,7 +257,9 @@ impl App {
         }
         let keys = [Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9];
         for (n, (tab, ..)) in TABS.iter().enumerate() {
+            // Ctrl+Alt+digit is Notes' headings: not a tab switch.
             if let Some(d) = tab_key(n)
+                && !ui.input(|inp| inp.modifiers.alt)
                 && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, keys[d]))
             {
                 self.tab = *tab;

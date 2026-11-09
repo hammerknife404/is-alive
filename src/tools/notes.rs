@@ -5,7 +5,7 @@
 //!
 //! Each emoji keeps the style it was added in (monochrome, colour, neon)
 //! as an invisible mark after it (see `theme::EmojiStyle::marker`). The
-//! autosaved notes keep the marks; Copy, Raw copy, Save .md and the Site
+//! autosaved notes keep the marks; Copy, Raw copy, Save as and the Site
 //! Bundle drop them, so other programs get plain emoji. Ctrl+C and Cut in
 //! the editor keep them, so emoji pasted back in keep their style.
 
@@ -77,11 +77,113 @@ pub struct NotesTool {
     /// Save or Ctrl+S was pressed: written on the next poll, once the Map's
     /// card notes are in (the keep list is trimmed then).
     save_asked: bool,
+    /// The Find (and Replace) bar, when open.
+    find: Option<FindBar>,
+    /// Scroll the editor to this character on the next frame.
+    scroll_to: Option<usize>,
+    /// A Markdown or text file opened: asking where it goes.
+    asking: Option<Viewed>,
+}
+
+/// Find and Replace over the notes.
+#[derive(Default)]
+struct FindBar {
+    query: String,
+    replace: String,
+    /// Match case.
+    case: bool,
+    /// The Replace row is showing.
+    replacing: bool,
+    /// The match selected, by its place in the list.
+    current: usize,
+    /// Give the Find field the keyboard on the next frame.
+    focus: bool,
+}
+
+/// Most matches Find lists and highlights.
+const FIND_MAX: usize = 5_000;
+
+/// Where `query` is in `text` (byte ranges), case-blind unless `case`.
+fn find_all(text: &str, query: &str, case: bool) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let Ok(re) = regex::RegexBuilder::new(&regex::escape(query))
+        .case_insensitive(!case)
+        .build()
+    else {
+        return Vec::new();
+    };
+    re.find_iter(text)
+        .take(FIND_MAX)
+        .map(|m| m.range())
+        .collect()
+}
+
+/// Tint `found` in a laid-out job (the selected one, `current`, stronger),
+/// splitting sections at their edges.
+fn mark_found(job: &mut LayoutJob, found: &[Range<usize>], current: Option<usize>, tint: Color32) {
+    use egui::text::{ByteIndex, LayoutSection};
+    if found.is_empty() {
+        return;
+    }
+    let mut out: Vec<LayoutSection> = Vec::with_capacity(job.sections.len() + 2 * found.len());
+    for sec in job.sections.drain(..) {
+        let end = sec.byte_range.end.0;
+        let mut at = sec.byte_range.start.0;
+        let mut first = true;
+        let mut piece = |r: Range<usize>, bg: Option<Color32>| {
+            let mut s = sec.clone();
+            s.byte_range = ByteIndex(r.start)..ByteIndex(r.end);
+            if !first {
+                s.leading_space = 0.0;
+            }
+            if let Some(bg) = bg {
+                s.format.background = bg;
+            }
+            first = false;
+            out.push(s);
+        };
+        let from = found.partition_point(|f| f.end <= at);
+        for (k, f) in found.iter().enumerate().skip(from) {
+            if f.start >= end {
+                break;
+            }
+            let (a, b) = (f.start.max(at), f.end.min(end));
+            if a > at {
+                piece(at..a, None);
+            }
+            let bg = if Some(k) == current {
+                tint
+            } else {
+                tint.gamma_multiply(0.45)
+            };
+            piece(a..b, Some(bg));
+            at = b;
+        }
+        if at < end || at == sec.byte_range.start.0 {
+            piece(at..end, None);
+        }
+    }
+    job.sections = out;
+}
+
+/// A heading's level at the start of `line` (0: not a heading), and where
+/// its text starts.
+fn heading_of(line: &str) -> (usize, usize) {
+    let n = line.chars().take_while(|&c| c == '#').count();
+    if (1..=6).contains(&n) && line[n..].starts_with(' ') {
+        (n, n + 1)
+    } else {
+        (0, 0)
+    }
 }
 
 /// An Open dialog result: read-only text or a portable photo for Notes.
 enum Opened {
     Text(Viewed),
+    /// Markdown or plain text: it may go into the notes.
+    Notes(Viewed),
     Photo(String),
 }
 
@@ -194,6 +296,9 @@ impl Default for NotesTool {
             elsewhere: Vec::new(),
             autosave: true,
             save_asked: false,
+            find: None,
+            scroll_to: None,
+            asking: None,
         };
         if unclean {
             notes.write();
@@ -456,6 +561,310 @@ impl NotesTool {
         self.changed(ctx.input(|i| i.time));
     }
 
+    /// Make the cursor's line a heading of `level` (0: plain text again).
+    fn set_heading(&mut self, ctx: &egui::Context, level: usize) {
+        let id = egui::Id::new(EDITOR_ID);
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        let c = state
+            .cursor
+            .char_range()
+            .map_or(self.text.chars().count(), |r| r.primary.index.0);
+        let b = self
+            .text
+            .char_indices()
+            .nth(c)
+            .map_or(self.text.len(), |(i, _)| i);
+        let start = self.text[..b].rfind('\n').map_or(0, |i| i + 1);
+        let (_, old) = heading_of(&self.text[start..]);
+        let new = if level == 0 {
+            String::new()
+        } else {
+            format!("{} ", "#".repeat(level))
+        };
+        self.text.replace_range(start..start + old, &new);
+        let moved = (c as isize + new.chars().count() as isize - old as isize).max(0) as usize;
+        state
+            .cursor
+            .set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(moved)))));
+        state.store(ctx, id);
+        self.refocus = true;
+        self.changed(ctx.input(|i| i.time));
+    }
+
+    /// A link around the selection: `[text](https://)` with the cursor in
+    /// the address; a selected address becomes `[](address)`.
+    fn link(&mut self, ctx: &egui::Context) {
+        self.edit_at_cursor(ctx, |sel| {
+            let lower = sel.trim().to_ascii_lowercase();
+            if lower.starts_with("http://") || lower.starts_with("https://") {
+                (format!("[]({})", sel.trim()), 1)
+            } else {
+                let text = format!("[{sel}](https://");
+                let at = text.chars().count();
+                (format!("{text})"), at)
+            }
+        })
+    }
+
+    /// Insert `block` on lines of its own at the cursor.
+    fn insert_block(&mut self, ctx: &egui::Context, block: &str) {
+        let at = widgets::text_selection(ctx, egui::Id::new(EDITOR_ID), &self.text)
+            .map_or(self.text.len(), |r| r.start);
+        let mut block = block.to_string();
+        if at > 0 && !self.text[..at].ends_with('\n') {
+            block.insert(0, '\n');
+        }
+        if !self.text[at..].starts_with('\n') {
+            block.push('\n');
+        }
+        let n = block.chars().count();
+        self.edit_at_cursor(ctx, |_| (block, n));
+    }
+
+    /// Select the match `k` in the editor and scroll to it.
+    fn show_match(&mut self, ctx: &egui::Context, found: &[Range<usize>], k: usize) {
+        let Some(r) = found.get(k) else { return };
+        let a = self.text[..r.start].chars().count();
+        let b = a + self.text[r.clone()].chars().count();
+        let id = egui::Id::new(EDITOR_ID);
+        let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+        state.cursor.set_char_range(Some(CCursorRange::two(
+            CCursor::new(CharIndex(a)),
+            CCursor::new(CharIndex(b)),
+        )));
+        state.store(ctx, id);
+        self.scroll_to = Some(a);
+    }
+
+    /// The Find bar: Find (Ctrl+F), Replace (Ctrl+H), match case, next and
+    /// previous (Enter, Shift+Enter), Esc to close.
+    fn find_bar(&mut self, ui: &mut Ui) {
+        let Some(bar) = &mut self.find else { return };
+        let ctx = ui.ctx().clone();
+        let before = (bar.query.clone(), bar.case);
+        let mut close = false;
+        let mut step: Option<bool> = None;
+        let (mut one, mut all) = (false, false);
+        ui.horizontal_wrapped(|ui| {
+            let r = widgets::line(ui, crate::input::Field::Text, &mut bar.query, 220.0, "Find");
+            if std::mem::take(&mut bar.focus) {
+                r.request_focus();
+            }
+            if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                step = Some(!ui.input(|i| i.modifiers.shift));
+                r.request_focus();
+            }
+            if r.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                close = true;
+            }
+            let found = find_all(&self.text, &bar.query, bar.case);
+            let label = match (bar.query.is_empty(), found.len()) {
+                (true, _) => String::new(),
+                (false, 0) => "No match".into(),
+                (false, n) if n >= FIND_MAX => format!("{} of {n}+", bar.current.min(n - 1) + 1),
+                (false, n) => format!("{} of {n}", bar.current.min(n - 1) + 1),
+            };
+            ui.weak(label);
+            if ui
+                .small_button("↑")
+                .on_hover_text("Previous (Shift+Enter)")
+                .clicked()
+            {
+                step = Some(false);
+            }
+            if ui.small_button("↓").on_hover_text("Next (Enter)").clicked() {
+                step = Some(true);
+            }
+            ui.toggle_value(&mut bar.case, "Aa")
+                .on_hover_text("Match case");
+            ui.toggle_value(&mut bar.replacing, "Replace")
+                .on_hover_text("Replace (Ctrl+H)");
+            if ui.small_button("×").on_hover_text("Close (Esc)").clicked() {
+                close = true;
+            }
+        });
+        if bar.replacing {
+            ui.horizontal(|ui| {
+                widgets::line(
+                    ui,
+                    crate::input::Field::Text,
+                    &mut bar.replace,
+                    220.0,
+                    "Replace with",
+                );
+                one = ui
+                    .button("Replace")
+                    .on_hover_text("Replace the selected match, then go to the next")
+                    .clicked();
+                all = ui.button("Replace all").clicked();
+            });
+        }
+        let query = bar.query.clone();
+        let case = bar.case;
+        let with = bar.replace.clone();
+        let mut current = bar.current;
+        if close {
+            self.find = None;
+            self.refocus = true;
+            return;
+        }
+        let found = find_all(&self.text, &query, case);
+        if (query.clone(), case) != before {
+            // A new search starts at the first match from the cursor on.
+            let cursor = widgets::text_selection(&ctx, egui::Id::new(EDITOR_ID), &self.text)
+                .map_or(0, |r| r.start);
+            current = found.iter().position(|f| f.start >= cursor).unwrap_or(0);
+            self.show_match(&ctx, &found, current);
+        }
+        if let Some(next) = step
+            && !found.is_empty()
+        {
+            let n = found.len();
+            current = if next {
+                (current + 1) % n
+            } else {
+                (current + n - 1) % n
+            };
+            self.show_match(&ctx, &found, current);
+        }
+        let room = crate::input::Field::Notes.max();
+        if one
+            && let Some(r) = found
+                .get(current.min(found.len().saturating_sub(1)))
+                .cloned()
+        {
+            if self.text.chars().count() - self.text[r.clone()].chars().count()
+                + with.chars().count()
+                > room
+            {
+                self.err = Some("Replacing that would make the notes too long.".into());
+            } else {
+                self.text.replace_range(r, &with);
+                self.changed(ctx.input(|i| i.time));
+                let found = find_all(&self.text, &query, case);
+                current = current.min(found.len().saturating_sub(1));
+                self.show_match(&ctx, &found, current);
+            }
+        }
+        if all && !found.is_empty() {
+            let mut text = self.text.clone();
+            for r in found.iter().rev() {
+                text.replace_range(r.clone(), &with);
+            }
+            if text.chars().count() > room {
+                self.err = Some("Replacing all of them would make the notes too long.".into());
+            } else {
+                self.text = text;
+                self.changed(ctx.input(|i| i.time));
+                widgets::toast(
+                    format!(
+                        "Replaced {} match{}",
+                        found.len(),
+                        if found.len() == 1 { "" } else { "es" }
+                    ),
+                    true,
+                );
+                current = 0;
+            }
+        }
+        if let Some(bar) = &mut self.find {
+            bar.current = current;
+        }
+    }
+
+    /// A Markdown or text file opened: replace the notes with it, add it at
+    /// the end, or just read it.
+    fn ask_where(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(v) = &self.asking else { return };
+        let name = crate::tools::export::file_name(&v.path);
+        let mut choice = None;
+        let r = egui::Modal::new(egui::Id::new("notes_open_where")).show(ctx, |ui| {
+            ui.set_max_width(380.0);
+            ui.strong(format!("Open {name}"));
+            ui.label(format!(
+                "{} line{} of text. Put it in Notes, or read it beside them?",
+                v.lines,
+                if v.lines == 1 { "" } else { "s" }
+            ));
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(RichText::new("Replace the notes").color(widgets::bad()))
+                    .on_hover_text("The notes become this file (redacted as you type would be)")
+                    .clicked()
+                {
+                    choice = Some(0);
+                }
+                if ui.button("Add at the end").clicked() {
+                    choice = Some(1);
+                }
+                if ui
+                    .button("Read only")
+                    .on_hover_text("In a tab beside Notes; never saved or bundled")
+                    .clicked()
+                {
+                    choice = Some(2);
+                }
+                if ui.button("Cancel").clicked() {
+                    ui.close();
+                }
+            });
+        });
+        match choice {
+            Some(2) => {
+                self.file = self.asking.take();
+                self.on_file = true;
+            }
+            Some(how) => {
+                let v = self.asking.take().expect("asked");
+                let incoming = crate::input::Field::Notes.clean(&self.photos.compact(&v.text));
+                let joined = if how == 0 || self.text.trim().is_empty() {
+                    incoming
+                } else {
+                    let sep = if self.text.ends_with('\n') {
+                        "\n"
+                    } else {
+                        "\n\n"
+                    };
+                    format!("{}{sep}{incoming}", self.text)
+                };
+                if joined.chars().count() > crate::input::Field::Notes.max() {
+                    self.err = Some(format!(
+                        "{name} is too long for the notes; open it Read only."
+                    ));
+                } else {
+                    self.text = joined;
+                    self.changed(now);
+                    self.on_file = false;
+                    widgets::toast(format!("{name} is in Notes"), true);
+                }
+            }
+            None if r.should_close() => self.asking = None,
+            None => {}
+        }
+    }
+
+    /// Save as Markdown, plain text or a web page, redacted.
+    fn save_as(&self, kind: usize) {
+        let date = chrono::Local::now().format("%Y-%m-%d");
+        let text = self.sanitized_plain();
+        match kind {
+            1 => widgets::save_file(
+                format!("notes-{date}.txt"),
+                "Plain text",
+                vec!["txt"],
+                crate::markdown_out::to_text(&text),
+            ),
+            2 => widgets::save_file(
+                format!("notes-{date}.html"),
+                "Web page",
+                vec!["html", "htm"],
+                crate::markdown_out::to_html(&text, &format!("Notes {date}")),
+            ),
+            _ => widgets::save_file(format!("notes-{date}.md"), "Markdown", vec!["md"], text),
+        }
+    }
+
     /// Set the emoji in the selection (`sel`, bytes) to `style`, keeping the
     /// selection (and giving the editor the keyboard back); redaction
     /// markers' 🔑 are left alone. Returns where the selection is now.
@@ -603,9 +1012,32 @@ impl NotesTool {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo, look: &mut crate::theme::Settings) {
-        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
+        // Ctrl+Shift+S before Ctrl+S, which would take it too.
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::S)) {
+            if !self.is_empty() {
+                self.save_as(0);
+            }
+        } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
             self.save_asked = true;
             ui.ctx().request_repaint();
+        }
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::O)) {
+            self.open(ui.ctx());
+        }
+        // Ctrl+H before the editor sees it (there it deletes a character).
+        for (key, replacing) in [(Key::F, false), (Key::H, true)] {
+            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) {
+                let sel = widgets::text_selection(ui.ctx(), egui::Id::new(EDITOR_ID), &self.text)
+                    .map(|r| self.text[r].to_string())
+                    .filter(|s| !s.is_empty() && !s.contains('\n') && s.len() <= 200);
+                let bar = self.find.get_or_insert_with(FindBar::default);
+                if let Some(s) = sel {
+                    bar.query = s;
+                }
+                bar.replacing |= replacing;
+                bar.focus = true;
+                self.on_file = false;
+            }
         }
         let font = FontId::new(
             look.notes_size as f32,
@@ -626,6 +1058,7 @@ impl NotesTool {
                 self.file = Some(v);
                 self.on_file = true;
             }
+            Some(Ok(Opened::Notes(v))) => self.asking = Some(v),
             Some(Ok(Opened::Photo(markdown))) => {
                 if self.photos.expand(&self.text).chars().count() + markdown.len()
                     > crate::input::Field::Notes.max()
@@ -667,11 +1100,16 @@ impl NotesTool {
             self.footer(ui, &hits, now, look);
         }
         ui.add_space(2.0);
+        self.ask_where(&ctx, now);
         if self.on_file {
             if let Some(v) = &self.file {
                 viewer(ui, v, &font);
             }
             return;
+        }
+        if self.find.is_some() {
+            self.find_bar(ui);
+            ui.add_space(2.0);
         }
 
         let narrow = ui.available_width() < 720.0;
@@ -789,17 +1227,42 @@ impl NotesTool {
                 self.wrap(&ctx, "*");
             }
             if ui
+                .button(RichText::new("S").strikethrough())
+                .on_hover_text("Strikethrough")
+                .clicked()
+            {
+                self.wrap(&ctx, "~~");
+            }
+            if ui
                 .button(RichText::new("</>").monospace())
-                .on_hover_text("Inline code")
+                .on_hover_text("Inline code (Ctrl+E)")
                 .clicked()
             {
                 self.wrap(&ctx, "`");
             }
-            if ui.button("H").on_hover_text("Heading").clicked() {
-                self.line_prefix(&ctx, "## ");
-            }
+            ui.menu_button("H ▾", |ui| {
+                for (level, name, keys) in [
+                    (1, "Heading 1", "Ctrl+Alt+1"),
+                    (2, "Heading 2", "Ctrl+Alt+2"),
+                    (3, "Heading 3", "Ctrl+Alt+3"),
+                    (0, "Normal text", "Ctrl+Alt+0"),
+                ] {
+                    if ui
+                        .add(egui::Button::new(name).shortcut_text(keys))
+                        .clicked()
+                    {
+                        self.set_heading(&ctx, level);
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Heading");
             if ui.button("•").on_hover_text("Bullet list").clicked() {
                 self.line_prefix(&ctx, "- ");
+            }
+            if ui.button("1.").on_hover_text("Numbered list").clicked() {
+                self.line_prefix(&ctx, "1. ");
             }
             if ui
                 .button("☐")
@@ -807,6 +1270,18 @@ impl NotesTool {
                 .clicked()
             {
                 self.line_prefix(&ctx, "- [ ] ");
+            }
+            if ui.button("“").on_hover_text("Quote").clicked() {
+                self.line_prefix(&ctx, "> ");
+            }
+            if ui.button("🔗").on_hover_text("Link (Ctrl+K)").clicked() {
+                self.link(&ctx);
+            }
+            if ui.button("▦").on_hover_text("Table").clicked() {
+                self.insert_block(&ctx, "| Device | IP | Note |\n|---|---|---|\n|  |  |  |\n");
+            }
+            if ui.button("—").on_hover_text("Horizontal rule").clicked() {
+                self.insert_block(&ctx, "---\n");
             }
             let mut emoji = None;
             let mut restyle = None;
@@ -1015,6 +1490,7 @@ impl NotesTool {
         self.opening = Some(Job::spawn(ctx, |tx| {
             let picked = rfd::FileDialog::new()
                 .set_title("Open notes, a photo, or a config file")
+                .add_filter("Notes (Markdown, text)", &["md", "markdown", "txt"])
                 .add_filter("Photos", &["png", "jpg", "jpeg", "webp"])
                 .add_filter(
                     "Text and config files",
@@ -1029,8 +1505,13 @@ impl NotesTool {
                 let photo = p.extension().and_then(|s| s.to_str()).is_some_and(|s| {
                     ["png", "jpg", "jpeg", "webp"].contains(&s.to_ascii_lowercase().as_str())
                 });
+                let notes = p.extension().and_then(|s| s.to_str()).is_some_and(|s| {
+                    ["md", "markdown", "txt"].contains(&s.to_ascii_lowercase().as_str())
+                });
                 tx.send(if photo {
                     crate::photos::import(&p).map(Opened::Photo)
+                } else if notes {
+                    read_text(&p).map(Opened::Notes)
                 } else {
                     read_text(&p).map(Opened::Text)
                 });
@@ -1157,19 +1638,25 @@ impl NotesTool {
                     self.changed(now);
                 }
                 ui.add_enabled_ui(!empty, |ui| {
-                    if ui
-                        .button("Save .md…")
-                        .on_hover_text("Save as Markdown, redacted")
-                        .clicked()
-                    {
-                        // Dated, so one visit's notes don't land on another's.
-                        widgets::save_file(
-                            format!("notes-{}.md", chrono::Local::now().format("%Y-%m-%d")),
-                            "Markdown",
-                            vec!["md"],
-                            self.sanitized_plain(),
-                        );
-                    }
+                    // Dated, so one visit's notes don't land on another's.
+                    ui.menu_button("Save as ▾", |ui| {
+                        for (kind, name, keys, tip) in [
+                            (0, "Markdown (.md)", "Ctrl+Shift+S", "As written, for opening here or in any Markdown editor"),
+                            (1, "Plain text (.txt)", "", "The marks taken out: for a ticket or an email"),
+                            (2, "Web page (.html)", "", "Formatted, photos included: to send, or print as PDF from the browser"),
+                        ] {
+                            if ui
+                                .add(egui::Button::new(name).shortcut_text(keys))
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                self.save_as(kind);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Save a copy, redacted, as Markdown, plain text or a web page");
                     if widgets::confirm_button(
                         ui,
                         "notes_raw_copy",
@@ -1187,7 +1674,7 @@ impl NotesTool {
                 });
                 if ui
                     .button("Open…")
-                    .on_hover_text("Open a photo to add to Notes, or a text/config file to read. Photos are not automatically redacted; review them before sharing.")
+                    .on_hover_text("Open notes (.md, .txt) to put in Notes or read, a photo to add, or a config file to read (Ctrl+O). Photos are not automatically redacted; review them before sharing.")
                     .clicked()
                 {
                     self.open(ui.ctx());
@@ -1268,9 +1755,23 @@ impl NotesTool {
             }
         }
         if focused {
-            for (key, mark) in [(Key::B, "**"), (Key::I, "*")] {
+            for (key, mark) in [(Key::B, "**"), (Key::I, "*"), (Key::E, "`")] {
                 if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) {
                     self.wrap(&ctx, mark);
+                }
+            }
+            // Before the editor: there Ctrl+K deletes to the line's end.
+            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+                self.link(&ctx);
+            }
+            for (key, level) in [
+                (Key::Num1, 1),
+                (Key::Num2, 2),
+                (Key::Num3, 3),
+                (Key::Num0, 0),
+            ] {
+                if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::ALT, key)) {
+                    self.set_heading(&ctx, level);
                 }
             }
             self.delete_emoji_marks(&ctx);
@@ -1290,6 +1791,13 @@ impl NotesTool {
         let show = self.show_hits;
         let cache = &self.cache;
         let ov = &self.ov;
+        // Find's matches, worked out from the text being laid out (it may
+        // have just changed).
+        let find = self
+            .find
+            .as_ref()
+            .map(|b| (b.query.clone(), b.case, b.current));
+        let scroll_to = self.scroll_to.take();
         let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
             let text = buf.as_str();
             let hits: Vec<Range<usize>> = hits_for(cache, text, ov)
@@ -1297,6 +1805,11 @@ impl NotesTool {
                 .map(|h| h.span)
                 .collect();
             let mut job = highlight(ui, text, if show { &hits } else { &[] }, font);
+            if let Some((q, case, current)) = &find {
+                let found = find_all(text, q, *case);
+                let tint = crate::theme::accent().gamma_multiply(0.45);
+                mark_found(&mut job, &found, Some(*current), tint);
+            }
             job.wrap.max_width = wrap;
             ui.fonts_mut(|f| f.layout_job(job))
         };
@@ -1306,7 +1819,7 @@ impl NotesTool {
             .auto_shrink(false)
             .show(ui, |ui| {
                 let fill = ui.available_size();
-                egui::TextEdit::multiline(&mut self.text)
+                let out = egui::TextEdit::multiline(&mut self.text)
                     .id(id)
                     .char_limit(crate::input::Field::Notes.room())
                     .desired_width(f32::INFINITY)
@@ -1314,7 +1827,15 @@ impl NotesTool {
                     .lock_focus(true)
                     .hint_text("Notes in Markdown. Select text and press Ctrl+R (or right-click, Redact) to redact it.")
                     .layouter(&mut layouter)
-                    .show(ui)
+                    .show(ui);
+                if let Some(c) = scroll_to {
+                    let at = out
+                        .galley
+                        .pos_from_cursor(CCursor::new(CharIndex(c)))
+                        .translate(out.galley_pos.to_vec2());
+                    ui.scroll_to_rect(at.expand(24.0), Some(egui::Align::Center));
+                }
+                out
             })
             .inner;
         if std::mem::take(&mut self.refocus) {
@@ -1714,7 +2235,69 @@ mod tests {
             elsewhere: Vec::new(),
             autosave: true,
             save_asked: false,
+            find: None,
+            scroll_to: None,
+            asking: None,
         }
+    }
+
+    #[test]
+    fn find_is_case_blind_unless_asked_and_literal() {
+        let t = "Switch SW-01, switch sw-02; a.b and axb";
+        assert_eq!(find_all(t, "switch", false).len(), 2);
+        assert_eq!(find_all(t, "switch", true), vec![14..20]);
+        // The query is text, not a pattern.
+        assert_eq!(find_all(t, "a.b", false).len(), 1);
+        assert!(find_all(t, "", false).is_empty());
+        assert_eq!(find_all("Ünïcode ünïcode", "ÜNÏ", false).len(), 2);
+    }
+
+    #[test]
+    fn found_matches_split_sections_and_keep_every_byte() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let t = "# Héading\n- find me, find you\n`find` here";
+            let mut job = highlight(ui, t, &[], &FontId::monospace(13.0));
+            let found = find_all(t, "find", false);
+            assert_eq!(found.len(), 3);
+            mark_found(&mut job, &found, Some(1), Color32::RED);
+            // Sections still cover the text end to end, on char boundaries.
+            let mut at = 0;
+            for s in &job.sections {
+                assert_eq!(s.byte_range.start.0, at);
+                assert!(t.is_char_boundary(s.byte_range.end.0));
+                at = s.byte_range.end.0;
+            }
+            assert_eq!(at, t.len());
+            let tinted: Vec<&str> = job
+                .sections
+                .iter()
+                .filter(|s| {
+                    s.format.background != Color32::TRANSPARENT
+                        && s.format.background != ui.visuals().code_bg_color
+                })
+                .map(|s| &t[s.byte_range.start.0..s.byte_range.end.0])
+                .collect();
+            assert!(tinted.iter().filter(|s| **s == "find").count() >= 2);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn headings_by_level() {
+        assert_eq!(heading_of("## Title"), (2, 3));
+        assert_eq!(heading_of("#hashtag"), (0, 0));
+        assert_eq!(heading_of("Plain"), (0, 0));
+    }
+
+    #[test]
+    fn preview_draws_tables_and_strikethrough() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let t = "| Device | IP |\n|---|---|\n| ~~old~~ | 10.0.0.2 |\n\nafter";
+            markdown::render(ui, t, &FontId::proportional(14.0));
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

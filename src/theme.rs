@@ -378,7 +378,7 @@ pub fn restyle_emoji(
 }
 
 /// `text` without the emoji style marks, for anything that leaves the app
-/// (Copy, Save .md, the Site Bundle): they're invisible, but other programs
+/// (Copy, Save as, the Site Bundle): they're invisible, but other programs
 /// get the plain emoji. The autosaved notes keep them.
 pub fn strip_emoji_styles(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
