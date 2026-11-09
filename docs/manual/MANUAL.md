@@ -8,7 +8,7 @@ end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.25.0**. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.26**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -147,7 +147,8 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **LAN** is this computer's address and subnet (for example `192.168.1.50/24`).
 - **Gateway** is the router this computer sends internet traffic to.
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
-- **Help** (or **F1**) opens the is-alive wiki in your browser.
+- **Help ▴** opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
+- **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
 - **v0.25.0** is the version you're running: worth including when you report a problem.
 - **Full scan** runs a quick health check of this network (below).
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
@@ -1028,7 +1029,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ## 16. Settings and themes
 
-![Settings, opened from the app's name: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note, Keyboard and mouse and the settings folder are further down](img/settings.png)
+![Settings, opened from the app's name: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note and the settings folder are further down](img/settings.png)
 
 Click **is-alive ▾** at the top left to open Settings. Changes apply at once and are remembered. In a small window, scroll it for the rest.
 
@@ -1073,10 +1074,6 @@ The small line under them says what's drawing the backdrop (graphics card or pro
 
 - **Show the accuracy note**: brings back the note above the Map if you closed it.
 
-### Keyboard and mouse
-
-Lists the shortcuts (see [Keyboard and mouse](#17-keyboard-and-mouse)).
-
 ### Where settings and notes are kept
 
 The bottom of Settings shows the folder:
@@ -1086,8 +1083,6 @@ The bottom of Settings shows the folder:
 
 It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). The window also reopens at the size you last closed it.
 
-**Help wiki** at the top right of Settings opens the wiki.
-
 ---
 
 ## 17. Keyboard and mouse
@@ -1096,7 +1091,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 |---|---|---|
 | **Ctrl+1** … **Ctrl+9** | Anywhere | Ping, Port Check, Traceroute, Subnet Sweep, DNS Lookup, Advanced, Config Export, Map, Notes |
 | **Ctrl+0** | Anywhere | Results |
-| **F1** | Anywhere | Open the is-alive wiki (same as **Help**) |
+| **F1** | Anywhere | Open the manual at the chapter about this tab (same as **Help → This tab**) |
 | **Enter** | A tool's field | Start the run |
 | **Esc** | While a tool runs | Stop the run |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
@@ -1179,7 +1174,7 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 is-alive was built for sites with regulated data (healthcare, finance): it sends as little as possible and keeps secrets out of everything it writes.
 
 - **On start, two requests, both optional:** the public IP (one DNS query to OpenDNS) and the update check (one HTTPS request to GitHub, carrying only the app's version). Turn both off in **Settings → Network** and opening the app sends nothing at all.
-- **Everything else only when you run it.** No telemetry, no accounts, no analytics. Links (Help, the update link, a card's Web button) open in your own browser.
+- **Everything else only when you run it.** No telemetry, no accounts, no analytics. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
 - **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
@@ -1241,11 +1236,11 @@ sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 
 ### Help or a link doesn't open the browser
 
-is-alive opens links with the system's own launcher. If nothing happens, check a default browser is set (Windows: **Settings → Apps → Default apps**; Linux: `xdg-settings get default-web-browser`).
+The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For the online links, is-alive uses the system's own launcher. If nothing happens, check a default browser is set (Windows: **Settings → Apps → Default apps**; Linux: `xdg-settings get default-web-browser`).
 
 ### Reporting a problem
 
-Include the version (bottom right), what you ran, and what you saw. **Copy** on the tab, or the run's **Copy** in Results, gives the exact text. For a start-up problem on Windows, attach `startup.log` (`%APPDATA%\is-alive\startup.log`).
+**Help → Report a problem** opens a new GitHub issue with the version and system filled in. Include what you ran and what you saw. **Copy** on the tab, or the run's **Copy** in Results, gives the exact text. For a start-up problem on Windows, attach `startup.log` (`%APPDATA%\is-alive\startup.log`).
 
 ---
 
