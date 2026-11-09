@@ -19,8 +19,8 @@ pub const PORT: u16 = 9;
 /// The magic packet for `mac`.
 pub fn packet(mac: &Mac) -> [u8; 102] {
     let mut p = [0xFF; 102];
-    for chunk in p[6..].chunks_exact_mut(6) {
-        chunk.copy_from_slice(mac);
+    for copy in p[6..].as_chunks_mut::<6>().0 {
+        *copy = *mac;
     }
     p
 }
