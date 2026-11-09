@@ -29,6 +29,9 @@ vello_cpu = { version = "0.1", default-features = false, features = ["std", "u8_
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+# Tests make a CA and a server certificate to read back, so no key is kept
+# in the repository.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
 # Tests check the SVG and draw.io exports parse as XML.
 roxmltree = "0.20"
 

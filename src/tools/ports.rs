@@ -1,18 +1,24 @@
 use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
-use crate::net::ports::{PRESETS, parse_ports, service_name};
+use crate::net::ports::{self, PRESETS, parse_ports, service_name};
+use crate::net::tls::{self, Level};
 use crate::net::{self, TcpState};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 enum Ev {
     Resolved(IpAddr, usize),
     Result(u16, TcpState, f64),
+    Cert(u16, Result<tls::Info, String>),
     Error(String),
 }
+
+/// How long a certificate read waits for the server.
+const TLS_WAIT: Duration = Duration::from_secs(5);
 
 pub struct PortTool {
     host: String,
@@ -22,12 +28,18 @@ pub struct PortTool {
     rate: u32,
     show_closed: bool,
     prefer_v6: bool,
+    /// Read the TLS certificate on open ports that speak TLS.
+    certs: bool,
     job: Option<Job<Ev>>,
     run_started: Option<String>,
     started_at: Instant,
     target: Option<IpAddr>,
     total: usize,
     results: Vec<(u16, TcpState, f64)>,
+    /// What each open TLS port presented, or why it couldn't be read.
+    tls: BTreeMap<u16, Result<tls::Info, String>>,
+    /// The port whose certificate window is open.
+    cert_view: Option<u16>,
     err: Option<String>,
 }
 
@@ -41,12 +53,15 @@ impl Default for PortTool {
             rate: widgets::SPEEDS[widgets::DEFAULT_SPEED].2,
             show_closed: false,
             prefer_v6: false,
+            certs: true,
             job: None,
             run_started: None,
             started_at: Instant::now(),
             target: None,
             total: 0,
             results: Vec::new(),
+            tls: BTreeMap::new(),
+            cert_view: None,
             err: None,
         }
     }
@@ -62,6 +77,9 @@ impl PortTool {
             Ev::Result(p, s, ms) => {
                 let at = self.results.partition_point(|r| r.0 < p);
                 self.results.insert(at, (p, s, ms));
+            }
+            Ev::Cert(p, r) => {
+                self.tls.insert(p, r);
             }
             Ev::Error(e) => self.err = Some(e),
         })
@@ -112,6 +130,11 @@ impl PortTool {
             widgets::speed(ui, "port_speed", &mut self.threads, &mut self.rate);
             ui.checkbox(&mut self.show_closed, "Show closed/filtered");
             ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+            ui.checkbox(&mut self.certs, "Certificates").on_hover_text(
+                "Read the TLS certificate on each open port that speaks TLS (HTTPS, SSL-VPN, \
+                 LDAPS...): who it's for, who issued it, when it expires, and whether this \
+                 computer trusts it",
+            );
         });
         widgets::error(ui, &self.err);
         ui.separator();
@@ -169,6 +192,7 @@ impl PortTool {
             return;
         }
 
+        self.cert_window(ui.ctx());
         // Virtualized: a full 1-65535 scan with closed ports shown stays fast.
         let rows: Vec<&(u16, TcpState, f64)> = self
             .results
@@ -183,11 +207,17 @@ impl PortTool {
             return;
         }
         let cols = [70.0, 80.0, 120.0, 80.0];
+        let any_tls = !self.tls.is_empty();
         ui.horizontal(|ui| {
             for (h, w) in ["Port", "State", "Service", "Time"].iter().zip(cols) {
                 ui.add_sized([w, 18.0], egui::Label::new(RichText::new(*h).strong()));
             }
+            if any_tls {
+                ui.label(RichText::new("Certificate").strong());
+            }
         });
+        let now = chrono::Utc::now();
+        let mut view = None;
         let row_h = 18.0 + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical().auto_shrink(false).show_rows(
             ui,
@@ -217,10 +247,63 @@ impl PortTool {
                         cell(ui, cols[1], RichText::new(txt).color(c));
                         cell(ui, cols[2], RichText::new(service_name(*port)));
                         cell(ui, cols[3], RichText::new(time));
+                        if let Some(r) = self.tls.get(port) {
+                            view = view.or(cert_cell(ui, r, now).then_some(*port));
+                        }
                     });
                 }
             },
         );
+        if view.is_some() {
+            self.cert_view = view;
+        }
+    }
+
+    /// The certificate window, for the port picked in the table.
+    fn cert_window(&mut self, ctx: &egui::Context) {
+        let Some(port) = self.cert_view else { return };
+        let Some(Ok(info)) = self.tls.get(&port) else {
+            self.cert_view = None;
+            return;
+        };
+        let now = chrono::Utc::now();
+        let (level, _) = info.verdict(now);
+        let rows = info.details(now);
+        let mut open = true;
+        egui::Window::new(format!("Certificate · {}:{port}", info.name))
+            .id(egui::Id::new("ports_cert"))
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(480.0)
+            // Over the middle of the window, clear of the row clicked.
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
+            .show(ctx, |ui| {
+                egui::Grid::new("ports_cert_grid")
+                    .num_columns(2)
+                    .spacing([10.0, 4.0])
+                    .show(ui, |ui| {
+                        for (i, (k, v)) in rows.iter().enumerate() {
+                            ui.weak(*k);
+                            let t = RichText::new(v);
+                            let t = if i == 0 {
+                                t.color(level_colour(level)).strong()
+                            } else {
+                                t
+                            };
+                            ui.add(egui::Label::new(t).wrap().selectable(true));
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+                if ui.button("Copy").clicked() {
+                    widgets::copy(ui.ctx(), cert_text(info, port, now));
+                    widgets::toast("Certificate details copied", true);
+                }
+            });
+        if !open {
+            self.cert_view = None;
+        }
     }
 
     /// Start time and logged text of a run that has just ended, once.
@@ -247,6 +330,7 @@ impl PortTool {
     fn report(&self) -> String {
         let host = self.target.map(|i| i.to_string()).unwrap_or_default();
         let mut s = format!("Port scan of {} ({host})\n", self.host.trim());
+        let now = chrono::Utc::now();
         for (port, state, _) in &self.results {
             if self.show_closed || !matches!(state, TcpState::Closed | TcpState::Filtered) {
                 s += &format!(
@@ -254,6 +338,15 @@ impl PortTool {
                     state_label(state).0,
                     service_name(*port)
                 );
+                match self.tls.get(port) {
+                    Some(Ok(info)) => {
+                        for (k, v) in info.details(now) {
+                            s += &format!("         {k}: {v}\n");
+                        }
+                    }
+                    Some(Err(e)) => s += &format!("         Certificate: not read ({e})\n"),
+                    None => {}
+                }
             }
         }
         s
@@ -262,6 +355,7 @@ impl PortTool {
     /// Every result, closed and filtered included: filter in the spreadsheet.
     fn table(&self) -> Option<Table> {
         let ip = log::cell(self.target);
+        let now = chrono::Utc::now();
         let rows = self
             .results
             .iter()
@@ -283,10 +377,25 @@ impl PortTool {
                     },
                     err.to_string(),
                 ]
+                .into_iter()
+                .chain(tls_cells(self.tls.get(port), now))
+                .collect()
             })
             .collect();
         Some(Table {
-            columns: &["host", "ip", "port", "state", "service", "rtt_ms", "error"],
+            columns: &[
+                "host",
+                "ip",
+                "port",
+                "state",
+                "service",
+                "rtt_ms",
+                "error",
+                "tls_status",
+                "tls_issued_to",
+                "tls_issued_by",
+                "tls_expires",
+            ],
             rows,
         })
     }
@@ -311,6 +420,8 @@ impl PortTool {
         self.err = None;
         self.target = None;
         self.results.clear();
+        self.tls.clear();
+        self.cert_view = None;
         self.total = 0;
         let host = match crate::input::host(&self.host) {
             Ok(t) => {
@@ -327,7 +438,7 @@ impl PortTool {
             Err(e) => return self.err = Some(e),
         };
         let timeout = Duration::from_millis(self.timeout_ms as u64);
-        let (threads, rate, v6) = (self.threads, self.rate, self.prefer_v6);
+        let (threads, rate, v6, certs) = (self.threads, self.rate, self.prefer_v6, self.certs);
 
         self.run_started = Some(log::now());
         self.started_at = Instant::now();
@@ -337,11 +448,101 @@ impl PortTool {
                 Err(e) => return tx.send(Ev::Error(format!("could not resolve {host}: {e}"))),
             };
             tx.send(Ev::Resolved(ip, ports.len()));
+            // The name as typed is what the certificate must be valid for.
+            let name = host.trim_matches(['[', ']']).to_string();
             net::par_for(&ports, threads, rate, tx.cancel_flag(), |&p| {
-                let (state, ms) = net::tcp_check(SocketAddr::new(ip, p), timeout);
+                let addr = SocketAddr::new(ip, p);
+                let (state, ms) = net::tcp_check(addr, timeout);
+                let open = state == TcpState::Open;
                 tx.send(Ev::Result(p, state, ms));
+                let want = ports::tls(p);
+                if !certs || !open || want == ports::Tls::No {
+                    return;
+                }
+                match tls::probe(&name, addr, TLS_WAIT) {
+                    Ok(info) => tx.send(Ev::Cert(p, Ok(info))),
+                    // An unknown port that isn't TLS: nothing to say.
+                    Err(_) if want == ports::Tls::Maybe => {}
+                    Err(e) => tx.send(Ev::Cert(p, Err(e.to_string()))),
+                }
             });
         }));
+    }
+}
+
+fn level_colour(l: Level) -> egui::Color32 {
+    match l {
+        Level::Good => widgets::ok(),
+        Level::Warn => widgets::warn(),
+        Level::Bad => widgets::bad(),
+    }
+}
+
+/// A port's Certificate cell: the verdict and whom it's for; or why it
+/// couldn't be read. True when it was clicked.
+fn cert_cell(
+    ui: &mut Ui,
+    r: &Result<tls::Info, String>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    match r {
+        Ok(info) => {
+            let (level, line) = info.summary(now);
+            let icon = match level {
+                Level::Good => "🔒",
+                Level::Warn => "⚠",
+                Level::Bad => "✖",
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("{icon} {line}")).color(level_colour(level)),
+                )
+                .truncate()
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_text("Click for the certificate's details")
+            .clicked()
+        }
+        Err(e) => {
+            ui.add(egui::Label::new(RichText::new("No TLS reply").weak()).truncate())
+                .on_hover_text(e);
+            false
+        }
+    }
+}
+
+/// The certificate window's text, for Copy.
+fn cert_text(info: &tls::Info, port: u16, now: chrono::DateTime<chrono::Utc>) -> String {
+    let mut s = format!("Certificate of {}:{port}\n", info.name);
+    for (k, v) in info.details(now) {
+        s += &format!("{k}: {v}\n");
+    }
+    s
+}
+
+/// The CSV's certificate columns for one port.
+fn tls_cells(
+    r: Option<&Result<tls::Info, String>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> [String; 4] {
+    match r {
+        Some(Ok(info)) => {
+            let leaf = info.leaf();
+            [
+                info.verdict(now).1.join("; "),
+                leaf.map_or(String::new(), |c| c.subject.clone()),
+                leaf.map_or(String::new(), |c| c.issuer.clone()),
+                leaf.and_then(|c| c.not_after)
+                    .map_or(String::new(), |t| t.format("%Y-%m-%d").to_string()),
+            ]
+        }
+        Some(Err(e)) => [
+            format!("not read: {e}"),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        None => Default::default(),
     }
 }
 
