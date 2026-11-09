@@ -4,9 +4,11 @@ mod backdrop;
 mod bundle;
 mod chrome;
 mod fonts;
+mod help;
 mod input;
 mod job;
 mod log;
+mod manual;
 mod map;
 mod mapnetwork;
 mod markdown;
@@ -156,9 +158,12 @@ struct App {
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
+    /// The user manual, built in: Help and F1 open it.
+    manual: manual::Manual,
     shots: Option<shots::Shots>,
-    /// The screenshot tour's last step: Settings open.
+    /// The screenshot tour's last steps: Settings open, then Help.
     shots_settings: bool,
+    shots_help: bool,
 }
 
 impl eframe::App for App {
@@ -191,6 +196,7 @@ impl eframe::App for App {
         self.central(ui, now);
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
+        self.manual.window(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
@@ -214,11 +220,11 @@ impl eframe::App for App {
 
 impl App {
     /// Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results; F1
-    /// opens the wiki.
+    /// opens the manual at this tab's chapter.
     fn tab_keys(&mut self, ui: &mut egui::Ui) {
         use egui::Key::*;
         if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, F1)) {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(chrome::WIKI));
+            self.manual.show(manual::chapter_of(self.tab));
         }
         let keys = [Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9];
         for (n, (tab, ..)) in TABS.iter().enumerate() {
@@ -231,7 +237,7 @@ impl App {
     }
 
     /// The screenshot tour (IS_ALIVE_SHOTS): every tab, then the Map with a
-    /// card selected, then Settings; or the user manual's pictures.
+    /// card selected, then Settings, Help and the manual; or the user manual's pictures.
     fn shots_step(&mut self, ctx: &egui::Context) {
         if self.shots.as_ref().is_some_and(shots::Shots::manual) {
             return self.manual_shots_step(ctx);
@@ -239,14 +245,32 @@ impl App {
         if let Some(s) = &mut self.shots {
             // Every tab, then the Map again with a card selected.
             let mut names: Vec<&str> = TABS.iter().map(|t| t.1).collect();
-            names.extend(["Map panel", "Settings"]);
+            names.extend(["Map panel", "Settings", "Help", "Manual", "Manual keys"]);
             match s.step(ctx, &names, true) {
                 Some(i) if i < TABS.len() => self.tab = TABS[i].0,
                 Some(i) if i == TABS.len() => {
                     self.tab = crate::Tab::Map;
                     self.map.select_for_shots();
                 }
-                Some(_) => self.shots_settings = true,
+                Some(i) if i == TABS.len() + 1 => self.shots_settings = true,
+                Some(i) if i == TABS.len() + 2 => {
+                    self.shots_settings = false;
+                    self.shots_help = true;
+                }
+                Some(i) if i == TABS.len() + 3 => {
+                    if self.shots_help {
+                        self.shots_help = false;
+                        egui::Popup::close_all(ctx);
+                        self.tab = crate::Tab::Ping;
+                        self.manual.show(manual::chapter_of(self.tab));
+                    }
+                }
+                Some(_) => {
+                    let keys = manual::chapter_named("Keyboard and mouse");
+                    if self.manual.chapter() != keys {
+                        self.manual.show(keys);
+                    }
+                }
                 None => {}
             }
         }
@@ -936,8 +960,10 @@ fn main() {
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
                 reloading: false,
+                manual: Default::default(),
                 shots: shots::Shots::from_env(),
                 shots_settings: false,
+                shots_help: false,
             };
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
