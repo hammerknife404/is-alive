@@ -498,6 +498,7 @@ impl MapView {
         self.menu_clients(ui, &mut sep, i, &group);
         sep.next();
         self.menu_test(ui, &mut sep, i, &group);
+        self.menu_wake(ui, &mut sep, &group);
         sep.next();
         self.menu_copy(ui, &mut sep, &group);
         sep.next();
@@ -782,6 +783,45 @@ impl MapView {
                 .clicked()
         {
             widgets::open_url(url);
+            ui.close();
+        }
+    }
+
+    /// Wake-on-LAN: the card, or every selected card with a real MAC.
+    fn menu_wake(&mut self, ui: &mut Ui, sep: &mut Sep, group: &[usize]) {
+        let cards: Vec<(crate::net::mac::Mac, Option<std::net::Ipv4Addr>)> = group
+            .iter()
+            .filter_map(|&k| {
+                let n = &self.map.nodes[k];
+                n.mac.filter(crate::net::wol::wakeable).map(|m| (m, n.ip))
+            })
+            .collect();
+        if cards.is_empty() {
+            return;
+        }
+        let (label, tip) = if group.len() > 1 {
+            (
+                format!("Wake all ({})", cards.len()),
+                format!(
+                    "Send Wake-on-LAN to the {} selected cards with a known MAC",
+                    cards.len()
+                ),
+            )
+        } else {
+            (
+                "Wake (Wake-on-LAN)".to_string(),
+                format!(
+                    "Send a Wake-on-LAN packet to {}",
+                    crate::net::mac::fmt(&cards[0].0)
+                ),
+            )
+        };
+        if sep
+            .add(ui, egui::Button::new(label))
+            .on_hover_text(tip)
+            .clicked()
+        {
+            crate::net::wol::wake_all(cards);
             ui.close();
         }
     }
