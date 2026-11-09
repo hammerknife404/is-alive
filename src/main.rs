@@ -165,11 +165,23 @@ struct App {
     /// The screenshot tour's last steps: Settings open, then Help.
     shots_settings: bool,
     shots_help: bool,
+    /// Closing waits on "Save the notes?" (autosave off, changes unsaved).
+    close_asked: bool,
+    /// The user answered it: close without asking again.
+    close_anyway: bool,
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
+        if ui.input(|i| i.viewport().close_requested())
+            && self.notes.unsaved()
+            && !self.close_anyway
+        {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_asked = true;
+        }
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
         let now = ui.input(|i| i.time);
@@ -198,6 +210,7 @@ impl eframe::App for App {
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
         self.manual.window(ui.ctx());
+        self.close_dialog(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
@@ -391,6 +404,52 @@ impl App {
     }
 
     /// The Site Bundle window, over everything when it's open.
+    /// Closing with autosave off and the notes changed: save them first?
+    fn close_dialog(&mut self, ctx: &egui::Context) {
+        if !self.close_asked {
+            return;
+        }
+        let mut choice = None;
+        let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
+            ui.set_max_width(340.0);
+            ui.strong("Save the notes before closing?");
+            ui.label("Autosave is off, and the notes have changes that aren't saved.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    choice = Some(true);
+                }
+                if ui
+                    .button(egui::RichText::new("Don't save").color(widgets::bad()))
+                    .clicked()
+                {
+                    choice = Some(false);
+                }
+                if ui.button("Cancel").clicked() {
+                    ui.close();
+                }
+            });
+        });
+        match choice {
+            Some(save) => {
+                if save {
+                    self.notes.set_elsewhere(self.map.note_texts());
+                    if !self.notes.save_now() {
+                        // The error shows in Notes; the window stays open.
+                        self.close_asked = false;
+                        self.tab = Tab::Notes;
+                        return;
+                    }
+                }
+                self.close_anyway = true;
+                self.close_asked = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            None if r.should_close() => self.close_asked = false,
+            None => {}
+        }
+    }
+
     fn bundle_window(&mut self, ctx: &egui::Context) {
         let App {
             bundle,
@@ -965,7 +1024,10 @@ fn main() {
                 shots: shots::Shots::from_env(),
                 shots_settings: false,
                 shots_help: false,
+                close_asked: false,
+                close_anyway: false,
             };
+            app.notes.set_autosave(app.look.notes_autosave);
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
             }
