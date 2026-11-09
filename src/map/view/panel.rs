@@ -394,6 +394,9 @@ impl MapView {
                     }
                 }
 
+                // New or changed since the saved map compared with.
+                self.since_panel(ui, i);
+
                 // Details: what's known about it, then the source's notes.
                 section(ui, "Details");
                 let mut facts: Vec<(&str, String)> = Vec::new();

@@ -14,6 +14,7 @@ mod panel;
 mod reveal;
 pub(crate) mod saved;
 mod sidebar;
+mod since;
 mod tabs;
 
 use super::layout::{self, CARD, Layout, Links, Mode};
@@ -272,6 +273,8 @@ pub struct MapView {
     animate: bool,
     /// The lit links as last drawn, kept while they don't change.
     lit_drawn: std::cell::RefCell<crate::map::colours::Lit>,
+    /// The saved map the live map is compared with (Compare ⏷), if any.
+    since: Option<since::Since>,
 }
 
 /// What a right-click menu was opened on.
@@ -1230,6 +1233,7 @@ impl MapView {
         }
         self.history_keys(&ctx);
         self.refresh(&ctx, &src);
+        self.refresh_since(&src, ctx.input(|i| i.time));
         self.settle_edits();
         self.stamp_notes();
         self.busy = src.busy;
