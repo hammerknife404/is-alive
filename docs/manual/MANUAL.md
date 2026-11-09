@@ -1063,6 +1063,7 @@ Click **is-alive ▾** at the top left to open Settings. Changes apply at once a
 | **Blueprint** | White lines on drafting blue |
 | **High contrast** | Black and white, bright colours |
 | **RGB** | Neon on black, with a rainbow line under the tabs |
+| **Scanner** | Gloss black, red and amber like a car's dashboard at night, with a red light sweeping across and back along the line under the tabs (still in the middle with **Animate** off) |
 | **Miami** | Midnight purple, hot pink and teal, over a 16-bit sunset |
 | **Light** | For bright rooms and screenshots in tickets |
 | **Paper** | Warm light, like a printed site map |

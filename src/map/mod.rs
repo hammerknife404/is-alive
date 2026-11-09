@@ -189,6 +189,11 @@ impl Zone {
                 0xa58cd6, 0x00e5ff, 0xb14dff, 0x39ff14, 0xff00c8, 0xfff200, 0xff8a00, 0x7a9cff,
                 0x8a6fc0,
             ],
+            // Dashboard lamps; clients grey.
+            Theme::Scanner => [
+                0x8c8c92, 0xff2a1a, 0xffb000, 0x39e06a, 0x4fc3ff, 0xd27dff, 0xff7a1a, 0xa9a9b0,
+                0x6a6a70,
+            ],
             Theme::Paper => [
                 0x6a5f4c, 0x2f5fb3, 0x7046c2, 0x2b7d4b, 0x1f7f8a, 0x94700f, 0xb8561c, 0x5a6f8c,
                 0x8a7f6c,

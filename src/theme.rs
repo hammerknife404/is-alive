@@ -21,18 +21,21 @@ pub enum Theme {
     Contrast,
     /// Neon on black, a rainbow rule.
     Rgb,
+    /// Gloss black, scanner red and dash amber; a red light sweeps the rule.
+    Scanner,
     Paper,
 }
 
 impl Theme {
     /// Menu order: the dark ones, then the light ones.
-    pub const ALL: [Theme; 9] = [
+    pub const ALL: [Theme; 10] = [
         Theme::Dark,
         Theme::Slate,
         Theme::Phosphor,
         Theme::Blueprint,
         Theme::Contrast,
         Theme::Rgb,
+        Theme::Scanner,
         Theme::Miami,
         Theme::Light,
         Theme::Paper,
@@ -48,6 +51,7 @@ impl Theme {
             Theme::Blueprint => "Blueprint",
             Theme::Contrast => "High contrast",
             Theme::Rgb => "RGB",
+            Theme::Scanner => "Scanner",
             Theme::Paper => "Paper",
         }
     }
@@ -62,6 +66,7 @@ impl Theme {
             Theme::Blueprint => "blueprint",
             Theme::Contrast => "contrast",
             Theme::Rgb => "rgb",
+            Theme::Scanner => "scanner",
             Theme::Paper => "paper",
         }
     }
@@ -72,7 +77,7 @@ impl Theme {
 
     /// A rule with moving colours along the tab bar.
     fn has_rule(self) -> bool {
-        matches!(self, Theme::Miami | Theme::Rgb)
+        matches!(self, Theme::Miami | Theme::Rgb | Theme::Scanner)
     }
 
     fn from_key(k: &str) -> Option<Self> {
@@ -135,6 +140,12 @@ pub fn status() -> (Color32, Color32, Color32) {
             Color32::from_rgb(64, 232, 200),
             Color32::from_rgb(255, 172, 70),
             Color32::from_rgb(255, 78, 120),
+        ),
+        // A dashboard's lamps: green, amber, red.
+        Theme::Scanner => (
+            Color32::from_rgb(57, 224, 106),
+            Color32::from_rgb(255, 176, 0),
+            Color32::from_rgb(255, 59, 48),
         ),
     }
 }
@@ -622,6 +633,13 @@ fn tokens(t: Theme) -> Option<Tokens> {
                 0xa58cd6, 0xff00c8, 0x00e5ff,
             ],
         ),
+        Theme::Scanner => k(
+            false,
+            [
+                0x0b0b0c, 0x111113, 0x050506, 0x161618, 0x1d1d20, 0x3d1512, 0xe4e4e6, 0xffffff,
+                0x8c8c92, 0xff2a1a, 0xffb000,
+            ],
+        ),
         Theme::Paper => k(
             true,
             [
@@ -727,6 +745,9 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     if !theme.has_rule() {
         return;
     }
+    if theme == Theme::Scanner {
+        return scanner_rule(ctx, y, animate);
+    }
     let shift = if animate {
         // In step with the backdrop's 10 frames a second.
         let (t, wait) = crate::backdrop::tick(ctx.input(|i| i.time), crate::backdrop::FPS);
@@ -781,7 +802,82 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     ctx.layer_painter(egui::LayerId::background()).add(mesh);
 }
 
-/// Extra glow under the selected tab's underline, Miami and RGB only.
+/// Lamps across the rule under the tabs.
+const LAMPS: usize = 24;
+/// Seconds for the light to cross and come back.
+const SWEEP_SECS: f64 = 2.0;
+/// Lamps lit behind the light as it moves, fading.
+const TRAIL: f32 = 4.0;
+/// Frames a second for the sweep: lamps step, as a scanner's do.
+const SCANNER_FPS: f64 = 15.0;
+
+/// Where the light is (0 to LAMPS - 1) and which way it's going, `t`
+/// seconds in: across and back, slowing a little at each end.
+fn scanner_at(t: f64) -> (f32, f32) {
+    let phase = (t / SWEEP_SECS).rem_euclid(1.0);
+    let (u, dir) = if phase < 0.5 {
+        (phase * 2.0, 1.0)
+    } else {
+        (2.0 - phase * 2.0, -1.0)
+    };
+    // Eased, so it turns at the ends rather than bouncing off them.
+    let eased = 0.5 - 0.5 * (u * std::f64::consts::PI).cos();
+    ((eased * (LAMPS - 1) as f64) as f32, dir)
+}
+
+/// How bright lamp `i` is (0 to 1) with the light at `x` going `dir`: full
+/// under it, fading over TRAIL lamps behind, dark ahead.
+fn lamp(i: usize, x: f32, dir: f32) -> f32 {
+    let behind = (x - i as f32) * dir;
+    if behind < -0.5 {
+        0.0
+    } else if behind <= 0.5 {
+        1.0
+    } else {
+        (1.0 - (behind - 0.5) / TRAIL).max(0.0)
+    }
+}
+
+/// Scanner's rule: a row of red lamps under the tabs with a light sweeping
+/// across and back. Still, it rests in the middle.
+fn scanner_rule(ctx: &egui::Context, y: f32, animate: bool) {
+    let (x, dir) = if animate {
+        let (t, wait) = crate::backdrop::tick(ctx.input(|i| i.time), SCANNER_FPS);
+        if ctx.input(|i| i.viewport().focused != Some(false)) {
+            crate::backdrop::repaint_in(ctx, wait);
+        }
+        scanner_at(t)
+    } else {
+        ((LAMPS - 1) as f32 / 2.0, 0.0)
+    };
+    let r = ctx.content_rect();
+    let w = r.width() / LAMPS as f32;
+    let red = accent_for(Theme::Scanner);
+    let off = Color32::from_rgb(46, 10, 8);
+    let painter = ctx.layer_painter(egui::LayerId::background());
+    for i in 0..LAMPS {
+        let b = if animate {
+            lamp(i, x, dir)
+        } else {
+            (1.0 - (x - i as f32).abs() / 2.0).max(0.0)
+        };
+        let x0 = r.left() + w * i as f32;
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(x0 + 1.0, y - 1.5),
+            egui::pos2(x0 + w - 1.0, y + 1.5),
+        );
+        painter.rect_filled(cell, 1.0, off.lerp_to_gamma(red, b));
+        if b > 0.0 {
+            painter.rect_filled(
+                cell.expand2(egui::vec2(1.0, 3.0)),
+                3.0,
+                red.gamma_multiply(0.22 * b),
+            );
+        }
+    }
+}
+
+/// Extra glow under the selected tab's underline, Miami, RGB and Scanner only.
 pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
     if current().has_rule() {
         painter.hline(x, y, Stroke::new(6.0, accent().gamma_multiply(0.25)));
@@ -1040,6 +1136,10 @@ pub fn appearance(
                 Theme::Blueprint => ("Blueprint", "White lines on drafting blue"),
                 Theme::Contrast => ("High contrast", "Black and white, bright colours"),
                 Theme::Rgb => ("RGB", "Neon on black, with a rainbow rule"),
+                Theme::Scanner => (
+                    "Scanner",
+                    "Gloss black, red and amber, with a red light sweeping the rule",
+                ),
                 Theme::Paper => ("Paper", "Warm light, like a printed site map"),
             };
             if t == Theme::Light {
@@ -1092,13 +1192,13 @@ pub fn appearance(
         // In every theme: the Map tab's glow and the map's packets too.
         let tip = if gpu {
             "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
-             (10 frames a second on the GPU, paused while the window isn't focused). Off, \
+             lit links, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
+             Scanner's light sweeps (10 to 15 frames a second on the GPU, paused while the window isn't focused). Off, \
              everything holds still; turn it off on battery."
         } else {
             "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links, and Miami's backdrop and the Miami and RGB line under the tabs drift \
-             (10 frames a second, no usable GPU, paused while the window isn't focused). Off, \
+             lit links, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
+             Scanner's light sweeps (10 to 15 frames a second, no usable GPU, paused while the window isn't focused). Off, \
              everything holds still; turn it off on battery."
         };
         if ui
@@ -1426,5 +1526,24 @@ mod tests {
             }
         }
         apply(&ctx, Theme::Dark);
+    }
+
+    #[test]
+    fn scanner_sweeps_across_and_back() {
+        let (x, dir) = scanner_at(0.0);
+        assert_eq!((x, dir), (0.0, 1.0));
+        let (x, dir) = scanner_at(SWEEP_SECS / 2.0 - 0.001);
+        assert!(x > (LAMPS - 2) as f32 && dir == 1.0, "{x}");
+        let (x, dir) = scanner_at(SWEEP_SECS * 0.75);
+        assert!(
+            (x - (LAMPS - 1) as f32 / 2.0).abs() < 0.5 && dir == -1.0,
+            "{x}"
+        );
+        // The lamp under the light is full, the trail fades, ahead is dark.
+        assert_eq!(lamp(10, 10.0, 1.0), 1.0);
+        assert!(lamp(8, 10.0, 1.0) > 0.0 && lamp(8, 10.0, 1.0) < 1.0);
+        assert_eq!(lamp(12, 10.0, 1.0), 0.0);
+        assert_eq!(lamp(16, 10.0, 1.0), 0.0);
+        assert_eq!(lamp(4, 10.0, 1.0), 0.0);
     }
 }
