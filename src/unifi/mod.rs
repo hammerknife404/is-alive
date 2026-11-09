@@ -415,8 +415,7 @@ mod tests {
         // What was stripped is kept in memory for Notes, not in the output.
         assert!(
             r.secrets.contains(&"hunter2".to_string()),
-            "the admin password isn't held ({} secrets are)",
-            r.secrets.len()
+            "the admin password isn't held"
         );
         assert!(r.secrets.iter().all(|s| !r.json.contains(s.as_str())));
         assert!(!r.secrets.iter().any(|s| s.starts_with('$')));

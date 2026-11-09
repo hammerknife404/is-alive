@@ -671,8 +671,7 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         {
             assert!(
                 r.secrets.contains(&s.to_string()),
-                "fixture secret #{i} not kept ({} secrets are)",
-                r.secrets.len()
+                "fixture secret #{i} not kept"
             );
         }
         // A stock community name would blank out ordinary words.
