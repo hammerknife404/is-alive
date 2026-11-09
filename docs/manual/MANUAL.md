@@ -8,7 +8,7 @@ end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.25.0**. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.27.0**. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -113,9 +113,22 @@ When is-alive starts, it asks GitHub whether a newer release is out (you can tur
 ### The tab bar (top)
 
 - **is-alive ▾** (top left) opens **Settings**: theme, network options and the list of shortcuts. See [Settings and themes](#16-settings-and-themes).
+- **The site** beside it (**● Scratch ▾** until you make one) is the client site you're working on. See [Sites](#sites) below.
 - **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results). In a narrow window the tabs wrap onto a second row.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Site Bundle…** (top right) zips the visit's results for Claude. See [Site Bundle and Claude](#18-site-bundle-and-claude).
+
+### Sites
+
+A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Site Bundle** all work on the site that's open, and its name is in the window's title.
+
+- **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs and map you already have along.
+- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**. Stop running tools before switching; a saved map with changes not saved is named so you can **Update** it first.
+- **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
+- **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
+- is-alive opens the site that was open when it closed.
+
+Results are never kept: they're in memory, and a switch clears them. Copy or export what you need first, or put it in the Site Bundle.
 
 ### How every tab is laid out
 
@@ -706,7 +719,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 
 **Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards or boxes dragged (a whole drag is one step) or put back, **Re-layout**, the **Links** view, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
 
-**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
+**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Each site has its own (see [Sites](#sites)). Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
 
 - **Live** is the map from the sweep and the files loaded now; each saved map has a tab beside it. Click one to open it. A **•** after its name means it has changed since it was saved.
 - **+ Save current** saves the map showing as a new tab, ready to be named.
@@ -841,7 +854,7 @@ The status row under the toolbar shows the word and line count, what's redacted,
 | **Save .md…** | Save as Markdown, redacted, as `notes-<date>.md` |
 | **Clear** | Empty the notes (click twice) |
 
-Notes save themselves every couple of seconds to your profile folder (see [Settings](#16-settings-and-themes)) and are there next time you open the app.
+Notes save themselves every couple of seconds to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)) and are there next time you open the app; each site has its own.
 
 ### Photos
 
@@ -1083,7 +1096,7 @@ The bottom of Settings shows the folder:
 - **Windows:** `%APPDATA%\is-alive` (for example `C:\Users\you\AppData\Roaming\is-alive`)
 - **Linux:** `~/.config/is-alive`
 
-It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). The window also reopens at the size you last closed it.
+It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). Those are Scratch's. Each site has a folder of its own in `sites` (for example `sites/harbor-dental`) with its own `notes.md`, `maps`, `map-notes.json` and `notes-allow.json`, and `site.json`: its name, when it was made and last opened, and the paths of its configs. The window also reopens at the size you last closed it.
 
 **Help wiki** at the top right of Settings opens the wiki.
 
@@ -1181,7 +1194,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. Links (Help, the update link, a card's Web button) open in your own browser.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. The Results log is in memory and gone when the app closes.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. The Results log is in memory, cleared when you switch sites and gone when the app closes.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.

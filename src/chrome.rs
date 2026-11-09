@@ -42,6 +42,7 @@ impl App {
                             .min_scrolled_height(room)
                             .show(ui, |ui| self.settings_ui(ui));
                     });
+                self.site_chip(ui);
                 ui.separator();
                 // The selected tab is marked by a sliding underline rather
                 // than a filled box; running jobs get a pulsing dot that

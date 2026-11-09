@@ -136,7 +136,7 @@ impl Store {
     /// shows the map as a new user sees it).
     pub fn open() -> Self {
         let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
-        let path = crate::theme::data_dir()
+        let path = crate::site::dir()
             .filter(|_| !tour)
             .map(|d| d.join(STORE_FILE));
         Self::at(path)

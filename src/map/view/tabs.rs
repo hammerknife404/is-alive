@@ -361,6 +361,28 @@ impl MapTabs {
         self.shown = None;
     }
 
+    /// Another site opened: its saved maps and kept card notes. The live
+    /// map starts over (as Clear map leaves it) unless `keep_live`: a new
+    /// site made from what's open takes it along.
+    pub fn switch_site(&mut self, keep_live: bool) {
+        if !keep_live {
+            self.clear_live();
+        }
+        let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
+        let mut live = std::mem::replace(&mut self.live, MapView::new(None));
+        live.note_store = Some(super::notes::Store::open());
+        *self = Self::in_dir(live, saved::folder().filter(|_| !tour));
+    }
+
+    /// Saved maps with changes not written to their files, by name.
+    pub fn unsaved(&self) -> Vec<String> {
+        self.saved
+            .iter()
+            .filter(|t| t.view.edits_differ(&t.saved))
+            .map(|t| t.name.clone())
+            .collect()
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let mut clear = false;
         ui.horizontal_wrapped(|ui| {

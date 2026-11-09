@@ -800,9 +800,10 @@ pub fn parse(data: &[u8]) -> Result<Snapshot, String> {
     from_json(&String::from_utf8_lossy(data))
 }
 
-/// Where saved maps live: `maps` in the settings folder.
+/// Where saved maps live: `maps` in the open site's folder (the settings
+/// folder for Scratch).
 pub fn folder() -> Option<PathBuf> {
-    Some(crate::theme::data_dir()?.join("maps"))
+    Some(crate::site::dir()?.join("maps"))
 }
 
 /// Every saved map in `dir`, oldest first, and a line for each file that
