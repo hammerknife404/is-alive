@@ -105,7 +105,13 @@ pub(crate) fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
 }
 
 /// Inline spans of one line, styled.
-fn inline(ui: &Ui, text: &str, size: f32, strong: bool, family: &FontFamily) -> LayoutJob {
+pub(crate) fn inline(
+    ui: &Ui,
+    text: &str,
+    size: f32,
+    strong: bool,
+    family: &FontFamily,
+) -> LayoutJob {
     let vis = ui.visuals();
     let body = if strong {
         vis.strong_text_color()

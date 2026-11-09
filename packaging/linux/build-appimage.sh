@@ -43,16 +43,32 @@ exec "$here/usr/bin/is-alive" "$@"
 RUN
 chmod 755 "$appdir/AppRun"
 
+# GitHub's release downloads fail now and then (a 504 for a few minutes):
+# try again rather than fail the build.
+fetch() {
+    curl -fsSL --retry 5 --retry-delay 10 --retry-all-errors -o "$1.part" "$2"
+    mv "$1.part" "$1"
+}
+
 tool=${APPIMAGETOOL:-}
 if [ -z "$tool" ]; then
     tool="$out/appimagetool-$arch.AppImage"
     if [ ! -x "$tool" ]; then
-        curl -fsSL -o "$tool" \
+        fetch "$tool" \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
         chmod 755 "$tool"
     fi
 fi
 
+# The runtime appimagetool would fetch itself, without retrying: fetched
+# here instead, and handed to it.
+runtime=${APPIMAGE_RUNTIME:-$out/runtime-$arch}
+if [ ! -s "$runtime" ]; then
+    fetch "$runtime" \
+        "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$arch"
+fi
+
 # Extract-and-run: works without FUSE (containers, CI).
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" "$tool" --no-appstream "$appdir" "$out/is-alive-$arch.AppImage"
+APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" "$tool" --no-appstream --runtime-file "$runtime" \
+    "$appdir" "$out/is-alive-$arch.AppImage"
 echo "-> $out/is-alive-$arch.AppImage"
