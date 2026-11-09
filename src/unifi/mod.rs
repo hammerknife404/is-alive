@@ -378,7 +378,7 @@ mod tests {
         let r = convert(sample(), Clients::Full).unwrap();
         let docs: Vec<Value> = serde_json::from_str(&r.json).unwrap();
         let text = r.json.as_str();
-        for secret in [
+        for (i, secret) in [
             "hunter2",
             "$6$abc",
             "x_authkey",
@@ -387,8 +387,12 @@ mod tests {
             "root",
             "PRIVATE KEY",
             "peer_public_key",
-        ] {
-            assert!(!text.contains(secret), "{secret} leaked");
+        ]
+        .iter()
+        .enumerate()
+        {
+            // By number: a failing test never prints a secret.
+            assert!(!text.contains(*secret), "fixture secret #{i} leaked");
         }
         assert_eq!(docs[0], json!({"__cmd": "select", "collection": "site"}));
         assert!(text.contains("port_overrides") && text.contains("Janes-iPhone"));
@@ -411,8 +415,7 @@ mod tests {
         // What was stripped is kept in memory for Notes, not in the output.
         assert!(
             r.secrets.contains(&"hunter2".to_string()),
-            "{:?}",
-            r.secrets
+            "the admin password isn't held"
         );
         assert!(r.secrets.iter().all(|s| !r.json.contains(s.as_str())));
         assert!(!r.secrets.iter().any(|s| s.starts_with('$')));

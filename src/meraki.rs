@@ -787,16 +787,26 @@ mod tests {
         ] {
             assert_eq!(r.count(t), n, "{t}");
         }
-        for secret in [
+        for (i, secret) in [
             "SuperSecretWifi1",
             "PppoeSecret99",
             "IkeSecret#77",
             "Harbor2024",
-        ] {
-            assert!(!r.json.contains(secret), "{secret} leaked");
+        ]
+        .iter()
+        .enumerate()
+        {
+            // By number: a failing test never prints a secret.
+            assert!(!r.json.contains(*secret), "fixture secret #{i} leaked");
         }
-        for secret in ["SuperSecretWifi1", "PppoeSecret99", "IkeSecret#77"] {
-            assert!(r.secrets.contains(&secret.to_string()), "{secret} not held");
+        for (i, secret) in ["SuperSecretWifi1", "PppoeSecret99", "IkeSecret#77"]
+            .iter()
+            .enumerate()
+        {
+            assert!(
+                r.secrets.contains(&secret.to_string()),
+                "fixture secret #{i} not held"
+            );
         }
         assert_eq!(r.withheld, 1);
         let v: Value = serde_json::from_str(&r.json).unwrap();

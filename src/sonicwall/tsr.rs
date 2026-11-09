@@ -552,15 +552,19 @@ Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:
     fn reads_a_sonicos_7_report() {
         assert!(sniff(REPORT.as_bytes()));
         let r = convert(REPORT.as_bytes()).unwrap();
-        for secret in [
+        for (i, secret) in [
             "Hunter2Admin",
             "SECRETREG",
             "ABCD-EFGH",
             "S3cretPass",
             "Sunshine1",
             "Jane.Doe",
-        ] {
-            assert!(!r.json.contains(secret), "{secret} leaked");
+        ]
+        .iter()
+        .enumerate()
+        {
+            // By number: a failing test never prints a secret.
+            assert!(!r.json.contains(*secret), "fixture secret #{i} leaked");
         }
         let v: Value = serde_json::from_str(&r.json).unwrap();
         assert_eq!(v["system"]["model"], "TZ 370");

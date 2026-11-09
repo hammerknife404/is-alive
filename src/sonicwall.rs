@@ -615,7 +615,7 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
     #[test]
     fn builds_tables_without_secrets() {
         let r = convert(b64(SAMPLE.as_bytes()).as_bytes()).unwrap();
-        for secret in [
+        for (i, secret) in [
             "S3cretPass",
             "TunnelPSK",
             "AdminPass",
@@ -624,8 +624,12 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
             "\"private\"",
             "Hunter2",
             "FwPass",
-        ] {
-            assert!(!r.json.contains(secret), "{secret} leaked");
+        ]
+        .iter()
+        .enumerate()
+        {
+            // By number: a failing test never prints a secret.
+            assert!(!r.json.contains(*secret), "fixture secret #{i} leaked");
         }
         let v: Value = serde_json::from_str(&r.json).unwrap();
         let x0 = &v["interfaces"][0];
@@ -661,11 +665,13 @@ firmwareVersion=SonicOS%207.0.1&serialNumber=2CB8EDDA6E30&&";
         assert!(credential_like("wifi PSK: abc"));
         assert!(r.used < r.keys);
         assert!(r.summary().contains("left behind"));
-        for s in ["S3cretPass", "TunnelPSK", "AdminPass", "FwPass"] {
+        for (i, s) in ["S3cretPass", "TunnelPSK", "AdminPass", "FwPass"]
+            .iter()
+            .enumerate()
+        {
             assert!(
                 r.secrets.contains(&s.to_string()),
-                "{s} not kept: {:?}",
-                r.secrets
+                "fixture secret #{i} not kept"
             );
         }
         // A stock community name would blank out ordinary words.
