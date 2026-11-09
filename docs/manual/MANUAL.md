@@ -768,6 +768,7 @@ Each selected card gets a section, newest on top:
 - **Connections:** its uplink and what hangs off it; click one to jump to that card.
 - **Ping**, **Ports**, **Trace**: a quick check of this device, right in the panel. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**; click it for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
 - **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser. **Copy** copies the card.
+- **SSH** (when port 22 is open) and **RDP** (when 3389 is open) connect to the device in the computer's own client, which asks for the log-in; is-alive stores no passwords. On Windows, SSH opens `ssh` (built into Windows 10 and 11) in a console window that stays open when it ends, so a refused connection can be read; RDP opens Remote Desktop Connection (`mstsc`). On Linux, SSH opens in the desktop's terminal (Konsole, Ptyxis, GNOME Terminal and others); RDP uses Remmina or FreeRDP. A button is left out when the computer has no client for it. Hover one to see what it runs.
 
 With several cards selected, the panel's header says how many and offers **Copy all**. Drag a card's grip (⠿) to reorder; **×** takes a card out of the panel. The panel can be resized from its edge.
 

@@ -3,6 +3,7 @@
 mod backdrop;
 mod bundle;
 mod chrome;
+mod connect;
 mod fonts;
 mod help;
 mod input;
