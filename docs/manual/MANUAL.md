@@ -831,7 +831,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 
 ### Getting it out
 
-The status row under the toolbar shows the word and line count, what's redacted, and the autosave state, with:
+The status row under the toolbar shows the word and line count, what's redacted, **Autosave** and when the notes were last saved, with:
 
 | Button | What it does |
 |---|---|
@@ -841,7 +841,7 @@ The status row under the toolbar shows the word and line count, what's redacted,
 | **Save .md…** | Save as Markdown, redacted, as `notes-<date>.md` |
 | **Clear** | Empty the notes (click twice) |
 
-Notes save themselves every couple of seconds to your profile folder (see [Settings](#16-settings-and-themes)) and are there next time you open the app.
+**Autosave** (on by default): the notes save themselves, redacted, a moment after each change to your profile folder (see [Settings](#16-settings-and-themes)), and are there next time you open the app. Untick it to save only when you choose: the status row then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
@@ -1100,6 +1100,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Esc** | While a tool runs | Stop the run |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
 | **Ctrl+B / Ctrl+I** | Notes | Bold / italic |
+| **Ctrl+S** | Notes | Save the notes now (with Autosave off, the only way they're saved) |
 | **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |

@@ -71,6 +71,12 @@ pub struct NotesTool {
     /// The Map's card notes, as typed: a kept value still in one of them
     /// stays on the keep list.
     elsewhere: Vec<String>,
+    /// Save a moment after each change (Settings: notes_autosave). Off,
+    /// only Save or Ctrl+S writes the notes.
+    autosave: bool,
+    /// Save or Ctrl+S was pressed: written on the next poll, once the Map's
+    /// card notes are in (the keep list is trimmed then).
+    save_asked: bool,
 }
 
 /// An Open dialog result: read-only text or a portable photo for Notes.
@@ -186,6 +192,8 @@ impl Default for NotesTool {
             picker_restyled: false,
             reselect: None,
             elsewhere: Vec::new(),
+            autosave: true,
+            save_asked: false,
         };
         if unclean {
             notes.write();
@@ -304,9 +312,25 @@ impl NotesTool {
         &self.ov
     }
 
-    /// Notes are waiting to be saved (the keep list is trimmed then).
+    /// Notes are about to be saved (the keep list is trimmed then).
     pub fn saving(&self) -> bool {
-        self.dirty.is_some()
+        self.dirty.is_some() && (self.autosave || self.save_asked)
+    }
+
+    /// Autosave on or off, from Settings.
+    pub fn set_autosave(&mut self, on: bool) {
+        self.autosave = on;
+    }
+
+    /// Changes that only Save writes: autosave is off.
+    pub fn unsaved(&self) -> bool {
+        !self.autosave && self.dirty.is_some()
+    }
+
+    /// Write the notes now (closing with autosave off). False if it failed.
+    pub fn save_now(&mut self) -> bool {
+        self.write();
+        self.err.is_none()
     }
 
     /// The Map's card notes, as typed, so the keep list holds on to the
@@ -345,9 +369,10 @@ impl NotesTool {
         self.changed(ctx.input(|i| i.time));
     }
 
-    /// Save now if there are unsaved changes (on exit).
+    /// Save now if there are unsaved changes (on exit), unless autosave is
+    /// off: then closing asked already.
     pub fn flush(&mut self) {
-        if self.dirty.is_some() {
+        if self.autosave && self.dirty.is_some() {
             self.write();
         }
     }
@@ -549,6 +574,18 @@ impl NotesTool {
     /// Notes right after typing still saves.
     pub fn poll(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
+        if std::mem::take(&mut self.save_asked) {
+            if self.dirty.is_some() {
+                self.write();
+                if self.err.is_none() {
+                    widgets::toast("Notes saved", true);
+                }
+            }
+            return;
+        }
+        if !self.autosave {
+            return;
+        }
         if self.dirty.is_some_and(|t| now - t >= SAVE_AFTER) {
             self.write();
         }
@@ -560,6 +597,10 @@ impl NotesTool {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo, look: &mut crate::theme::Settings) {
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) {
+            self.save_asked = true;
+            ui.ctx().request_repaint();
+        }
         let font = FontId::new(
             look.notes_size as f32,
             crate::fonts::family(ui.ctx(), &look.notes_font),
@@ -617,7 +658,7 @@ impl NotesTool {
         if self.on_file {
             self.file_footer(ui);
         } else {
-            self.footer(ui, &hits, now);
+            self.footer(ui, &hits, now, look);
         }
         ui.add_space(2.0);
         if self.on_file {
@@ -1029,7 +1070,7 @@ impl NotesTool {
     }
 
     /// Under the toolbar: counts, what's redacted, autosave, and the ways out.
-    fn footer(&mut self, ui: &mut Ui, hits: &[Hit], now: f64) {
+    fn footer(&mut self, ui: &mut Ui, hits: &[Hit], now: f64, look: &mut crate::theme::Settings) {
         ui.horizontal_wrapped(|ui| {
             let (words, lines) = (
                 self.text.split_whitespace().count(),
@@ -1065,14 +1106,41 @@ impl NotesTool {
                     .on_hover_text("Highlight them in the editor");
             }
             ui.separator();
-            let saved = match (&self.dirty, &self.saved) {
-                (Some(_), _) => "Saving…".to_string(),
-                (None, Some(t)) => format!("Autosaved {t}"),
-                (None, None) => "Autosave on".to_string(),
-            };
-            ui.weak(saved).on_hover_text(
-                path().map_or("No profile folder".into(), |p| p.display().to_string()),
-            );
+            let file = path().map_or("No profile folder".into(), |p| p.display().to_string());
+            let mut on = self.autosave;
+            if ui
+                .checkbox(&mut on, "Autosave")
+                .on_hover_text(format!(
+                    "Save the notes, redacted, a moment after each change, to {file}. \
+                     Off: only Save (Ctrl+S) writes them, and closing is-alive with changes \
+                     not saved asks first."
+                ))
+                .changed()
+            {
+                self.autosave = on;
+                look.notes_autosave = on;
+                crate::theme::save(look);
+            }
+            match (self.autosave, self.dirty.is_some(), &self.saved) {
+                (true, true, _) => {
+                    ui.weak("Saving…");
+                }
+                (false, true, _) => {
+                    ui.colored_label(widgets::warn(), "Not saved");
+                    if ui
+                        .add(egui::Button::new("Save").shortcut_text("Ctrl+S"))
+                        .on_hover_text(format!("Save the notes, redacted, to {file}"))
+                        .clicked()
+                    {
+                        self.save_asked = true;
+                        ui.ctx().request_repaint();
+                    }
+                }
+                (_, false, Some(t)) => {
+                    ui.weak(format!("Saved {t}")).on_hover_text(file);
+                }
+                (_, false, None) => {}
+            }
             if ui.available_size_before_wrap().x <= 340.0 {
                 ui.end_row();
             }
@@ -1638,7 +1706,24 @@ mod tests {
             picker_restyled: false,
             reselect: None,
             elsewhere: Vec::new(),
+            autosave: true,
+            save_asked: false,
         }
+    }
+
+    #[test]
+    fn autosave_off_waits_for_save() {
+        let mut n = notes("draft");
+        n.changed(1.0);
+        // On: about to save, nothing to ask on close.
+        assert!(n.saving());
+        assert!(!n.unsaved());
+        n.set_autosave(false);
+        // Off: kept until Save (or Ctrl+S) asks, and closing asks first.
+        assert!(!n.saving());
+        assert!(n.unsaved());
+        n.save_asked = true;
+        assert!(n.saving());
     }
 
     fn select(ctx: &egui::Context, n: &NotesTool, what: &str) {
