@@ -1420,11 +1420,12 @@ mod tests {
         shown.push(v.map.summary.clone());
         shown.extend(v.map.findings.iter().map(|f| f.text.clone()));
         shown.push(v.purpose.caption().unwrap().to_string());
-        for text in &shown {
-            for secret in &secrets {
+        // By number: a failing test never prints the answer key.
+        for (j, text) in shown.iter().enumerate() {
+            for (i, secret) in secrets.iter().enumerate() {
                 assert!(
                     !text.contains(secret.as_str()),
-                    "{secret:?} shown in {text:?}"
+                    "answer-key text #{i} shown in map text #{j}"
                 );
             }
         }

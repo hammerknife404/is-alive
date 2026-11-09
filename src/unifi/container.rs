@@ -13,6 +13,10 @@ use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use std::io::{self, Read};
 
+// UniFi's backup-format constants: the same in every controller, and
+// published by every tool that reads a .unf or .unifi backup. They're not
+// secrets (the format can't be read without them); the backup's own
+// passwords and keys are what the converter strips.
 const UNF_KEY: &[u8; 16] = b"bcyangkmluohmars";
 const UNF_IV: &[u8; 16] = b"ubntenterpriseap";
 const UNIFI_KEY: [u8; 32] = [
