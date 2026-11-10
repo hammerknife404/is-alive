@@ -603,7 +603,7 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
 
 /// Distinct targets in the Results log, in run order, so it's plain whether
 /// every run is this site's before the log goes in.
-fn log_targets(log: &Log) -> Vec<String> {
+pub(crate) fn log_targets(log: &Log) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in log.entries.iter().filter_map(|e| e.target()) {
         if !out.iter().any(|o| o == t) {
@@ -615,7 +615,13 @@ fn log_targets(log: &Log) -> Vec<String> {
 
 /// Checkbox, name and what's loaded; greyed out with a hint when there's
 /// nothing to include.
-fn part_row(ui: &mut Ui, on: &mut bool, name: &str, loaded: Option<String>, missing: &str) {
+pub(crate) fn part_row(
+    ui: &mut Ui,
+    on: &mut bool,
+    name: &str,
+    loaded: Option<String>,
+    missing: &str,
+) {
     match loaded {
         Some(detail) => {
             ui.checkbox(on, name);

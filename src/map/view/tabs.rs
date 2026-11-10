@@ -212,6 +212,31 @@ impl MapTabs {
         }
     }
 
+    /// The map showing on the Map tab (live or saved), for the site
+    /// report; `picture` draws it too. None while it's empty.
+    pub fn report(&self, src: &Sources, picture: bool) -> Option<crate::report::MapPart> {
+        match self.shown {
+            Some(i) => {
+                let t = self.saved.get(i)?;
+                t.view
+                    .report(src, format!("Saved map “{}”", t.name), picture)
+            }
+            None => self.live.report(src, "Live map".into(), picture),
+        }
+    }
+
+    /// Changes when what the report would take from the map showing does.
+    pub fn report_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.shown.hash(&mut h);
+        match self.shown.and_then(|i| self.saved.get(i)) {
+            Some(t) => t.view.report_key(&mut h),
+            None => self.live.report_key(&mut h),
+        }
+        h.finish()
+    }
+
     /// Rebuild the live map from the data on the next frame (Reload).
     pub fn reload(&mut self) {
         self.live.reload();

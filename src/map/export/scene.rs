@@ -21,6 +21,9 @@ pub struct Look {
     weak: Rgb,
     dark: bool,
     white: bool,
+    /// The findings under the map (off where they're listed beside it, as
+    /// in the site report).
+    findings: bool,
 }
 
 impl Look {
@@ -43,6 +46,15 @@ impl Look {
             weak: on(vis.weak_text_color()),
             dark: vis.dark_mode,
             white,
+            findings: true,
+        }
+    }
+
+    /// The same page without the findings under the map.
+    pub fn without_findings(self) -> Self {
+        Look {
+            findings: false,
+            ..self
         }
     }
 }
@@ -221,7 +233,11 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
     let map = d.map;
     let b = d.bounds();
     let (m, head) = (32.0, 64.0);
-    let foot = 28.0 + 20.0 * map.findings.len().min(12) as f32;
+    let foot = if look.findings {
+        28.0 + 20.0 * map.findings.len().min(12) as f32
+    } else {
+        0.0
+    };
     let drawn = d.lines();
     // In Sites the box already names the site.
     let sites = d.lay.boxes.iter().any(|g| g.tree);
@@ -285,7 +301,9 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
         let top = pos2(m, m + head + b.height() + 16.0);
         items.push(Item::Legend(draw_legend(&entries, plan, top, &ink)));
     }
-    findings(d, &ink, m, size.y - foot + 8.0, &mut items);
+    if look.findings {
+        findings(d, &ink, m, size.y - foot + 8.0, &mut items);
+    }
     Scene { size, items }
 }
 

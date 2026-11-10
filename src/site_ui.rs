@@ -421,6 +421,7 @@ impl App {
         }
         let named = site::current().is_some().then(|| self.site_name.clone());
         self.bundle.for_site(named.as_deref());
+        self.report.for_site(named.as_deref());
         self.retitle(ctx);
         if self.tab == Tab::Results {
             self.tab = Tab::Notes;

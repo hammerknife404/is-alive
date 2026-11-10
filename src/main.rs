@@ -18,6 +18,7 @@ mod meraki;
 mod net;
 mod photos;
 mod redact;
+mod report;
 mod shots;
 mod site;
 mod site_ui;
@@ -129,6 +130,7 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
+    report: tools::report::ReportTool,
     map: map::view::MapTabs,
     notes: tools::notes::NotesTool,
     log: log::Log,
@@ -223,6 +225,7 @@ impl eframe::App for App {
         self.central(ui, now);
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
+        self.report_window(ui.ctx());
         self.manual.window(ui.ctx());
         self.close_dialog(ui.ctx());
         self.site_dialog(ui.ctx());
@@ -488,6 +491,28 @@ impl App {
                 info,
                 notes,
                 map,
+            },
+        );
+    }
+
+    fn report_window(&mut self, ctx: &egui::Context) {
+        self.report.window(
+            ctx,
+            tools::report::Sources {
+                map: &self.map,
+                map_src: map::view::Sources {
+                    sweep: &self.sweep,
+                    export: &self.export,
+                    info: &self.info,
+                    busy: false,
+                    note: self.look.map_note,
+                    legend: self.look.map_legend,
+                    redact: self.notes.overrides(),
+                    animate: self.look.animate,
+                },
+                log: &self.log,
+                info: &self.info,
+                notes: &self.notes,
             },
         );
     }
@@ -1028,6 +1053,7 @@ fn main() {
                 advanced: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
+                report: Default::default(),
                 map: map::view::MapTabs::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),

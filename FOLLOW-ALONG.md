@@ -120,6 +120,7 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 1. Click the **Results** tab. Every check you ran is listed with its start and end time.
 2. **Copy** puts everything on the clipboard, ready to paste into an email or support ticket. **Save** writes it to a text file.
+3. Click **Report…** at the bottom right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
 
 ---
 

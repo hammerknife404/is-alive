@@ -6,6 +6,7 @@ pub mod export;
 pub mod notes;
 pub mod ping;
 pub mod ports;
+pub mod report;
 pub mod speed;
 pub mod sweep;
 pub mod trace;
