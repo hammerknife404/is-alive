@@ -170,7 +170,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.4** is the version you're running: worth including when you report a problem.
+- **v0.28.5** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -931,15 +931,35 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 
 ### Writing
 
-- **Edit / Split / Preview**: the editor only (default), the editor and the formatted preview side by side, or the preview only. In Split, drag the divider (double-click it for half and half).
-- **B**, ***I***, **S** (strikethrough), **</>** (code) format the selection (**Ctrl+B**, **Ctrl+I**, **Ctrl+E** for code). **H ▾** makes the line a heading, level 1 to 3, or plain text again (**Ctrl+Alt+1**, **2**, **3**, **0**).
-- **•** starts a bullet, **1.** a numbered item, **☐** a task box you can tick in the preview, **“** a quote.
-- **🔗** (**Ctrl+K**) makes the selection a link: `[text](https://)` with the cursor in the address; a selected address becomes `[](address)` with the cursor on the text. **▦** inserts a table to fill in (`| Device | IP | Note |`) and **—** a dividing line. Preview draws tables as a grid.
+Everything is in one row above the notes:
+
+- **Outline** shows or hides the outline on the left (below). It's open on a window 1440 points wide or more, and folded on a smaller one until you open it.
+- **Edit / Split / Preview**: the editor only (default), the editor and the formatted preview side by side, or the preview only. In Split, drag the divider (double-click it for half and half). The preview uses the app's own font, as the Site report and a saved web page do; code stays monospace.
+- **B**, ***I*** and **</>** (code) format the selection (**Ctrl+B**, **Ctrl+I**, **Ctrl+E**). **H ▾** makes the line a heading, level 1 to 3, or plain text again (**Ctrl+Alt+1**, **2**, **3**, **0**). **•** starts a bullet and **☐** a task box you can tick in the preview.
+- **Insert ▾** holds the rest:
+  - **Time**: the date and time with the time zone and where this computer's clock syncs from (useful when comparing with device logs).
+  - **Host info**: this computer's name, domain, LAN, MAC, gateway and WAN.
+  - **Photo or file…** (**Ctrl+O**): see *Getting it out* and *Photos* below.
+  - **Link** (**Ctrl+K**): makes the selection a link, `[text](https://)` with the cursor in the address; a selected address becomes `[](address)` with the cursor on the text.
+  - **Table**: a table to fill in (`| Device | IP | Note |`), which Preview draws as a grid.
+  - **Numbered list**, **Quote**, **Strikethrough** and **Horizontal rule**.
+- **☺** opens the emoji menu, grouped into Status, People, Notes and Tech (a server rack, Wi-Fi, network, firewall, printer, camera, disk and more). Hover an emoji to see what it's for and its shortcode (`:white_check_mark:`, `:fire:`, `:wireless:`); typing the shortcode works too, and Preview draws it as the emoji. The server rack is the file cabinet emoji (🗄, `:file_cabinet:`): Unicode has no server, so other apps show a cabinet.
+- **Redact** (see *Redaction* below).
+- On the right: when the notes were last saved (or **Not saved** with **Save**, with Autosave off), how much is redacted (*🔑 2 redacted*: click it to highlight them in the editor or stop), and **File ▾** (below).
 - **Undo** and **redo**: **Ctrl+Z** and **Ctrl+Y** (or **Ctrl+Shift+Z**).
 - **Lists continue**: press **Enter** at the end of a list item and the next one starts; Enter on an empty item ends the list.
-- **☺** opens the emoji menu, grouped into Status, People, Notes and Tech (a server rack, Wi-Fi, network, firewall, printer, camera, disk and more). Hover an emoji to see what it's for and its shortcode (`:white_check_mark:`, `:fire:`, `:wireless:`); typing the shortcode works too, and Preview draws it as the emoji. The server rack is the file cabinet emoji (🗄, `:file_cabinet:`): Unicode has no server, so other apps show a cabinet.
-- **Time** inserts the date and time with the time zone and where this computer's clock syncs from (useful when comparing with device logs). **Host info** inserts this computer's name, domain, LAN, MAC, gateway and WAN.
-- **Font and size** (right end of the toolbar): Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
+- **The font and size** are in [Settings](#16-settings-and-themes) under **Notes**: Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
+
+### The outline
+
+**Outline** opens a panel on the left with:
+
+- **Headings**, indented by level. Click one to go to it in the editor, with its line selected (from Preview, Notes switches to Split).
+- **Tasks**: how many are open and done, with a bar.
+- **Redacted**: what's hidden, **Highlight in the editor**, and **By hand (n)**: the values you redacted or kept by hand, each with × to undo.
+- The word and line count.
+
+**×** closes it; **Outline** opens it again.
 
 **Emoji styles.** Emoji are drawn a size up in one of four styles: **Match theme** (monochrome; neon in the Miami and RGB themes), **Monochrome**, **Colour** (each emoji in its own colour: faces yellow, ✅ green, ❌ red) and **Miami neon**. The **Style** row at the top of the emoji menu offers **Same as app** (follows Settings), **Monochrome**, **Colour** and **Miami neon**, for the emoji you insert from then on (with emoji selected, it restyles those too), so one note can mix styles. Emoji inserted in a style of their own keep it. Emoji inserted with **Same as app** follow the **Emoji** setting in Settings, so with *Match theme* they change with the theme.
 
@@ -949,21 +969,23 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 
 ### Getting it out
 
-The status row under the toolbar shows the word and line count, what's redacted, **Autosave** and when the notes were last saved, with:
+**File ▾** (right end of the toolbar):
 
-| Button | What it does |
+| Item | What it does |
 |---|---|
-| **Open…** (**Ctrl+O**) | Open notes (`.md` or `.txt`, up to 5 MB): **Replace the notes** with them, **Add at the end**, or **Read only**. Add a photo (below). Or open a config file or log in a read-only tab beside Notes, with line numbers. A file opened to read is never saved, redacted or bundled |
+| **Save** (**Ctrl+S**) | With Autosave off: save the notes now |
+| **Save as Markdown… / plain text… / web page…** | Save a copy, redacted, dated `notes-<date>`: **Markdown** as written (**Ctrl+Shift+S**); **plain text** with the marks taken out, headings underlined and tables lined up, for a ticket or an email; **web page** formatted, photos included, to send or to print as PDF from the browser. Nothing in the notes becomes code in the page: every character is escaped, and only `http`, `https` and `mailto` links stay links |
 | **Copy** | Copy the notes, redacted |
 | **Raw copy** | Copy them exactly as written, secrets included (click twice) |
-| **Save as ▾** | Save a copy, redacted, dated `notes-<date>`: **Markdown (.md)** as written (**Ctrl+Shift+S**); **Plain text (.txt)** with the marks taken out, headings underlined and tables lined up, for a ticket or an email; **Web page (.html)** formatted, photos included, to send or to print as PDF from the browser. Nothing in the notes becomes code in the page: every character is escaped, and only `http`, `https` and `mailto` links stay links |
+| **Open…** (**Ctrl+O**) | Open notes (`.md` or `.txt`, up to 5 MB): **Replace the notes** with them, **Add at the end**, or **Read only**. Add a photo (below). Or open a config file or log in a read-only tab beside Notes, with line numbers. A file opened to read is never saved, redacted or bundled |
+| **Autosave** | On or off (below) |
 | **Clear** | Empty the notes (click twice) |
 
-**Autosave** (on by default): the notes save themselves, redacted, a moment after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it to save only when you choose: the status row then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
+**Autosave** (on by default): the notes save themselves, redacted, a moment after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
-**Open…** also takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
+**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
 
 - In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
 - Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.
@@ -974,7 +996,7 @@ The status row under the toolbar shows the word and line count, what's redacted,
 
 Notes never get scanned and mangled: only what you mark, and the secrets of the configs you've opened, are hidden.
 
-- **By hand:** select a password (or anything private) and click **Redact** (**Ctrl+R**). It's hidden there and everywhere else it appears, as a `[🔑 REDACTED: …]` marker. With the cursor on a redacted value, the button becomes **Unredact**. **By hand (n)** lists them, with × to undo.
+- **By hand:** select a password (or anything private) and click **Redact** (**Ctrl+R**). It's hidden there and everywhere else it appears, as a `[🔑 REDACTED: …]` marker. With the cursor on a redacted value, the button becomes **Unredact**. **By hand (n)** in the outline lists them, with × to undo.
 - **From configs:** every password, pre-shared key and secret that Config Export removed from a loaded backup or export is held in memory and hidden wherever it appears in Notes, so the staff Wi-Fi password can't slip into a note you send. They stay hidden until is-alive closes, even after the file is closed or the map cleared.
 
 Autosave, **Copy**, **Save as** and the Site Bundle all get the redacted text. Only **Raw copy** gives the original.
@@ -1201,9 +1223,13 @@ The small line under them says what's drawing the backdrop (graphics card or pro
 - **Look up the public IP on start** (on by default): one DNS query to OpenDNS when the app opens, for the WAN address in the status bar. Off, nothing leaves the computer until you run something.
 - **Check for updates on start** (on by default): one request to GitHub for the latest version. **Check now** checks at any time and says if you're up to date or why it couldn't check.
 
+### Notes
+
+- **Font**: the notes' text size (8 to 32 points) and font: Sans, Mono, and the log-friendly monospace fonts this computer already has (Consolas, Cascadia Mono, DejaVu Sans Mono…). The editor uses it; the preview keeps the app's own font at that size.
+
 ### Map
 
-- **Show the accuracy note**: brings back the note above the Map if you closed it.
+- **Show the accuracy note**: brings back the note under the Map's toolbar if you closed it.
 
 ### Where settings and notes are kept
 

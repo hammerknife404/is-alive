@@ -256,6 +256,12 @@ impl App {
             (None, false) => {}
         }
         ui.separator();
+        ui.label(egui::RichText::new("Notes").strong());
+        ui.horizontal(|ui| {
+            ui.label("Font");
+            crate::tools::notes::font_menus(ui, &mut self.look);
+        });
+        ui.separator();
         ui.label(egui::RichText::new("Map").strong());
         if ui
             .checkbox(&mut self.look.map_note, "Show the accuracy note")
