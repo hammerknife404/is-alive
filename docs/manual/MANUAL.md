@@ -169,7 +169,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.1** is the version you're running: worth including when you report a problem.
+- **v0.28.2** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -199,7 +199,7 @@ When every check is done and the sweep found something, the **Map** tab glows fo
 | **Title** | The page's heading and file name (`<title>-report-<date>.html`). The open site's name, else the map's title |
 | **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section |
 | **Findings** | The map's findings, worst first, each with the devices it names |
-| **Changes since** | What changed since the saved map you're comparing with (**Compare ⏷** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
+| **Changes since** | What changed since the saved map you're comparing with (**⋯ › Compare** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
 | **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A link the data didn't show is marked *(assumed)* |
 | **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
 | **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
@@ -697,20 +697,36 @@ A map with nothing to show offers **Scan this network** (a sweep of this compute
 
 ### The toolbar
 
-A row above the toolbar says which map is showing. On the live map it has **Clear map…** (click it twice): it closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. It's greyed out while there's nothing to clear. On a saved map it has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first. **Saved maps** opens the saved maps bar (below).
+Nothing sits above the map: its controls float over its top edge, so the map has the whole window.
 
 | Control | What it does |
 |---|---|
-| **Search** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
-| **Clients: …** ⏷ | End devices, drawn as small tiles. The menu offers **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
+| **Find** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
+| **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered. On a narrow map they fold into one drop-down |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
-| **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
-| **⟲ Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
-| **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered |
-| **Legend** | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Your choice is remembered |
-| **Examples ⏷** | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
-| **Export ⏷** | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out) |
+| **⚠ 2 high · 4 med** | The map's findings, worst first: click to open them in **Layers** (below). Only there when the map has findings |
+| **⋯** | Everything used less often (below) |
+| **Layers** (top right) | The panel of sites, roles and findings (below) |
+| **Legend** (top right) | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Off until you turn it on; your choice is remembered |
+| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a narrow map (a small window, or Layers and a card's panel both open) it's in **⋯** instead |
+
+**⋯** holds:
+
+| Item | What it does |
+|---|---|
+| **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
+| **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
+| **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
+| **Compare** ▸ | On the live map: what changed since a saved map of this site (see *Compare with the last visit*, below) |
+| **Examples** ▸ | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
+| **Saved maps** | Show or hide the saved maps bar (below) |
+| **Copy findings** | The findings as text, worst first, for a ticket |
+| **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
+
+On a saved map, a **Saved: *name* ⏷** chip starts the toolbar: its menu has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first.
+
+Under the toolbar the map says what it needs to: that it's a plan or a training map, the accuracy note (below) and how far a running sweep has got.
 
 **Layouts:**
 
@@ -750,7 +766,7 @@ In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, 
 | **Common links only** | The backbone: links that more than one device's traffic runs over, from the internet to firewalls, switches and access points. A link to an end device (a server, a printer, a laptop) is left out; an access point whose clients aren't drawn but counted on it still counts |
 | **Confirmed links only** | The links the data shows (a controller, a firewall, a /mapnetwork map); the grey dotted ones a sweep placed by guess are left out |
 
-A selected card's lit path always shows, whatever the view. While a view other than **All links** is on, a pill in the map's top right corner says which; click it to show all links again. The legend lists only the lines drawn, and **Export ⏷** draws what the map shows. The view is an undo step and is kept in saved maps.
+A selected card's lit path always shows, whatever the view. While a view other than **All links** is on, a pill in the map's top right corner, under **Legend**, says which; click it to show all links again. The legend lists only the lines drawn, and **Export ⏷** draws what the map shows. The view is an undo step and is kept in saved maps.
 
 ### The legend
 
@@ -761,25 +777,25 @@ The **Legend** panel in the bottom left corner says what everything on the map m
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
-Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** in the toolbar, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ⏷** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
+Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** at the top right, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ⏷** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
 
 ### Undo and saved maps
 
 **Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards or boxes dragged (a whole drag is one step) or put back, **Re-layout**, the **Links** view, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
 
-**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Each site has its own (see [Sites](#sites)). Click **Saved maps** (beside the zoom controls) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
+**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Each site has its own (see [Sites](#sites)). Click **Saved maps** (beside the zoom controls, or in **⋯**) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
 
 - **Live** is the map from the sweep and the files loaded now; each saved map has a tab beside it. Click one to open it. A **•** after its name means it has changed since it was saved.
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
-- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, above the map and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its panel. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
+- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its panel. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
 ### Compare with the last visit
 
-Back at a site, **Compare ⏷** (beside **Saved maps**, on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
+Back at a site, **⋯ › Compare** (on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
 
 - **NEW** on a card (green) is a device that wasn't on the saved map; **CHANGED** (amber) is one whose address, open ports or name changed. Zoomed far out, each is a dot on the card's corner.
 - **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
@@ -793,7 +809,7 @@ Back at a site, **Compare ⏷** (beside **Saved maps**, on the live map) lists t
 - **New clients** (phones, laptops), unless the saved map was saved with **Clients: All**: a map holds only the clients it shows, so one saved with **Some** can't say whether a client is new. Clients gone or changed are still listed, since the live map is compared with every client, whatever **Clients** shows now. To compare clients next time, set **Clients: All** before **+ Save current**.
 - Only maps marked **As found** are offered (not a plan or a training map), and not on an example. Opening another site stops the comparison.
 
-**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **Compare ⏷ › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
+**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **⋯ › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
 
 ### Selecting cards
 
@@ -868,27 +884,29 @@ A card with a note has a small folded sheet on its top edge, at every zoom, and 
 
 Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`; not an example's).
 
-### The left panel and findings
+### Layers and findings
 
+**Layers** (top right, or the findings chip) opens the panel on the left. It's shut when the map opens, so the map gets the room; **×** shuts it again.
+
+- **The map's summary** at the top: what it is and how much it holds.
 - **Sites:** each site with a ▾/▸ toggle to collapse or expand it; **Collapse all**, **Expand all**; click a site's name to select its cards and bring it into view. You can also click a site's title on the map.
 - **Roles** with counts; click one to fade those cards out.
-- **Action items**, worst first; click one to select the devices it's about.
-- **‹** hides the panel (the legend still fades roles); **›** brings it back.
+- **Action items** (the findings), worst first; click one to select the devices it's about.
 
-**Findings** (the band above the map) come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **Copy** puts them in a ticket.
+**Findings** come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **⋯ › Copy findings** puts them in a ticket.
 
 ### Example: walking a site with the Acme example
 
-1. Open the **Map** tab, click **Examples ⏷**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
+1. Open the **Map** tab, click **⋯ › Examples**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
 2. Click the **SonicWall NSA 3700** card. The panel shows it's the primary of an HA pair with a high-priority action item (*WAN2 failover not recently tested*), and the line to the internet lights up.
 3. Right-click a server card and choose **Select its path to the WAN**: the switch, firewall and internet link it depends on light up. If that switch failed, everything under it would lose its connection.
 4. Switch to **Zones** to see the devices grouped by role, then back to **Cluster**.
-5. Open **Examples ⏷** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
-6. **Examples ⏷ → Close the example** goes back to this network's map.
+5. Open **⋯ › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
+6. **⋯ › Examples › Close the example** goes back to this network's map.
 
 ![The Contoso Health example in the Sites layout: 23 clinics, each in its own box](img/map-sites.png)
 
-**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note above it says so and offers **Site Bundle…** for an accurate one from `/mapnetwork`. Its **×** hides it for good; **Settings → Show the accuracy note** brings it back.
+**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…** for an accurate one from `/mapnetwork`. **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
 
 **Updating.** The map rebuilds by itself as a sweep finds devices and when a file is loaded in Config Export. Rebuilds keep pins, selections, moved cards and spot-check results. A pinned card that's no longer in the data stays, drawn in red with a dashed outline and marked *Not in the latest data*, so you can check it before unpinning it.
 

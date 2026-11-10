@@ -5,6 +5,7 @@
 
 use super::history::Edits;
 use super::saved::{self, Purpose, Snapshot};
+use super::toolbar::{TabsAsk, TabsMenu};
 use super::*;
 use crate::job::{Job, pump};
 use std::path::{Path, PathBuf};
@@ -411,45 +412,6 @@ impl MapTabs {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
-        let mut clear = false;
-        ui.horizontal_wrapped(|ui| {
-            if let Some(i) = self.shown {
-                ui.strong(&self.saved[i].name);
-                if ui
-                    .button("Close map")
-                    .on_hover_text("Back to the live map; the saved map stays in Saved maps")
-                    .clicked()
-                {
-                    self.shown = None;
-                }
-                if ui.button("Delete saved map…").clicked() {
-                    self.asking = Some(Ask::Delete(i));
-                }
-            } else {
-                ui.weak("Live map");
-                let any = src.export.has_files()
-                    || src.sweep.is_running()
-                    || src.sweep.finished().is_some();
-                clear = widgets::confirm_button(
-                    ui,
-                    "clear_live_map",
-                    any,
-                    "Clear map…",
-                    "Close the configs opened and forget the sweep's results, for this session. \
-                     Saved maps and the files on disk are kept, and Notes keeps hiding the \
-                     configs' secrets",
-                );
-            }
-            if ui.button("Saved maps").clicked() {
-                self.bar = !self.bar;
-            }
-            if self.shown.is_none() {
-                self.compare_menu(ui);
-            }
-        });
-        if clear {
-            return Some(Action::ClearLive);
-        }
         self.poll_open();
         self.tell_skipped();
         self.redact(src.redact);
@@ -461,13 +423,32 @@ impl MapTabs {
         self.confirm_dialog(ui.ctx(), &src);
         let bar = self.bar;
         let saved = self.shown.is_some();
+        let menu = self.tabs_menu(&src);
         let view = self.view();
         view.bar = bar;
+        view.tabs_menu = menu;
         let act = view.ui(ui, src);
         let flip = std::mem::take(&mut view.bar_flip);
+        let ask = view.tabs_ask.take();
         let empty = view.map.nodes.is_empty();
         if flip {
             self.bar = !self.bar;
+        }
+        match ask {
+            Some(TabsAsk::CloseSaved) => self.shown = None,
+            Some(TabsAsk::DeleteSaved) => {
+                if let Some(i) = self.shown {
+                    self.asking = Some(Ask::Delete(i));
+                }
+            }
+            Some(TabsAsk::Compare(n)) => {
+                if let Some(&j) = self.compare_found().get(n) {
+                    self.compare_with(j);
+                }
+            }
+            Some(TabsAsk::StopCompare) => self.live.since = None,
+            Some(TabsAsk::Clear) => return Some(Action::ClearLive),
+            None => {}
         }
         // Nothing mapped, so no canvas to hold Saved maps: a link instead.
         if empty && !self.bar && !self.saved.is_empty() {
@@ -496,87 +477,58 @@ impl MapTabs {
         }
     }
 
-    /// Compare ⏷: the live map against a saved map of this site, newest
-    /// first (as found only: a plan or a training map is no visit).
-    fn compare_menu(&mut self, ui: &mut Ui) {
+    /// What the toolbar shows for the saved maps: the one on show, Compare's
+    /// list, and whether Clear map has anything to clear.
+    fn tabs_menu(&self, src: &Sources) -> TabsMenu {
         let live = &self.live;
         let example = matches!(
             live.note_scope,
             super::notes::Scope::Example(_) | super::notes::Scope::Blank
         );
-        if live.map.nodes.is_empty() || example {
-            return;
-        }
-        let mut found: Vec<usize> = (0..self.saved.len())
-            .filter(|&j| self.saved[j].view.purpose == Purpose::AsFound)
-            .collect();
-        found.sort_by(|&a, &b| self.saved[b].created.cmp(&self.saved[a].created));
-        let label = match &live.since {
-            Some(s) => format!("Since {} ⏷", short(&s.name)),
-            None => "Compare ⏷".to_string(),
-        };
-        let mut pick = None;
-        let mut stop = false;
-        let b = ui.add(egui::Button::new(label).selected(live.since.is_some()));
-        let b = b.on_hover_text(
-            "Mark what's new, changed or gone since a saved map of this site: the last \
-             visit, say",
-        );
-        egui::Popup::menu(&b).show(|ui| {
-            ui.set_min_width(260.0);
-            ui.weak("Compare the live map with:");
-            for &j in &found {
+        let compare = self
+            .compare_found()
+            .into_iter()
+            .map(|j| {
                 let t = &self.saved[j];
                 let on = live
                     .since
                     .as_ref()
                     .is_some_and(|s| s.name == t.name && s.created == t.created);
-                if ui
-                    .add(
-                        egui::Button::new(format!(
-                            "{} · {}",
-                            short(&t.name),
-                            super::since::day(&t.created)
-                        ))
-                        .selected(on),
-                    )
-                    .on_hover_text(&t.name)
-                    .clicked()
-                {
-                    pick = Some(j);
-                    ui.close();
-                }
-            }
-            if found.is_empty() {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(
-                            "No saved map of this site yet. + Save current in Saved maps keeps \
-                             this one, to compare with on the next visit.",
-                        )
-                        .weak(),
-                    )
-                    .wrap(),
-                );
-            }
-            if live.since.is_some() {
-                ui.separator();
-                if ui.button("Stop comparing").clicked() {
-                    stop = true;
-                    ui.close();
-                }
-            }
-        });
-        if stop {
-            self.live.since = None;
+                (
+                    format!("{} · {}", short(&t.name), super::since::day(&t.created)),
+                    t.name.clone(),
+                    on,
+                )
+            })
+            .collect();
+        TabsMenu {
+            saved: self.shown.map(|i| self.saved[i].name.clone()),
+            can_compare: self.shown.is_none() && !live.map.nodes.is_empty() && !example,
+            compare,
+            comparing: live.since.is_some(),
+            clearable: src.export.has_files()
+                || src.sweep.is_running()
+                || src.sweep.finished().is_some(),
         }
-        if let Some(j) = pick {
-            let t = &self.saved[j];
-            let was = saved::copy_map(t.view.frozen.as_deref().unwrap_or(&t.view.map));
-            let was_all = t.saved.clients == Clients::All;
-            let s = super::since::Since::new(t.name.clone(), t.created.clone(), was, was_all);
-            self.live.compare_with(s);
-        }
+    }
+
+    /// The saved maps the live map can be compared with: as found (a plan
+    /// or a training map is no visit), newest first.
+    fn compare_found(&self) -> Vec<usize> {
+        let mut found: Vec<usize> = (0..self.saved.len())
+            .filter(|&j| self.saved[j].view.purpose == Purpose::AsFound)
+            .collect();
+        found.sort_by(|&a, &b| self.saved[b].created.cmp(&self.saved[a].created));
+        found
+    }
+
+    /// Compare the live map with saved map `j`.
+    fn compare_with(&mut self, j: usize) {
+        let t = &self.saved[j];
+        let was = saved::copy_map(t.view.frozen.as_deref().unwrap_or(&t.view.map));
+        let was_all = t.saved.clients == Clients::All;
+        let s = super::since::Since::new(t.name.clone(), t.created.clone(), was, was_all);
+        self.live.compare_with(s);
     }
 
     /// Live, a sub-tab for each saved map, + Save current and Open….

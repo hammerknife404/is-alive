@@ -1,94 +1,9 @@
-//! The card panel beside the map: findings band, a card's details, and
-//! each card's runs and results.
+//! The card panel beside the map: a card's details, and each card's runs
+//! and results.
 
 use super::*;
 
 impl MapView {
-    pub(super) fn findings_band(&mut self, ui: &mut Ui, focus: &mut Option<Vec<usize>>) {
-        let f = &self.map.findings;
-        if f.is_empty() {
-            return;
-        }
-        let id = ui.make_persistent_id("map_findings");
-        let state =
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-        let mut toggle = false;
-        state
-            .show_header(ui, |ui| {
-                // The whole header opens it, not just the arrow.
-                let r = ui
-                    .add(egui::Label::new(RichText::new("Findings").strong()).sense(Sense::click()))
-                    .on_hover_text("Show or hide the findings, worst first");
-                toggle |= r.clicked();
-                for (sev, colour) in [
-                    (Sev::High, widgets::bad()),
-                    (Sev::Med, widgets::warn()),
-                    (Sev::Low, ui.visuals().weak_text_color()),
-                ] {
-                    let n = f.iter().filter(|x| x.sev == sev).count();
-                    if n > 0 {
-                        ui.label(RichText::new(format!("• {n} {}", sev.label())).color(colour));
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("Copy")
-                        .on_hover_text("Copy the findings as text, worst first")
-                        .clicked()
-                    {
-                        let mut s = format!("Findings: {}\n", self.map.summary);
-                        for x in f {
-                            s += &format!("[{}] {}\n", x.sev.label(), x.text);
-                        }
-                        widgets::copy(ui.ctx(), s);
-                        widgets::toast("Findings copied", true);
-                    }
-                });
-            })
-            .body_unindented(|ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(150.0)
-                    .id_salt("findings_list")
-                    .show(ui, |ui| {
-                        for x in f {
-                            ui.horizontal(|ui| {
-                                let c = match x.sev {
-                                    Sev::High => widgets::bad(),
-                                    Sev::Med => widgets::warn(),
-                                    Sev::Low => ui.visuals().weak_text_color(),
-                                };
-                                ui.label(
-                                    RichText::new(format!("{:<4}", x.sev.label()))
-                                        .monospace()
-                                        .color(c),
-                                );
-                                let r =
-                                    ui.add(egui::Label::new(&x.text).wrap().sense(Sense::click()));
-                                if !x.nodes.is_empty() {
-                                    let r = r.on_hover_text("Show on the map");
-                                    if r.clicked() {
-                                        *focus = Some(x.nodes.clone());
-                                    }
-                                    if r.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-                                }
-                            });
-                        }
-                    });
-            });
-        if toggle {
-            let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                id,
-                false,
-            );
-            s.toggle(ui);
-            s.store(ui.ctx());
-        }
-        ui.separator();
-    }
-
     /// The detail panel: every selected card, stacked, the one clicked last
     /// on top. Each has /mapnetwork's sections: action items, details and
     /// connections, then what can be run against it. `menus` gets each

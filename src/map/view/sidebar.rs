@@ -1,5 +1,6 @@
-//! The controls drawn over the map: zoom buttons, and the sidebar of
-//! sites, roles and filters (the legend is in `legend`).
+//! The controls drawn over the map: zoom buttons, and Layers, the panel of
+//! sites, roles and findings (the legend is in `legend`, the toolbar in
+//! `toolbar`).
 
 use super::*;
 
@@ -18,7 +19,10 @@ impl MapView {
             .size()
             .x
             + 18.0;
-        let r = Rect::from_min_size(pos2(rect.max.x - 10.0 - w, rect.min.y + 8.0), vec2(w, 22.0));
+        let r = Rect::from_min_size(
+            pos2(rect.max.x - 10.0 - w, rect.min.y + 52.0),
+            vec2(w, 22.0),
+        );
         if r.min.x < rect.min.x + 40.0 {
             return;
         }
@@ -109,8 +113,8 @@ impl MapView {
         self.follow = false;
     }
 
-    /// Sites, roles to fade in and out, and the action items, worst first:
-    /// the sidebar /mapnetwork's maps have.
+    /// Layers: sites, roles to fade in and out, and the action items, worst
+    /// first, as /mapnetwork's maps have them. Shut until asked for.
     pub(super) fn sidebar(
         &mut self,
         ui: &mut Ui,
@@ -139,14 +143,21 @@ impl MapView {
             .size_range(180.0..=380.0)
             .show_collapsible(ui, &mut self.side, |ui| {
                 ui.horizontal(|ui| {
-                    ui.strong(format!("{} cards", self.map.nodes.len()));
+                    ui.strong("Layers");
+                    ui.weak(format!("{} cards", self.map.nodes.len()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         hide = ui
-                            .small_button("‹")
-                            .on_hover_text("Hide this panel")
+                            .small_button("×")
+                            .on_hover_text("Close Layers (the Layers button opens it again)")
                             .clicked();
                     });
                 });
+                // What the map is, in one line: /mapnetwork's title and counts.
+                if !self.map.summary.is_empty() {
+                    ui.add(
+                        egui::Label::new(RichText::new(&self.map.summary).small().weak()).wrap(),
+                    );
+                }
                 ui.separator();
                 // A bar of its own, not one floating over the counts.
                 ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();

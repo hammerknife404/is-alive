@@ -959,7 +959,7 @@ impl Default for Settings {
             notes_emoji: EmojiStyle::Theme,
             backdrop: Source::Scene,
             map_layout: None,
-            map_legend: true,
+            map_legend: false,
             nav: None,
             renderer: None,
         }
@@ -994,7 +994,7 @@ impl Settings {
                     }
                 }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
-                "map_legend" => s.map_legend = v.trim() != "0",
+                "map_legend" => s.map_legend = v.trim() == "1",
                 "nav" => {
                     s.nav = match v.trim() {
                         "open" => Some(true),
@@ -1104,8 +1104,8 @@ impl Settings {
         if let Some(m) = self.map_layout {
             s += &format!("map_layout={}\n", m.key());
         }
-        if !self.map_legend {
-            s += "map_legend=0\n";
+        if self.map_legend {
+            s += "map_legend=1\n";
         }
         if let Some(open) = self.nav {
             s += if open { "nav=open\n" } else { "nav=rail\n" };
@@ -1483,10 +1483,11 @@ mod tests {
             renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);
-        // The map's legend: on unless turned off, and only the off is written.
-        assert!(Settings::default().map_legend);
+        // The map's legend: off unless turned on (it covers part of the
+        // map), and only the on is written.
+        assert!(!Settings::default().map_legend);
         assert!(!Settings::default().text().contains("map_legend"));
-        assert!(s.text().contains("map_legend=0\n"));
+        assert!(!s.text().contains("map_legend"));
         assert!(Settings::parse("map_legend=1\n").map_legend);
         assert!(!Settings::parse("map_legend=0\n").map_legend);
         // The nav: follows the window unless pinned, and only a pin is written.

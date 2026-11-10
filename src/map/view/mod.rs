@@ -1,6 +1,6 @@
 //! The Map tab: pan (drag), zoom (wheel or pinch), drag a card to move it,
 //! click to trace its path to the internet, Ctrl+click to see what joins
-//! several cards, search, filter by role, and a findings band. F fits, +
+//! several cards, search, filter by role, and the findings in Layers. F fits, +
 //! and − zoom, 0 is 100% and the arrows pan from the keyboard. It rebuilds
 //! as the sweep finds hosts, so a scan can be watched filling in the map.
 
@@ -16,6 +16,7 @@ pub(crate) mod saved;
 mod sidebar;
 mod since;
 mod tabs;
+mod toolbar;
 
 use super::layout::{self, CARD, Layout, Links, Mode};
 use super::runs::{CardRuns, Out, Run, State, Tool};
@@ -186,7 +187,7 @@ pub struct MapView {
     raised: Vec<String>,
     /// When the map was last rebuilt, to pace rebuilds during a sweep.
     built_at: f64,
-    /// The left sidebar is open (closed: a › button on the canvas).
+    /// The Layers panel (sites, roles, findings) is open; shut until asked for.
     side: bool,
     /// Spot checks run from cards, with their results.
     runs: CardRuns,
@@ -214,8 +215,6 @@ pub struct MapView {
     /// When a site's title on the canvas was last clicked: the second click
     /// of a double-click there is ignored (the boxes have moved under it).
     flipped_at: f64,
-    /// The sidebar's starting state was picked for the window's width.
-    sized: bool,
     /// The legend is shown on the canvas.
     legend: bool,
     /// The setting the legend was last told (`Sources::legend`): a change
@@ -239,9 +238,23 @@ pub struct MapView {
     /// toggle was clicked.
     bar: bool,
     bar_flip: bool,
-    /// How wide each of the toolbar's groups was when last drawn (0: not
-    /// yet), for which row each goes on.
-    bar_w: [f32; BAR_GROUPS],
+    /// The boxes floating over the canvas last frame (toolbar, notices,
+    /// Layers and Legend): they take the pointer before the map does.
+    float_rects: Vec<Rect>,
+    /// What the saved-maps level puts in the toolbar, and what the toolbar
+    /// asked of it this frame.
+    tabs_menu: toolbar::TabsMenu,
+    tabs_ask: Option<toolbar::TabsAsk>,
+    /// Fit the map, or select the first search match, next frame (asked
+    /// from the toolbar, which is drawn after the canvas).
+    fit_next: bool,
+    search_next: bool,
+    /// ⋯ › Clear map… is asking to be sure.
+    ask_clear: bool,
+    /// The canvas is narrow: Export is in ⋯ rather than beside Legend.
+    export_in_menu: bool,
+    /// How wide Layers, Legend and Export were last frame.
+    right_w: f32,
     /// Re-layout was clicked this frame: Undo names the step for it.
     relaid: bool,
     /// A test runs in its own tab (Sources::busy), as of this frame.
@@ -273,7 +286,7 @@ pub struct MapView {
     animate: bool,
     /// The lit links as last drawn, kept while they don't change.
     lit_drawn: std::cell::RefCell<crate::map::colours::Lit>,
-    /// The saved map the live map is compared with (Compare ⏷), if any.
+    /// The saved map the live map is compared with (⋯ › Compare), if any.
     since: Option<since::Since>,
 }
 
@@ -301,57 +314,10 @@ const NOTHING_YET: &str = "Nothing on the map yet";
 pub const GONE_FLAG: &str =
     "Not in the latest data. Kept because it's pinned: check it, then unpin it or × to let it go.";
 
-/// What the toolbar asked for this frame.
-struct Toolbar {
-    act: Option<Action>,
-    search_enter: bool,
-    fit: bool,
-}
-
-/// The toolbar's groups, in order: search, Clients and Scan; Re-layout and
-/// Reload; ↩ ↪; the layouts and Legend; Examples and Export.
-const BAR_GROUPS: usize = 5;
-const BAR_LAYOUTS: usize = 3;
-const BAR_END: usize = 4;
-/// About how wide each group is, until it's been drawn.
-const BAR_GUESS: [f32; BAR_GROUPS] = [560.0, 160.0, 60.0, 340.0, 180.0];
-/// Room for the separator before a group and the gap after it.
-const BAR_GAP: f32 = 16.0;
-/// Narrower than this, the layouts go under the search row even when they
-/// would just fit after it: one long row is hard to scan.
-const BAR_ONE_ROW: f32 = 1100.0;
-
-/// Which of the toolbar's groups (widths `w`, 0 for one not drawn yet) go
-/// on each row in `full`: in order, each on the row so far if it fits,
-/// else starting the next. The search group always has the first row.
-/// Each group fits the window on its own, the widest (search, Clients and
-/// Scan) at the narrowest the window gets.
-fn bar_rows(w: &[f32; BAR_GROUPS], full: f32) -> Vec<Vec<usize>> {
-    let width = |k: usize| if w[k] > 0.0 { w[k] } else { BAR_GUESS[k] } + BAR_GAP;
-    let mut rows = vec![vec![0]];
-    let mut used = width(0);
-    for k in 1..BAR_GROUPS {
-        // The layouts join the search row only with Examples and Export
-        // after them: one row for the lot, or the layouts lead the next.
-        let alone = k == BAR_LAYOUTS
-            && rows.len() == 1
-            && (full < BAR_ONE_ROW || used + width(k) + width(BAR_END) > full);
-        let fits = used + width(k) <= full && !alone;
-        if fits {
-            rows.last_mut().expect("a row").push(k);
-            used += width(k);
-        } else {
-            rows.push(vec![k]);
-            used = width(k);
-        }
-    }
-    rows
-}
-
 /// Cards or a site the canvas should bring into view this frame.
 #[derive(Default)]
 struct Focus {
-    /// From the findings band or the sidebar's action items.
+    /// From Layers' action items.
     on: Option<Vec<usize>>,
     /// A site title clicked in the sidebar.
     site: Option<String>,
@@ -382,8 +348,6 @@ impl MapView {
         };
         Self {
             follow: true,
-            side: true,
-            legend: true,
             mode,
             clients,
             note_scope: notes::Scope::Live,
@@ -1238,32 +1202,26 @@ impl MapView {
         self.stamp_notes();
         self.busy = src.busy;
         let empty = self.map.nodes.is_empty();
-        let bar = self.toolbar(ui, &src, empty);
-        // The first thing asked for wins: a toolbar click isn't lost to
-        // the accuracy note drawn after it.
-        let mut act = bar.act;
-        act = act.or(self.notices(ui, &src, empty));
         if empty {
-            ui.separator();
             self.track_edits();
             self.sync_notes();
-            return act.or(empty_state(ui, src.info));
+            let full = ui.available_rect_before_wrap();
+            let act = empty_state(ui, src.info);
+            return act.or(self.controls(ui, full, &src, true));
         }
-        // A narrow window starts with the sidebar shut: the map needs the
-        // room more (the › button and the legend stand in for it).
-        if !self.sized {
-            self.sized = true;
-            self.side &= ui.available_width() >= 900.0;
-        }
-        let mut focus = Focus {
-            search: bar.search_enter,
+        let focus = Focus {
+            search: std::mem::take(&mut self.search_next),
             ..Default::default()
         };
-        self.findings_band(ui, &mut focus.on);
-        act = act.or(self.detail_panel(ui, &src, &mut focus.pick));
-        // Left: roles and action items, as /mapnetwork's sidebar has them.
+        let mut focus = focus;
+        let mut act = self.detail_panel(ui, &src, &mut focus.pick);
+        // Left: Layers (sites, roles and findings), as /mapnetwork's sidebar has them.
         self.sidebar(ui, &mut focus.on, &mut focus.site);
-        self.canvas(ui, bar.fit, focus);
+        let rect = ui.available_rect_before_wrap();
+        let fit = std::mem::take(&mut self.fit_next);
+        self.canvas(ui, fit, focus);
+        // Over the canvas, after it: the first thing asked for wins.
+        act = act.or(self.controls(ui, rect, &src, false));
         // Esc next frame closes a menu or leaves a text box: not the map's.
         self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
         self.track_edits();
@@ -1280,270 +1238,6 @@ impl MapView {
         // else was asked for this one).
         if self.legend != src.legend && act.is_none() {
             return Some(Action::Legend(self.legend));
-        }
-        act
-    }
-
-    /// Search, clients, scan, fit and layout, and Export. Its groups go on
-    /// as few rows as the window has room for, in order, each on the first
-    /// row it fits on (Examples and Export at a row's right end), so none
-    /// is ever cut off at the window's edge.
-    fn toolbar(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Toolbar {
-        let ctx = ui.ctx().clone();
-        let mut bar = Toolbar {
-            act: None,
-            search_enter: false,
-            fit: false,
-        };
-        let full = ui.available_width();
-        for row in bar_rows(&self.bar_w, full) {
-            ui.horizontal(|ui| {
-                // A row never takes more than the window: the right end
-                // stays on screen.
-                ui.set_max_width(full);
-                for (n, &k) in row.iter().enumerate() {
-                    if k == BAR_END {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let r = ui.scope(|ui| {
-                                bar.act = bar.act.take().or(self.toolbar_end(ui, src, empty));
-                            });
-                            self.bar_w[k] = r.response.rect.width();
-                        });
-                        continue;
-                    }
-                    if k == BAR_LAYOUTS && n > 0 {
-                        ui.separator();
-                    }
-                    let r = ui.scope_builder(
-                        egui::UiBuilder::new()
-                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                        |ui| self.bar_group(ui, &ctx, k, src, empty, &mut bar),
-                    );
-                    self.bar_w[k] = r.response.rect.width();
-                }
-            });
-        }
-        bar
-    }
-
-    /// The toolbar's group `k` (see `bar_rows`).
-    fn bar_group(
-        &mut self,
-        ui: &mut Ui,
-        ctx: &egui::Context,
-        k: usize,
-        src: &Sources,
-        empty: bool,
-        bar: &mut Toolbar,
-    ) {
-        match k {
-            0 => self.bar_find(ui, src, empty, bar),
-            1 => self.bar_edit(ui, empty, bar),
-            2 => self.history_buttons(ui),
-            BAR_LAYOUTS => {
-                if let Some(m) = self.layout_buttons(ui, ctx, empty) {
-                    bar.fit = true;
-                    bar.act = Some(Action::Layout(m));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Search, Clients and Scan.
-    fn bar_find(&mut self, ui: &mut Ui, src: &Sources, empty: bool, bar: &mut Toolbar) {
-        // Narrower with text in it: room for the count and ×.
-        let width = if self.search.is_empty() { 220.0 } else { 140.0 };
-        let r = widgets::line(
-            ui,
-            crate::input::Field::Text,
-            &mut self.search,
-            width,
-            "Search name, IP, MAC, note",
-        )
-        .on_hover_text("Finds cards by name, IP, MAC, vendor, details or note");
-        bar.search_enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if !self.search.is_empty() {
-            let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
-            ui.weak(format!("{n} match{}", if n == 1 { "" } else { "es" }));
-            if ui.small_button("×").on_hover_text("Clear search").clicked() {
-                self.search.clear();
-            }
-        }
-        ui.separator();
-        // A map with no end devices at all (an infrastructure-only
-        // /mapnetwork map) has nothing for the switch to show or hide.
-        let any = empty || !self.map.under.is_empty() || self.map.nodes.iter().any(|n| n.client);
-        ui.add_enabled_ui(any && self.frozen.is_none(), |ui| {
-            egui::ComboBox::from_id_salt("map-client-visibility")
-                .selected_text(format!("Clients: {}", self.clients.name()))
-                .show_ui(ui, |ui| {
-                    for c in Clients::ALL {
-                        if ui
-                            .selectable_label(self.clients == c, c.name())
-                            .on_hover_text(c.tip())
-                            .on_disabled_hover_text(if self.frozen.is_some() {
-                                "A saved map keeps the clients it was saved with"
-                            } else {
-                                reveal::no_clients_why(src)
-                            })
-                            .clicked()
-                        {
-                            self.clients = c;
-                            if !cfg!(test)
-                                && std::env::var_os("IS_ALIVE_SHOTS").is_none()
-                                && let Some(dir) = crate::theme::data_dir()
-                            {
-                                let result = saved::save_live_clients(&dir, c);
-                                if let Err(e) = result {
-                                    widgets::toast(
-                                        format!("Could not save client visibility: {e}"),
-                                        false,
-                                    );
-                                }
-                            }
-                            // The level sets every uplink again.
-                            self.reveal.clear();
-                        }
-                    }
-                });
-        });
-        if empty {
-            return;
-        }
-        ui.separator();
-        let subnet = src
-            .info
-            .lan
-            .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
-        let subnet = subnet.as_deref().unwrap_or("this machine's subnet");
-        let tip = if src.export.example_open() {
-            format!("Close the example and sweep {subnet}, filling in the map as hosts answer")
-        } else if src.sweep.finished().is_some() {
-            format!("Sweep {subnet} again and update the map as hosts answer")
-        } else {
-            format!("Sweep {subnet} and add what answers to the map")
-        };
-        if ui
-            .add_enabled(
-                src.info.lan.is_some() && !src.sweep.is_running(),
-                egui::Button::new("Scan"),
-            )
-            .on_hover_text(&tip)
-            .on_disabled_hover_text(if src.sweep.is_running() {
-                "A sweep is running"
-            } else {
-                "No LAN address on this machine"
-            })
-            .clicked()
-        {
-            bar.act = Some(Action::Sweep);
-        }
-    }
-
-    /// Re-layout and Reload.
-    fn bar_edit(&mut self, ui: &mut Ui, empty: bool, bar: &mut Toolbar) {
-        ui.add_enabled_ui(!empty, |ui| {
-            // Always there, so the buttons after it never move; it
-            // has something to do once a card was dragged.
-            let moved = !self.placed.is_empty() || !self.shifted.is_empty();
-            if ui
-                .add_enabled(moved, egui::Button::new("Re-layout"))
-                .on_hover_text("Put dragged cards and boxes back where the layout had them")
-                .on_disabled_hover_text(if empty {
-                    NOTHING_YET
-                } else {
-                    "Puts dragged cards and boxes back where the layout had them: nothing \
-                     was dragged"
-                })
-                .clicked()
-            {
-                self.relayout_all();
-                bar.fit = true;
-            }
-            if ui
-                .add_enabled(self.frozen.is_none(), egui::Button::new("⟲ Reload"))
-                .on_hover_text(
-                    "Read the map's files again and rebuild it, keeping pins and the \
-                     selection. (It already updates by itself as a sweep finds hosts or a \
-                     file is loaded.)",
-                )
-                .on_disabled_hover_text(if empty {
-                    NOTHING_YET
-                } else {
-                    "A saved map doesn't change with the files: Live has the map they make"
-                })
-                .clicked()
-            {
-                bar.act = Some(Action::Reload);
-            }
-        });
-    }
-
-    /// Sites, Cluster, Tree, Zones; the one picked, if it changed.
-    fn layout_buttons(&mut self, ui: &mut Ui, ctx: &egui::Context, empty: bool) -> Option<Mode> {
-        let mut picked = None;
-        ui.add_enabled_ui(!empty, |ui| {
-            let now = self.mode();
-            for m in Mode::ALL {
-                if ui
-                    .selectable_label(now == m, m.name())
-                    .on_hover_text(m.tip())
-                    .on_disabled_hover_text(NOTHING_YET)
-                    .clicked()
-                    && now != m
-                {
-                    self.mode = Some(m);
-                    self.placed.clear();
-                    self.relayout(ctx);
-                    picked = Some(m);
-                }
-            }
-            // The legend's switch sits with the other ways to show the map.
-            ui.separator();
-            if ui
-                .selectable_label(self.legend, "Legend")
-                .on_hover_text("Show what the colours, lines and badges mean (L)")
-                .on_disabled_hover_text(NOTHING_YET)
-                .clicked()
-            {
-                self.legend = !self.legend;
-            }
-        });
-        picked
-    }
-
-    /// The toolbar's right end, drawn right to left: Export, Examples.
-    fn toolbar_end(&self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
-        self.export_button(ui, empty);
-        examples_menu(ui, src)
-    }
-
-    /// Under the toolbar: the map's summary, the accuracy note, and how far
-    /// a running sweep has got.
-    fn notices(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
-        let mut act = None;
-        // A plan or a training map says so first: it isn't what was found.
-        if let Some(c) = self.purpose.caption() {
-            ui.label(RichText::new(c).strong().color(widgets::warn()));
-        }
-        if !self.map.summary.is_empty() {
-            ui.weak(&self.map.summary);
-        }
-        if !empty && src.note && src.export.mapnetwork().is_none() && self.frozen.is_none() {
-            act = accuracy_note(ui);
-        }
-        // A sweep fills the map in as it runs: show how far along it is.
-        if let Some((done, total, since, range)) = src.sweep.progress() {
-            ui.horizontal(|ui| {
-                widgets::spinner(ui);
-                ui.label(format!("Scanning {range}"));
-                if total > 0 {
-                    widgets::progress(ui, done, total, since);
-                } else {
-                    ui.weak("starting…");
-                }
-            });
         }
         act
     }
@@ -1685,19 +1379,6 @@ impl MapView {
         let lines = self.lines_now();
         self.paint(ui, rect, hover, &lines);
         self.reveal_chips(ui, rect);
-        // With the sidebar shut, a button that opens it again (the legend
-        // keeps the roles' fading).
-        if !self.side
-            && ui
-                .put(
-                    Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(24.0, 24.0)),
-                    egui::Button::new("›").corner_radius(6),
-                )
-                .on_hover_text("Show the sites, roles and action items")
-                .clicked()
-        {
-            self.side = true;
-        }
         if self.legend {
             let entries = self.legend_entries(&lines);
             self.legend_panel(ui, rect, &entries);
@@ -1708,52 +1389,6 @@ impl MapView {
         self.links_pill(ui, rect);
         self.bar_toggle(ui, rect);
     }
-}
-
-/// The map is a quick picture, not a survey: say so, and point to the
-/// reviewed path. Site Bundle opens it; × closes the note for good.
-fn accuracy_note(ui: &mut Ui) -> Option<Action> {
-    let warn = widgets::warn();
-    let mut act = None;
-    egui::Frame::new()
-        .fill(warn.gamma_multiply(0.12))
-        .stroke(Stroke::new(1.0, warn.gamma_multiply(0.5)))
-        .corner_radius(6)
-        .inner_margin(egui::Margin::symmetric(8, 4))
-        .show(ui, |ui| {
-            // One row: the text wraps in the room the buttons leave.
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("⚠").color(warn));
-                let room = (ui.available_width() - 150.0).max(160.0);
-                ui.allocate_ui(egui::vec2(room, 0.0), |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            "Built from what this app can see, so it may be incomplete or wrong. \
-For an accurate map, make a Site Bundle and run /mapnetwork in Claude.",
-                        )
-                        .wrap(),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(egui::Button::new("×").frame(false))
-                        .on_hover_text("Close this note")
-                        .clicked()
-                    {
-                        act = Some(Action::HideNote);
-                    }
-                    if ui
-                        .small_button("Site Bundle…")
-                        .on_hover_text("Zip it all for /mapnetwork")
-                        .clicked()
-                    {
-                        act = Some(Action::Bundle);
-                    }
-                });
-            });
-        });
-    ui.add_space(2.0);
-    act
 }
 
 /// Every card below `i` in the child table `kids`, nearest first.
@@ -1778,12 +1413,14 @@ fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
     out
 }
 
-/// Where Fit puts the map in `view`: a margin all round, more at the
-/// bottom, where the zoom controls sit, and clear of a `legend` that size
+/// Where Fit puts the map in `view`: a margin all round, more at the top,
+/// under the toolbar, and at the bottom, where the zoom controls sit, and
+/// clear of a `legend` that size
 /// in the bottom left corner: above it or beside it, whichever lets the
 /// map be drawn bigger (`zoom` says how big in a room).
 fn fit_room(view: Rect, legend: Vec2, zoom: &dyn Fn(Rect) -> f32) -> Rect {
-    let room = Rect::from_min_max(view.min + vec2(30.0, 24.0), view.max - vec2(30.0, 44.0));
+    // The toolbar floats over the top of the canvas: the map starts below it.
+    let room = Rect::from_min_max(view.min + vec2(30.0, 60.0), view.max - vec2(30.0, 44.0));
     if legend == Vec2::ZERO {
         return room;
     }
@@ -1925,73 +1562,10 @@ fn example_tip(blank: bool) -> &'static str {
     }
 }
 
-/// The toolbar's Examples menu; the example picked, if any.
-fn examples_menu(ui: &mut Ui, src: &Sources) -> Option<Action> {
-    let mut picked = None;
-    // The example on the map now, ticked; picking it again reads it again.
-    let shown = src
-        .export
-        .mapnetwork()
-        .and_then(|m| m.0.file_name().map(|f| f.to_os_string()));
-    ui.menu_button("Examples ⏷", |ui| {
-        ui.weak("Fictional sites, as /mapnetwork maps");
-        for (i, (label, f)) in crate::skills::EXAMPLES.iter().enumerate() {
-            let blank = *f == crate::skills::BLANK;
-            if blank {
-                ui.separator();
-            }
-            let on =
-                shown.is_some() && shown.as_deref() == crate::skills::example_path(i).file_name();
-            if ui
-                .selectable_label(on, *label)
-                .on_hover_text(example_tip(blank))
-                .clicked()
-            {
-                picked = Some(Action::Example(i));
-                ui.close();
-            }
-        }
-        if src.export.example_open() {
-            ui.separator();
-            if ui
-                .button("Close the example")
-                .on_hover_text("Back to this network's map (a Scan closes it too)")
-                .clicked()
-            {
-                picked = Some(Action::CloseExample);
-                ui.close();
-            }
-        }
-    })
-    .response
-    .on_hover_text("Open an example map (a fictional site drawn by /mapnetwork) or a blank one");
-    picked
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::map::Node;
-
-    /// The toolbar wraps group by group, so nothing is ever cut off: one
-    /// row on a wide window, the layouts with Examples and Export under
-    /// the rest at the default size, and three rows at the narrowest.
-    #[test]
-    fn the_toolbar_wraps_rather_than_cut_anything_off() {
-        let w = [540.0, 150.0, 50.0, 300.0, 160.0];
-        assert_eq!(bar_rows(&w, 1400.0), [vec![0, 1, 2, 3, 4]]);
-        assert_eq!(bar_rows(&w, 1100.0), [vec![0, 1, 2], vec![3, 4]]);
-        assert_eq!(bar_rows(&w, 740.0), [vec![0, 1], vec![2, 3, 4]]);
-        assert_eq!(bar_rows(&w, 600.0), [vec![0], vec![1, 2, 3], vec![4]]);
-        // A row's groups never add up to more than the window (one alone
-        // can't be helped).
-        for full in (560..1500).step_by(20) {
-            for row in bar_rows(&w, full as f32) {
-                let need: f32 = row.iter().map(|&k| w[k] + BAR_GAP).sum();
-                assert!(row.len() == 1 || need <= full as f32, "{full}: {row:?}");
-            }
-        }
-    }
 
     fn view(n: usize) -> MapView {
         let mut v = MapView::new(None);
