@@ -924,6 +924,10 @@ pub struct Settings {
     /// The nav pinned open (true) or folded (false); None follows the
     /// window's width (see `nav::open`).
     pub nav: Option<bool>,
+    /// How a UniFi backup's client table is read (Config Export's "UniFi
+    /// clients"): kept, so a site's backup reopens with the clients the Map
+    /// shows. None (the default) leaves them out: they're often people's names.
+    pub unifi_clients: crate::unifi::Clients,
     /// What draws the window: wgpu once it has opened it here (after
     /// OpenGL failed, or when asked for); None means OpenGL. See `startup`.
     pub renderer: Option<eframe::Renderer>,
@@ -961,6 +965,7 @@ impl Default for Settings {
             map_layout: None,
             map_legend: false,
             nav: None,
+            unifi_clients: crate::unifi::Clients::None,
             renderer: None,
         }
     }
@@ -995,6 +1000,10 @@ impl Settings {
                 }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 "map_legend" => s.map_legend = v.trim() == "1",
+                "unifi_clients" => {
+                    s.unifi_clients =
+                        crate::unifi::Clients::from_label(v.trim()).unwrap_or_default()
+                }
                 "nav" => {
                     s.nav = match v.trim() {
                         "open" => Some(true),
@@ -1109,6 +1118,9 @@ impl Settings {
         }
         if let Some(open) = self.nav {
             s += if open { "nav=open\n" } else { "nav=rail\n" };
+        }
+        if self.unifi_clients != crate::unifi::Clients::None {
+            s += &format!("unifi_clients={}\n", self.unifi_clients.label());
         }
         if let Some(r) = self.renderer {
             s += &format!("renderer={r}\n");
@@ -1480,6 +1492,7 @@ mod tests {
             map_layout: Some(crate::map::layout::Mode::Zones),
             map_legend: false,
             nav: Some(false),
+            unifi_clients: crate::unifi::Clients::Anonymized,
             renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);

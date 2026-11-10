@@ -324,6 +324,10 @@ impl MapView {
     pub(super) fn apply_edits(&mut self, e: &Edits) {
         self.placed.clone_from(&e.placed);
         self.mode = e.mode;
+        // On the live map, Clients undone or redone is kept as if picked.
+        if self.frozen.is_none() && self.clients != e.clients {
+            self.remember_clients(e.clients);
+        }
         self.clients = e.clients;
         self.reveal.clone_from(&e.reveal);
         self.closed.clone_from(&e.closed);

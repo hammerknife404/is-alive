@@ -526,6 +526,13 @@ impl MapView {
     /// Show `c`'s clients, and remember it for the live map.
     fn set_clients(&mut self, c: Clients) {
         self.clients = c;
+        self.remember_clients(c);
+        // The level sets every uplink again.
+        self.reveal.clear();
+    }
+
+    /// The live map's Clients level, kept for the next start.
+    pub(super) fn remember_clients(&self, c: Clients) {
         if !cfg!(test)
             && std::env::var_os("IS_ALIVE_SHOTS").is_none()
             && let Some(dir) = crate::theme::data_dir()
@@ -533,8 +540,6 @@ impl MapView {
         {
             widgets::toast(format!("Could not save client visibility: {e}"), false);
         }
-        // The level sets every uplink again.
-        self.reveal.clear();
     }
 
     /// Compare ▸: the live map against a saved map of this site.

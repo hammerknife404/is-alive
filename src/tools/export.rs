@@ -175,6 +175,9 @@ pub struct ExportTool {
     generation: u64,
     /// Files the last load couldn't read or convert.
     failed: Vec<String>,
+    /// Files that are there but couldn't be read, until one reads or Clear:
+    /// a site keeps remembering them, to try again next time.
+    unread: Vec<PathBuf>,
     /// Saved maps opened here or dropped, for the Map tab to take.
     saved_maps: Vec<(PathBuf, Vec<u8>)>,
 }
@@ -252,6 +255,17 @@ tech support report (.wri), Meraki API export (.json), or /mapnetwork map (.dc.h
                     e
                 }
             })
+    }
+}
+
+/// A file read (`ok`) or not: one that couldn't be read is kept on the
+/// list a site remembers until it reads, so the next visit tries it again.
+/// Examples aren't a site's.
+fn note_unread(unread: &mut Vec<PathBuf>, path: &Path, ok: bool) {
+    if ok {
+        unread.retain(|p| p != path);
+    } else if crate::skills::example(path).is_none() && !unread.iter().any(|p| p == path) {
+        unread.push(path.to_path_buf());
     }
 }
 
@@ -384,11 +398,13 @@ impl ExportTool {
             Ev::Picked(p) => self.pending = Some(p),
             Ev::Done(path, r) => match *r {
                 Ok(export) => {
+                    note_unread(&mut self.unread, &path, true);
                     self.shown = land(&mut self.slots, path, export);
                     loaded = true;
                 }
                 Err(e) => {
                     self.failed.push(file_name(&path));
+                    note_unread(&mut self.unread, &path, false);
                     add_err(&mut self.err, format!("{}: {e}", file_name(&path)));
                 }
             },
@@ -429,6 +445,27 @@ impl ExportTool {
         v
     }
 
+    /// What a site remembers: the files open here and those it couldn't
+    /// read (to try again next time), examples left out.
+    pub fn remembered_paths(&self) -> Vec<PathBuf> {
+        let mut v = self.open_paths();
+        for p in &self.unread {
+            if !v.contains(p) {
+                v.push(p.clone());
+            }
+        }
+        v
+    }
+
+    /// How UniFi backups' client tables are read (Settings keeps it).
+    pub fn clients(&self) -> unifi::Clients {
+        self.clients
+    }
+
+    pub fn set_clients(&mut self, c: unifi::Clients) {
+        self.clients = c;
+    }
+
     pub fn has_files(&self) -> bool {
         !self.slots.is_empty() || self.job.is_some()
     }
@@ -440,6 +477,7 @@ impl ExportTool {
         self.job = None;
         self.pending = None;
         self.slots.clear();
+        self.unread.clear();
         self.shown = 0;
         self.err = None;
         self.failed.clear();
@@ -806,5 +844,28 @@ mod tests {
             .err()
             .unwrap();
         assert!(e.starts_with("is-alive-no-such-file: "), "{e}");
+    }
+
+    /// A config that's there but won't read stays on the site's list (to
+    /// try again next visit) until it reads; Clear forgets it.
+    #[test]
+    fn a_config_that_wont_read_is_still_remembered() {
+        let bad = PathBuf::from("/srv/acme/backup.unf");
+        let mut unread = Vec::new();
+        note_unread(&mut unread, &bad, false);
+        note_unread(&mut unread, &bad, false);
+        assert_eq!(unread, std::slice::from_ref(&bad));
+        let mut t = ExportTool {
+            unread: unread.clone(),
+            ..Default::default()
+        };
+        assert_eq!(t.remembered_paths(), std::slice::from_ref(&bad));
+        note_unread(&mut unread, &bad, true);
+        assert!(
+            unread.is_empty(),
+            "read at last: one entry, as an open file"
+        );
+        t.clear();
+        assert!(t.remembered_paths().is_empty());
     }
 }

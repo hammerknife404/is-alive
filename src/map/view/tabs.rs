@@ -374,12 +374,17 @@ impl MapTabs {
     /// Map → Clear map, once the files and the sweep are cleared: the live
     /// map starts over (cards, pins, moves, undo), as on a fresh start.
     /// What's the user's, not the network's, carries over: the layout,
-    /// Clients, the side panel and legend, how notes are redacted, and the
-    /// card notes kept on this computer.
+    /// Clients, Links, Trace to WAN, the roles faded out, Layers and the
+    /// legend, how notes are redacted, and the card notes kept on this
+    /// computer.
     pub fn clear_live(&mut self) {
         let old = std::mem::replace(&mut self.live, MapView::new(None));
         self.live.mode = old.mode;
         self.live.clients = old.clients;
+        self.live.links = old.links;
+        self.live.lay.links = old.links;
+        self.live.trace_wan = old.trace_wan;
+        self.live.hidden = old.hidden;
         self.live.side = old.side;
         self.live.legend = old.legend;
         self.live.ov = old.ov;
@@ -397,6 +402,11 @@ impl MapTabs {
         let tour = std::env::var_os("IS_ALIVE_SHOTS").is_some();
         let mut live = std::mem::replace(&mut self.live, MapView::new(None));
         live.note_store = Some(super::notes::Store::open());
+        // Written to the new site's store next frame, carried or not.
+        live.note_synced = Default::default();
+        // The last site's redaction (its allow list, its configs' secrets)
+        // isn't this one's: the Notes tab sends this site's next frame.
+        live.ov = Default::default();
         // The saved map it was compared with is another site's.
         live.since = None;
         *self = Self::in_dir(live, saved::folder().filter(|_| !tour));
@@ -1427,6 +1437,9 @@ mod tests {
     fn clear_map_keeps_the_users_settings() {
         let mut live = MapView::new(Some(Mode::Zones));
         live.clients = Clients::All;
+        live.links = Links::Common;
+        live.trace_wan = true;
+        live.hidden.insert(Zone::Wireless);
         live.side = false;
         live.legend = false;
         live.ov.known = vec!["Bobcat2019".into()];
@@ -1438,6 +1451,8 @@ mod tests {
         let v = &t.live;
         assert_eq!(v.mode, Some(Mode::Zones));
         assert_eq!(v.clients, Clients::All);
+        assert_eq!((v.links, v.lay.links), (Links::Common, Links::Common));
+        assert!(v.trace_wan && v.hidden.contains(&Zone::Wireless));
         assert!(!v.side && !v.legend);
         assert_eq!(v.ov.known, ["Bobcat2019"]);
         assert!(v.note_store.is_some(), "card notes are still kept");
@@ -1446,5 +1461,30 @@ mod tests {
             "the map starts over"
         );
         assert_eq!(t.shown, None);
+    }
+
+    /// Another site: the view choices carry over as with Clear map, but the
+    /// last site's redaction doesn't (its allow list, its configs' secrets),
+    /// whether the live map is carried or starts over.
+    #[test]
+    fn a_site_switch_keeps_the_view_and_drops_the_last_sites_secrets() {
+        for keep_live in [false, true] {
+            let mut live = MapView::new(Some(Mode::Tree));
+            live.clients = Clients::Some;
+            live.links = Links::Confirmed;
+            live.ov.known = vec!["Bobcat2019".into()];
+            live.ov.allow = vec!["192.0.2.10".into()];
+            let mut t = MapTabs::in_dir(live, None);
+            t.switch_site(keep_live);
+            let v = &t.live;
+            assert_eq!(v.mode, Some(Mode::Tree), "keep_live {keep_live}");
+            assert_eq!(v.clients, Clients::Some);
+            assert_eq!(v.links, Links::Confirmed);
+            assert_eq!(
+                v.ov,
+                crate::redact::Overrides::default(),
+                "keep_live {keep_live}"
+            );
+        }
     }
 }
