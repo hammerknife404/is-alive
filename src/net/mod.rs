@@ -4,6 +4,7 @@ pub mod domain;
 pub mod hostinfo;
 pub mod icmp;
 pub mod mac;
+pub mod names;
 pub mod ports;
 pub mod speed;
 pub mod subnet;

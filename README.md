@@ -15,7 +15,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Ping](https://github.com/hammerknife404/is-alive/wiki/Ping) | ICMP or TCP ping with a live latency graph, loss and min/avg/max |
 | [Ports](https://github.com/hammerknife404/is-alive/wiki/Port-Check) | TCP port scan: lists, ranges and presets, with service names, and the TLS certificate on HTTPS and SSL-VPN ports (expiry, issuer, trust) |
 | [Traceroute](https://github.com/hammerknife404/is-alive/wiki/Traceroute) | Every router to a host, three probes per hop |
-| [Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names, MACs, vendors and an Inventory for /mapnetwork |
+| [Sweep](https://github.com/hammerknife404/is-alive/wiki/Subnet-Sweep) | Live hosts on one or more subnets and ranges at once, with names (DNS, else what each device calls itself over NetBIOS or mDNS), MACs, vendors and an Inventory for /mapnetwork |
 | [Lookup](https://github.com/hammerknife404/is-alive/wiki/DNS-Lookup) | DNS: any record type from any resolver, or every resolver compared; WHOIS registration |
 | [Domains](https://github.com/hammerknife404/is-alive/wiki/Advanced) | Mail and domain health: MX, SPF, DMARC, DKIM, SMTP, blacklists, DNSSEC and more |
 | [Configs](https://github.com/hammerknife404/is-alive/wiki/Config-Export) | UniFi, SonicWall and Meraki configs to sanitized JSON, offline; /mapnetwork maps back in |

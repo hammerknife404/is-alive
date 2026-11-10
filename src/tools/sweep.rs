@@ -4,7 +4,7 @@ use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
-use crate::net::{self, TcpState, ports, subnet, targets};
+use crate::net::{self, TcpState, names, ports, subnet, targets};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
@@ -202,7 +202,12 @@ impl SweepTool {
         ui.horizontal(|ui| {
             widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
             widgets::speed(ui, "sweep_speed", &mut self.threads, &mut self.rate);
-            ui.checkbox(&mut self.resolve_names, "Resolve names");
+            ui.checkbox(&mut self.resolve_names, "Resolve names")
+                .on_hover_text(
+                    "Name each device: from DNS, else the name it gives itself over NetBIOS \
+                     (Windows, NAS, many printers) or multicast DNS (Apple devices, printers, \
+                     Linux). One small UDP question to each live device; off is quicker",
+                );
             ui.checkbox(&mut self.check_ports, "Check mgmt ports")
                 .on_hover_text(PORTS_TIP);
         });
@@ -574,6 +579,8 @@ impl SweepTool {
         self.run_started = Some(log::now());
         self.started_at = Instant::now();
         let me = self.local.lan.map(|(ip, _)| ip);
+        // A device answers NetBIOS or mDNS within milliseconds on a LAN.
+        let ask = Duration::from_millis(timeout.min(400) as u64);
         self.job = Some(Job::spawn(ctx, move |tx| {
             let alive = Mutex::new(Vec::new());
             // Each probe makes the OS ARP for the address, so hosts that drop
@@ -586,10 +593,10 @@ impl SweepTool {
                 if r.is_reply() {
                     // The reply means the neighbor entry was just resolved.
                     let mac = mac::neighbors().get(&ip).copied();
-                    let name = if names {
-                        net::reverse(IpAddr::V4(ip))
+                    let (name, own_mac) = if names {
+                        identify(ip, mac.is_some(), ask)
                     } else {
-                        None
+                        (None, None)
                     };
                     alive.lock().unwrap().push((ip, mac.is_some()));
                     tx.send(Ev::Alive(Host {
@@ -597,7 +604,7 @@ impl SweepTool {
                         rtt: Some(r.rtt_ms),
                         ttl: r.ttl,
                         name,
-                        mac,
+                        mac: mac.or(own_mac),
                         open: Vec::new(),
                     }));
                 }
@@ -636,7 +643,7 @@ impl SweepTool {
                 .collect();
             net::par_for(&silent, threads, rate, tx.cancel_flag(), |&(ip, m)| {
                 let name = if names {
-                    net::reverse(IpAddr::V4(ip))
+                    identify(ip, true, ask).0
                 } else {
                     None
                 };
@@ -669,6 +676,23 @@ impl SweepTool {
             });
         }));
     }
+}
+
+/// A live host's name: DNS's (PTR), else the one it gives for itself
+/// (NetBIOS, then multicast DNS), each waiting up to `wait`. With no MAC
+/// from ARP (past a router) NetBIOS is asked even when DNS has a name, for
+/// the MAC a Windows host reports; that MAC comes back second.
+fn identify(ip: Ipv4Addr, have_mac: bool, wait: Duration) -> (Option<String>, Option<Mac>) {
+    let dns = net::reverse(IpAddr::V4(ip));
+    if dns.is_some() && have_mac {
+        return (dns, None);
+    }
+    let nb = names::netbios(SocketAddr::new(IpAddr::V4(ip), names::NETBIOS_PORT), wait);
+    let mac = nb.as_ref().and_then(|n| n.mac).filter(|_| !have_mac);
+    let name = dns
+        .or_else(|| nb.map(|n| n.name))
+        .or_else(|| names::mdns(ip, SocketAddr::new(IpAddr::V4(ip), names::MDNS_PORT), wait));
+    (name, mac)
 }
 
 fn found_by(h: &Host) -> &'static str {
