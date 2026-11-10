@@ -908,6 +908,9 @@ pub struct Settings {
     /// Notes save themselves a moment after each change. Off: only Save
     /// (Ctrl+S) writes them.
     pub notes_autosave: bool,
+    /// Each site keeps its Results (in its folder) from one visit to the
+    /// next. Off: Results live in memory only, as in Scratch.
+    pub results_keep: bool,
     /// The site open when the app last closed (its folder name); None is
     /// Scratch.
     pub site: Option<String>,
@@ -951,6 +954,7 @@ impl Default for Settings {
             wan_on_start: WAN_ON_START,
             updates_on_start: UPDATES_ON_START,
             notes_autosave: true,
+            results_keep: true,
             site: None,
             notes_font: crate::fonts::MONO.into(),
             notes_size: 13,
@@ -981,6 +985,7 @@ impl Settings {
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "notes_autosave" => s.notes_autosave = v.trim() != "0",
+                "results_keep" => s.results_keep = v.trim() != "0",
                 "site" => {
                     let f = v.trim();
                     if !f.is_empty()
@@ -1067,6 +1072,9 @@ impl Settings {
         }
         if !self.notes_autosave {
             s += "notes_autosave=0\n";
+        }
+        if !self.results_keep {
+            s += "results_keep=0\n";
         }
         if let Some(site) = &self.site {
             s += &format!("site={site}\n");
@@ -1454,6 +1462,7 @@ mod tests {
             wan_on_start: !WAN_ON_START,
             updates_on_start: !UPDATES_ON_START,
             notes_autosave: false,
+            results_keep: false,
             site: Some("harbor-dental".into()),
             backdrop: Source::Image("/home/me/Pictures/delorean.png".into()),
             notes_font: "DejaVu Sans Mono".into(),

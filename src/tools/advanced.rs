@@ -7,6 +7,18 @@ use crate::widgets::{self, Action};
 use eframe::egui::{self, Color32, RichText, Ui};
 use std::time::Instant;
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "domain",
+    "resolver",
+    "section",
+    "check",
+    "check_status",
+    "kind",
+    "status",
+    "text",
+];
+
 const DEFAULT_RESOLVER: &str = "1.1.1.1";
 
 enum Ev {
@@ -251,16 +263,7 @@ impl AdvancedTool {
             }
         }
         Some(Table {
-            columns: &[
-                "domain",
-                "resolver",
-                "section",
-                "check",
-                "check_status",
-                "kind",
-                "status",
-                "text",
-            ],
+            columns: COLUMNS,
             rows,
         })
     }

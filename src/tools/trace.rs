@@ -7,6 +7,11 @@ use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::net::IpAddr;
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "host", "ip", "hop", "address", "name", "rtt1_ms", "rtt2_ms", "rtt3_ms", "note",
+];
+
 const PROBES: usize = 3;
 
 struct Hop {
@@ -214,9 +219,7 @@ impl TraceTool {
             })
             .collect();
         Some(Table {
-            columns: &[
-                "host", "ip", "hop", "address", "name", "rtt1_ms", "rtt2_ms", "rtt3_ms", "note",
-            ],
+            columns: COLUMNS,
             rows,
         })
     }

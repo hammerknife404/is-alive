@@ -1,6 +1,11 @@
-//! Session log: every finished run, timestamped, kept in memory with a cap.
+//! Results log: every finished run, timestamped, with a cap. A site keeps
+//! its own in `results.json` in its folder, so a visit's runs are there when
+//! it opens again; Scratch (no site) keeps them in memory only, since its log
+//! can mix any client's hosts.
 
+use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 
 /// Oldest entries are dropped past either limit.
 const MAX_ENTRIES: usize = 500;
@@ -109,6 +114,148 @@ impl Log {
         }
         s
     }
+}
+
+// ---------------------------------------------------------------- saved
+
+const FILE: &str = "results.json";
+const FORMAT: &str = "is-alive-results-1";
+/// The log's own cap with room for JSON's quoting and the tables.
+const FILE_MAX: u64 = 3 * MAX_BYTES as u64;
+
+/// Every tool that logs runs, by the name it logs under, with its table's
+/// columns: a saved run is read back only as one of these (names and
+/// columns are the app's own, never the file's).
+const TOOLS: &[(&str, &[&str])] = &[
+    ("Host info", crate::net::hostinfo::COLUMNS),
+    ("Ping", crate::tools::ping::COLUMNS),
+    ("Port Check", crate::tools::ports::COLUMNS),
+    ("Traceroute", crate::tools::trace::COLUMNS),
+    ("Speed Test", crate::tools::speed::COLUMNS),
+    ("Subnet Sweep", crate::tools::sweep::COLUMNS),
+    ("Lookup", crate::tools::dns::COLUMNS),
+    ("Domain Health", crate::tools::advanced::COLUMNS),
+];
+
+/// Where the open site keeps its runs; None in Scratch.
+pub fn site_file() -> Option<PathBuf> {
+    crate::site::current()?;
+    Some(crate::site::dir()?.join(FILE))
+}
+
+impl Log {
+    fn to_json(&self) -> String {
+        let runs: Vec<Value> = self
+            .entries
+            .iter()
+            .map(|e| {
+                let mut run = json!({
+                    "tool": e.tool,
+                    "started": e.started,
+                    "ended": e.ended,
+                    "text": e.text,
+                });
+                if let Some(t) = &e.table {
+                    run["columns"] = json!(t.columns);
+                    run["rows"] = json!(t.rows);
+                }
+                run
+            })
+            .collect();
+        json!({ "format": FORMAT, "dropped": self.dropped, "runs": runs }).to_string()
+    }
+
+    /// Read back defensively: runs of tools this version doesn't log are
+    /// left out, a table that isn't its tool's is kept as text only, and
+    /// the caps apply as to any run.
+    fn from_json(text: &str) -> Option<Log> {
+        let v: Value = serde_json::from_str(text).ok()?;
+        if v.get("format")?.as_str()? != FORMAT {
+            return None;
+        }
+        let mut log = Log::default();
+        let runs = v.get("runs")?.as_array()?;
+        for r in runs.iter().skip(runs.len().saturating_sub(MAX_ENTRIES)) {
+            let Some((tool, columns)) = r
+                .get("tool")
+                .and_then(Value::as_str)
+                .and_then(|t| TOOLS.iter().find(|(name, _)| *name == t))
+                .copied()
+            else {
+                continue;
+            };
+            let Some(text) = r.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            let line =
+                |k: &str| crate::input::line(r.get(k).and_then(Value::as_str).unwrap_or(""), 40);
+            log.push(Entry {
+                tool,
+                started: line("started"),
+                ended: line("ended"),
+                text: text.to_string(),
+                table: table(r, columns),
+            });
+        }
+        let dropped = v.get("dropped").and_then(Value::as_u64).unwrap_or(0);
+        log.dropped += usize::try_from(dropped).unwrap_or(0).min(1_000_000);
+        Some(log)
+    }
+
+    /// The runs saved at `path`; an empty log when there are none or the
+    /// file isn't a results file.
+    pub fn load(path: &Path) -> Log {
+        crate::input::read_capped(path, FILE_MAX)
+            .and_then(|t| Log::from_json(&t))
+            .unwrap_or_default()
+    }
+
+    /// Write the log to `path` in one step, readable by this user only; an
+    /// empty log removes the file.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if self.entries.is_empty() && self.dropped == 0 {
+            return match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        crate::theme::write_private(&tmp, self.to_json())?;
+        std::fs::rename(tmp, path)
+    }
+}
+
+/// A saved run's table, if it has its tool's columns and every row fits them.
+fn table(r: &Value, columns: &'static [&'static str]) -> Option<Table> {
+    let cols = r.get("columns")?.as_array()?;
+    if cols.len() != columns.len()
+        || cols
+            .iter()
+            .zip(columns)
+            .any(|(c, want)| c.as_str() != Some(want))
+    {
+        return None;
+    }
+    let rows = r
+        .get("rows")?
+        .as_array()?
+        .iter()
+        .map(|row| {
+            let cells = row.as_array()?;
+            (cells.len() == columns.len())
+                .then(|| {
+                    cells
+                        .iter()
+                        .map(|c| c.as_str().map(str::to_string))
+                        .collect()
+                })
+                .flatten()
+        })
+        .collect::<Option<Vec<Vec<String>>>>()?;
+    Some(Table { columns, rows })
 }
 
 /// File formats for exporting log entries.
@@ -325,6 +472,122 @@ mod tests {
             text: "x".repeat(n),
             table: None,
         }
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "is-alive-log-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        d.join(FILE)
+    }
+
+    #[test]
+    fn every_tool_round_trips_with_its_table() {
+        let mut log = Log::default();
+        for (tool, columns) in TOOLS {
+            log.push(Entry {
+                tool,
+                started: "2026-11-09 20:41:00".into(),
+                ended: "2026-11-09 20:41:05".into(),
+                text: format!("{tool} output\n<b>&\"quoted\""),
+                table: Some(Table {
+                    columns,
+                    rows: vec![columns.iter().map(|c| format!("{c}-1")).collect()],
+                }),
+            });
+        }
+        log.push(entry(3));
+        log.dropped = 2;
+        let path = temp("round-trip");
+        log.save(&path).unwrap();
+        let back = Log::load(&path);
+        assert_eq!(back.entries.len(), log.entries.len());
+        assert_eq!(back.dropped, 2);
+        for (a, b) in log.entries.iter().zip(&back.entries) {
+            assert_eq!(
+                (a.tool, &a.started, &a.ended, &a.text),
+                (b.tool, &b.started, &b.ended, &b.text)
+            );
+            assert_eq!(
+                a.table.as_ref().map(|t| (t.columns, &t.rows)),
+                b.table.as_ref().map(|t| (t.columns, &t.rows))
+            );
+        }
+        // The CSV is the same either way: the columns are the tool's own.
+        let all = |l: &Log| Format::Csv.export(&l.entries.iter().collect::<Vec<_>>());
+        assert_eq!(all(&log), all(&back));
+        // Readable by this user only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // An empty log takes the file away.
+        Log::default().save(&path).unwrap();
+        assert!(!path.exists());
+        Log::default().save(&path).unwrap();
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_saved_log_is_read_back_defensively() {
+        // Not a results file: nothing.
+        assert!(Log::from_json("{}").is_none());
+        assert!(Log::from_json("not json").is_none());
+        assert!(Log::from_json(r#"{"format":"other","runs":[]}"#).is_none());
+        let text = json!({
+            "format": FORMAT,
+            "dropped": 1,
+            "runs": [
+                // A tool this version doesn't log: left out.
+                {"tool": "Telnet", "started": "a", "ended": "b", "text": "x"},
+                // No text: left out.
+                {"tool": "Ping", "started": "a", "ended": "b"},
+                // Columns that aren't Ping's: kept as text only.
+                {"tool": "Ping", "started": "a", "ended": "b", "text": "kept",
+                 "columns": ["evil"], "rows": [["=cmd"]]},
+                // A short row: text only.
+                {"tool": "Lookup", "started": "a", "ended": "b", "text": "dns",
+                 "columns": crate::tools::dns::COLUMNS, "rows": [["one"]]},
+                // A long start time is cut, control characters go.
+                {"tool": "Ping", "started": "x\u{0007}".repeat(100), "ended": "b", "text": "t"},
+            ],
+        })
+        .to_string();
+        let log = Log::from_json(&text).unwrap();
+        let got: Vec<(&str, &str, bool)> = log
+            .entries
+            .iter()
+            .map(|e| (e.tool, e.text.as_str(), e.table.is_some()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Ping", "kept", false),
+                ("Lookup", "dns", false),
+                ("Ping", "t", false)
+            ]
+        );
+        assert!(log.entries[2].started.chars().count() <= 40);
+        assert!(!log.entries[2].started.contains('\u{0007}'));
+        assert_eq!(log.dropped, 1);
+        // The caps hold: only the newest MAX_ENTRIES runs are read.
+        let many: Vec<Value> = (0..MAX_ENTRIES + 7)
+            .map(|i| json!({"tool": "Ping", "started": "", "ended": "", "text": i.to_string()}))
+            .collect();
+        let log = Log::from_json(&json!({"format": FORMAT, "runs": many}).to_string()).unwrap();
+        assert_eq!(log.entries.len(), MAX_ENTRIES);
+        assert_eq!(log.entries[0].text, "7");
+        // A file that isn't there is an empty log.
+        assert!(
+            Log::load(Path::new("/nonexistent/is-alive/results.json"))
+                .entries
+                .is_empty()
+        );
     }
 
     #[test]

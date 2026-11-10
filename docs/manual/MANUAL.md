@@ -120,15 +120,15 @@ When is-alive starts, it asks GitHub whether a newer release is out (you can tur
 
 ### Sites
 
-A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Site Bundle** all work on the site that's open, and its name is in the window's title.
+A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, its **Results**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Site Bundle** all work on the site that's open, and its name is in the window's title.
 
-- **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs and map you already have along.
-- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**. Stop running tools before switching; a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
+- **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
+- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**. Stop running tools before switching; a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
 
-Results are never kept: they're in memory, and a switch clears them. Copy or export what you need first, or put them in the [Site report](#site-report) or the Site Bundle.
+**Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch never keeps Results: they're in memory only, and gone when you switch or close, because its runs can be any client's.
 
 ### How every tab is laid out
 
@@ -1080,7 +1080,7 @@ A rule must cover `10.0.0.5` to `10.0.1.20`, but the firewall only takes CIDR bl
 
 ![Results with the runs of a session: Ping, Port Check, DNS Lookup, Advanced and Speed Test, each with its start and end time and its own Copy, Save and Export](img/results.png)
 
-**What it's for:** everything you ran in this session in one place, with start and end times, to copy into a ticket or export for a report.
+**What it's for:** everything you ran at this site in one place, with start and end times, to copy into a ticket or export for a report.
 
 Every finished run from every tab is logged here (Full scan runs too). Runs still going show at the bottom with *running…*. The 12 newest are open; older ones are folded: click a header to open it.
 
@@ -1089,14 +1089,15 @@ Every finished run from every tab is logged here (Full scan runs too). Runs stil
 | **Filter** | Show only runs whose tool name or output contains this text (`FAIL`, `443`, `timeout`, a hostname). × clears it |
 | **Copy / Save…** | All shown runs as text |
 | **Export ⏷** | All shown runs as **CSV**, **JSON**, **Markdown** or **HTML** |
-| **Clear** | Empty the log (click twice) |
+| **Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
+| **Clear** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
 | Each run's **Copy**, **Save…**, **Export ⏷** | Just that run |
 
 Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
-**The log lives in memory only:** it's gone when you close the app. Export what you need before closing.
+**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, or with it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the status row says how many.
 
 ### Example: a report for the ticket
 
@@ -1161,7 +1162,7 @@ The bottom of Settings shows the folder:
 - **Windows:** `%APPDATA%\is-alive` (for example `C:\Users\you\AppData\Roaming\is-alive`)
 - **Linux:** `~/.config/is-alive`
 
-It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). Those are Scratch's. Each site has a folder of its own in `sites` (for example `sites/harbor-dental`) with its own `notes.md`, `maps`, `map-notes.json` and `notes-allow.json`, and `site.json`: its name, when it was made and last opened, and the paths of its configs. The window also reopens at the size you last closed it.
+It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). Those are Scratch's. Each site has a folder of its own in `sites` (for example `sites/harbor-dental`) with its own `notes.md`, `maps`, `map-notes.json` and `notes-allow.json`, `results.json` (its Results, unless **Keep with site** is off) and `site.json`: its name, when it was made and last opened, and the paths of its configs. The window also reopens at the size you last closed it.
 
 ---
 
@@ -1265,7 +1266,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. The Results log is in memory, cleared when you switch sites and gone when the app closes.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results are never written: they're cleared when you switch sites and gone when the app closes.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.

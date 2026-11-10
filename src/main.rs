@@ -134,6 +134,8 @@ struct App {
     map: map::view::MapTabs,
     notes: tools::notes::NotesTool,
     log: log::Log,
+    /// The log as last written to the open site's folder (its stamp).
+    log_saved: (usize, usize, usize),
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
     /// The public address has been asked for: on start (unless Settings
@@ -383,6 +385,7 @@ impl App {
         self.notes.poll(ctx);
         self.remember_site_configs();
         self.collect();
+        self.keep_results();
         self.dropped_files(ctx);
         pump(&mut self.info_job, |i| self.info = i);
         let mut found = None;
@@ -768,6 +771,55 @@ impl App {
         }
     }
 
+    /// The open site's saved runs, as Results (none in Scratch, or with
+    /// Keep with site off).
+    pub(crate) fn load_results(&mut self) {
+        self.log = match log::site_file().filter(|_| self.look.results_keep) {
+            Some(p) => log::Log::load(&p),
+            None => log::Log::default(),
+        };
+        self.log_saved = self.log.stamp();
+    }
+
+    /// Write Results to the open site's folder when they've changed: a run
+    /// finished, the log was cleared. Not in Scratch, nor with Keep with
+    /// site off.
+    pub(crate) fn keep_results(&mut self) {
+        let stamp = self.log.stamp();
+        if stamp == self.log_saved || !self.look.results_keep || self.shots.is_some() {
+            return;
+        }
+        let Some(path) = log::site_file() else { return };
+        match self.log.save(&path) {
+            Ok(()) => self.log_saved = stamp,
+            Err(e) => {
+                // Said once; tried again at the next change.
+                self.log_saved = stamp;
+                widgets::toast(format!("Results not saved: {e}"), false);
+            }
+        }
+    }
+
+    /// Keep with site turned on or off. On: the site's saved runs come back
+    /// ahead of this session's, and all of them are saved. Off: the open
+    /// site's file goes (its runs stay in Results until is-alive closes).
+    fn set_results_keep(&mut self, on: bool) {
+        self.look.results_keep = on;
+        theme::save(&self.look);
+        if on {
+            let now = std::mem::take(&mut self.log);
+            self.load_results();
+            for e in now.entries {
+                self.log.push(e);
+            }
+            self.log.dropped += now.dropped;
+        } else if let Some(p) = log::site_file()
+            && let Err(e) = log::Log::default().save(&p)
+        {
+            widgets::toast(format!("Couldn't remove the saved Results: {e}"), false);
+        }
+    }
+
     /// Runs still in progress, with their live output.
     fn running(&self) -> Vec<(&'static str, String, String)> {
         [
@@ -830,6 +882,7 @@ impl App {
         let running: Vec<_> = running.iter().filter(|r| hit(r.0, &r.2)).collect();
         let filtered = !needle.is_empty();
         let mut clear = false;
+        let mut keep_to = None;
         ui.horizontal(|ui| {
             widgets::lead(ui, "Filter");
             widgets::line(
@@ -864,6 +917,27 @@ impl App {
                 ));
                 if self.log.dropped > 0 {
                     ui.weak(format!("({} oldest dropped)", self.log.dropped));
+                }
+                ui.separator();
+                // Shown unticked in Scratch, which never keeps them.
+                let at_site = log::site_file().is_some();
+                let mut keep = self.look.results_keep && at_site;
+                if ui
+                    .add_enabled(at_site, egui::Checkbox::new(&mut keep, "Keep with site"))
+                    .on_hover_text(format!(
+                        "Save Results in {}'s folder, readable by you only, so they're here \
+                         the next time it opens (and for its Site report). Off: in memory \
+                         only, gone when is-alive closes; the site's saved runs are taken off \
+                         disk.",
+                        self.site_name
+                    ))
+                    .on_disabled_hover_text(
+                        "Scratch keeps Results in memory only: its runs can be any client's. \
+                         Open a site (top left) to keep them with it.",
+                    )
+                    .changed()
+                {
+                    keep_to = Some(keep);
                 }
             },
             |ui| {
@@ -918,6 +992,9 @@ impl App {
         }
         if clear {
             self.log.clear();
+        }
+        if let Some(on) = keep_to {
+            self.set_results_keep(on);
         }
     }
 }
@@ -1057,6 +1134,7 @@ fn main() {
                 map: map::view::MapTabs::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
+                log_saved: (0, 0, 0),
                 info: HostInfo::local(),
                 info_job: None,
                 wan_asked: false,
@@ -1086,6 +1164,7 @@ fn main() {
                 site_missing: Vec::new(),
             };
             app.notes.set_autosave(app.look.notes_autosave);
+            app.load_results();
             // The site opens as it was left: its configs read again.
             if app.shots.is_none() && files.is_empty() {
                 app.reopen_site_configs(&cc.egui_ctx);

@@ -23,7 +23,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Notes](https://github.com/hammerknife404/is-alive/wiki/Notes) | Markdown notes for the visit, with photos and redaction |
 | [Speed](https://github.com/hammerknife404/is-alive/wiki/Speed-Test) | Throughput, latency, jitter and loss under load, bufferbloat grade and VoIP MOS |
 | [Subnet Calc](https://github.com/hammerknife404/is-alive/wiki/Subnet-Calc) | IPv4 and IPv6 subnet calculator: details, address check, split, ranges to CIDR |
-| [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run, with Filter and Export to CSV, JSON, Markdown or HTML |
+| [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run, kept with its site from one visit to the next, with Filter and Export to CSV, JSON, Markdown or HTML |
 
 **Full scan** (bottom right) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Report…** beside it puts the visit on one web page for the client or the ticket: the map, its findings, what changed since the last visit, every device and the notes, ready to print to PDF. **Settings** opens from the app's name at the top left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
 
