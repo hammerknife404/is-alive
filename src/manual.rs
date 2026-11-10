@@ -38,6 +38,7 @@ const PICTURES: &[(&str, &[u8])] = pictures![
     "settings",
     "map-light",
     "site-bundle",
+    "site-report",
 ];
 
 pub struct Chapter {
