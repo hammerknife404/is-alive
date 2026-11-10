@@ -1,0 +1,71 @@
+name: wiki
+
+# The wiki's pages live in docs/wiki, changed in the same pull request as
+# what they describe. A merge to main publishes them: what changed since the
+# last sync is merged into the wiki page by page (scripts/wiki_sync.py), so
+# an edit made on the wiki itself is kept, and a clash fails the run rather
+# than overwrite it. A pull request runs everything but the push (a dry run
+# that also checks the token may push).
+#
+# Why a workflow: a cloud session can't push to the wiki (it isn't a
+# repository the Claude GitHub App can be given), but this job's token can.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/wiki/**"
+      - "scripts/wiki_sync.py"
+      - "scripts/test_wiki_sync.py"
+      - ".github/workflows/wiki.yml"
+  pull_request:
+    paths:
+      - "docs/wiki/**"
+      - "scripts/wiki_sync.py"
+      - "scripts/test_wiki_sync.py"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One sync at a time, in order: each builds on the one before.
+concurrency:
+  group: wiki-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+env:
+  # The wiki commit docs/wiki was taken from: the first sync checks the wiki
+  # is still there, so nothing on it is lost. Later syncs go by the
+  # Synced-From trailer on the wiki's own commits.
+  IMPORTED_FROM: c76d4d4f756c0e63bf4b6a4b936031a17e7d4e79
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      # The wiki is pushed with this job's token.
+      contents: write
+    steps:
+      # Third-party actions are pinned to commit SHAs (tags are mutable).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The last synced commit is the base of the merge.
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 scripts/test_wiki_sync.py
+      - name: Clone the wiki
+        env:
+          TOKEN: ${{ github.token }}
+        run: git clone --quiet "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki
+      - name: Merge docs/wiki into it
+        run: >-
+          python3 scripts/wiki_sync.py --repo . --wiki wiki --dir docs/wiki
+          --sha "$GITHUB_SHA" --imported-from "$IMPORTED_FROM"
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        run: git -C wiki push --quiet origin HEAD
+      - name: Check it could publish
+        if: github.event_name == 'pull_request'
+        run: |
+          git -C wiki log -1 --stat
+          git -C wiki push --dry-run origin HEAD
