@@ -541,7 +541,15 @@ impl App {
             }
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
-            Tab::Export => self.export.ui(ui),
+            Tab::Export => {
+                self.export.ui(ui);
+                // Its UniFi clients choice is kept, so a site's backup
+                // reopens with the clients the Map shows.
+                if self.export.clients() != self.look.unifi_clients {
+                    self.look.unifi_clients = self.export.clients();
+                    theme::save(&self.look);
+                }
+            }
             Tab::Map => {
                 let busy =
                     self.ping.is_running() || self.ports.is_running() || self.trace.is_running();
@@ -1033,6 +1041,7 @@ fn main() {
                 site_missing: Vec::new(),
             };
             app.notes.set_autosave(app.look.notes_autosave);
+            app.export.set_clients(app.look.unifi_clients);
             app.load_results();
             // The site opens as it was left: its configs read again.
             if app.shots.is_none() && files.is_empty() {

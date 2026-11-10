@@ -478,6 +478,14 @@ impl NotesTool {
         self.autosave = on;
     }
 
+    /// Another site's notes open as `old`'s were looked at: the view
+    /// (Edit, Split, Preview), the outline and the redaction highlight.
+    pub fn keep_view_of(&mut self, old: &NotesTool) {
+        self.view = old.view;
+        self.outline = old.outline;
+        self.show_hits = old.show_hits;
+    }
+
     /// Changes that only Save writes: autosave is off.
     pub fn unsaved(&self) -> bool {
         !self.autosave && self.dirty.is_some()

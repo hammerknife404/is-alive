@@ -138,7 +138,8 @@ Five parts, the same on every tab:
 A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, its **Results**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Site Bundle** all work on the site that's open, and its name is in the window's title.
 
 - **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
-- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**. Stop running tools before switching; a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
+- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Site Bundle finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
+- **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **UniFi clients**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
@@ -179,7 +180,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.9** is the version you're running: worth including when you report a problem.
+- **v0.28.10** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -642,7 +643,7 @@ Open them with **Open file…** (pick several at once if you like), by dropping 
 | Control | What it does |
 |---|---|
 | **Open file…** | Pick one or more files |
-| **UniFi clients** | Whether a UniFi backup's client list (every device that has connected) goes into the JSON: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names, which are often people's names) |
+| **UniFi clients** | Whether a UniFi backup's client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names, which are often people's names). Your choice is remembered, for every site, and the backups open now are read again with it |
 | **The sub-tabs** | One per file, named *kind · file name*. The file opened last is shown; past six, the oldest fold into an **n more** menu |
 | **Save JSON…** | Save the sanitized JSON: `<name>.unifidump.json`, `.sonicwall.json`, `.meraki.json` or `.mapnetwork.json` |
 | **Copy** | Copy the summary |

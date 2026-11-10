@@ -200,7 +200,7 @@ impl App {
         if self.site_ask.is_none() {
             return;
         }
-        let busy = self.any_running();
+        let busy = self.switch_busy();
         // Autosave is off and the notes changed: a switch would drop them.
         let unsaved_notes = self.notes.unsaved();
         let unsaved = self.map.unsaved();
@@ -262,28 +262,28 @@ impl App {
                             format!("The notes have changes not saved (Autosave is off). Save them in {here} first?"),
                         );
                     }
-                    if busy {
-                        ui.colored_label(widgets::warn(), "Stop the running tools first.");
+                    if let Some(why) = busy {
+                        ui.colored_label(widgets::warn(), why);
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if unsaved_notes {
                             if ui
-                                .add_enabled(!busy, egui::Button::new("Save notes and switch"))
+                                .add_enabled(busy.is_none(), egui::Button::new("Save notes and switch"))
                                 .clicked()
                             {
                                 done = Some((to.clone(), false, true));
                             }
                             if ui
                                 .add_enabled(
-                                    !busy,
+                                    busy.is_none(),
                                     egui::Button::new(RichText::new("Switch, don't save").color(widgets::bad())),
                                 )
                                 .clicked()
                             {
                                 done = Some((to.clone(), false, false));
                             }
-                        } else if ui.add_enabled(!busy, egui::Button::new("Switch")).clicked() {
+                        } else if ui.add_enabled(busy.is_none(), egui::Button::new("Switch")).clicked() {
                             done = Some((to.clone(), false, false));
                         }
                         if ui.button("Cancel").clicked() {
@@ -314,15 +314,15 @@ impl App {
                     ui.radio_value(carry, true, format!("What's open now ({here}: the notes, configs and map as they are)"));
                     ui.weak("Kept in your profile folder under sites: the notes (redacted), saved maps and card notes. Configs stay where they are; the site remembers their paths.");
                     widgets::error(ui, err);
-                    if !*carry && busy {
-                        ui.colored_label(widgets::warn(), "Stop the running tools first, or start with what's open.");
+                    if !*carry && let Some(why) = busy {
+                        ui.colored_label(widgets::warn(), format!("{why} Or start with what's open."));
                     }
                     if !*carry && unsaved_notes {
                         ui.weak(format!("The notes' changes not saved (Autosave is off) are saved in {here} first."));
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        let ok = !name.trim().is_empty() && (*carry || !busy);
+                        let ok = !name.trim().is_empty() && (*carry || busy.is_none());
                         if ui.add_enabled(ok, egui::Button::new("Create and open")).clicked() || (ok && enter) {
                             match site::create(name) {
                                 Ok(folder) => done = Some((Some(folder), *carry, !*carry)),
@@ -416,6 +416,8 @@ impl App {
         }
         self.remember_site_configs();
         self.keep_results();
+        // A reload asked for here isn't the next site's.
+        self.reloading = false;
         site::set_current(to);
         site::touch();
         self.look.site = site::current();
@@ -432,7 +434,10 @@ impl App {
             self.export.clear();
             self.sweep.clear_results();
             self.load_results();
-            self.notes = Default::default();
+            // The next site's notes, in the view they were read in.
+            let fresh = crate::tools::notes::NotesTool::default();
+            let old = std::mem::replace(&mut self.notes, fresh);
+            self.notes.keep_view_of(&old);
             // A fresh Notes starts with Autosave on: keep the user's choice.
             self.notes.set_autosave(self.look.notes_autosave);
             self.map.switch_site(false);
@@ -445,6 +450,21 @@ impl App {
         self.report.for_site(named.as_deref());
         self.retitle(ctx);
         widgets::toast(format!("{} is open", self.site_name), true);
+    }
+
+    /// Why a site can't be switched now, if it can't: a switch would cut
+    /// short a run, a config being read (dropping it from the site's list)
+    /// or a Site Bundle being written.
+    pub(crate) fn switch_busy(&self) -> Option<&'static str> {
+        if self.any_running() {
+            Some("Stop the running tools first.")
+        } else if self.export.is_running() {
+            Some("Wait for Config Export to finish reading.")
+        } else if self.bundle.is_running() {
+            Some("Wait for the Site Bundle to be saved.")
+        } else {
+            None
+        }
     }
 
     /// Read the open site's configs again from where they are; those not
@@ -482,7 +502,8 @@ impl App {
         if self.export.is_running() || site::current().is_none() {
             return;
         }
-        let mut open = self.export.open_paths();
+        // Those it couldn't read stay too: they're tried again next time.
+        let mut open = self.export.remembered_paths();
         for p in &self.site_missing {
             if !open.contains(p) {
                 open.push(p.clone());

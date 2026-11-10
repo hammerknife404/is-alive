@@ -48,6 +48,11 @@ impl Clients {
         }
     }
 
+    /// From its label (the settings file's `unifi_clients=`).
+    pub fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.label() == s)
+    }
+
     pub fn hint(self) -> &'static str {
         match self {
             Clients::None => "Leave the client table out.",
