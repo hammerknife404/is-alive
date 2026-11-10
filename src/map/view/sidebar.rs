@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// How wide Layers is, over the canvas's left edge.
+pub(super) const SIDE_W: f32 = 272.0;
+
 impl MapView {
     /// While a Links view leaves lines out, a pill in the canvas's top
     /// right corner says so; a click shows them all again.
@@ -82,11 +85,13 @@ impl MapView {
         }
     }
 
-    /// Ease to zoom `z`, about the middle of the canvas.
+    /// Ease to zoom `z`, about the middle of what the canvas `rect` leaves
+    /// in sight beside the panels.
     pub(super) fn zoom_about_middle(&mut self, rect: Rect, z: f32) {
         let z = z.clamp(MIN_ZOOM, MAX_ZOOM);
-        let mid = self.to_world(rect, rect.center());
-        self.aim = Some((rect.size() / 2.0 - mid.to_vec2() * z, z));
+        let at = self.beside_panel(rect).center();
+        let mid = self.to_world(rect, at);
+        self.aim = Some((at - rect.min - mid.to_vec2() * z, z));
         self.follow = false;
     }
 
@@ -110,18 +115,31 @@ impl MapView {
                 .filter_map(|&i| Some(layout::card_rect(&self.map.nodes[i], self.target(i)?)))
                 .fold(Rect::NOTHING, |r, c| r.union(c)),
         };
-        self.fit_to(self.settled(view), area);
+        let seen = self.settled(view);
+        self.fit_to(view, seen, area);
         self.follow = false;
     }
 
     /// Layers: sites, roles to fade in and out, and the action items, worst
     /// first, as /mapnetwork's maps have them. Shut until asked for.
+    ///
+    /// It lies over the canvas's left edge rather than taking room from it,
+    /// so opening it never changes the map's zoom: flush with the edges
+    /// from 1440 points wide, floating with a shadow below that.
     pub(super) fn sidebar(
         &mut self,
         ui: &mut Ui,
         focus: &mut Option<Vec<usize>>,
         focus_site: &mut Option<String>,
     ) {
+        self.side_cover = 0.0;
+        if !self.side {
+            return;
+        }
+        let canvas = ui.available_rect_before_wrap();
+        let w = SIDE_W.min(canvas.width() - 100.0).max(160.0);
+        let flush = ui.ctx().content_rect().width() >= 1440.0;
+        let v = ui.visuals().clone();
         let sites = self.site_counts();
         let mut flip_all: Option<bool> = None;
         let counts: Vec<(Zone, usize)> = Zone::ALL
@@ -138,236 +156,281 @@ impl MapView {
         findings.sort_by_key(|f| f.0);
         let (mut hide, mut flip) = (false, None);
         let mut since_ev = None;
-        egui::Panel::left("map_side")
-            .resizable(true)
-            .default_size(230.0)
-            .size_range(180.0..=380.0)
-            .show_collapsible(ui, &mut self.side, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("Layers");
-                    ui.weak(format!("{} cards", self.map.nodes.len()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        hide = ui
-                            .small_button("×")
-                            .on_hover_text("Close Layers (the Layers button opens it again)")
-                            .clicked();
-                    });
-                });
-                // What the map is, in one line: /mapnetwork's title and counts.
-                if !self.map.summary.is_empty() {
-                    ui.add(
-                        egui::Label::new(RichText::new(&self.map.summary).small().weak()).wrap(),
-                    );
-                }
-                ui.separator();
-                // A bar of its own, not one floating over the counts.
-                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
-                egui::ScrollArea::vertical()
-                    .id_salt("map_side_scroll")
-                    .auto_shrink(false)
+        egui::Area::new(egui::Id::new("map_side"))
+            .order(egui::Order::Middle)
+            .fixed_pos(canvas.min)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(v.panel_fill)
+                    .stroke(v.widgets.noninteractive.bg_stroke)
+                    .inner_margin(egui::Margin::same(10))
+                    .shadow(if flush {
+                        egui::Shadow::NONE
+                    } else {
+                        egui::Shadow {
+                            offset: [8, 0],
+                            blur: 24,
+                            spread: 0,
+                            color: Color32::from_black_alpha(90),
+                        }
+                    })
                     .show(ui, |ui| {
-                        if let Some(s) = &self.since {
-                            since_ev = super::since::since_side(ui, s, &self.map);
+                        ui.set_width(w - 20.0);
+                        ui.set_height(canvas.height() - 20.0);
+                        ui.horizontal(|ui| {
+                            ui.strong("Layers");
+                            ui.weak(format!("{} cards", self.map.nodes.len()));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    hide = crate::inspector::icon_button(
+                            ui,
+                            "×",
+                            "Close Layers (the Layers button opens it again; Esc on a small \
+                             window)",
+                        )
+                        .clicked();
+                                },
+                            );
+                        });
+                        // What the map is, in one line: /mapnetwork's title and counts.
+                        if !self.map.summary.is_empty() {
+                            ui.add(
+                                egui::Label::new(RichText::new(&self.map.summary).small().weak())
+                                    .wrap(),
+                            );
                         }
-                        if !sites.is_empty() {
-                            egui::CollapsingHeader::new(
-                                RichText::new(format!("SITES ({})", sites.len()))
-                                    .small()
-                                    .strong(),
-                            )
-                            .id_salt("map_side_sites")
-                            .default_open(true)
+                        ui.separator();
+                        // A bar of its own, not one floating over the counts.
+                        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                        egui::ScrollArea::vertical()
+                            .id_salt("map_side_scroll")
+                            .auto_shrink(false)
                             .show(ui, |ui| {
-                                // One site: nothing to fold all of.
-                                if sites.len() > 1 {
-                                    ui.horizontal(|ui| {
-                                        let any_open = sites.iter().any(|s| !s.2);
-                                        let any_closed = sites.iter().any(|s| s.2);
-                                        if ui
-                                            .add_enabled(
-                                                any_open,
-                                                egui::Button::new("Collapse all").small(),
-                                            )
-                                            .on_hover_text("Fold every site to one card")
-                                            .clicked()
-                                        {
-                                            flip_all = Some(true);
-                                        }
-                                        if ui
-                                            .add_enabled(
-                                                any_closed,
-                                                egui::Button::new("Expand all").small(),
-                                            )
-                                            .on_hover_text("Open every site again")
-                                            .clicked()
-                                        {
-                                            flip_all = Some(false);
-                                        }
-                                    });
+                                if let Some(s) = &self.since {
+                                    since_ev = super::since::since_side(ui, s, &self.map);
                                 }
-                                for (site, n, closed) in &sites {
-                                    let row = ui.horizontal(|ui| {
-                                        let (d, _) = ui
-                                            .allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                                        let toggle = ui.interact(
-                                            d.expand(2.0),
-                                            ui.id().with(("site_flip", site)),
-                                            Sense::click(),
-                                        );
-                                        let c = if toggle.hovered() {
-                                            ui.visuals().strong_text_color()
-                                        } else {
-                                            ui.visuals().text_color()
-                                        };
-                                        chevron(ui.painter(), d.center(), 4.5, !closed, c);
-                                        let toggle = toggle.on_hover_text(if *closed {
-                                            "Expand this site"
-                                        } else {
-                                            "Collapse this site to one card"
-                                        });
-                                        if toggle.clicked() {
-                                            self.flip_sites.push(site.clone());
+                                if !sites.is_empty() {
+                                    egui::CollapsingHeader::new(
+                                        RichText::new(format!("SITES ({})", sites.len()))
+                                            .small()
+                                            .strong(),
+                                    )
+                                    .id_salt("map_side_sites")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        // One site: nothing to fold all of.
+                                        if sites.len() > 1 {
+                                            ui.horizontal(|ui| {
+                                                let any_open = sites.iter().any(|s| !s.2);
+                                                let any_closed = sites.iter().any(|s| s.2);
+                                                if ui
+                                                    .add_enabled(
+                                                        any_open,
+                                                        egui::Button::new("Collapse all").small(),
+                                                    )
+                                                    .on_hover_text("Fold every site to one card")
+                                                    .clicked()
+                                                {
+                                                    flip_all = Some(true);
+                                                }
+                                                if ui
+                                                    .add_enabled(
+                                                        any_closed,
+                                                        egui::Button::new("Expand all").small(),
+                                                    )
+                                                    .on_hover_text("Open every site again")
+                                                    .clicked()
+                                                {
+                                                    flip_all = Some(false);
+                                                }
+                                            });
                                         }
-                                        if toggle.hovered() {
-                                            ui.ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        let text = RichText::new(site);
-                                        let text = if *closed { text.italics() } else { text };
-                                        // Long names cut short, the count kept.
-                                        let room = (ui.available_width() - 34.0).max(40.0);
-                                        ui.allocate_ui(
-                                            vec2(room, ui.spacing().interact_size.y),
-                                            |ui| {
-                                                // Not selectable: a click on the
-                                                // name is a click on the row.
-                                                ui.add(
-                                                    egui::Label::new(text)
-                                                        .truncate()
-                                                        .selectable(false),
-                                                )
-                                                .on_hover_text(site);
-                                            },
-                                        );
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| count(ui, *n),
-                                        );
-                                    });
-                                    let r = ui
-                                        .interact(
-                                            row.response
-                                                .rect
-                                                .with_min_x(row.response.rect.min.x + 18.0),
-                                            ui.id().with(("site_row", site)),
-                                            Sense::click(),
-                                        )
-                                        .on_hover_text(
-                                            "Show this site's cards and their connections",
-                                        );
-                                    if r.clicked() {
-                                        *focus_site = Some(site.clone());
-                                    }
-                                    if r.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-                                }
-                            });
-                        }
-                        egui::CollapsingHeader::new(RichText::new("ROLES").small().strong())
-                            .id_salt("map_side_roles")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for (zone, n) in &counts {
-                                    let off = self.hidden.contains(zone);
-                                    let c = zone_colour(*zone);
-                                    let r = ui
-                                        .horizontal(|ui| {
-                                            let (d, _) = ui.allocate_exact_size(
-                                                vec2(12.0, 12.0),
-                                                Sense::hover(),
-                                            );
-                                            if off {
-                                                ui.painter().circle_stroke(
-                                                    d.center(),
-                                                    4.5,
-                                                    Stroke::new(1.5, c),
+                                        for (site, n, closed) in &sites {
+                                            let row = ui.horizontal(|ui| {
+                                                let (d, _) = ui.allocate_exact_size(
+                                                    vec2(14.0, 14.0),
+                                                    Sense::hover(),
                                                 );
-                                            } else {
-                                                ui.painter().circle_filled(d.center(), 5.0, c);
-                                            }
-                                            let text = RichText::new(zone.name());
-                                            ui.add(
-                                                egui::Label::new(if off {
-                                                    text.weak()
+                                                let toggle = ui.interact(
+                                                    d.expand(2.0),
+                                                    ui.id().with(("site_flip", site)),
+                                                    Sense::click(),
+                                                );
+                                                let c = if toggle.hovered() {
+                                                    ui.visuals().strong_text_color()
                                                 } else {
-                                                    text
-                                                })
-                                                .selectable(false),
-                                            );
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| count(ui, *n),
-                                            );
-                                        })
-                                        .response
-                                        .interact(Sense::click())
-                                        .on_hover_text("Click to fade this role out or back in");
-                                    if r.clicked() {
-                                        flip = Some(*zone);
-                                    }
-                                    if r.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
+                                                    ui.visuals().text_color()
+                                                };
+                                                chevron(ui.painter(), d.center(), 4.5, !closed, c);
+                                                let toggle = toggle.on_hover_text(if *closed {
+                                                    "Expand this site"
+                                                } else {
+                                                    "Collapse this site to one card"
+                                                });
+                                                if toggle.clicked() {
+                                                    self.flip_sites.push(site.clone());
+                                                }
+                                                if toggle.hovered() {
+                                                    ui.ctx().set_cursor_icon(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                }
+                                                let text = RichText::new(site);
+                                                let text =
+                                                    if *closed { text.italics() } else { text };
+                                                // Long names cut short, the count kept.
+                                                let room = (ui.available_width() - 34.0).max(40.0);
+                                                ui.allocate_ui(
+                                                    vec2(room, ui.spacing().interact_size.y),
+                                                    |ui| {
+                                                        // Not selectable: a click on the
+                                                        // name is a click on the row.
+                                                        ui.add(
+                                                            egui::Label::new(text)
+                                                                .truncate()
+                                                                .selectable(false),
+                                                        )
+                                                        .on_hover_text(site);
+                                                    },
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| count(ui, *n),
+                                                );
+                                            });
+                                            let r = ui
+                                                .interact(
+                                                    row.response
+                                                        .rect
+                                                        .with_min_x(row.response.rect.min.x + 18.0),
+                                                    ui.id().with(("site_row", site)),
+                                                    Sense::click(),
+                                                )
+                                                .on_hover_text(
+                                                    "Show this site's cards and their connections",
+                                                );
+                                            if r.clicked() {
+                                                *focus_site = Some(site.clone());
+                                            }
+                                            if r.hovered() {
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
+                                            }
+                                        }
+                                    });
                                 }
-                            });
-                        if !findings.is_empty() {
-                            egui::CollapsingHeader::new(
-                                RichText::new(format!("ACTION ITEMS ({})", findings.len()))
-                                    .small()
-                                    .strong(),
-                            )
-                            .id_salt("map_side_actions")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for (sev, text, nodes) in &findings {
-                                    let c = match sev {
-                                        Sev::High => widgets::bad(),
-                                        Sev::Med => widgets::warn(),
-                                        Sev::Low => ui.visuals().weak_text_color(),
-                                    };
-                                    let r = ui
-                                        .horizontal_top(|ui| {
-                                            let (d, _) = ui.allocate_exact_size(
-                                                vec2(10.0, 16.0),
-                                                Sense::hover(),
-                                            );
-                                            ui.painter().circle_filled(
-                                                d.center() - vec2(0.0, 2.0),
-                                                4.0,
-                                                c,
-                                            );
-                                            ui.add(egui::Label::new(text).wrap().selectable(false));
-                                        })
-                                        .response;
-                                    if !nodes.is_empty() {
-                                        let r = r
+                                egui::CollapsingHeader::new(
+                                    RichText::new("ROLES").small().strong(),
+                                )
+                                .id_salt("map_side_roles")
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    for (zone, n) in &counts {
+                                        let off = self.hidden.contains(zone);
+                                        let c = zone_colour(*zone);
+                                        let r = ui
+                                            .horizontal(|ui| {
+                                                let (d, _) = ui.allocate_exact_size(
+                                                    vec2(12.0, 12.0),
+                                                    Sense::hover(),
+                                                );
+                                                if off {
+                                                    ui.painter().circle_stroke(
+                                                        d.center(),
+                                                        4.5,
+                                                        Stroke::new(1.5, c),
+                                                    );
+                                                } else {
+                                                    ui.painter().circle_filled(d.center(), 5.0, c);
+                                                }
+                                                let text = RichText::new(zone.name());
+                                                ui.add(
+                                                    egui::Label::new(if off {
+                                                        text.weak()
+                                                    } else {
+                                                        text
+                                                    })
+                                                    .selectable(false),
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| count(ui, *n),
+                                                );
+                                            })
+                                            .response
                                             .interact(Sense::click())
-                                            .on_hover_text("Show on the map");
+                                            .on_hover_text(
+                                                "Click to fade this role out or back in",
+                                            );
                                         if r.clicked() {
-                                            *focus = Some(nodes.clone());
+                                            flip = Some(*zone);
                                         }
                                         if r.hovered() {
                                             ui.ctx()
                                                 .set_cursor_icon(egui::CursorIcon::PointingHand);
                                         }
                                     }
-                                    ui.add_space(4.0);
+                                });
+                                if !findings.is_empty() {
+                                    egui::CollapsingHeader::new(
+                                        RichText::new(format!("ACTION ITEMS ({})", findings.len()))
+                                            .small()
+                                            .strong(),
+                                    )
+                                    .id_salt("map_side_actions")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        for (sev, text, nodes) in &findings {
+                                            let c = match sev {
+                                                Sev::High => widgets::bad(),
+                                                Sev::Med => widgets::warn(),
+                                                Sev::Low => ui.visuals().weak_text_color(),
+                                            };
+                                            let r = ui
+                                                .horizontal_top(|ui| {
+                                                    let (d, _) = ui.allocate_exact_size(
+                                                        vec2(10.0, 16.0),
+                                                        Sense::hover(),
+                                                    );
+                                                    ui.painter().circle_filled(
+                                                        d.center() - vec2(0.0, 2.0),
+                                                        4.0,
+                                                        c,
+                                                    );
+                                                    ui.add(
+                                                        egui::Label::new(text)
+                                                            .wrap()
+                                                            .selectable(false),
+                                                    );
+                                                })
+                                                .response;
+                                            if !nodes.is_empty() {
+                                                let r = r
+                                                    .interact(Sense::click())
+                                                    .on_hover_text("Show on the map");
+                                                if r.clicked() {
+                                                    *focus = Some(nodes.clone());
+                                                }
+                                                if r.hovered() {
+                                                    ui.ctx().set_cursor_icon(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                }
+                                            }
+                                            ui.add_space(4.0);
+                                        }
+                                    });
                                 }
                             });
-                        }
                     });
             });
+        self.side_cover = w;
         if hide {
             self.side = false;
         }

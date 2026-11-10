@@ -93,12 +93,11 @@ impl MapView {
         }
         let mut act = None;
         let right = self.right_controls(ui, rect, empty);
+        // Beside Layers, when it's open over the canvas's left edge.
+        let left = self.beside_panel(rect).min.x;
         let room = Rect::from_min_max(
-            rect.min + vec2(EDGE, EDGE),
-            pos2(
-                (right.min.x - 12.0).max(rect.min.x + 200.0),
-                rect.max.y - 60.0,
-            ),
+            pos2(left + EDGE, rect.min.y + EDGE),
+            pos2((right.min.x - 12.0).max(left + 200.0), rect.max.y - 60.0),
         );
         let mut col = ui.new_child(
             egui::UiBuilder::new()
@@ -120,12 +119,12 @@ impl MapView {
 
     /// The toolbar folds the layouts into a drop-down and Export into ⋯:
     /// when the canvas `rect` is narrow with the inspector open, so picking a
-    /// card (which opens it) doesn't change the toolbar.
+    /// card (which opens it) doesn't change the toolbar; or with Layers open.
     fn compact(&self, rect: Rect, empty: bool) -> bool {
         let w = if empty {
             rect.width()
         } else {
-            rect.width() + self.panel_now - self.panel_full
+            rect.width() + self.panel_now - self.panel_full - self.side_cover
         };
         w < COMPACT
     }
@@ -143,7 +142,8 @@ impl MapView {
         // too little room.
         let beside = self.beside_panel(rect);
         let edge = beside.max.x;
-        self.controls_in_menu = !empty && self.cover > 0.0 && beside.width() < TIGHT;
+        self.controls_in_menu =
+            !empty && (self.cover > 0.0 || self.side_cover > 0.0) && beside.width() < TIGHT;
         if self.controls_in_menu {
             return Rect::from_min_size(pos2(edge - EDGE, rect.min.y + EDGE), Vec2::ZERO);
         }
@@ -982,18 +982,7 @@ mod tests {
         assert!(at(&shown, "Legend").x < edge);
         assert!(at(&shown, "Fit").x < edge);
         // Esc lets the card go and the inspector shuts.
-        frame(
-            &ctx,
-            &mut v,
-            &src,
-            vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        );
+        frame(&ctx, &mut v, &src, vec![esc()]);
         let shown = frame(&ctx, &mut v, &src, vec![]);
         assert!(v.selection().is_empty());
         assert!(!shown.iter().any(|(s, _)| s == "Traceroute"));
@@ -1084,6 +1073,144 @@ mod tests {
         v.side = false;
         let shown = frame(&ctx, &mut v, &src, vec![]);
         assert!(shown.iter().any(|(s, _)| s == "Traceroute"));
+    }
+
+    fn esc() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// Layers lies over the map's left edge: opening it leaves the zoom as
+    /// it was, on a laptop and on a wide window, and the toolbar moves
+    /// beside it.
+    #[test]
+    fn opening_layers_keeps_the_maps_zoom() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        for size in [vec2(1280.0, 720.0), vec2(1600.0, 900.0)] {
+            let mut v = MapView::new(None);
+            let mut shown = Vec::new();
+            for _ in 0..6 {
+                shown = frame_at(&ctx, &mut v, &src, vec![], size);
+            }
+            let zoom = v.zoom;
+            let find = at(&shown, "Find name, IP, MAC, note");
+            v.side = true;
+            for _ in 0..8 {
+                shown = frame_at(&ctx, &mut v, &src, vec![], size);
+            }
+            at(&shown, "ROLES");
+            assert_eq!(v.side_cover, sidebar::SIDE_W, "{size:?}");
+            assert!(
+                (v.zoom - zoom).abs() < 1e-3,
+                "{size:?}: zoom {zoom} became {}",
+                v.zoom
+            );
+            let moved = at(&shown, "Find name, IP, MAC, note");
+            assert!(moved.x > sidebar::SIDE_W && moved.x > find.x, "{size:?}");
+        }
+    }
+
+    /// Below 1100 points wide Layers floats over the map, and Esc shuts it
+    /// once there are no cards to let go; on a laptop Esc leaves it open.
+    #[test]
+    fn esc_shuts_layers_on_a_small_window() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let small = vec2(1000.0, 700.0);
+        let mut v = MapView::new(None);
+        for _ in 0..4 {
+            frame_at(&ctx, &mut v, &src, vec![], small);
+        }
+        v.side = true;
+        v.select(Some(a_device(&v)));
+        frame_at(&ctx, &mut v, &src, vec![], small);
+        // The first Esc lets the card go; the next shuts Layers.
+        frame_at(&ctx, &mut v, &src, vec![esc()], small);
+        assert!(v.selection().is_empty() && v.side);
+        frame_at(&ctx, &mut v, &src, vec![esc()], small);
+        assert!(!v.side);
+        // On a laptop it stays open.
+        v.side = true;
+        frame(&ctx, &mut v, &src, vec![]);
+        frame(&ctx, &mut v, &src, vec![esc()]);
+        assert!(v.side);
+    }
+
+    /// On a window too small for Layers and the inspector side by side, a
+    /// card picked with Layers open shuts Layers and shows the card.
+    #[test]
+    fn a_card_picked_on_a_crowded_map_shuts_layers() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let tiny = vec2(700.0, 500.0);
+        let mut v = MapView::new(None);
+        for _ in 0..4 {
+            frame_at(&ctx, &mut v, &src, vec![], tiny);
+        }
+        v.side = true;
+        frame_at(&ctx, &mut v, &src, vec![], tiny);
+        v.select(Some(a_device(&v)));
+        let mut shown = Vec::new();
+        for _ in 0..3 {
+            shown = frame_at(&ctx, &mut v, &src, vec![], tiny);
+        }
+        assert!(!v.side, "Layers shut");
+        at(&shown, "Traceroute");
+        // With room for both (a laptop), Layers stays.
+        let mut v = MapView::new(None);
+        for _ in 0..4 {
+            frame(&ctx, &mut v, &src, vec![]);
+        }
+        v.side = true;
+        frame(&ctx, &mut v, &src, vec![]);
+        v.select(Some(a_device(&v)));
+        let shown = frame(&ctx, &mut v, &src, vec![]);
+        let shown = if shown.iter().any(|(s, _)| s == "Traceroute") {
+            shown
+        } else {
+            frame(&ctx, &mut v, &src, vec![])
+        };
+        assert!(v.side);
+        at(&shown, "Traceroute");
     }
 
     #[test]

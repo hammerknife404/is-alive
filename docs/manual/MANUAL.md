@@ -171,7 +171,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.7** is the version you're running: worth including when you report a problem.
+- **v0.28.8** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -753,6 +753,7 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 - **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
+- **Panels keep the zoom.** Layers and a card's inspector lie over the map's edges (or, on a wide window, beside it) without zooming it out: the map stays as it was, and a selected card is moved clear of them. **Fit** (or **F**, or a double-click) frames the whole map in the room the open panels leave, and keeps it there as the map grows; with every panel shut, it fills the window again.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links** (below), **Legend** and **Export** (the same formats).
 - **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way. Dropped onto other cards' links, it moves them round it the same way.
 - **Drag a box by its title** (a role's box in Zones, a site's in Sites) to move it with its cards; cards you dragged out of it come along too. In Zones the folded **×N** line into it follows it; the way into a moved site's box takes its own route, round the cards in its way. **Re-layout** puts boxes back too.
@@ -903,7 +904,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 
 ### Layers and findings
 
-**Layers** (top right, or the findings chip) opens the panel on the left. It's shut when the map opens, so the map gets the room; **×** shuts it again. On a window under 1440 points wide, opening it shuts a card's floating inspector, so the two don't cover the map between them: the cards stay selected and lit, and picking a card (or shutting Layers) opens the inspector again.
+**Layers** (top right, or the findings chip) opens the panel on the left, 272 points wide. It lies over the map's left edge rather than squeezing it, so the map keeps its zoom; the toolbar and the legend move beside it. From 1440 points wide it sits flush with the edges; on a smaller window it floats, with a shadow. It's shut when the map opens; **×** shuts it again, and so does **Esc** on a window under 1100 points wide (once no cards are selected: the first Esc lets them go). On a window under 1440 points wide, opening it shuts a card's floating inspector, so the two don't cover the map between them: the cards stay selected and lit, and picking a card (or shutting Layers) opens the inspector again. On a window too small for both side by side, picking a card shuts Layers instead.
 
 - **The map's summary** at the top: what it is and how much it holds.
 - **Sites:** each site with a ▾/▸ toggle to collapse or expand it; **Collapse all**, **Expand all**; click a site's name to select its cards and bring it into view. You can also click a site's title on the map.
@@ -1268,7 +1269,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
-| **Esc** | Map | Clear the selection (pinned cards stay) |
+| **Esc** | Map | Clear the selection (pinned cards stay); with none to clear, on a window under 1100 points wide, shut Layers |
 | **Esc** | The inspector, on a window under 1100 points wide (on the Map, under 1440) | Close it |
 | **N** | Map, one card selected | Write or edit its note |
 | **Ctrl+Enter** / **Esc** | A card's note | Save it / leave it as it was |
@@ -1279,7 +1280,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 |---|---|---|
 | Drag the background | Map | Pan |
 | Scroll / pinch | Map | Zoom |
-| Double-click the background | Map | Fit the whole map |
+| Double-click the background | Map | Fit the whole map in the room the open panels leave |
 | Double-click a card | Map | Zoom to that card |
 | Double-click a card's note mark | Map | Open its note |
 | Click a card | Map | Select it and light its path to the internet |

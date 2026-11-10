@@ -281,9 +281,16 @@ impl MapView {
                 self.aim = None;
             }
         }
-        // Esc that closed a menu or left a text box was theirs.
+        // Esc that closed a menu or left a text box was theirs. It lets the
+        // cards go (shutting the inspector); with none to let go, on a small
+        // window, it shuts Layers floating over the map.
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !self.keys_busy {
+            let had = self.selection().len();
             self.select(None);
+            let small = ui.ctx().content_rect().width() < 1100.0;
+            if self.selection().len() == had && small {
+                self.side = false;
+            }
         }
         if !self.keys_busy {
             self.keys(ui, rect);

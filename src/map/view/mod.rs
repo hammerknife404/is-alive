@@ -170,9 +170,11 @@ pub struct MapView {
     aim: Option<(Vec2, f32)>,
     /// Keep the whole map in view as it grows, until the user pans or zooms.
     follow: bool,
-    /// The canvas as it was with no card selected: what the map fits to
-    /// while the panel is open.
-    wide: Option<Rect>,
+    /// What a fit asked for left of the canvas, at its left and right: the
+    /// panels open then (Layers, the inspector). Keeping the map in view as
+    /// it grows frames the canvas less these, so a panel opened or shut
+    /// later doesn't change the zoom. Back to none when every panel is shut.
+    fit_insets: (f32, f32),
     /// How much of the canvas's width the inspector takes this frame
     /// (docked: its width; floating: none), and would take open (docked
     /// or floating: its width). A fit asked for frames what's left.
@@ -181,11 +183,15 @@ pub struct MapView {
     /// How wide the inspector floats over the canvas's right edge this
     /// frame (0 when docked or shut): the controls there move beside it.
     cover: f32,
+    /// How wide Layers lies over the canvas's left edge this frame (0 when
+    /// shut): the toolbar and legend move beside it.
+    side_cover: f32,
     /// Layers opened over a floating inspector: it stays shut, the cards
     /// still selected, until the selection changes or Layers shuts.
     insp_hidden: bool,
-    /// Layers was open last frame.
+    /// Layers, and the inspector, were open last frame.
     side_was: bool,
+    insp_was: bool,
     /// The files the map is drawn from: another set (an example picked, a
     /// file loaded or cleared) is another map, shown whole.
     source: u64,
@@ -628,6 +634,7 @@ impl MapView {
     /// pinned cards selected.
     fn new_map(&mut self) {
         self.follow = true;
+        self.fit_insets = self.open_insets();
         self.aim = None;
         self.placed.clear();
         self.raised.clear();
@@ -1098,18 +1105,31 @@ impl MapView {
         r
     }
 
+    /// Keep the whole map in view in the canvas `view`, less what the last
+    /// fit asked for left of it (`fit_insets`).
     fn fit(&mut self, view: Rect) {
-        self.fit_to(view, self.bounds());
+        let frame = self.frame(view);
+        self.fit_to(view, frame, self.bounds());
     }
 
-    /// Fit asked for (the Fit button, a double-click on the background):
-    /// the whole map in the view as it is now, panel or not, and kept in
-    /// view as it grows.
+    /// Fit asked for (the Fit button, F, a double-click on the background):
+    /// the whole map in what the panels open now leave of the canvas `view`,
+    /// and kept in view there as it grows.
     fn fit_view(&mut self, view: Rect) {
-        let view = self.settled(view);
+        self.fit_insets = self.open_insets();
         self.follow = true;
-        self.wide = Some(view);
         self.fit(view);
+    }
+
+    /// What the panels open now take from the canvas, left and right: what
+    /// a fit made now leaves them.
+    fn open_insets(&self) -> (f32, f32) {
+        let right = if self.insp_open() {
+            self.panel_full
+        } else {
+            0.0
+        };
+        (self.side_cover, right)
     }
 
     /// Select the cards a finding names, lighting what joins them, and
@@ -1132,43 +1152,63 @@ impl MapView {
                     .iter()
                     .filter_map(|&i| Some(layout::card_rect(&self.map.nodes[i], self.target(i)?)))
                     .fold(Rect::NOTHING, |r, c| r.union(c));
-                self.fit_to(self.settled(view), area);
+                let seen = self.settled(view);
+                self.fit_to(view, seen, area);
                 self.follow = false;
             }
         }
     }
 
+    /// The canvas `rect` as it is without a docked inspector (whose width
+    /// this frame is `panel_now`).
+    fn full(&self, rect: Rect) -> Rect {
+        let mut r = rect;
+        r.max.x += self.panel_now;
+        r
+    }
+
+    /// What a fit keeps the map in: the canvas `rect` less `fit_insets`.
+    fn frame(&self, rect: Rect) -> Rect {
+        let mut r = self.full(rect);
+        let (left, right) = self.fit_insets;
+        r.max.x = (r.max.x - right).max(r.min.x + 100.0);
+        r.min.x = (r.min.x + left).min(r.max.x - 100.0);
+        r
+    }
+
     /// What the canvas `rect` leaves in view once the inspector is open
-    /// (anything selected) or shut, docked or floating over it: a fit asked
-    /// for now frames that, not the canvas before a selection made this
-    /// frame opens the inspector.
+    /// (anything selected) or shut, docked or floating over it, and with
+    /// Layers over its left edge: what a card or a site is brought into,
+    /// not the canvas before a selection made this frame opens the inspector.
     fn settled(&self, rect: Rect) -> Rect {
         let end = if self.insp_open() {
             self.panel_full
         } else {
             0.0
         };
-        let mut r = rect;
-        r.max.x = (r.max.x + self.panel_now - end).max(r.min.x + 100.0);
+        let mut r = self.full(rect);
+        r.max.x = (r.max.x - end).max(r.min.x + 100.0);
+        r.min.x = (r.min.x + self.side_cover).min(r.max.x - 100.0);
         r
     }
 
-    /// Ease the view so the middle of the map sits in the middle of `view`,
-    /// keeping the zoom.
+    /// Ease the view so the middle of the map sits in the middle of what
+    /// the canvas `view` leaves in sight, keeping the zoom.
     fn center(&mut self, view: Rect) {
-        let view = self.settled(view);
+        let mid = self.settled(view).center() - view.min;
         let b = self.bounds();
         if !b.is_positive() {
             return;
         }
         let zoom = self.aim.map_or(self.zoom, |a| a.1);
-        self.aim = Some((view.size() / 2.0 - b.center().to_vec2() * zoom, zoom));
+        self.aim = Some((mid - b.center().to_vec2() * zoom, zoom));
         self.follow = false;
     }
 
-    /// Ease the view to show the world rect `b`, clear of the zoom
-    /// controls along the bottom and the legend.
-    fn fit_to(&mut self, view: Rect, b: Rect) {
+    /// Ease the view to show the world rect `b` in `frame`, a part of the
+    /// canvas `view`, clear of the zoom controls along the bottom and the
+    /// legend.
+    fn fit_to(&mut self, view: Rect, frame: Rect, b: Rect) {
         if !b.is_positive() {
             return;
         }
@@ -1177,18 +1217,20 @@ impl MapView {
                 .min(room.height() / b.height())
                 .clamp(MIN_ZOOM, 1.0)
         };
-        let room = fit_room(view, self.legend_size, &zoom_in);
+        let room = fit_room(frame, self.legend_size, &zoom_in);
         let zoom = zoom_in(room);
         let pan = room.center() - view.min - b.center().to_vec2() * zoom;
         self.aim = Some((pan, zoom));
     }
 
+    /// Bring card `i` to the middle of what the canvas `view` leaves in
+    /// sight, close enough to read.
     fn focus(&mut self, view: Rect, i: usize) {
-        let view = self.settled(view);
+        let mid = self.settled(view).center() - view.min;
         if let Some(p) = self.target(i) {
             let zoom = self.zoom.max(0.85);
             let c = layout::card_rect(&self.map.nodes[i], p).center();
-            self.aim = Some((view.size() / 2.0 - c.to_vec2() * zoom, zoom));
+            self.aim = Some((mid - c.to_vec2() * zoom, zoom));
             self.follow = false;
         }
     }
@@ -1234,7 +1276,10 @@ impl MapView {
                 None => widgets::toast(format!("{ip} isn't on this map"), false),
             }
         }
-        self.layers_over_inspector(ctx.content_rect().width());
+        self.layers_over_inspector(
+            ctx.content_rect().width(),
+            ui.available_rect_before_wrap().width(),
+        );
         let mut act = self.detail_panel(ui, &src, &mut focus.pick);
         // Left: Layers (sites, roles and findings), as /mapnetwork's sidebar has them.
         self.sidebar(ui, &mut focus.on, &mut focus.site);
@@ -1285,7 +1330,8 @@ impl MapView {
         let stack = self.ordered();
         let right = ui.available_rect_before_wrap().right();
         let mut edit = self.note_edit.take();
-        crate::inspector::show_as(ui, PANEL, at, &mut open, |ui, _| {
+        // Esc is the map's: it lets the cards go (see `interact`).
+        crate::inspector::show_as(ui, PANEL, at, false, &mut open, |ui, _| {
             act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus, &mut edit);
         });
         self.note_edit = edit;
@@ -1297,10 +1343,6 @@ impl MapView {
             w
         };
         self.cover = if shown && open && !docked { w } else { 0.0 };
-        // Esc over a floating inspector: the cards are let go of.
-        if shown && !open {
-            self.select(None);
-        }
         match ev {
             Some(PanelEv::Drop(i)) => self.toggle(i),
             Some(PanelEv::TraceWan(on)) => self.trace_wan = on,
@@ -1326,26 +1368,36 @@ impl MapView {
 
     /// Opening Layers shuts a floating inspector (its cards stay selected),
     /// so the two don't cover the map between them; a new selection, or
-    /// Layers shut, opens it again. Docked, both stay.
-    fn layers_over_inspector(&mut self, width: f32) {
-        let floats = matches!(
-            crate::inspector::map_dock(width),
-            crate::inspector::Dock::Over(_)
-        );
+    /// Layers shut, opens it again. Docked, both stay. On a canvas `canvas`
+    /// points wide with no room for both, a card picked (its inspector
+    /// opening) shuts Layers.
+    fn layers_over_inspector(&mut self, width: f32, canvas: f32) {
+        let at = crate::inspector::map_dock(width);
+        let (floats, insp_w) = match at {
+            crate::inspector::Dock::Over(w) => (true, w),
+            crate::inspector::Dock::Docked(w) => (false, w),
+        };
         if self.side && !self.side_was && floats && self.insp_open() {
             self.insp_hidden = true;
+        }
+        let crowded = canvas - sidebar::SIDE_W - insp_w < 200.0;
+        if self.side && crowded && self.insp_open() && !self.insp_was {
+            self.side = false;
         }
         if !self.side {
             self.insp_hidden = false;
         }
         self.side_was = self.side;
+        self.insp_was = self.insp_open();
     }
 
-    /// `rect` less what a floating inspector covers of its right edge: the
-    /// controls there sit beside it, and a selected card is kept clear of it.
+    /// `rect` less what a floating inspector covers of its right edge and
+    /// Layers of its left: the controls sit beside them, and a selected
+    /// card is kept clear of them.
     fn beside_panel(&self, rect: Rect) -> Rect {
         let mut r = rect;
         r.max.x = (r.max.x - self.cover).max(r.min.x + 100.0);
+        r.min.x = (r.min.x + self.side_cover).min(r.max.x - 100.0);
         r
     }
 
@@ -1376,31 +1428,38 @@ impl MapView {
             self.open_note(&[i]);
         }
         if self.zoom == 0.0 {
+            // The first look: clear of whatever panels are open already.
             self.zoom = 1.0;
+            self.fit_insets = self.open_insets();
             self.fit(rect);
             if let Some((p, z)) = self.aim.take() {
                 (self.pan, self.zoom) = (p, z);
             }
         }
-        // While cards are selected the inspector takes the right of the
-        // view (docked, or floating over it); fitting to what's left would
-        // zoom the whole map out as it opens. So the map keeps the fit it had
-        // without it, panned only to keep the selected card clear of it.
-        let selected = self.selection().first().copied();
-        if selected.is_none() || self.wide.is_none_or(|w| w.min != rect.min) {
-            self.wide = Some(rect);
+        // A panel opening (the inspector, Layers) lies over the map or takes
+        // the side of the canvas; fitting to what's left would zoom the whole
+        // map out as it opens. So the map keeps the fit it had (`fit_insets`),
+        // panned only to keep the selected card clear of the panels. With
+        // every panel shut, it fills the canvas again.
+        if !self.insp_open() && !self.side {
+            self.fit_insets = (0.0, 0.0);
         }
-        let wide = self.wide.map_or(rect, |w| w.union(rect));
+        let selected = self.selection().first().copied();
         if fit {
             self.fit_view(rect);
         } else if self.follow && !self.dragging() {
-            self.fit(wide);
+            self.fit(rect);
             if let (Some(i), Some((pan, zoom))) = (selected, self.aim)
                 && let Some(p) = self.target(i)
             {
-                let right = rect.min.x + pan.x + (p.x + CARD.x) * zoom;
-                let over = right - (self.beside_panel(rect).right() - 16.0);
-                if over > 0.0 {
+                let clear = self.beside_panel(rect);
+                let left = rect.min.x + pan.x + p.x * zoom;
+                let right = left + CARD.x * zoom;
+                let over = right - (clear.right() - 16.0);
+                let under = clear.left() + 16.0 - left;
+                if under > 0.0 {
+                    self.aim = Some((pan + vec2(under, 0.0), zoom));
+                } else if over > 0.0 {
                     self.aim = Some((pan - vec2(over, 0.0), zoom));
                 }
             }
@@ -1762,25 +1821,33 @@ mod tests {
     }
 
     #[test]
-    fn fits_frame_the_canvas_the_panel_leaves() {
+    fn panels_opening_keep_the_fit_and_a_fit_asked_for_frames_what_they_leave() {
         let mut v = tree8();
         v.panel_full = 320.0;
         let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
-        // Nothing selected, the panel shut: the whole canvas.
+        // Nothing selected, Layers shut: the whole canvas.
         assert_eq!(v.settled(full), full);
-        // A finding selects cards this frame: the panel will open over the
-        // right of the canvas.
+        assert_eq!(v.frame(full), full);
+        // A finding selects cards this frame: the inspector will open over
+        // the right of the canvas, and a card is brought into what's left.
         v.show_cards(full, &[5, 6]);
         assert_eq!(v.settled(full).right(), 680.0);
-        // A double-click puts the selection back while the panel is half
-        // shut: the fit is to the canvas with it open again.
-        v.panel_now = 150.0;
-        let mid = Rect::from_min_size(pos2(0.0, 0.0), vec2(850.0, 600.0));
-        v.fit_view(mid);
-        assert_eq!(v.wide.map(|w| w.right()), Some(680.0));
-        // Sliding shut: the canvas it will have, the whole width.
-        v.select(None);
-        assert_eq!(v.settled(mid).right(), 1000.0);
+        // The map kept in view as it grows still fills the whole canvas: its
+        // zoom doesn't change as the inspector opens.
+        assert_eq!(v.frame(full), full);
+        // Layers over the left edge too: the same.
+        (v.side, v.side_cover) = (true, sidebar::SIDE_W);
+        assert_eq!(v.settled(full).left(), sidebar::SIDE_W);
+        assert_eq!(v.frame(full), full);
+        // Fit asked for: what the two leave, and kept there.
+        v.fit_view(full);
+        let between = Rect::from_min_max(pos2(sidebar::SIDE_W, 0.0), pos2(680.0, 600.0));
+        assert_eq!(v.frame(full), between);
+        // The inspector docked instead (the canvas narrower by its width):
+        // the same frame.
+        v.panel_now = 320.0;
+        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(680.0, 600.0));
+        assert_eq!(v.frame(narrow), between);
     }
 
     #[test]
@@ -1920,6 +1987,7 @@ mod tests {
         let mut v = view(1);
         let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
         v.fit_to(
+            view,
             view,
             Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 2000.0)),
         );
