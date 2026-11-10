@@ -59,15 +59,17 @@ pub enum Ask {
 /// ×, or by Esc when floating.
 pub fn show(ui: &mut Ui, id: &str, open: &mut bool, add: impl FnOnce(&mut Ui, &mut bool)) {
     let width = ui.ctx().content_rect().width();
-    show_as(ui, id, dock(width), open, add);
+    show_as(ui, id, dock(width), true, open, add);
 }
 
 /// `show`, placed as `at` says rather than by the window's width (the Map
-/// floats it on a window where a tool page docks it).
+/// floats it on a window where a tool page docks it). `esc`: Esc closes it
+/// when floating (the Map handles Esc itself).
 pub fn show_as(
     ui: &mut Ui,
     id: &str,
     at: Dock,
+    esc: bool,
     open: &mut bool,
     add: impl FnOnce(&mut Ui, &mut bool),
 ) {
@@ -94,7 +96,8 @@ pub fn show_as(
             );
             // Esc that closes a menu or leaves a text box is theirs.
             let ctx = ui.ctx().clone();
-            if ui.input(|i| i.key_pressed(egui::Key::Escape))
+            if esc
+                && ui.input(|i| i.key_pressed(egui::Key::Escape))
                 && !ctx.text_edit_focused()
                 && !egui::Popup::is_any_open(&ctx)
             {
