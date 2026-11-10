@@ -8,6 +8,7 @@ mod fonts;
 mod help;
 mod icons;
 mod input;
+mod inspector;
 mod job;
 mod log;
 mod manual;
@@ -529,7 +530,10 @@ impl App {
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
             Tab::Speed => self.speed.ui(ui),
-            Tab::Sweep => self.sweep.ui(ui, &self.info),
+            Tab::Sweep => {
+                let ask = self.sweep.ui(ui, &self.info);
+                self.inspector_ask(ui.ctx(), ask);
+            }
             Tab::Dns => self.dns.ui(ui),
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => self.export.ui(ui),
@@ -598,6 +602,30 @@ impl App {
                 egui::FontId::proportional(18.0),
                 egui::Color32::WHITE.gamma_multiply(fade),
             );
+        }
+    }
+
+    /// What an inspector's button asked for: a test in its own tab, or the
+    /// device on the Map.
+    fn inspector_ask(&mut self, ctx: &egui::Context, ask: Option<inspector::Ask>) {
+        match ask {
+            Some(inspector::Ask::Ping(ip)) => {
+                self.ping.run(ctx, &ip, 4);
+                self.tab = Tab::Ping;
+            }
+            Some(inspector::Ask::Ports(ip)) => {
+                self.ports.run(ctx, &ip);
+                self.tab = Tab::Ports;
+            }
+            Some(inspector::Ask::Trace(ip)) => {
+                self.trace.run(ctx, &ip);
+                self.tab = Tab::Trace;
+            }
+            Some(inspector::Ask::OnMap(ip)) => {
+                self.map.find(ip);
+                self.tab = Tab::Map;
+            }
+            None => {}
         }
     }
 

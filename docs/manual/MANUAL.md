@@ -144,6 +144,7 @@ All the testing tabs work the same way:
 1. **The toolbar:** the main field first (Host, Range, Domain…), **▶ Start** right after it, then the options.
 2. **The status row** under it: what the run found on the left (counts, loss, time taken), **Copy** and **Save…** on the right. **Copy** puts the result on the clipboard for a ticket or email; **Save…** writes it to a text file.
 3. **The results** below. Before the first run, a short explanation says what to do.
+4. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep) so far): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
 
 **Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. Copies and saves confirm themselves with a short message at the bottom of the window.
 
@@ -169,7 +170,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.2** is the version you're running: worth including when you report a problem.
+- **v0.28.3** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -442,6 +443,16 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
 **Check mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 on each live device: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients. It's a port scan, so it's off unless you tick it.
+
+### A device's details
+
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, after **Check mgmt ports**, its open ports with what each is for. Its buttons:
+
+- **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
+- **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
+- **On map**: switch to the Map with its card selected (if it's on the map).
+
+Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**: both stay in the inspector.
 
 ### Example: what's on the office network?
 
@@ -1213,6 +1224,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
 | **Esc** | Map | Clear the selection (pinned cards stay) |
+| **Esc** | The inspector, on a window under 1100 points wide | Close it |
 | **N** | Map, one card selected | Write or edit its note |
 | **Ctrl+Enter** / **Esc** | A card's note | Save it / leave it as it was |
 

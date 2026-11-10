@@ -411,6 +411,13 @@ impl MapTabs {
             .collect()
     }
 
+    /// Show the live map with the card at `ip` selected (from another
+    /// tab's inspector): next time the Map is drawn.
+    pub fn find(&mut self, ip: std::net::Ipv4Addr) {
+        self.shown = None;
+        self.live.pick_ip = Some(ip);
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         self.poll_open();
         self.tell_skipped();

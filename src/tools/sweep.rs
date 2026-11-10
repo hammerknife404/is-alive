@@ -5,8 +5,9 @@ use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
 use crate::net::{self, TcpState, names, ports, subnet, targets};
+use crate::theme;
 use crate::widgets::{self, Action};
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{self, FontId, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -80,6 +81,8 @@ pub struct SweepTool {
     revision: u64,
     /// How many sweeps have started.
     runs: u64,
+    /// The host open in the inspector, by address.
+    picked: Option<Ipv4Addr>,
 }
 
 impl Default for SweepTool {
@@ -104,6 +107,7 @@ impl Default for SweepTool {
             err: None,
             revision: 0,
             runs: 0,
+            picked: None,
         }
     }
 }
@@ -175,7 +179,18 @@ impl SweepTool {
         got || changed
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) {
+    /// The tab; what the inspector asked for, if anything.
+    pub fn ui(&mut self, ui: &mut Ui, info: &HostInfo) -> Option<crate::inspector::Ask> {
+        let mut ask = None;
+        // Docked, the inspector takes the tab's right side top to bottom;
+        // floating, it's drawn over the table after it.
+        let docked = matches!(
+            crate::inspector::dock(ui.ctx().content_rect().width()),
+            crate::inspector::Dock::Docked(_)
+        );
+        if docked {
+            ask = self.inspector(ui);
+        }
         // First time the tab is shown: prefill with the host's own subnet.
         if !self.detected {
             self.detected = true;
@@ -278,43 +293,216 @@ impl SweepTool {
                     &[],
                 );
             }
-            return;
+            return ask;
         }
 
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                egui::Grid::new("sweep")
-                    .striped(true)
-                    .min_col_width(60.0)
-                    .show(ui, |ui| {
-                        let mut heads = vec!["Address", "Time", "TTL", "MAC", "Vendor", "Name"];
-                        if self.checked_ports {
-                            heads.push("Open ports");
-                        }
-                        for h in heads {
-                            ui.strong(h);
-                        }
-                        ui.end_row();
-                        for h in &self.alive {
-                            ui.monospace(h.ip.to_string());
-                            match h.rtt {
-                                Some(r) => ui.monospace(widgets::fmt_ms(r)),
-                                None => ui
-                                    .label(RichText::new("no ping").weak())
-                                    .on_hover_text(ARP_TIP),
-                            };
-                            ui.monospace(h.ttl.map(|t| t.to_string()).unwrap_or_default());
-                            ui.monospace(h.mac.as_ref().map(mac::fmt).unwrap_or_default());
-                            ui.label(self.vendor(h));
-                            ui.label(h.name.as_deref().unwrap_or(""));
-                            if self.checked_ports {
-                                ui.monospace(port_list(&h.open));
-                            }
-                            ui.end_row();
-                        }
-                    });
-            });
+        // Floating, the inspector covers the table, not the run bar above it.
+        let below = ui.available_rect_before_wrap();
+        self.hosts_table(ui);
+        if !docked {
+            let mut over = ui.new_child(egui::UiBuilder::new().max_rect(below));
+            ask = ask.or(self.inspector(&mut over));
+        }
+        ask
+    }
+
+    /// The hosts, one row each; a click opens one in the inspector (another
+    /// click on it closes it). MAC and Vendor drop out, Vendor first, when the
+    /// table gets too narrow: both are in the inspector.
+    fn hosts_table(&mut self, ui: &mut Ui) {
+        let width = ui.available_width();
+        let cols = columns(width, self.checked_ports);
+        let row_h = 24.0;
+        let font = FontId::proportional(14.0);
+        let mono = FontId::monospace(13.0);
+        let v = ui.visuals().clone();
+        // The header, outside the scroll so it stays put.
+        let (head, _) = ui.allocate_exact_size(vec2(width, row_h), Sense::hover());
+        for (c, r) in cols.cells(head) {
+            cell(ui.painter(), r, c.title(), &font, v.strong_text_color());
+        }
+        ui.painter().hline(
+            head.x_range(),
+            head.bottom(),
+            egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
+        );
+        let mut pick = None;
+        egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+            ui,
+            row_h,
+            self.alive.len(),
+            |ui, range| {
+                for i in range {
+                    let h = &self.alive[i];
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                    let on = self.picked == Some(h.ip);
+                    let fill = if on {
+                        theme::accent().gamma_multiply(0.16)
+                    } else if resp.hovered() {
+                        v.widgets.hovered.weak_bg_fill
+                    } else if i % 2 == 1 {
+                        v.faint_bg_color
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    ui.painter().rect_filled(rect, 4.0, fill);
+                    let (text, weak) = (v.text_color(), v.weak_text_color());
+                    for (c, r) in cols.cells(rect) {
+                        let (s, f, colour) = match c {
+                            Col::Address => (h.ip.to_string(), &mono, text),
+                            Col::Time => match h.rtt {
+                                Some(t) => (widgets::fmt_ms(t), &mono, text),
+                                None => ("no ping".to_string(), &font, weak),
+                            },
+                            Col::Ttl => (
+                                h.ttl.map(|t| t.to_string()).unwrap_or_default(),
+                                &mono,
+                                text,
+                            ),
+                            Col::Mac => (
+                                h.mac.as_ref().map(mac::fmt).unwrap_or_default(),
+                                &mono,
+                                weak,
+                            ),
+                            Col::Vendor => (self.vendor(h), &font, text),
+                            Col::Name => (h.name.clone().unwrap_or_default(), &font, text),
+                            Col::Ports => (port_list(&h.open), &mono, text),
+                        };
+                        cell(ui.painter(), r, &s, f, colour);
+                    }
+                    let resp = if h.rtt.is_none() {
+                        resp.on_hover_text(ARP_TIP)
+                    } else {
+                        resp
+                    };
+                    if resp.clicked() {
+                        pick = Some((!on).then_some(h.ip));
+                    }
+                }
+            },
+        );
+        if let Some(p) = pick {
+            self.picked = p;
+        }
+    }
+
+    /// The picked host in the inspector; what its buttons asked for.
+    fn inspector(&mut self, ui: &mut Ui) -> Option<crate::inspector::Ask> {
+        use crate::inspector::{self as insp, Act, Ask};
+        let h = self.alive.iter().find(|h| Some(h.ip) == self.picked)?;
+        let ip = h.ip;
+        let kind = if self.local.gateway == Some(ip) {
+            "Gateway"
+        } else if self.local.lan.is_some_and(|(me, _)| me == ip) {
+            "This machine"
+        } else if h.rtt.is_none() {
+            "Host · ARP only"
+        } else {
+            "Host"
+        };
+        let title = h.name.clone().unwrap_or_else(|| ip.to_string());
+        let named = h.name.is_some();
+        let mac = h.mac.as_ref().map(mac::fmt);
+        let vendor = self.vendor(h);
+        let (name_from, mac_from) = (h.name_from, h.mac_from);
+        let (rtt, ttl, ports_open) = (h.rtt, h.ttl, h.open.clone());
+        let web = insp::web_url(ip, &ports_open);
+        let checked = self.checked_ports;
+        let mut open = true;
+        let mut ask = None;
+        let address = ip.to_string();
+        insp::show(ui, "sweep_inspector", &mut open, |ui, open| {
+            insp::header(ui, kind, &title, named.then_some(address.as_str()), open);
+            let web_tip = format!("Open {web} in the browser");
+            let acts = [
+                Act {
+                    label: "Ping",
+                    tip: "Ping it in the Ping tab",
+                    enabled: true,
+                },
+                Act {
+                    label: "Ports",
+                    tip: "Check its ports in the Port Check tab",
+                    enabled: true,
+                },
+                Act {
+                    label: "Trace",
+                    tip: "Trace the route to it in the Traceroute tab",
+                    enabled: true,
+                },
+                Act {
+                    label: "Web",
+                    tip: &web_tip,
+                    enabled: true,
+                },
+                Act {
+                    label: "On map",
+                    tip: "Select it on the Map",
+                    enabled: true,
+                },
+            ];
+            match insp::actions(ui, &acts) {
+                Some(0) => ask = Some(Ask::Ping(address.clone())),
+                Some(1) => ask = Some(Ask::Ports(address.clone())),
+                Some(2) => ask = Some(Ask::Trace(address.clone())),
+                Some(3) => insp::open(web.clone()),
+                Some(4) => ask = Some(Ask::OnMap(ip)),
+                _ => {}
+            }
+            insp::section(ui, "Details");
+            insp::row(ui, "Address", &address, true);
+            if let Some(m) = &mac {
+                insp::row(ui, "MAC", m, true);
+                if mac_from == Some("netbios") {
+                    insp::row(ui, "MAC from", "the device, over NetBIOS", false);
+                }
+            }
+            if !vendor.is_empty() {
+                insp::row(ui, "Vendor", &vendor, false);
+            }
+            if named {
+                insp::row(ui, "Name", &title, false);
+                let from = match name_from {
+                    Some("dns") => "DNS",
+                    Some("netbios") => "the device, over NetBIOS",
+                    Some("mdns") => "the device, over multicast DNS",
+                    _ => "",
+                };
+                if !from.is_empty() {
+                    insp::row(ui, "Name from", from, false);
+                }
+            }
+            match rtt {
+                Some(t) => insp::row(ui, "Ping", &widgets::fmt_ms(t), true),
+                None => insp::row(ui, "Ping", "no reply; it answered ARP", false),
+            }
+            if let Some(t) = ttl {
+                insp::row(ui, "TTL", &t.to_string(), true);
+            }
+            insp::section(ui, "Open ports");
+            if !checked {
+                insp::note(
+                    ui,
+                    "Not checked: tick Check mgmt ports before the sweep to see them, or use Ports.",
+                );
+            } else if ports_open.is_empty() {
+                insp::note(ui, "None of the management ports answered.");
+            } else {
+                let chips: Vec<String> = ports_open
+                    .iter()
+                    .map(|p| match ports::service_name(*p) {
+                        "" => p.to_string(),
+                        s => format!("{p} {s}"),
+                    })
+                    .collect();
+                insp::chips(ui, &chips);
+            }
+        });
+        if !open {
+            self.picked = None;
+        }
+        ask
     }
 
     fn arp_only(&self) -> usize {
@@ -558,6 +746,7 @@ impl SweepTool {
         self.checked_ports = false;
         self.err = None;
         self.revision += 1;
+        self.picked = None;
     }
 
     /// How many sweeps have started (each may be another network).
@@ -723,6 +912,110 @@ fn identify(
     (md, from, mac)
 }
 
+/// The table's columns.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Col {
+    Address,
+    Time,
+    Ttl,
+    Mac,
+    Vendor,
+    Name,
+    Ports,
+}
+
+impl Col {
+    fn title(self) -> &'static str {
+        match self {
+            Col::Address => "Address",
+            Col::Time => "Time",
+            Col::Ttl => "TTL",
+            Col::Mac => "MAC",
+            Col::Vendor => "Vendor",
+            Col::Name => "Name",
+            Col::Ports => "Open ports",
+        }
+    }
+
+    /// Its width; Name takes what's left.
+    fn width(self) -> f32 {
+        match self {
+            Col::Address => 120.0,
+            Col::Time => 76.0,
+            Col::Ttl => 44.0,
+            Col::Mac => 156.0,
+            Col::Vendor => 170.0,
+            Col::Name => 160.0,
+            Col::Ports => 150.0,
+        }
+    }
+}
+
+/// The columns shown, left to right.
+struct Cols(Vec<Col>);
+
+/// Room between columns, and at the row's ends.
+const GAP: f32 = 8.0;
+
+impl Cols {
+    /// Each column's cell in the row `r`, left to right.
+    fn cells(&self, r: Rect) -> Vec<(Col, Rect)> {
+        let fixed: f32 = self
+            .0
+            .iter()
+            .filter(|c| **c != Col::Name)
+            .map(|c| c.width() + GAP)
+            .sum();
+        let name = (r.width() - fixed - 2.0 * GAP).max(Col::Name.width());
+        let mut x = r.min.x + GAP;
+        self.0
+            .iter()
+            .map(|&c| {
+                let w = if c == Col::Name { name } else { c.width() };
+                let cell = Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height()));
+                x += w + GAP;
+                (c, cell)
+            })
+            .collect()
+    }
+}
+
+/// Every column that fits in `width`: Vendor goes first as it narrows, then
+/// MAC (both are in the inspector). Open ports only after a port check.
+fn columns(width: f32, ports: bool) -> Cols {
+    let mut all = vec![
+        Col::Address,
+        Col::Time,
+        Col::Ttl,
+        Col::Mac,
+        Col::Vendor,
+        Col::Name,
+    ];
+    if ports {
+        all.push(Col::Ports);
+    }
+    let need = |cols: &[Col]| cols.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
+    for drop in [Col::Vendor, Col::Mac] {
+        if need(&all) > width {
+            all.retain(|c| *c != drop);
+        }
+    }
+    Cols(all)
+}
+
+/// `text` in the cell `r`, on one line, cut with … where it doesn't fit.
+fn cell(p: &egui::Painter, r: Rect, text: &str, font: &FontId, colour: egui::Color32) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font.clone(), colour);
+    job.wrap = egui::text::TextWrapping {
+        max_width: r.width(),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let g = p.layout_job(job);
+    p.galley(pos2(r.min.x, r.center().y - g.size().y / 2.0), g, colour);
+}
+
 fn found_by(h: &Host) -> &'static str {
     if h.rtt.is_some() { "ping" } else { "arp" }
 }
@@ -769,6 +1062,133 @@ mod tests {
         };
         s.apply(hosts.into_iter().map(Ev::Alive).collect());
         s
+    }
+
+    #[test]
+    fn vendor_then_mac_drop_out_as_the_table_narrows() {
+        let has = |w: f32, c: Col| columns(w, false).0.contains(&c);
+        // Room for everything.
+        assert!(has(900.0, Col::Vendor) && has(900.0, Col::Mac));
+        // Vendor goes first.
+        assert!(!has(700.0, Col::Vendor) && has(700.0, Col::Mac));
+        // Then MAC; the address, time and name always stay.
+        for c in [Col::Address, Col::Time, Col::Name] {
+            assert!(has(400.0, c));
+        }
+        assert!(!has(400.0, Col::Mac));
+        // Open ports only after a port check, and it keeps its place last.
+        assert!(!has(1400.0, Col::Ports));
+        assert_eq!(columns(1400.0, true).0.last(), Some(&Col::Ports));
+    }
+
+    /// One frame of the Sweep tab in a window `size` big: every text drawn,
+    /// and what the inspector asked for.
+    fn sweep_frame(
+        ctx: &egui::Context,
+        s: &mut SweepTool,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> (Vec<(String, Rect)>, Option<crate::inspector::Ask>) {
+        fn texts(sh: &egui::Shape, out: &mut Vec<(String, Rect)>) {
+            match sh {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|x| texts(x, out)),
+                _ => {}
+            }
+        }
+        let input = egui::RawInput {
+            events,
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)),
+            time: Some(ctx.input(|i| i.time) + 0.1),
+            ..Default::default()
+        };
+        let info = HostInfo::default();
+        let mut ask = None;
+        let mut out = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| ask = s.ui(ui, &info));
+        });
+        out.textures_delta.clear();
+        let mut found = Vec::new();
+        for c in &out.shapes {
+            texts(&c.shape, &mut found);
+        }
+        (found, ask)
+    }
+
+    fn click_at(
+        ctx: &egui::Context,
+        s: &mut SweepTool,
+        size: egui::Vec2,
+        at: egui::Pos2,
+    ) -> (Vec<(String, Rect)>, Option<crate::inspector::Ask>) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        sweep_frame(ctx, s, size, vec![egui::Event::PointerMoved(at)]);
+        sweep_frame(ctx, s, size, vec![press(true)]);
+        let (_, ask) = sweep_frame(ctx, s, size, vec![press(false)]);
+        let (t, later) = sweep_frame(ctx, s, size, vec![]);
+        (t, ask.or(later))
+    }
+
+    fn at(t: &[(String, Rect)], label: &str) -> egui::Pos2 {
+        t.iter()
+            .find(|(s, _)| s == label)
+            .unwrap_or_else(|| panic!("no {label:?}"))
+            .1
+            .center()
+    }
+
+    /// On a laptop-sized window a click on a host opens it in the
+    /// inspector, whose buttons ask for the tests and the Map; another
+    /// click on the row closes it.
+    #[test]
+    fn a_host_opens_in_the_inspector_with_its_tests() {
+        for size in [vec2(1280.0, 720.0), vec2(1000.0, 700.0)] {
+            let ctx = egui::Context::default();
+            let mut h = host([10, 0, 0, 7], Some(1.5));
+            h.name = Some("printer-2f".into());
+            h.name_from = Some("mdns");
+            h.mac = Some(mac(7));
+            let mut s = swept(vec![host([10, 0, 0, 1], Some(0.4)), h]);
+            s.detected = true;
+            let (t, _) = sweep_frame(&ctx, &mut s, size, vec![]);
+            let (t, _) = click_at(&ctx, &mut s, size, at(&t, "printer-2f"));
+            assert_eq!(s.picked, Some(Ipv4Addr::new(10, 0, 0, 7)), "{size:?}");
+            for label in [
+                "Ping",
+                "Ports",
+                "Trace",
+                "Web",
+                "On map",
+                "the device, over multicast DNS",
+            ] {
+                at(&t, label);
+            }
+            let (_, ask) = click_at(&ctx, &mut s, size, at(&t, "Ports"));
+            assert_eq!(ask, Some(crate::inspector::Ask::Ports("10.0.0.7".into())));
+            let (t, ask) = click_at(&ctx, &mut s, size, at(&t, "On map"));
+            assert_eq!(
+                ask,
+                Some(crate::inspector::Ask::OnMap(Ipv4Addr::new(10, 0, 0, 7)))
+            );
+            // The row again: closed.
+            // The row's name, not the inspector's heading: the leftmost.
+            let row = t
+                .iter()
+                .filter(|(x, _)| x == "printer-2f")
+                .min_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x))
+                .expect("the row")
+                .1
+                .center();
+            click_at(&ctx, &mut s, size, row);
+            assert_eq!(s.picked, None, "{size:?}");
+        }
     }
 
     #[test]

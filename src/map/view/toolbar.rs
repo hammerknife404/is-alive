@@ -807,6 +807,44 @@ mod tests {
         at(&after, "ROLES");
     }
 
+    /// Sweep's On map: the card at that address is selected, and an
+    /// address the map hasn't got selects nothing.
+    #[test]
+    fn a_card_asked_for_by_address_is_selected() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let export = crate::tools::export::ExportTool::with_example(0);
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let mut v = MapView::new(None);
+        frame(&ctx, &mut v, &src, vec![]);
+        let (i, ip) = v
+            .map
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(i, n)| n.ip.map(|ip| (i, ip)))
+            .expect("a card with an address");
+        v.pick_ip = Some(ip);
+        frame(&ctx, &mut v, &src, vec![]);
+        assert_eq!(v.selection(), vec![i]);
+        v.select(None);
+        v.pick_ip = Some(std::net::Ipv4Addr::new(192, 0, 2, 250));
+        frame(&ctx, &mut v, &src, vec![]);
+        assert!(v.selection().is_empty());
+        assert!(v.pick_ip.is_none(), "asked once");
+    }
+
     #[test]
     fn the_findings_chip_names_the_worst_two_kinds() {
         assert_eq!(findings_label((0, 0, 0)), None);

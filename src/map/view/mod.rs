@@ -251,6 +251,8 @@ pub struct MapView {
     search_next: bool,
     /// ⋯ › Clear map… is asking to be sure.
     ask_clear: bool,
+    /// Select the card at this address next frame (another tab's On map).
+    pick_ip: Option<std::net::Ipv4Addr>,
     /// The canvas is narrow: Export is in ⋯ rather than beside Legend.
     export_in_menu: bool,
     /// How wide Layers, Legend and Export were last frame.
@@ -1209,11 +1211,16 @@ impl MapView {
             let act = empty_state(ui, src.info);
             return act.or(self.controls(ui, full, &src, true));
         }
-        let focus = Focus {
+        let mut focus = Focus {
             search: std::mem::take(&mut self.search_next),
             ..Default::default()
         };
-        let mut focus = focus;
+        if let Some(ip) = self.pick_ip.take() {
+            match self.map.nodes.iter().position(|n| n.ip == Some(ip)) {
+                Some(i) => focus.pick = Some((i, false)),
+                None => widgets::toast(format!("{ip} isn't on this map"), false),
+            }
+        }
         let mut act = self.detail_panel(ui, &src, &mut focus.pick);
         // Left: Layers (sites, roles and findings), as /mapnetwork's sidebar has them.
         self.sidebar(ui, &mut focus.on, &mut focus.site);
