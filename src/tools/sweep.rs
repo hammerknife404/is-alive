@@ -221,17 +221,32 @@ impl SweepTool {
             }
             self.plan_label(ui);
         });
-        ui.horizontal(|ui| {
-            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
-            widgets::speed(ui, "sweep_speed", &mut self.threads, &mut self.rate);
-            ui.checkbox(&mut self.resolve_names, "Resolve names")
-                .on_hover_text(
-                    "Name each device: from DNS, else the name it gives itself over NetBIOS \
+        let mut summary = vec![
+            widgets::speed_name(self.threads, self.rate).to_string(),
+            format!("timeout {} ms", self.timeout_ms),
+            if self.resolve_names {
+                "names"
+            } else {
+                "no names"
+            }
+            .to_string(),
+        ];
+        if self.check_ports {
+            summary.push("checks mgmt ports".into());
+        }
+        widgets::options(ui, "sweep", &summary, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
+                widgets::speed(ui, "sweep_speed", &mut self.threads, &mut self.rate);
+                ui.checkbox(&mut self.resolve_names, "Resolve names")
+                    .on_hover_text(
+                        "Name each device: from DNS, else the name it gives itself over NetBIOS \
                      (Windows, NAS, many printers) or multicast DNS (Apple devices, printers, \
                      Linux). One small UDP question to each live device; off is quicker",
-                );
-            ui.checkbox(&mut self.check_ports, "Check mgmt ports")
-                .on_hover_text(PORTS_TIP);
+                    );
+                ui.checkbox(&mut self.check_ports, "Check mgmt ports")
+                    .on_hover_text(PORTS_TIP);
+            });
         });
         widgets::error(ui, &self.err);
         ui.separator();

@@ -315,28 +315,39 @@ impl SpeedTool {
                 Action::None => {}
             }
         });
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(!running, |ui| {
-                widgets::lead(ui, "Duration");
-                ui.add(
-                    egui::DragValue::new(&mut self.secs)
-                        .range(5..=60)
-                        .suffix(" s"),
-                )
-                .on_hover_text("Per direction");
-                ui.label("Streams");
-                ui.add(egui::DragValue::new(&mut self.streams).range(1..=16))
-                    .on_hover_text("Parallel connections. 4 suits most lines");
-                ui.add_enabled(
-                    self.pick != Pick::Upload,
-                    egui::Checkbox::new(&mut self.down, "Download"),
-                )
-                .on_disabled_hover_text("An upload URL can't measure download");
-                ui.add_enabled(
-                    self.pick != Pick::File,
-                    egui::Checkbox::new(&mut self.up, "Upload"),
-                )
-                .on_disabled_hover_text("A file download can't measure upload");
+        let mut summary = vec![
+            format!("{} s each way", self.secs),
+            format!("{} streams", self.streams),
+        ];
+        match (self.down, self.up) {
+            (true, false) => summary.push("download only".into()),
+            (false, true) => summary.push("upload only".into()),
+            _ => {}
+        }
+        widgets::options(ui, "speed", &summary, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!running, |ui| {
+                    widgets::lead(ui, "Duration");
+                    ui.add(
+                        egui::DragValue::new(&mut self.secs)
+                            .range(5..=60)
+                            .suffix(" s"),
+                    )
+                    .on_hover_text("Per direction");
+                    ui.label("Streams");
+                    ui.add(egui::DragValue::new(&mut self.streams).range(1..=16))
+                        .on_hover_text("Parallel connections. 4 suits most lines");
+                    ui.add_enabled(
+                        self.pick != Pick::Upload,
+                        egui::Checkbox::new(&mut self.down, "Download"),
+                    )
+                    .on_disabled_hover_text("An upload URL can't measure download");
+                    ui.add_enabled(
+                        self.pick != Pick::File,
+                        egui::Checkbox::new(&mut self.up, "Upload"),
+                    )
+                    .on_disabled_hover_text("A file download can't measure upload");
+                });
             });
         });
         let place = self.place();

@@ -102,35 +102,50 @@ impl AdvancedTool {
                 Action::None => {}
             }
         });
-        ui.horizontal(|ui| {
-            // Enter here starts a run too; the Start button above has already been drawn.
-            let mut enter = widgets::field(
-                ui,
-                "Resolver",
-                Field::Resolver,
-                &mut self.resolver,
-                110.0,
-                DEFAULT_RESOLVER,
-            );
-            ui.separator();
-            enter |= widgets::field(
-                ui,
-                "DKIM",
-                Field::Selectors,
-                &mut self.selectors,
-                160.0,
-                "s1024, mykey",
-            );
-            ui.weak("extra selectors; common ones are always probed")
-                .on_hover_text(domain::SELECTORS.join(", "));
-            if enter && !running {
-                self.start(ui.ctx());
+        let mut summary = vec![format!(
+            "resolver {}",
+            if self.resolver.trim().is_empty() {
+                DEFAULT_RESOLVER
+            } else {
+                self.resolver.trim()
             }
+        )];
+        if !self.selectors.trim().is_empty() {
+            summary.push(format!("DKIM {}", self.selectors.trim()));
+        }
+        let mut go = false;
+        widgets::options(ui, "domains", &summary, |ui| {
+            ui.horizontal(|ui| {
+                // Enter here starts a run too; the Start button above has already been drawn.
+                let mut enter = widgets::field(
+                    ui,
+                    "Resolver",
+                    Field::Resolver,
+                    &mut self.resolver,
+                    110.0,
+                    DEFAULT_RESOLVER,
+                );
+                ui.separator();
+                enter |= widgets::field(
+                    ui,
+                    "DKIM",
+                    Field::Selectors,
+                    &mut self.selectors,
+                    160.0,
+                    "s1024, mykey",
+                );
+                ui.weak("extra selectors; common ones are always probed")
+                    .on_hover_text(domain::SELECTORS.join(", "));
+                go = enter && !running;
+            });
+            widgets::toolbar_note(
+                ui,
+                "Asks the resolver directly, so you see what the internet sees.",
+            );
         });
-        widgets::toolbar_note(
-            ui,
-            "Asks the resolver directly, so you see what the internet sees.",
-        );
+        if go {
+            self.start(ui.ctx());
+        }
         widgets::error(ui, &self.err);
         ui.separator();
 

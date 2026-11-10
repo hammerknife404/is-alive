@@ -92,11 +92,26 @@ impl TraceTool {
                 Action::None => {}
             }
         });
-        ui.horizontal(|ui| {
-            widgets::num(ui, "Max hops", &mut self.max_hops, 1..=64, "");
-            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
-            ui.checkbox(&mut self.resolve_names, "Resolve names");
-            ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+        let mut summary = vec![
+            format!("{} hops at most", self.max_hops),
+            format!("timeout {} ms", self.timeout_ms),
+            if self.resolve_names {
+                "names"
+            } else {
+                "no names"
+            }
+            .to_string(),
+        ];
+        if self.prefer_v6 {
+            summary.push("IPv6 first".into());
+        }
+        widgets::options(ui, "trace", &summary, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                widgets::num(ui, "Max hops", &mut self.max_hops, 1..=64, "");
+                widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=10_000, " ms");
+                ui.checkbox(&mut self.resolve_names, "Resolve names");
+                ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+            });
         });
         widgets::error(ui, &self.err);
         ui.separator();

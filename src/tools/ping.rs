@@ -148,15 +148,18 @@ impl PingTool {
                 widgets::num(ui, "Port", &mut self.port, 1..=65535, "");
             }
         });
-        ui.horizontal(|ui| {
-            widgets::num(ui, "Count", &mut self.count, 0..=100_000, "");
-            ui.weak("(0 = continuous)");
-            widgets::num(ui, "Interval", &mut self.interval_ms, 100..=60_000, " ms");
-            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
-            if self.mode == Mode::Icmp {
-                widgets::num(ui, "Size", &mut self.size, 0..=65_500, " B");
-            }
-            ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+        let summary = self.summary();
+        widgets::options(ui, "ping", &summary, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                widgets::num(ui, "Count", &mut self.count, 0..=100_000, "");
+                ui.weak("(0 = continuous)");
+                widgets::num(ui, "Interval", &mut self.interval_ms, 100..=60_000, " ms");
+                widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
+                if self.mode == Mode::Icmp {
+                    widgets::num(ui, "Size", &mut self.size, 0..=65_500, " B");
+                }
+                ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+            });
         });
         widgets::error(ui, &self.err);
         ui.separator();
@@ -193,6 +196,26 @@ impl PingTool {
                     ui.add(egui::Label::new(RichText::new(line).monospace().color(c)).extend());
                 }
             });
+    }
+
+    /// The options, folded: how many pings, how often, how long to wait.
+    fn summary(&self) -> Vec<String> {
+        let mut s = vec![
+            match self.count {
+                0 => "Until stopped".to_string(),
+                1 => "1 ping".to_string(),
+                n => format!("{n} pings"),
+            },
+            format!("every {} ms", self.interval_ms),
+            format!("timeout {} ms", self.timeout_ms),
+        ];
+        if self.mode == Mode::Icmp {
+            s.push(format!("{} B", self.size));
+        }
+        if self.prefer_v6 {
+            s.push("IPv6 first".into());
+        }
+        s
     }
 
     fn stats_row(&self, ui: &mut Ui) {
@@ -447,6 +470,23 @@ fn push_capped<T>(q: &mut VecDeque<T>, v: T, cap: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folded_options_say_how_the_next_ping_goes() {
+        let mut t = PingTool::default();
+        assert_eq!(
+            t.summary(),
+            ["Until stopped", "every 1000 ms", "timeout 1000 ms", "32 B"]
+        );
+        t.count = 4;
+        t.mode = Mode::Tcp;
+        t.prefer_v6 = true;
+        // TCP sends no payload: no size.
+        assert_eq!(
+            t.summary(),
+            ["4 pings", "every 1000 ms", "timeout 1000 ms", "IPv6 first"]
+        );
+    }
 
     #[test]
     fn a_full_scan_ping_leaves_the_tab_settings() {
