@@ -2,6 +2,7 @@ Every release, newest first. Each GitHub release has the Windows `.exe`, the Lin
 
 | Release | Date | Highlights |
 |---|---|---|
+| [v0.28.9](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.9) | 2026-11-10 | the manual is text only: its 21 screenshots, out of date since the redesign, are gone (3.6 MB off the download), with a table of the window's parts instead |
 | [v0.28.8](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.8) | 2026-11-10 | Map: Layers lies over the map's edge, so opening it no longer zooms the map out; Fit frames the map in the room the open panels leave |
 | [v0.28.7](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.7) | 2026-11-10 | Map: a card opens in the inspector, as a device does in Sweep; on a laptop it floats over the map, which keeps its size and zoom, with the map's controls beside it |
 | [v0.28.6](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.6) | 2026-11-10 | Ping, Port Check, Traceroute, Sweep, Domains and Speed Test: the settings fold under Options, their values shown as chips; one row instead of several |
