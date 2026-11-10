@@ -12,6 +12,17 @@ use crate::markdown::shortcode;
 
 /// The notes as a web page of their own, styled to read and print well.
 pub fn to_html(text: &str, title: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n{}</body>\n</html>\n",
+        escape(title),
+        body_html(text)
+    )
+}
+
+/// The notes as HTML to go inside a page (the site report's notes).
+pub fn body_html(text: &str) -> String {
     let mut body = String::new();
     let mut list: Option<&'static str> = None;
     let close_list = |body: &mut String, list: &mut Option<&'static str>| {
@@ -98,12 +109,7 @@ pub fn to_html(text: &str, title: &str) -> String {
         body.push_str(&format!("<p>{}</p>\n", inline_html(line.trim())));
     }
     close_list(&mut body, &mut list);
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n{body}</body>\n</html>\n",
-        escape(title)
-    )
+    body
 }
 
 const STYLE: &str = "\

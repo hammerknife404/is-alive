@@ -1,6 +1,6 @@
 //! The window's frame around the tabs: the header (the app's name, which
 //! opens Settings, the tabs and Site Bundle), the footer (this machine's
-//! addresses, Full scan, Refresh), and Settings itself.
+//! addresses, Full scan, Report…, Refresh), and Settings itself.
 
 use crate::job::Job;
 use crate::{App, FULL_SCAN_TIP, TABS, Tab, VERSION, tab_key, theme, widgets};
@@ -201,6 +201,20 @@ impl App {
                         .clicked()
                     {
                         self.refresh_info(ui.ctx());
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("Report…")
+                                .small()
+                                .selected(self.report.open),
+                        )
+                        .on_hover_text(
+                            "One web page documenting the visit: the map, findings, every \
+                             device and the notes. Opens in any browser; prints to PDF",
+                        )
+                        .clicked()
+                    {
+                        self.report.open = !self.report.open;
                     }
                     let busy = self.any_running();
                     let tip = if busy {

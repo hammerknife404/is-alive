@@ -128,7 +128,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
 
-Results are never kept: they're in memory, and a switch clears them. Copy or export what you need first, or put it in the Site Bundle.
+Results are never kept: they're in memory, and a switch clears them. Copy or export what you need first, or put them in the [Site report](#site-report) or the Site Bundle.
 
 ### How every tab is laid out
 
@@ -164,6 +164,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
 - **v0.25.0** is the version you're running: worth including when you report a problem.
 - **Full scan** runs a quick health check of this network (below).
+- **Report…** opens the [Site report](#site-report): one web page documenting the visit.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 
 ### Full scan
@@ -182,6 +183,25 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
 When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
+
+### Site report
+
+**Report…** (bottom right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
+
+| Field or row | What it's for |
+|---|---|
+| **Title** | The page's heading and file name (`<title>-report-<date>.html`). The open site's name, else the map's title |
+| **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section |
+| **Findings** | The map's findings, worst first, each with the devices it names |
+| **Changes since** | What changed since the saved map you're comparing with (**Compare ⏷** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
+| **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A link the data didn't show is marked *(assumed)* |
+| **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
+| **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
+| **Test results** | Every run in Results. Off by default: like the Site Bundle's, it can hold other clients' hosts, so the row lists its targets for you to check |
+
+At the top of the page, tiles count the devices, the findings by severity and the changes, and say which LAN, gateway and WAN is-alive ran from. A section with nothing in it is left out, and so is a column no device has a value for (no MAC column for a map Claude drew, no Site column for one site). A plan, a training map or an example says so under the title, as it does on the Map tab.
+
+**What's safe about the page.** Everything in it is escaped, the map is a picture, and the page loads and runs nothing: no scripts, no fonts, nothing from the internet, so opening it tells no one it was opened. Card notes and Notes are redacted as they are everywhere; check photos yourself, as Notes says.
 
 ### Dropping files
 
@@ -1072,7 +1092,7 @@ Every finished run from every tab is logged here (Full scan runs too). Runs stil
 | **Clear** | Empty the log (click twice) |
 | Each run's **Copy**, **Save…**, **Export ⏷** | Just that run |
 
-Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those.
+Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
@@ -1194,6 +1214,8 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 ## 18. Site Bundle and Claude
 
 ![The Site Bundle window: site name, known problems, UniFi client handling, and the list of what the bundle includes](img/site-bundle.png)
+
+This chapter is about handing the visit to Claude. For a document people read, use the [Site report](#site-report).
 
 is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Site Bundle…** (top right, any tab) gathers it all into one zip.
 

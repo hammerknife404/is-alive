@@ -12,6 +12,7 @@ mod png;
 mod scene;
 mod svg;
 
+pub use csv::vendor;
 pub use scene::Look;
 
 use super::layout::{self, CARD, Layout, Line};
