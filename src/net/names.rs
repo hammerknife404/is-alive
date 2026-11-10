@@ -165,7 +165,7 @@ fn parse_nbstat(r: &[u8], id: u16) -> Option<NetBios> {
     let names = data.get(1..1 + 18 * count)?;
     let mut name = None;
     let mut group = None;
-    for e in names.chunks_exact(18) {
+    for e in names.as_chunks::<18>().0 {
         let (suffix, flags) = (e[15], u16::from_be_bytes([e[16], e[17]]));
         if suffix != 0x00 {
             continue;
