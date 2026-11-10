@@ -182,6 +182,14 @@ impl Client {
         parse(&m, id)
     }
 
+    /// One UDP query, no retry and no TCP: for asking a device itself
+    /// (multicast DNS on its port 5353), where silence means no answer.
+    pub fn once(&self, name: &str, rtype: u16) -> io::Result<Msg> {
+        let id = random_id();
+        let q = encode_query(id, name, rtype, self.rd, false)?;
+        parse(&self.udp(&q, id)?, id)
+    }
+
     fn udp(&self, q: &[u8], id: u16) -> io::Result<Vec<u8>> {
         let bind = if self.server.is_ipv4() {
             "0.0.0.0:0"

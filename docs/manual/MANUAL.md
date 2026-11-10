@@ -421,7 +421,7 @@ How to read it:
 | **Ranges** | What to sweep: one network or several. Filled in with this computer's subnet the first time you open the tab. Each can be a subnet (`192.168.1.0/24`, `192.168.1.0 255.255.255.0` or `192.168.1.*`), a short range (`192.168.1.1-254`), a full range (`10.0.0.10-10.0.1.20`, or `10.0.0.10 to 10.0.1.20`) or one address. Separate them with spaces, commas, semicolons or new lines: `10.10.10.0/24 192.168.100.1-50 172.20.5.12 10.0.0.0/28` sweeps all four. Spaces around `-` and `/` and a dash pasted from a document are fine. Beside **Start** it says how many targets and addresses that is (overlaps are swept once), or what's wrong with an entry. Up to 65,536 addresses in all |
 | **Timeout** | How long to wait for each address (default 750 ms) |
 | **Speed** | As in [Port Check](#5-port-check) |
-| **Resolve names** | Look up each device's name (on by default) |
+| **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
 | **Check mgmt ports** | After the sweep, check each live device's management ports (off by default; see below) |
 | **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run) |
 
@@ -429,9 +429,11 @@ How to read it:
 
 Every address is pinged. On your own network segment, pinging an address also makes this computer ask "who has this address?" (ARP), and almost every device answers that even when it ignores ping. So the sweep also lists devices that answered ARP but not ping: their **Time** says *no ping*, and the status row counts them as *ARP only*. Only devices the computer has just heard from count, not ones that left minutes ago.
 
-Past a router there's no ARP, so on a remote subnet only devices that answer ping are found. Sweeping several networks at once works the same way: your own segment gets ARP and MACs, the others ping only.
+Past a router there's no ARP, so on a remote subnet only devices that answer ping are found. Sweeping several networks at once works the same way: your own segment gets ARP and MACs, the others ping only (with a MAC only from Windows devices, over NetBIOS).
 
-**MAC** comes from this computer's ARP table, so only devices on your own segment have one. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
+**Name** comes from DNS (the device's PTR record) when there is one. Most small sites have none, so a device DNS can't name is asked for its own: over **NetBIOS** (UDP port 137: Windows, Samba, most NAS boxes and many printers answer with their computer name) and, failing that, over **multicast DNS** (UDP port 5353: Apple devices, printers, cast devices and Linux with Avahi answer with a name ending `.local`). Each is one small question to that device and one answer, from an ordinary port: no admin rights, nothing broadcast. A device that answers neither keeps a blank name. The name is the device's own claim, like its DNS name.
+
+**MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
 **Check mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 on each live device: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients. It's a port scan, so it's off unless you tick it.
 

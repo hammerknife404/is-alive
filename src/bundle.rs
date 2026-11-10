@@ -305,6 +305,36 @@ mod tests {
     use crate::unifi::Clients;
     use std::io::Read;
 
+    /// The bundled /mapnetwork skill reads every file a bundle can carry and
+    /// the manifest keys it relies on: a new one has to be explained there
+    /// before it ships (see CLAUDE.md, Bundled skills).
+    #[test]
+    fn the_bundled_mapnetwork_skill_knows_every_file() {
+        let skill = include_str!("../skills/mapnetwork/SKILL.md");
+        for f in [
+            "manifest.json",
+            UNIFI,
+            SONICWALL,
+            MERAKI,
+            INVENTORY,
+            RESULTS,
+            NOTES,
+            CARD_NOTES,
+            MAP,
+        ] {
+            assert!(
+                skill.contains(&format!("`{f}`")),
+                "skills/mapnetwork/SKILL.md doesn't name the bundle's {f}"
+            );
+        }
+        for key in ["mapnetwork_preflight", "known_problems", "existing_map"] {
+            assert!(
+                skill.contains(&format!("`{key}`")),
+                "skills/mapnetwork/SKILL.md doesn't name the manifest's {key}"
+            );
+        }
+    }
+
     fn part(file: &'static str, data: &str) -> Part {
         Part {
             file,
