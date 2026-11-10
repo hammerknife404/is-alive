@@ -114,6 +114,8 @@ def main(argv=None):
         help="owner/name, for the trailer",
     )
     a = p.parse_args(argv)
+    # The trailer names a full commit, whatever --sha was given as.
+    a.sha = git(a.repo, "rev-parse", "--verify", f"{a.sha}^{{commit}}").decode().strip()
 
     ours = tree(a.repo, a.sha, a.dir)
     theirs = tree(a.wiki, "HEAD")

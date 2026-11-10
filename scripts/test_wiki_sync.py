@@ -108,6 +108,11 @@ class WikiSync(unittest.TestCase):
         self.assertEqual(self.sync(sha), 0)
         self.assertIsNone(page(self.wiki, "New.md"))
 
+    def test_the_trailer_names_the_full_commit(self):
+        sha = commit(self.repo, {"docs/wiki/New.md": "n\n"})
+        self.assertEqual(self.sync("HEAD"), 0)
+        self.assertEqual(wiki_sync.last_sync(self.wiki), sha)
+
     def test_nothing_new_makes_no_commit(self):
         sha = commit(self.repo, {"docs/wiki/New.md": "n\n"})
         self.assertEqual(self.sync(sha), 0)
