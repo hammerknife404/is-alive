@@ -98,24 +98,32 @@ pub fn show(ui: &mut Ui, id: &str, open: &mut bool, add: impl FnOnce(&mut Ui, &m
     }
 }
 
-/// The top of the inspector: a small capitalised kind, ×, the name, and
-/// its address in the accent colour.
-pub fn header(ui: &mut Ui, kind: &str, title: &str, address: Option<&str>, open: &mut bool) {
+/// The top of the inspector: a small capitalised kind, × (when `close`
+/// is given), the name, and its address in the accent colour.
+pub fn header(
+    ui: &mut Ui,
+    kind: &str,
+    title: &str,
+    address: Option<&str>,
+    close: Option<&mut bool>,
+) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(kind.to_uppercase())
                 .small()
                 .color(ui.visuals().weak_text_color()),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(egui::Button::new("×").frame(false))
-                .on_hover_text("Close (Esc on a small window)")
-                .clicked()
-            {
-                *open = false;
-            }
-        });
+        if let Some(open) = close {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new("×").frame(false))
+                    .on_hover_text("Close (Esc on a small window)")
+                    .clicked()
+                {
+                    *open = false;
+                }
+            });
+        }
     });
     ui.add(egui::Label::new(RichText::new(title).heading().strong()).wrap());
     if let Some(a) = address {

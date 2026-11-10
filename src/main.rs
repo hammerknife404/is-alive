@@ -22,6 +22,7 @@ mod net;
 mod photos;
 mod redact;
 mod report;
+mod results_ui;
 mod shots;
 mod site;
 mod site_ui;
@@ -161,8 +162,11 @@ struct App {
     /// ((filter, log stamp), matching entries) for the last frame.
     #[allow(clippy::type_complexity)]
     filter_cache: Option<((String, (usize, usize, usize)), Vec<usize>)>,
-    /// Scroll Results to its newest runs on the next frame (after a full scan).
+    /// Open the full scan's first run in Results on the next frame.
     jump_to_new: bool,
+    /// The run open in Results (None: the newest), and how it's shown.
+    result_pick: Option<results_ui::RunKey>,
+    result_view: results_ui::RunView,
     look: theme::Settings,
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
@@ -886,148 +890,6 @@ impl App {
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
         .collect()
     }
-
-    fn results_ui(&mut self, ui: &mut egui::Ui) {
-        let jump = std::mem::take(&mut self.jump_to_new);
-        let running = self.running();
-        let needle = self.filter.trim().to_lowercase();
-        let hit = |tool: &str, text: &str| {
-            needle.is_empty()
-                || tool.to_lowercase().contains(&needle)
-                || text.to_lowercase().contains(&needle)
-        };
-        // Matching the log is the costly part (it can be megabytes): only
-        // when the filter or the log changes, not every frame.
-        let key = (needle.clone(), self.log.stamp());
-        if self.filter_cache.as_ref().is_none_or(|c| c.0 != key) {
-            let idx = (0..self.log.entries.len())
-                .filter(|&i| hit(self.log.entries[i].tool, &self.log.entries[i].text))
-                .collect();
-            self.filter_cache = Some((key, idx));
-        }
-        let shown: Vec<(usize, &log::Entry)> = self
-            .filter_cache
-            .as_ref()
-            .map(|c| c.1.iter().map(|&i| (i, &self.log.entries[i])).collect())
-            .unwrap_or_default();
-        let running: Vec<_> = running.iter().filter(|r| hit(r.0, &r.2)).collect();
-        let filtered = !needle.is_empty();
-        let mut clear = false;
-        let mut keep_to = None;
-        ui.horizontal(|ui| {
-            widgets::lead(ui, "Filter");
-            widgets::line(
-                ui,
-                input::Field::Text,
-                &mut self.filter,
-                240.0,
-                "tool or text, e.g. FAIL, 443, timeout",
-            )
-            .on_hover_text("Show runs containing this. Copy, Save and Export follow it");
-            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
-                self.filter.clear();
-            }
-        });
-        ui.separator();
-        widgets::status_row(
-            ui,
-            |ui| {
-                ui.label(format!(
-                    "{}{} logged run(s){}",
-                    if filtered {
-                        format!("{} of ", shown.len())
-                    } else {
-                        String::new()
-                    },
-                    self.log.entries.len(),
-                    if running.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", {} running", running.len())
-                    }
-                ));
-                if self.log.dropped > 0 {
-                    ui.weak(format!("({} oldest dropped)", self.log.dropped));
-                }
-                ui.separator();
-                // Shown unticked in Scratch, which never keeps them.
-                let at_site = log::site_file().is_some();
-                let mut keep = self.look.results_keep && at_site;
-                if ui
-                    .add_enabled(at_site, egui::Checkbox::new(&mut keep, "Keep with site"))
-                    .on_hover_text(format!(
-                        "Save Results in {}'s folder, readable by you only, so they're here \
-                         the next time it opens (and for its Site report). Off: in memory \
-                         only, gone when is-alive closes; the site's saved runs are taken off \
-                         disk.",
-                        self.site_name
-                    ))
-                    .on_disabled_hover_text(
-                        "Scratch keeps Results in memory only: its runs can be any client's. \
-                         Open a site (top left) to keep them with it.",
-                    )
-                    .changed()
-                {
-                    keep_to = Some(keep);
-                }
-            },
-            |ui| {
-                ui.add_enabled_ui(!shown.is_empty(), |ui| {
-                    clear =
-                        widgets::confirm_button(ui, "log_clear", true, "Clear", "Clear the log");
-                    let render = || {
-                        if filtered {
-                            shown.iter().map(|(_, e)| e.render() + "\n").collect()
-                        } else {
-                            self.log.render()
-                        }
-                    };
-                    widgets::export_menu(ui, "log", || shown.iter().map(|(_, e)| *e).collect());
-                    widgets::save_button(ui, "log", render);
-                    widgets::copy_button(ui, render);
-                });
-            },
-        );
-        if self.log.entries.is_empty() && running.is_empty() {
-            widgets::empty_state(
-                ui,
-                "No results yet",
-                "Finished runs from every tab are logged here with start and end times, to copy, save or export together.",
-                &[],
-            );
-        } else if shown.is_empty() && running.is_empty() {
-            widgets::empty_hint(ui, "No runs match the filter.");
-        } else {
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    // The newest runs open, older ones folded: a long log
-                    // stays quick to draw.
-                    let open_from = shown.len().saturating_sub(12);
-                    for (k, (i, e)) in shown.iter().enumerate() {
-                        let open = k >= open_from;
-                        entry_ui(ui, *i, &e.header(), &e.text, Some(e), open, || e.render());
-                    }
-                    // Ids from the top of the range so they never meet log indices.
-                    for (j, (tool, since, text)) in running.iter().enumerate() {
-                        let header = format!("{tool}  started {since}, running…");
-                        entry_ui(ui, usize::MAX - j, &header, text, None, true, || {
-                            format!("=== {header} ===\n{}\n", text.trim_end())
-                        });
-                    }
-                    if jump {
-                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-                    }
-                });
-        }
-        if clear {
-            self.log.clear();
-        }
-        if let Some(on) = keep_to {
-            self.set_results_keep(on);
-        }
-    }
 }
 
 /// Digit of the tab's Ctrl shortcut: 1-9 for the first nine, 0 for Results
@@ -1040,33 +902,6 @@ fn tab_key(n: usize) -> Option<usize> {
     } else {
         None
     }
-}
-
-/// `entry` is the logged run, for Export; None while it's still running.
-fn entry_ui(
-    ui: &mut egui::Ui,
-    id: usize,
-    header: &str,
-    text: &str,
-    entry: Option<&log::Entry>,
-    open: bool,
-    full: impl Fn() -> String,
-) {
-    egui::CollapsingHeader::new(egui::RichText::new(header).strong())
-        .id_salt(("log", id))
-        .default_open(open)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                widgets::copy_button(ui, &full);
-                widgets::save_button(ui, "result", &full);
-                if let Some(e) = entry {
-                    widgets::export_menu(ui, "result", || vec![e]);
-                }
-            });
-            ui.add(
-                egui::Label::new(egui::RichText::new(text.trim_end()).monospace()).selectable(true),
-            );
-        });
 }
 
 /// Window and taskbar icon; the same artwork is in the .exe and the AppImage.
@@ -1178,6 +1013,8 @@ fn main() {
                 filter: String::new(),
                 filter_cache: None,
                 jump_to_new: false,
+                result_pick: None,
+                result_view: results_ui::RunView::Output,
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
