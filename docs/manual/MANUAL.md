@@ -141,10 +141,11 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 
 All the testing tabs work the same way:
 
-1. **The toolbar:** the main field first (Host, Range, Domain…), **▶ Start** right after it, then the options.
-2. **The status row** under it: what the run found on the left (counts, loss, time taken), **Copy** and **Save…** on the right. **Copy** puts the result on the clipboard for a ticket or email; **Save…** writes it to a text file.
-3. **The results** below. Before the first run, a short explanation says what to do.
-4. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep) so far): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
+1. **The run bar:** the main field first (Host, Range, Domain…), **▶ Start** right after it, and what decides the run (Ping's ICMP or TCP, Port Check's ports, Lookup's type and resolver).
+2. **Options** under it: the rest of the settings, folded. Their values show as small chips (*Normal*, *timeout 750 ms*, *names*), so you can see how the next run will go; click **Options** to change them. The tab remembers it open or folded while the app runs.
+3. **The status row** under it: what the run found on the left (counts, loss, time taken), **Copy** and **Save…** on the right. **Copy** puts the result on the clipboard for a ticket or email; **Save…** writes it to a text file.
+4. **The results** below. Before the first run, a short explanation says what to do.
+5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep) so far): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
 
 **Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. Copies and saves confirm themselves with a short message at the bottom of the window.
 
@@ -170,7 +171,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.5** is the version you're running: worth including when you report a problem.
+- **v0.28.6** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -245,7 +246,7 @@ Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` 
 ### Example: is the internet connection healthy?
 
 1. Type `1.1.1.1` in **Host** (Cloudflare's public DNS: always on, close to everyone).
-2. Set **Count** to `20` and press **Enter**.
+2. Open **Options**, set **Count** to `20` and press **Enter**.
 3. A healthy wired broadband line looks like this:
 
    ```
@@ -365,7 +366,7 @@ How to read it: DNS (53) means the router answers name lookups for the office; 8
 | 3389 (rdp), 445 (smb) on a router | Unusual: is a port forwarded, or is this really a server? |
 | 4433, 8443, 10443 | Often an SSL-VPN or a firewall's management page: should it be reachable from where you are? |
 
-A device you expect to see with nothing open and every port *filtered* (tick **Show closed/filtered**) is either down or behind a firewall that drops everything.
+A device you expect to see with nothing open and every port *filtered* (tick **Show closed/filtered** under **Options**) is either down or behind a firewall that drops everything.
 
 **CSV columns:** host, ip, port, state, service, rtt_ms, error, tls_status, tls_issued_to, tls_issued_by, tls_expires (closed and filtered ports included; the tls_ columns are empty where no certificate was read). The text report and **Copy** add each certificate's details under its port.
 
@@ -457,7 +458,7 @@ Click the row again, or the inspector's **×**, to close it. In a window 1100 po
 ### Example: what's on the office network?
 
 1. Open **Subnet Sweep**. **Range** already says this computer's subnet, say `192.168.1.0/24`.
-2. Tick **Check mgmt ports** (if you're allowed to port-scan this network) and press **Enter**.
+2. Open **Options** and tick **Check mgmt ports** (if you're allowed to port-scan this network), then press **Enter**.
 3. After a few seconds:
 
    ```
@@ -617,7 +618,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 ### Common problems
 
-- **Blacklists: "couldn't check … they refuse public resolvers"**: Spamhaus and URIBL don't answer big public resolvers. Set **Resolver** to the ISP's or the office's own DNS server to include them.
+- **Blacklists: "couldn't check … they refuse public resolvers"**: Spamhaus and URIBL don't answer big public resolvers. Set **Resolver** (under **Options**) to the ISP's or the office's own DNS server to include them.
 - **"that's an IP address"**: these checks need a domain. For a reverse lookup of an address, use [DNS Lookup](#8-dns-lookup).
 
 **CSV columns:** domain, resolver, section, check, check_status, kind (finding or record), status, text.
@@ -1394,7 +1395,7 @@ sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 | Sweep finds few devices on a remote subnet | Only ping counts past a router, and firewalls drop it |
 | Advanced: SMTP says port 25 is probably blocked | The ISP or office firewall blocks outbound mail: normal, not the domain's fault |
 | DNS Lookup's WHOIS: *Cannot reach …:43* | The network blocks outbound TCP port 43: try from another network |
-| Advanced: blacklists *couldn't check* | Those lists refuse public resolvers: set **Resolver** to the office's DNS |
+| Advanced: blacklists *couldn't check* | Those lists refuse public resolvers: set **Options › Resolver** to the office's DNS |
 | Speed Test blocked or 403 | Web filtering, or Cloudflare rate-limiting: use **Download a file** with a server from **Servers** |
 | Map empty | Nothing seen yet: **Scan this network**, or open a backup in Config Export |
 | Status bar WAN says *unknown* | No internet, or OpenDNS blocked; *not looked up* means it's turned off in Settings |

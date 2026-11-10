@@ -234,6 +234,61 @@ pub fn spinner(ui: &mut Ui) {
 }
 
 /// Speed preset picker plus the raw threads / rate values it sets.
+/// The speed preset `threads` and `rate` make, or "Custom".
+pub fn speed_name(threads: usize, rate: u32) -> &'static str {
+    SPEEDS
+        .iter()
+        .find(|s| s.1 == threads && s.2 == rate)
+        .map_or("Custom", |s| s.0)
+}
+
+/// A tool's less-used settings, folded under its run bar: "Options" with
+/// what they're set to as small chips; a click unfolds the settings in
+/// place. One row instead of several, and the chips still say how the next
+/// run will go. Remembered per tab while the app runs.
+pub fn options(ui: &mut Ui, id: &str, summary: &[String], body: impl FnOnce(&mut Ui)) {
+    let key = ui.make_persistent_id(("options", id));
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), key, false);
+    let open = state.is_open();
+    state
+        .show_header(ui, |ui| {
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new("Options").color(crate::theme::accent()))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(if open {
+                    "Fold the settings away"
+                } else {
+                    "Show every setting"
+                });
+            if r.clicked() {
+                let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    key,
+                    false,
+                );
+                s.toggle(ui);
+                s.store(ui.ctx());
+            }
+            if !open {
+                for c in summary {
+                    let v = ui.visuals();
+                    egui::Frame::new()
+                        .fill(v.widgets.inactive.weak_bg_fill)
+                        .stroke(v.widgets.noninteractive.bg_stroke)
+                        .corner_radius(9)
+                        .inner_margin(egui::Margin::symmetric(7, 1))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(c).small());
+                        });
+                }
+            }
+        })
+        .body_unindented(|ui| body(ui));
+}
+
 pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
     let current = SPEEDS
         .iter()
@@ -1021,6 +1076,14 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speed_presets_are_named_and_anything_else_is_custom() {
+        for (name, t, r, _) in SPEEDS {
+            assert_eq!(speed_name(*t, *r), *name);
+        }
+        assert_eq!(speed_name(3, 7), "Custom");
+    }
     use std::path::PathBuf;
 
     #[test]

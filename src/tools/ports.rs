@@ -140,16 +140,31 @@ impl PortTool {
         if enter && !running {
             self.start(ui.ctx());
         }
-        ui.horizontal(|ui| {
-            widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
-            widgets::speed(ui, "port_speed", &mut self.threads, &mut self.rate);
-            ui.checkbox(&mut self.show_closed, "Show closed/filtered");
-            ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
-            ui.checkbox(&mut self.certs, "Certificates").on_hover_text(
-                "Read the TLS certificate on each open port that speaks TLS (HTTPS, SSL-VPN, \
-                 LDAPS...): who it's for, who issued it, when it expires, and whether this \
-                 computer trusts it",
-            );
+        let mut summary = vec![
+            widgets::speed_name(self.threads, self.rate).to_string(),
+            format!("timeout {} ms", self.timeout_ms),
+        ];
+        if self.show_closed {
+            summary.push("closed shown".into());
+        }
+        if self.certs {
+            summary.push("certificates".into());
+        }
+        if self.prefer_v6 {
+            summary.push("IPv6 first".into());
+        }
+        widgets::options(ui, "ports", &summary, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                widgets::num(ui, "Timeout", &mut self.timeout_ms, 100..=30_000, " ms");
+                widgets::speed(ui, "port_speed", &mut self.threads, &mut self.rate);
+                ui.checkbox(&mut self.show_closed, "Show closed/filtered");
+                ui.checkbox(&mut self.prefer_v6, "Prefer IPv6");
+                ui.checkbox(&mut self.certs, "Certificates").on_hover_text(
+                    "Read the TLS certificate on each open port that speaks TLS (HTTPS, SSL-VPN, \
+                     LDAPS...): who it's for, who issued it, when it expires, and whether this \
+                     computer trusts it",
+                );
+            });
         });
         widgets::error(ui, &self.err);
         ui.separator();
