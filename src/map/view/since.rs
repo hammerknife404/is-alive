@@ -1,4 +1,4 @@
-//! Compare the live map with a saved one (Compare ⏷ beside Saved maps):
+//! Compare the live map with a saved one (⋯ › Compare in the toolbar):
 //! cards new since then get a NEW mark, cards with something changed a
 //! CHANGED mark, and the sidebar lists them with the devices gone. The
 //! comparing is in `map::compare`; this is how it shows.

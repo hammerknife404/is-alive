@@ -156,7 +156,7 @@ impl ReportTool {
                     "Changes since",
                     map.and_then(|m| m.since.as_ref())
                         .map(|s| format!("“{}” ({}) · {}", s.name, s.day, s.diff.counts())),
-                    "Compare ⏷ on the Map tab picks the last visit's saved map",
+                    "⋯ › Compare on the Map tab picks the last visit's saved map",
                 );
                 let clients = map.map_or(0, |m| m.devices.iter().filter(|d| d.client).count());
                 part_row(

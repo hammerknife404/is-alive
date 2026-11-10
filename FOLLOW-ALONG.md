@@ -105,12 +105,12 @@ Then try these, one at a time:
 The **Map** tab draws a network as a picture: the internet at the top, then the firewall, switches, wireless access points and servers below, each a coloured card. It's safe to try: the built-in examples are made-up companies, so nothing on the real network is touched.
 
 1. Click the **Map** tab.
-2. Click **Examples** at the top right and pick **Contoso Health: 23 clinics, 81 devices**.
+2. Click **⋯** at the right end of the map's toolbar, then **Examples**, and pick **Contoso Health: 23 clinics, 81 devices**.
 3. Each grey box is one clinic. Scroll to zoom in, and drag the background to move around.
 4. Click any card. A panel opens on the right with what's known about it (its address, its model, any problems found), and the line to the box it plugs into lights up.
 5. Right-click a card and choose **Select the path to the WAN**. Every box between that card and the internet lights up: that's the route its traffic takes.
 6. Try the layout buttons along the top (**Sites**, **Cluster**, **Tree**, **Zones**): the same network, arranged four ways.
-7. To leave the example, open **Examples** again and click **Close the example**.
+7. To leave the example, open **⋯ › Examples** again and click **Close the example**.
 
 **What it means:** when something breaks, the map shows what it depends on. If a switch fails, everything drawn below it loses its connection.
 
@@ -150,4 +150,4 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 ## Questions after the demo?
 
-Ask the presenter, or open the app again later: everything in this guide works the same on your own. The [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki) has a short page explaining each tab. The [user manual](docs/manual/MANUAL.md) goes further: every control on every tab, worked examples, and what to do when something doesn't look right. It's built into the app too: **Help** at the bottom right, or **F1**.
+Ask the presenter, or open the app again later: everything in this guide works the same on your own. The [is-alive wiki](https://github.com/hammerknife404/is-alive/wiki) has a short page explaining each tab. The [user manual](docs/manual/MANUAL.md) goes further: every control on every tab, worked examples, and what to do when something doesn't look right. It's built into the app too: **Help** at the bottom of the left-hand column, or **F1**.

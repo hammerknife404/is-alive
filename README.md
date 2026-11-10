@@ -5,7 +5,7 @@
 **📖 Documentation**, three ways in, each linking the others:
 
 - **[Wiki](https://github.com/hammerknife404/is-alive/wiki)**: a short page per tab, and guides for the Site Bundle, settings, privacy and development.
-- **[User manual](docs/manual/MANUAL.md)**: one document to read through or print. Every tab and control, worked examples, troubleshooting and a glossary. It's also built into the app: **Help** at the bottom right, or **F1** for the tab you're on.
+- **[User manual](docs/manual/MANUAL.md)**: one document to read through or print. Every tab and control, worked examples, troubleshooting and a glossary. It's also built into the app: **Help** at the foot of the nav, or **F1** for the tab you're on.
 - **[Follow-along guide](FOLLOW-ALONG.md)**: a 20-minute walk-through for people new to networking.
 
 A native network tester for site visits, written in Rust. One portable `.exe` on Windows, one `.AppImage` on Linux: no installer, no admin rights. **[Download the latest release](https://github.com/hammerknife404/is-alive/releases/latest).**
@@ -29,7 +29,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 
 ## With Claude
 
-**Site Bundle…** (in the site menu, top left) zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. With **Claude Skills** ticked the bundle carries both skills, so it works even where they aren't installed. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit. The Map's **Examples** menu opens two fictional sites drawn by `/mapnetwork`. See [Site Bundle and Claude](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
+**Site Bundle…** (in the site menu, top left) zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. With **Claude Skills** ticked the bundle carries both skills, so it works even where they aren't installed. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit. The Map's **⋯ › Examples** opens two fictional sites drawn by `/mapnetwork`. See [Site Bundle and Claude](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
 
 ## Privacy
 
