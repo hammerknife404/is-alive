@@ -140,10 +140,10 @@ impl MapView {
         ui.label(
             RichText::new(format!("SINCE {}", s.day()))
                 .small()
-                .strong()
                 .color(ui.visuals().weak_text_color()),
         )
         .on_hover_text(format!("Compared with the saved map \"{}\"", s.name));
+        ui.add_space(2.0);
         for (t, c) in lines {
             ui.add(egui::Label::new(RichText::new(t).color(c)).wrap());
         }

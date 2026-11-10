@@ -145,7 +145,7 @@ All the testing tabs work the same way:
 2. **Options** under it: the rest of the settings, folded. Their values show as small chips (*Normal*, *timeout 750 ms*, *names*), so you can see how the next run will go; click **Options** to change them. The tab remembers it open or folded while the app runs.
 3. **The status row** under it: what the run found on the left (counts, loss, time taken), **Copy** and **Save…** on the right. **Copy** puts the result on the clipboard for a ticket or email; **Save…** writes it to a text file.
 4. **The results** below. Before the first run, a short explanation says what to do.
-5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep) so far): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
+5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep), a card on the [Map](#selecting-cards)): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
 
 **Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. Copies and saves confirm themselves with a short message at the bottom of the window.
 
@@ -171,7 +171,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.6** is the version you're running: worth including when you report a problem.
+- **v0.28.7** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -714,20 +714,20 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | Control | What it does |
 |---|---|
 | **Find** | Find a card by name, IP, MAC, vendor or its note; **Enter** selects the first match |
-| **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered. On a narrow map they fold into one drop-down |
+| **Sites / Cluster / Tree / Zones** | The layout (below); your choice is remembered. On a laptop-sized window (under about 1360 points wide), or with Layers open, they fold into one drop-down, so the toolbar fits beside a card's inspector and doesn't change when you pick one |
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **⚠ 2 high · 4 med** | The map's findings, worst first: click to open them in **Layers** (below). Only there when the map has findings |
 | **⋯** | Everything used less often (below) |
 | **Layers** (top right) | The panel of sites, roles and findings (below) |
 | **Legend** (top right) | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Off until you turn it on; your choice is remembered |
-| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a narrow map (a small window, or Layers and a card's panel both open) it's in **⋯** instead |
+| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **⋯** instead |
 
 **⋯** holds:
 
 | Item | What it does |
 |---|---|
-| **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The detail panel of a switch or AP (or of its **+N more** card) has them as buttons |
+| **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The inspector of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site (see *Compare with the last visit*, below) |
@@ -762,7 +762,7 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
 
-![The Acme example in the Zones layout with the Access points box selected by its title: the box outlined, its cards in the panel on the right](img/map-zones.png)
+![The Acme example in the Zones layout with the Access points box selected by its title: the box outlined, its cards in the inspector on the right](img/map-zones.png)
 
 - **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
 - **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
@@ -801,7 +801,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
-- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its panel. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
+- **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
@@ -811,7 +811,7 @@ Back at a site, **⋯ › Compare** (on the live map) lists this site's saved ma
 
 - **NEW** on a card (green) is a device that wasn't on the saved map; **CHANGED** (amber) is one whose address, open ports or name changed. Zoomed far out, each is a dot on the card's corner.
 - **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
-- A selected card's panel says the same under **Since** *date*.
+- A selected card's inspector says the same under **Since** *date*.
 
 **How devices are matched:** by MAC first, so a device DHCP moved is the same device with a new IP, not one gone and one new. A device with no MAC (known only by IP, past a router) is matched by IP, then by its card (a /mapnetwork card keeps its id when its address changes). Two devices at one IP with different MACs are one gone and one new.
 
@@ -825,21 +825,21 @@ Back at a site, **⋯ › Compare** (on the live map) lists this site's saved ma
 
 ### Selecting cards
 
-![A card selected on the Acme example: its path to the internet lit, and the panel on the right with its action items, details and connections](img/map-selected.png)
+![A card selected on the Acme example: its path to the internet lit, and its inspector on the right with its action items, details and connections](img/map-selected.png)
 
-- **Click a card** to select it. Its panel opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes.
+- **Click a card** to select it. Its [inspector](#the-inspector-right) opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes.
 - A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing up it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
-- **Trace to WAN**, at the top of the panel, lights every selected card's whole path to the internet instead.
+- **Trace to WAN**, at the top of the inspector, lights every selected card's whole path to the internet instead.
 
 ### The right-click menu
 
-Right-click a card, or click **☰** at the top of its section in the panel. Under the card's name (its role and IP in small text), the items come in groups:
+Right-click a card, or click **⋯** at the top of it in the inspector. Under the card's name (its role and IP in small text), the items come in groups:
 
 | Item | What it does |
 |---|---|
-| **Pin** / **Unpin** | A pinned card stays selected while you click others, and keeps its place in the panel |
+| **Pin** / **Unpin** | A pinned card stays selected while you click others, and keeps its place in the inspector |
 | **Select** / **Select only this card** | Just this card (*Select* when nothing is selected yet) |
 | **Add to selection** (Ctrl+click) / **Remove from selection** | Add it to what's selected, or take it out if it's already in |
 | **Clear selection** (Esc) | (Several cards selected) Let go of them all; pinned cards stay |
@@ -849,10 +849,10 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 | **Select with everything below it** | This card and every card under it, all the way down |
 | **Add note…** / **Edit note…** / **Remove note** | Write a note on the card, change it or take it off (see *Notes on cards* below). On several selected cards: **Add note to N cards…** puts the same note on each (in place of any they have), and **Remove notes** takes theirs off |
 | **Show 8 more clients** / **Show all N clients** (once some show, **Show the other N clients**) / **Hide** or **Fold clients** | (A switch, AP or firewall with clients not drawn, or its **+N more** card) The same as its **+N** and **−** chips: the next few clients, best first, all of them, or back to what **Clients** shows |
-| **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The panel's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the panel scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
+| **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The inspector's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the inspector scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
 | **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
-| **Wake (Wake-on-LAN)** | (A card with a MAC) The panel's **Wake**: a Wake-on-LAN packet to its MAC. On several selected cards, **Wake all (N)** wakes each one with a MAC, and one message says how many went out |
+| **Wake (Wake-on-LAN)** | (A card with a MAC known from a sweep of this network or a backup) A Wake-on-LAN packet to wake a computer that's asleep or switched off. It goes out as a broadcast on the device's network, so it reaches a device on this computer's own network, or further only if the router passes it on; the device wakes only if Wake-on-LAN is turned on in its BIOS and network card. Ping it a minute later to see it come up. A private (randomized) MAC gets no item: phones and virtual adapters don't wake this way. On several selected cards, **Wake all (N)** wakes each one with a MAC, and one message says how many went out |
 | **Copy IP** / **Copy MAC** | (When it has one) The address, shown on the right of the item |
 | **Copy details** | Copy the card as text |
 | **Put back in the layout** | (A card you've dragged) Back where the layout had it |
@@ -860,29 +860,34 @@ Right-click a card, or click **☰** at the top of its section in the panel. Und
 
 Each item shows only when it applies, with how many cards it takes, and a line sets each group apart. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
 
-**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the panel; a message says so and the panel scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
+**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the inspector; a message says so and the inspector scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
 
-**☰ in the panel is the same menu:** the same items, doing the same things, for the card whose ☰ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
+**⋯ in the inspector is the same menu:** the same items, doing the same things, for the card whose ⋯ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
 
-### The panel (right)
+### The inspector (right)
+
+A card's details open in the [inspector](#how-every-tab-is-laid-out), the same panel a device opens in on Subnet Sweep. From 1440 points wide it sits beside the map, 360 wide; on a smaller window (a laptop) it floats over the map's right edge, so the map keeps its size and its zoom: the selected card is kept clear of it, and **Layers**, **Legend** and the zoom controls move beside it. On the smallest windows Layers and Legend go into **⋯** while it's open. **×** or **Esc** lets the card go (pinned cards stay).
 
 Each selected card gets a section, newest on top:
 
-- **The role and name**, with **☰** (the card's right-click menu, see above), the 📌 pin button and **×**.
-- **Action items:** the card's own warnings and the findings that name it.
-- **Details:** IP, MAC, open ports, what saw it (sweep, backup, map), then everything the source said about it.
-- **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below). **Add note** in the row of buttons starts one.
-- **Connections:** its uplink and what hangs off it; click one to jump to that card.
-- **Ping**, **Ports**, **Trace**: a quick check of this device, right in the panel. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**; click it for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
-- **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser. **Copy** copies the card.
+- **The role and name**, with its address (or what stands for one: *WAN …*, a site's hosts), its zone and tags; **⋯** (the card's right-click menu, see above), the 📌 pin button and **×** at the top.
+- **Ping**, **Port Check**, **Traceroute**: a quick check of this device, right here. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**, and the inspector scrolls to it; click it for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
+- **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser.
 - **SSH** (when port 22 is open) and **RDP** (when 3389 is open) connect to the device in the computer's own client, which asks for the log-in; is-alive stores no passwords. On Windows, SSH opens `ssh` (built into Windows 10 and 11) in a console window that stays open when it ends, so a refused connection can be read; RDP opens Remote Desktop Connection (`mstsc`). On Linux, SSH opens in the desktop's terminal (Konsole, Ptyxis, GNOME Terminal and others); RDP uses Remmina or FreeRDP. A button is left out when the computer has no client for it. Hover one to see what it runs.
-- **Wake** (when the card's MAC is known, from a sweep of this network or a backup) sends a Wake-on-LAN packet to wake a computer that's asleep or switched off. It goes out as a broadcast on the device's network, so it reaches a device on this computer's own network, or further only if the router passes it on. The device wakes only if Wake-on-LAN is turned on in its BIOS and network card. Ping it a minute later to see it come up. A private (randomized) MAC gets no button: phones and virtual adapters don't wake this way.
+- **Action items:** the card's own warnings and the findings that name it.
+- **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it.
+- **Open ports**, each with what it's for (`22 ssh`, `443 https`).
+- **Results:** the quick checks above.
+- **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below); **Add note** starts one.
+- **Connections:** its uplink and what hangs off it; click one to show that card, **Ctrl+click** to add it to the selection.
 
-With several cards selected, the panel's header says how many and offers **Copy all**. Drag a card's grip (⠿) to reorder; **×** takes a card out of the panel. The panel can be resized from its edge.
+**Copy details**, **Wake** and the rest are in **⋯**.
+
+With several cards selected, the inspector's header says how many and offers **Trace to WAN** and **Copy all**, and each card has a frame of its own. Drag a card's grip (⠿) to reorder; **×** takes a card out.
 
 ### Notes on cards
 
-Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ☰), **Add note** in its panel, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's panel. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Several cards selected: **Add note to N cards…** writes one note onto each.
+Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ⋯), **Add note** in its inspector, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's inspector. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Several cards selected: **Add note to N cards…** writes one note onto each.
 
 A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy details** and the exports carry it.
 
@@ -892,13 +897,13 @@ A card with a note has a small folded sheet on its top edge, at every zoom, and 
 
 - **A saved map** keeps its notes in its file, like its other changes: **Update with current** saves them. A value redacted later (by hand, or a backup's secret loaded) is redacted in the file at once, as in `notes.md`; a map opened from a file is kept redacted the same way.
 - **An example** keeps them on this computer, with that example. **The blank map** doesn't: it's a start for any site, so its notes last only until is-alive closes or another map starts. Save the map to keep them.
-- **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. When a card's address is another device's after a rebuild (another network, or DHCP moved it), the note leaves that card and stays with its own device. A card with no MAC to go by (known only by IP, a randomized address, a shared one such as a router pair's or a firewall HA pair's, a MAC two cards show, this computer) keeps its note only until is-alive closes or another map starts, and a card known only by IP until another sweep starts; its panel says so. **+ Save current** keeps them all in a saved map.
+- **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. When a card's address is another device's after a rebuild (another network, or DHCP moved it), the note leaves that card and stays with its own device. A card with no MAC to go by (known only by IP, a randomized address, a shared one such as a router pair's or a firewall HA pair's, a MAC two cards show, this computer) keeps its note only until is-alive closes or another map starts, and a card known only by IP until another sweep starts; its inspector says so. **+ Save current** keeps them all in a saved map.
 
 Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`; not an example's).
 
 ### Layers and findings
 
-**Layers** (top right, or the findings chip) opens the panel on the left. It's shut when the map opens, so the map gets the room; **×** shuts it again.
+**Layers** (top right, or the findings chip) opens the panel on the left. It's shut when the map opens, so the map gets the room; **×** shuts it again. On a window under 1440 points wide, opening it shuts a card's floating inspector, so the two don't cover the map between them: the cards stay selected and lit, and picking a card (or shutting Layers) opens the inspector again.
 
 - **The map's summary** at the top: what it is and how much it holds.
 - **Sites:** each site with a ▾/▸ toggle to collapse or expand it; **Collapse all**, **Expand all**; click a site's name to select its cards and bring it into view. You can also click a site's title on the map.
@@ -910,7 +915,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 ### Example: walking a site with the Acme example
 
 1. Open the **Map** tab, click **⋯ › Examples**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
-2. Click the **SonicWall NSA 3700** card. The panel shows it's the primary of an HA pair with a high-priority action item (*WAN2 failover not recently tested*), and the line to the internet lights up.
+2. Click the **SonicWall NSA 3700** card. Its inspector shows it's the primary of an HA pair with a high-priority action item (*WAN2 failover not recently tested*), and the line to the internet lights up.
 3. Right-click a server card and choose **Select its path to the WAN**: the switch, firewall and internet link it depends on light up. If that switch failed, everything under it would lose its connection.
 4. Switch to **Zones** to see the devices grouped by role, then back to **Cluster**.
 5. Open **⋯ › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
@@ -1264,7 +1269,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
 | **Esc** | Map | Clear the selection (pinned cards stay) |
-| **Esc** | The inspector, on a window under 1100 points wide | Close it |
+| **Esc** | The inspector, on a window under 1100 points wide (on the Map, under 1440) | Close it |
 | **N** | Map, one card selected | Write or edit its note |
 | **Ctrl+Enter** / **Esc** | A card's note | Save it / leave it as it was |
 
@@ -1279,7 +1284,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Double-click a card's note mark | Map | Open its note |
 | Click a card | Map | Select it and light its path to the internet |
 | Ctrl+click or Shift+click a card | Map | Add to or take out of the selection |
-| Right-click a card (or ☰ on it in the panel) | Map | Pin, add a note, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
+| Right-click a card (or ⋯ on it in the inspector) | Map | Pin, add a note, select related cards, collapse its site, copy (for every selected card, if it's one of several) |
 | Drag a card | Map | Move it (and the rest of the selection with it) |
 | Click a site's title | Map | Collapse or expand the site |
 | Click a role box's title (Zones) | Map | Select its cards (Ctrl/Shift+click: add them) |

@@ -107,7 +107,7 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 1. Click the **Map** tab.
 2. Click **⋯** at the right end of the map's toolbar, then **Examples**, and pick **Contoso Health: 23 clinics, 81 devices**.
 3. Each grey box is one clinic. Scroll to zoom in, and drag the background to move around.
-4. Click any card. A panel opens on the right with what's known about it (its address, its model, any problems found), and the line to the box it plugs into lights up.
+4. Click any card. Its details open on the right, in the same inspector a device opens in on Subnet Sweep (what's known about it: its address, its model, any problems found, with Ping, Port Check and Traceroute), and the line to the box it plugs into lights up.
 5. Right-click a card and choose **Select the path to the WAN**. Every box between that card and the internet lights up: that's the route its traffic takes.
 6. Try the layout buttons along the top (**Sites**, **Cluster**, **Tree**, **Zones**): the same network, arranged four ways.
 7. To leave the example, open **⋯ › Examples** again and click **Close the example**.

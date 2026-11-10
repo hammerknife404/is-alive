@@ -157,8 +157,6 @@ pub struct MapView {
     /// A text box had the keyboard or a menu was open last frame: Esc
     /// there was theirs, not the map's.
     keys_busy: bool,
-    /// What the detail panel shows while it slides shut.
-    shown: Option<String>,
     hidden: HashSet<Zone>,
     lay: Layout,
     /// Where each card is drawn now, easing toward the layout.
@@ -175,9 +173,19 @@ pub struct MapView {
     /// The canvas as it was with no card selected: what the map fits to
     /// while the panel is open.
     wide: Option<Rect>,
-    /// How wide the detail panel is this frame (it slides), and open.
+    /// How much of the canvas's width the inspector takes this frame
+    /// (docked: its width; floating: none), and would take open (docked
+    /// or floating: its width). A fit asked for frames what's left.
     panel_now: f32,
     panel_full: f32,
+    /// How wide the inspector floats over the canvas's right edge this
+    /// frame (0 when docked or shut): the controls there move beside it.
+    cover: f32,
+    /// Layers opened over a floating inspector: it stays shut, the cards
+    /// still selected, until the selection changes or Layers shuts.
+    insp_hidden: bool,
+    /// Layers was open last frame.
+    side_was: bool,
     /// The files the map is drawn from: another set (an example picked, a
     /// file loaded or cleared) is another map, shown whole.
     source: u64,
@@ -255,6 +263,9 @@ pub struct MapView {
     pick_ip: Option<std::net::Ipv4Addr>,
     /// The canvas is narrow: Export is in ⋯ rather than beside Legend.
     export_in_menu: bool,
+    /// A floating inspector leaves too little room: Layers and Legend are
+    /// in ⋯ as well.
+    controls_in_menu: bool,
     /// How wide Layers, Legend and Export were last frame.
     right_w: f32,
     /// Re-layout was clicked this frame: Undo names the step for it.
@@ -305,9 +316,8 @@ enum Menu {
     Box(String),
 }
 
-/// The detail panel's id, and its width until it's dragged.
+/// The inspector's id.
 const PANEL: &str = "map_detail";
-const PANEL_SIZE: f32 = 320.0;
 
 /// Why a control is greyed out on an empty map.
 const NOTHING_YET: &str = "Nothing on the map yet";
@@ -859,6 +869,7 @@ impl MapView {
     fn select(&mut self, i: Option<usize>) {
         self.selected = i.map(|i| self.map.nodes[i].id.clone());
         self.also.clear();
+        self.insp_hidden = false;
         // Pinned cards left on their own weren't clicked: they light only
         // what joins them, and the panel offers Trace to WAN.
         self.traced = i.is_some();
@@ -1002,6 +1013,7 @@ impl MapView {
     /// the one taken out.
     fn toggle(&mut self, i: usize) {
         let was = self.selected.clone();
+        self.insp_hidden = false;
         let id = self.map.nodes[i].id.clone();
         if let Some(k) = self.kept.iter().position(|s| *s == id) {
             self.kept.remove(k);
@@ -1126,15 +1138,15 @@ impl MapView {
         }
     }
 
-    /// The canvas `rect` as it will be once the detail panel has slid open
-    /// (anything selected) or shut: a fit asked for now frames that, not
-    /// the canvas mid-slide, nor the canvas before a selection made this
-    /// frame opens the panel.
+    /// What the canvas `rect` leaves in view once the inspector is open
+    /// (anything selected) or shut, docked or floating over it: a fit asked
+    /// for now frames that, not the canvas before a selection made this
+    /// frame opens the inspector.
     fn settled(&self, rect: Rect) -> Rect {
-        let end = if self.selection().is_empty() {
-            0.0
-        } else {
+        let end = if self.insp_open() {
             self.panel_full
+        } else {
+            0.0
         };
         let mut r = rect;
         r.max.x = (r.max.x + self.panel_now - end).max(r.min.x + 100.0);
@@ -1144,6 +1156,7 @@ impl MapView {
     /// Ease the view so the middle of the map sits in the middle of `view`,
     /// keeping the zoom.
     fn center(&mut self, view: Rect) {
+        let view = self.settled(view);
         let b = self.bounds();
         if !b.is_positive() {
             return;
@@ -1221,6 +1234,7 @@ impl MapView {
                 None => widgets::toast(format!("{ip} isn't on this map"), false),
             }
         }
+        self.layers_over_inspector(ctx.content_rect().width());
         let mut act = self.detail_panel(ui, &src, &mut focus.pick);
         // Left: Layers (sites, roles and findings), as /mapnetwork's sidebar has them.
         self.sidebar(ui, &mut focus.on, &mut focus.site);
@@ -1249,8 +1263,9 @@ impl MapView {
         act
     }
 
-    /// The card panel on the right (it keeps the last card while it slides
-    /// shut), and what was done in it. `pick` is a card it asked to show.
+    /// The inspector: docked on the right from 1440 points wide, floating
+    /// over the canvas's right edge below that (`inspector::map_dock`); and
+    /// what was done in it. `pick` is a card it asked to show.
     fn detail_panel(
         &mut self,
         ui: &mut Ui,
@@ -1258,28 +1273,32 @@ impl MapView {
         pick: &mut Option<(usize, bool)>,
     ) -> Option<Action> {
         let mut act = None;
-        if self.selected.is_some() {
-            self.shown.clone_from(&self.selected);
-        }
-        let mut open = !self.selection().is_empty();
+        let at = crate::inspector::map_dock(ui.ctx().content_rect().width());
+        let (w, docked) = match at {
+            crate::inspector::Dock::Docked(w) => (w, true),
+            crate::inspector::Dock::Over(w) => (w, false),
+        };
+        let shown = self.insp_open();
+        let mut open = shown;
         let mut ev: Option<PanelEv> = None;
         let mut menus = Vec::new();
         let stack = self.ordered();
         let right = ui.available_rect_before_wrap().right();
         let mut edit = self.note_edit.take();
-        egui::Panel::right(PANEL)
-            .resizable(true)
-            .default_size(PANEL_SIZE)
-            .size_range(260.0..=520.0)
-            .show_collapsible(ui, &mut open, |ui| {
-                act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus, &mut edit);
-            });
+        crate::inspector::show_as(ui, PANEL, at, &mut open, |ui, _| {
+            act = self.detail(ui, stack, src.busy, pick, &mut ev, &mut menus, &mut edit);
+        });
         self.note_edit = edit;
         self.card_menus(menus);
         self.panel_now = right - ui.available_rect_before_wrap().right();
-        self.panel_full = egui::PanelState::load(ui.ctx(), egui::Id::new(PANEL))
-            .map_or(PANEL_SIZE, |p| p.size().x);
-        if !open {
+        self.panel_full = if docked && self.panel_now > 0.0 {
+            self.panel_now
+        } else {
+            w
+        };
+        self.cover = if shown && open && !docked { w } else { 0.0 };
+        // Esc over a floating inspector: the cards are let go of.
+        if shown && !open {
             self.select(None);
         }
         match ev {
@@ -1287,7 +1306,10 @@ impl MapView {
             Some(PanelEv::TraceWan(on)) => self.trace_wan = on,
             Some(PanelEv::Keep(i)) => self.keep(i),
             Some(PanelEv::Move(from, to)) => self.move_card(from, to),
-            Some(PanelEv::Run(i, tool)) => self.run_card(ui.ctx(), i, tool),
+            Some(PanelEv::Run(i, tool)) => {
+                self.run_card(ui.ctx(), i, tool);
+                panel::reveal(ui.ctx(), &self.map.nodes[i].id, tool);
+            }
             Some(PanelEv::Stop(i, tool)) => self.runs.stop(&self.map.nodes[i].id, tool),
             Some(PanelEv::Clear(i, tool)) => self.runs.clear(&self.map.nodes[i].id, tool),
             Some(PanelEv::Reveal(p, n)) => self.reveal_step(p, n),
@@ -1295,6 +1317,36 @@ impl MapView {
             _ => {}
         }
         act
+    }
+
+    /// The inspector is open: cards are selected, and Layers didn't shut it.
+    fn insp_open(&self) -> bool {
+        !self.insp_hidden && !self.selection().is_empty()
+    }
+
+    /// Opening Layers shuts a floating inspector (its cards stay selected),
+    /// so the two don't cover the map between them; a new selection, or
+    /// Layers shut, opens it again. Docked, both stay.
+    fn layers_over_inspector(&mut self, width: f32) {
+        let floats = matches!(
+            crate::inspector::map_dock(width),
+            crate::inspector::Dock::Over(_)
+        );
+        if self.side && !self.side_was && floats && self.insp_open() {
+            self.insp_hidden = true;
+        }
+        if !self.side {
+            self.insp_hidden = false;
+        }
+        self.side_was = self.side;
+    }
+
+    /// `rect` less what a floating inspector covers of its right edge: the
+    /// controls there sit beside it, and a selected card is kept clear of it.
+    fn beside_panel(&self, rect: Rect) -> Rect {
+        let mut r = rect;
+        r.max.x = (r.max.x - self.cover).max(r.min.x + 100.0);
+        r
     }
 
     /// The map itself: fit and focus, input, animation and painting, and
@@ -1330,10 +1382,10 @@ impl MapView {
                 (self.pan, self.zoom) = (p, z);
             }
         }
-        // While cards are selected the panel takes the right of the view;
-        // fitting to what's left would zoom the whole map out as it opens.
-        // So the map keeps the fit it had without the panel (the panel lies
-        // over its right edge), panned only to keep the selected card clear.
+        // While cards are selected the inspector takes the right of the
+        // view (docked, or floating over it); fitting to what's left would
+        // zoom the whole map out as it opens. So the map keeps the fit it had
+        // without it, panned only to keep the selected card clear of it.
         let selected = self.selection().first().copied();
         if selected.is_none() || self.wide.is_none_or(|w| w.min != rect.min) {
             self.wide = Some(rect);
@@ -1347,7 +1399,7 @@ impl MapView {
                 && let Some(p) = self.target(i)
             {
                 let right = rect.min.x + pan.x + (p.x + CARD.x) * zoom;
-                let over = right - (rect.right() - 16.0);
+                let over = right - (self.beside_panel(rect).right() - 16.0);
                 if over > 0.0 {
                     self.aim = Some((pan - vec2(over, 0.0), zoom));
                 }
@@ -1386,15 +1438,18 @@ impl MapView {
         let lines = self.lines_now();
         self.paint(ui, rect, hover, &lines);
         self.reveal_chips(ui, rect);
+        // The legend and the controls along the bottom keep beside a
+        // floating inspector, not under it.
+        let beside = self.beside_panel(rect);
         if self.legend {
             let entries = self.legend_entries(&lines);
-            self.legend_panel(ui, rect, &entries);
+            self.legend_panel(ui, beside, &entries);
         } else {
             self.legend_size = Vec2::ZERO;
         }
-        self.zoom_controls(ui, rect);
-        self.links_pill(ui, rect);
-        self.bar_toggle(ui, rect);
+        self.zoom_controls(ui, rect, beside);
+        self.links_pill(ui, beside);
+        self.bar_toggle(ui, beside);
     }
 }
 
@@ -2280,8 +2335,14 @@ mod tests {
             let panel = Rect::from_min_size(pos2(820.0, 0.0), vec2(320.0, 900.0));
             let stack = v.ordered();
             let mut edit = v.note_edit.take();
+            // In a scroll area, as the inspector puts it.
             ui.scope_builder(UiBuilder::new().max_rect(panel), |ui| {
-                v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus, &mut edit);
+                egui::ScrollArea::vertical()
+                    .id_salt("test_inspector")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus, &mut edit);
+                    });
             });
             v.note_edit = edit;
             if let Some(PanelEv::Note(e)) = ev.take() {
