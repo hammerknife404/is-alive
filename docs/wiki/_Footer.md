@@ -1,0 +1,1 @@
+[is-alive on GitHub](https://github.com/hammerknife404/is-alive) · [Latest release](https://github.com/hammerknife404/is-alive/releases/latest) · [Report an issue](https://github.com/hammerknife404/is-alive/issues)
