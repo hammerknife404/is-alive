@@ -32,7 +32,13 @@ struct Host {
     rtt: Option<f64>,
     ttl: Option<u8>,
     name: Option<String>,
+    /// Where the name came from: "dns" (its PTR), or the device's own word,
+    /// "netbios" or "mdns".
+    name_from: Option<&'static str>,
     mac: Option<Mac>,
+    /// "arp" (this machine's neighbor table) or "netbios" (the device's own
+    /// word, past a router).
+    mac_from: Option<&'static str>,
     /// Open ports from `ports::INFRA`, ascending.
     open: Vec<u16>,
 }
@@ -149,6 +155,7 @@ impl SweepTool {
                 Ev::Mac(ip, m) => {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                         h.mac = Some(m);
+                        h.mac_from = Some("arp");
                         changed = true;
                     }
                 }
@@ -411,6 +418,8 @@ impl SweepTool {
                     "vendor": h.mac.as_ref().and_then(mac::vendor),
                     "private_mac": h.mac.as_ref().map(mac::local_admin),
                     "name": h.name,
+                    "name_from": h.name_from,
+                    "mac_from": h.mac_from,
                     "found_by": found_by(h),
                     "rtt_ms": h.rtt.map(|r| (r * 100.0).round() / 100.0),
                     "ttl": h.ttl,
@@ -437,8 +446,9 @@ impl SweepTool {
             "ports_checked": if self.checked_ports { ports::INFRA } else { &[] },
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
-                "mac comes from this machine's ARP table, so only hosts on the scanner's own segment have one; past a router it is null.",
-                "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: no mac or ARP is expected, which is not a sign of an unknown device; null when the scanner's LAN wasn't known).",
+                "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
+                "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
+                "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "open_ports is null when ports were not checked.",
             ],
@@ -593,10 +603,15 @@ impl SweepTool {
                 if r.is_reply() {
                     // The reply means the neighbor entry was just resolved.
                     let mac = mac::neighbors().get(&ip).copied();
-                    let (name, own_mac) = if names {
+                    let (name, name_from, own_mac) = if names {
                         identify(ip, mac.is_some(), ask)
                     } else {
-                        (None, None)
+                        (None, None, None)
+                    };
+                    let mac_from = match (mac, own_mac) {
+                        (Some(_), _) => Some("arp"),
+                        (None, Some(_)) => Some("netbios"),
+                        (None, None) => None,
                     };
                     alive.lock().unwrap().push((ip, mac.is_some()));
                     tx.send(Ev::Alive(Host {
@@ -604,7 +619,9 @@ impl SweepTool {
                         rtt: Some(r.rtt_ms),
                         ttl: r.ttl,
                         name,
+                        name_from,
                         mac: mac.or(own_mac),
+                        mac_from,
                         open: Vec::new(),
                     }));
                 }
@@ -642,17 +659,19 @@ impl SweepTool {
                 .filter(|(ip, _)| swept.contains(ip) && !seen.contains(ip) && Some(*ip) != me)
                 .collect();
             net::par_for(&silent, threads, rate, tx.cancel_flag(), |&(ip, m)| {
-                let name = if names {
-                    identify(ip, true, ask).0
+                let (name, name_from, _) = if names {
+                    identify(ip, true, ask)
                 } else {
-                    None
+                    (None, None, None)
                 };
                 tx.send(Ev::Alive(Host {
                     ip,
                     rtt: None,
                     ttl: None,
                     name,
+                    name_from,
                     mac: Some(m),
+                    mac_from: Some("arp"),
                     open: Vec::new(),
                 }));
             });
@@ -678,21 +697,30 @@ impl SweepTool {
     }
 }
 
-/// A live host's name: DNS's (PTR), else the one it gives for itself
-/// (NetBIOS, then multicast DNS), each waiting up to `wait`. With no MAC
-/// from ARP (past a router) NetBIOS is asked even when DNS has a name, for
-/// the MAC a Windows host reports; that MAC comes back second.
-fn identify(ip: Ipv4Addr, have_mac: bool, wait: Duration) -> (Option<String>, Option<Mac>) {
+/// A live host's name and where it came from: DNS's (PTR), else the one
+/// it gives for itself (NetBIOS, then multicast DNS), each waiting up to
+/// `wait`. With no MAC from ARP (past a router) NetBIOS is asked even when
+/// DNS has a name, for the MAC a Windows host reports, which comes last.
+fn identify(
+    ip: Ipv4Addr,
+    have_mac: bool,
+    wait: Duration,
+) -> (Option<String>, Option<&'static str>, Option<Mac>) {
     let dns = net::reverse(IpAddr::V4(ip));
     if dns.is_some() && have_mac {
-        return (dns, None);
+        return (dns, Some("dns"), None);
     }
     let nb = names::netbios(SocketAddr::new(IpAddr::V4(ip), names::NETBIOS_PORT), wait);
     let mac = nb.as_ref().and_then(|n| n.mac).filter(|_| !have_mac);
-    let name = dns
-        .or_else(|| nb.map(|n| n.name))
-        .or_else(|| names::mdns(ip, SocketAddr::new(IpAddr::V4(ip), names::MDNS_PORT), wait));
-    (name, mac)
+    if let Some(n) = dns {
+        return (Some(n), Some("dns"), mac);
+    }
+    if let Some(n) = nb {
+        return (Some(n.name), Some("netbios"), mac);
+    }
+    let md = names::mdns(ip, SocketAddr::new(IpAddr::V4(ip), names::MDNS_PORT), wait);
+    let from = md.is_some().then_some("mdns");
+    (md, from, mac)
 }
 
 fn found_by(h: &Host) -> &'static str {
@@ -722,7 +750,9 @@ mod tests {
             rtt,
             ttl: rtt.map(|_| 64),
             name: None,
+            name_from: None,
             mac: None,
+            mac_from: None,
             open: Vec::new(),
         }
     }
@@ -824,6 +854,35 @@ mod tests {
             serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
         assert_eq!(v["ranges"], json!(["10.0.0.0/24", "172.20.5.0-20"]));
         assert_eq!(v["hosts"][2]["on_scanner_lan"], false);
+        assert!(v["hosts"][2]["mac"].is_null() && v["hosts"][2]["mac_from"].is_null());
+        // A Windows host past the router that reported its own name and MAC.
+        let mut win = host([172, 20, 5, 10], Some(4.0));
+        (win.name, win.name_from) = (Some("FRONTDESK-PC".into()), Some("netbios"));
+        (win.mac, win.mac_from) = (Some(mac(7)), Some("netbios"));
+        s.alive.push(win);
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        let w = &v["hosts"][3];
+        assert_eq!(
+            (&w["name"], &w["name_from"], &w["mac"], &w["mac_from"]),
+            (
+                &json!("FRONTDESK-PC"),
+                &json!("netbios"),
+                &json!("00:11:32:00:00:07"),
+                &json!("netbios")
+            )
+        );
+        assert_eq!(w["on_scanner_lan"], false);
+
+        // Every field a host carries is one the bundled /mapnetwork skill
+        // explains: a new one has to be described there before it ships.
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        for key in w.as_object().unwrap().keys() {
+            assert!(
+                skill.contains(&format!("`{key}`")),
+                "skills/mapnetwork/SKILL.md doesn't explain the inventory field {key}"
+            );
+        }
         assert!(same_subnet(
             Ipv4Addr::new(10, 0, 0, 1),
             Ipv4Addr::new(10, 0, 0, 254),

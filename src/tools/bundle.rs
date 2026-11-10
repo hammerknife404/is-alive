@@ -84,10 +84,11 @@ address and service objects, access and NAT rules. Enforced config, not observat
 const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs, \
 appliance ports, firewall, port forwarding and NAT rules, static routes, VPN and uplinks. Enforced config, \
 not observation.";
-const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name, TTL \
-and open management ports. Observed state.";
-const RESULTS_WHAT: &str =
-    "is-alive test runs (ping, port check, traceroute, DNS, mail health) with start and end times.";
+const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
+with where it came from: mac_from, name_from), TTL and open management ports. Observed state.";
+const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
+start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
+check by its newest run.";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \

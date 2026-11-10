@@ -128,22 +128,37 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
 
 - **Skip Step 1.** `mapnetwork_preflight` already answers it (site name, scan,
   firewall config, known problems, existing map, clients on or off). Don't ask
-  again; `existing_map` set means the **update path**, saved under that name.
+  again; `existing_map` set (the bundle's `map.dc.html`) means the **update
+  path**, saved under that name.
 - **Files and their tier** (Step 3's tiers): `unifi.unifidump.json` goes
   through /unifidump first; `sonicwall.json` / `meraki.json` are **enforced
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
   `card-notes.json` and the manifest's `known_problems` are the technician's
   word: context, findings and device notes, never topology on their own.
   `results.json` (test runs) becomes a finding only where a run shows a problem
-  (loss, a closed port that should be open, a failing mail check).
+  (loss, a closed port that should be open, a failing mail check). A site
+  keeps its runs from one visit to the next, so they can span visits: judge
+  each check by its **newest** run (`started`); an older failure that a later
+  run of the same check doesn't repeat is history, not a finding.
 - **`inventory.json` hosts:** `found_by: "arp"` means it answered ARP but drops
   ping (a firewall default, not a fault). `open_ports` is role evidence for the
   infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera).
   `private_mac: true` is a phone, laptop or VM, never infrastructure.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;
-  `on_scanner_lan: false` marks a host on a routed network, where **no MAC is
-  expected** — that's not an unidentified device.
+  `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
+  only from the host itself (below) — a missing one there is **expected**,
+  not an unidentified device.
+- **Where a host's `name` and `mac` came from:** `name_from` is `dns` (its
+  PTR record), `netbios` (the computer name a Windows, Samba or NAS host
+  reports) or `mdns` (a `name.local` an Apple device, printer, cast device or
+  Linux host reports); `mac_from` is `arp` (the scanner's own segment) or
+  `netbios` (a Windows host past a router reported it). `netbios` and `mdns`
+  are the device's own claim: use them as labels and role hints (a
+  `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
+- **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
+  `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
+  `open_ports`, `is_gateway`, `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
 - **Fill `ip` and `mac` on every node** you can (Step 2's schema): is-alive
