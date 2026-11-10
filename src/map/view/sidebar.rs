@@ -39,11 +39,12 @@ impl MapView {
         }
     }
 
-    /// − 100% + Fit in the canvas corner, for when there's no wheel.
-    pub(super) fn zoom_controls(&mut self, ui: &mut Ui, rect: Rect) {
+    /// − 100% + Fit in the bottom right of the canvas `rect` (of `place`,
+    /// beside a floating inspector), for when there's no wheel.
+    pub(super) fn zoom_controls(&mut self, ui: &mut Ui, rect: Rect, place: Rect) {
         let h = 22.0;
-        let mut x = rect.max.x - 10.0;
-        let y = rect.max.y - 10.0 - h;
+        let mut x = place.max.x - 10.0;
+        let y = place.max.y - 10.0 - h;
         let mut button = |ui: &mut Ui, w: f32, text: &str, tip: &str| {
             x -= w;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, h));

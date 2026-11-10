@@ -296,7 +296,8 @@ impl MapView {
                 if total == 1 { "" } else { "s" }
             ));
             for it in self.reveal_items(i) {
-                if ui.small_button(&it.short).on_hover_text(it.tip).clicked() {
+                let b = egui::Button::new(&it.short).min_size(vec2(0.0, crate::inspector::ICON.y));
+                if ui.add(b).on_hover_text(it.tip).clicked() {
                     asked = Some((it.uplink, it.to));
                 }
             }

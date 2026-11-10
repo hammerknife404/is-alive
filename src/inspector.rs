@@ -1,11 +1,11 @@
 //! The inspector: one panel on the right for whatever is picked (a host in
-//! Sweep now; a run in Results and a card on the Map to follow), so a device
+//! Sweep, a card on the Map; Results' runs use its pieces), so a device
 //! reads the same wherever it's picked. Docked beside the content on a wide
 //! window, floating over it on a small one, where Esc closes it (CLAUDE.md,
 //! "UI: built for a field laptop first").
 
 use crate::{theme, widgets};
-use eframe::egui::{self, Color32, Rect, RichText, Ui, vec2};
+use eframe::egui::{self, Color32, Rect, RichText, Ui, Vec2, vec2};
 
 /// Where the inspector goes for a window `width` points wide.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -28,6 +28,20 @@ pub fn dock(width: f32) -> Dock {
     }
 }
 
+/// Where the Map's inspector goes: docked at 360 from 1440 points wide (the
+/// map keeps its zoom), over the canvas below that, so the map keeps its
+/// width too.
+pub fn map_dock(width: f32) -> Dock {
+    match dock(width) {
+        Dock::Docked(_) if width < 1440.0 => Dock::Over(320.0),
+        d => d,
+    }
+}
+
+/// A frameless button in the inspector's header (×, pin, ⋯): 28 points
+/// square, so it's easy to hit on a trackpad.
+pub const ICON: Vec2 = vec2(28.0, 28.0);
+
 /// What a button in the inspector asks the app to do with a device.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Ask {
@@ -44,11 +58,23 @@ pub enum Ask {
 /// starts below anything that must stay reachable (a run bar). Shut by its
 /// ×, or by Esc when floating.
 pub fn show(ui: &mut Ui, id: &str, open: &mut bool, add: impl FnOnce(&mut Ui, &mut bool)) {
+    let width = ui.ctx().content_rect().width();
+    show_as(ui, id, dock(width), open, add);
+}
+
+/// `show`, placed as `at` says rather than by the window's width (the Map
+/// floats it on a window where a tool page docks it).
+pub fn show_as(
+    ui: &mut Ui,
+    id: &str,
+    at: Dock,
+    open: &mut bool,
+    add: impl FnOnce(&mut Ui, &mut bool),
+) {
     if !*open {
         return;
     }
-    let width = ui.ctx().content_rect().width();
-    match dock(width) {
+    match at {
         Dock::Docked(w) => {
             egui::Panel::right(egui::Id::new(id))
                 .exact_size(w)
@@ -66,7 +92,12 @@ pub fn show(ui: &mut Ui, id: &str, open: &mut bool, add: impl FnOnce(&mut Ui, &m
                 egui::pos2(room.max.x - w, room.min.y),
                 egui::pos2(room.max.x, room.max.y),
             );
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().text_edit_focused() {
+            // Esc that closes a menu or leaves a text box is theirs.
+            let ctx = ui.ctx().clone();
+            if ui.input(|i| i.key_pressed(egui::Key::Escape))
+                && !ctx.text_edit_focused()
+                && !egui::Popup::is_any_open(&ctx)
+            {
                 *open = false;
                 return;
             }
@@ -107,31 +138,66 @@ pub fn header(
     address: Option<&str>,
     close: Option<&mut bool>,
 ) {
+    header_with(
+        ui,
+        kind,
+        None,
+        title,
+        |_| {},
+        |ui| {
+            if let Some(open) = close
+                && icon_button(ui, "×", "Close (Esc on a small window)").clicked()
+            {
+                *open = false;
+            }
+        },
+    );
+    if let Some(a) = address {
+        self::address(ui, a);
+    }
+    ui.add_space(4.0);
+}
+
+/// The header's first two lines: `lead` (a grip), a `colour` swatch (a
+/// card's role), the kind, `buttons` drawn right to left (× first), then
+/// the name.
+pub fn header_with(
+    ui: &mut Ui,
+    kind: &str,
+    colour: Option<Color32>,
+    title: &str,
+    lead: impl FnOnce(&mut Ui),
+    buttons: impl FnOnce(&mut Ui),
+) {
     ui.horizontal(|ui| {
+        ui.set_min_height(ICON.y);
+        lead(ui);
+        if let Some(c) = colour {
+            let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+            ui.painter().rect_filled(r, 2.0, c);
+        }
         ui.label(
             RichText::new(kind.to_uppercase())
                 .small()
                 .color(ui.visuals().weak_text_color()),
         );
-        if let Some(open) = close {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new("×").frame(false))
-                    .on_hover_text("Close (Esc on a small window)")
-                    .clicked()
-                {
-                    *open = false;
-                }
-            });
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            buttons(ui);
+        });
     });
     ui.add(egui::Label::new(RichText::new(title).heading().strong()).wrap());
-    if let Some(a) = address {
-        ui.add(
-            egui::Label::new(RichText::new(a).monospace().color(theme::accent())).selectable(true),
-        );
-    }
-    ui.add_space(4.0);
+}
+
+/// An address under the name, in the accent colour, selectable to copy.
+pub fn address(ui: &mut Ui, a: &str) {
+    ui.add(egui::Label::new(RichText::new(a).monospace().color(theme::accent())).selectable(true));
+}
+
+/// A header button: frameless, `ICON` square.
+pub fn icon_button(ui: &mut Ui, text: &str, tip: &str) -> egui::Response {
+    ui.add(egui::Button::new(text).frame(false).min_size(ICON))
+        .on_hover_text(tip)
 }
 
 /// One button in the inspector's action row.
@@ -268,6 +334,19 @@ mod tests {
             panic!("floats")
         };
         assert!((240.0..=480.0).contains(&w));
+    }
+
+    #[test]
+    fn the_maps_inspector_floats_over_the_canvas_below_1440() {
+        assert_eq!(map_dock(1920.0), Dock::Docked(360.0));
+        assert_eq!(map_dock(1440.0), Dock::Docked(360.0));
+        // Where a tool page docks it, the Map floats it: the map keeps its
+        // width as well as its zoom.
+        assert_eq!(map_dock(1439.0), Dock::Over(320.0));
+        assert_eq!(map_dock(1280.0), Dock::Over(320.0));
+        assert_eq!(map_dock(1120.0), Dock::Over(320.0));
+        assert_eq!(map_dock(1000.0), dock(1000.0));
+        assert_eq!(map_dock(620.0), dock(620.0));
     }
 
     #[test]

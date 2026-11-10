@@ -654,6 +654,7 @@ impl MapView {
         if !editing && note.is_none() {
             return;
         }
+        // The inspector's section heading, with the note glyph the card has.
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let title = match edit.as_ref().filter(|_| editing).map(|e| e.ids.len()) {
@@ -665,10 +666,10 @@ impl MapView {
             ui.label(
                 RichText::new(title)
                     .small()
-                    .strong()
                     .color(ui.visuals().weak_text_color()),
             );
         });
+        ui.add_space(2.0);
         if editing && let Some(e) = edit.as_mut() {
             self.note_editor(ui, i, e, ev);
             return;
@@ -682,15 +683,16 @@ impl MapView {
         ui.add(egui::Label::new(job).wrap().selectable(true));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            let tall = vec2(0.0, crate::inspector::ICON.y);
             if ui
-                .small_button("Edit")
+                .add(egui::Button::new("Edit").min_size(tall))
                 .on_hover_text("Change it (N)")
                 .clicked()
             {
                 *ev = Some(NoteEv::Open(i));
             }
             if ui
-                .small_button("Remove")
+                .add(egui::Button::new("Remove").min_size(tall))
                 .on_hover_text("Take the note off")
                 .clicked()
             {
@@ -777,8 +779,10 @@ impl MapView {
         let hits = redact::find_with(&e.text, &self.ov);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            // The inspector's height for a button.
+            let tall = vec2(0.0, crate::inspector::ICON.y);
             if ui
-                .add(egui::Button::new("Save").small())
+                .add(egui::Button::new("Save").min_size(tall))
                 .on_hover_text(if e.ids.len() > 1 {
                     "Put it on each of them (Ctrl+Enter)"
                 } else {
@@ -789,7 +793,7 @@ impl MapView {
                 *ev = Some(NoteEv::Save);
             }
             if ui
-                .small_button("Cancel")
+                .add(egui::Button::new("Cancel").min_size(tall))
                 .on_hover_text("Leave the note as it was (Esc)")
                 .clicked()
             {
@@ -800,7 +804,7 @@ impl MapView {
                 _ => "Redact",
             };
             if ui
-                .add_enabled(pick.is_some(), egui::Button::new(label).small())
+                .add_enabled(pick.is_some(), egui::Button::new(label).min_size(tall))
                 .on_hover_text(if label == "Unredact" {
                     "Show this value again, everywhere: the Notes tab too (Ctrl+R)"
                 } else {

@@ -8,6 +8,9 @@ use super::*;
 
 /// Narrower than this, the layouts fold into one drop-down.
 const COMPACT: f32 = 980.0;
+/// Narrower than this beside a floating inspector (the smallest windows),
+/// Layers and Legend go into ⋯ too: there's room for the toolbar only.
+const TIGHT: f32 = 460.0;
 /// Room around the controls, from the canvas's edges.
 const EDGE: f32 = 10.0;
 
@@ -115,6 +118,18 @@ impl MapView {
         act
     }
 
+    /// The toolbar folds the layouts into a drop-down and Export into ⋯:
+    /// when the canvas `rect` is narrow with the inspector open, so picking a
+    /// card (which opens it) doesn't change the toolbar.
+    fn compact(&self, rect: Rect, empty: bool) -> bool {
+        let w = if empty {
+            rect.width()
+        } else {
+            rect.width() + self.panel_now - self.panel_full
+        };
+        w < COMPACT
+    }
+
     /// Layers, Legend and Export, right-aligned at the top; the rect they took.
     fn right_controls(&mut self, ui: &mut Ui, rect: Rect, empty: bool) -> Rect {
         // Placed by its width last frame (a first guess before that), so
@@ -124,11 +139,19 @@ impl MapView {
         } else {
             220.0
         };
+        // Beside a floating inspector, not under it; in ⋯ when that leaves
+        // too little room.
+        let beside = self.beside_panel(rect);
+        let edge = beside.max.x;
+        self.controls_in_menu = !empty && self.cover > 0.0 && beside.width() < TIGHT;
+        if self.controls_in_menu {
+            return Rect::from_min_size(pos2(edge - EDGE, rect.min.y + EDGE), Vec2::ZERO);
+        }
         let at = Rect::from_min_max(
-            pos2(rect.max.x - EDGE - w, rect.min.y + EDGE),
-            pos2(rect.max.x - EDGE, rect.min.y + EDGE + 40.0),
+            pos2(edge - EDGE - w, rect.min.y + EDGE),
+            pos2(edge - EDGE, rect.min.y + EDGE + 40.0),
         );
-        let compact = rect.width() < COMPACT;
+        let compact = self.compact(rect, empty);
         let mut row = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(at)
@@ -177,7 +200,7 @@ impl MapView {
         empty: bool,
     ) -> Option<Action> {
         let mut act = None;
-        let compact = rect.width() < COMPACT;
+        let compact = self.compact(rect, empty);
         self.export_in_menu = compact;
         if let Some(name) = self.tabs_menu.saved.clone() {
             self.saved_chip(ui, &name);
@@ -210,6 +233,11 @@ impl MapView {
             }
         }
         ui.separator();
+        // The drop-down lays itself out in a row of its own, which always
+        // "fits": on a narrow strip it goes to the next row by hand.
+        if compact && ui.available_size_before_wrap().x < 120.0 {
+            ui.end_row();
+        }
         if let Some(m) = self.layout_picker(ui, compact, empty) {
             self.fit_next = true;
             act = Some(Action::Layout(m));
@@ -359,6 +387,26 @@ impl MapView {
     fn more_menu(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
         ui.set_min_width(220.0);
         let mut act = None;
+        // Beside a floating inspector on the smallest windows.
+        if self.controls_in_menu {
+            if ui
+                .add(egui::Button::selectable(self.side, "Layers"))
+                .on_hover_text("Sites, roles to fade out, and the findings, worst first")
+                .clicked()
+            {
+                self.side = !self.side;
+                ui.close();
+            }
+            if ui
+                .add(egui::Button::selectable(self.legend, "Legend").shortcut_text("L"))
+                .on_hover_text("What the colours, lines and badges mean")
+                .clicked()
+            {
+                self.legend = !self.legend;
+                ui.close();
+            }
+            ui.separator();
+        }
         self.clients_menu(ui, src, empty);
         ui.separator();
         let moved = !self.placed.is_empty() || !self.shifted.is_empty();
@@ -691,6 +739,17 @@ mod tests {
         src: &Sources,
         events: Vec<egui::Event>,
     ) -> Vec<(String, Rect)> {
+        frame_at(ctx, v, src, events, vec2(1280.0, 720.0))
+    }
+
+    /// `frame`, on a screen `size` points.
+    fn frame_at(
+        ctx: &egui::Context,
+        v: &mut MapView,
+        src: &Sources,
+        events: Vec<egui::Event>,
+        size: Vec2,
+    ) -> Vec<(String, Rect)> {
         fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
             match s {
                 Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
@@ -700,7 +759,7 @@ mod tests {
         }
         let input = egui::RawInput {
             events,
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
             time: Some(ctx.input(|i| i.time) + 0.1),
             ..Default::default()
         };
@@ -768,7 +827,9 @@ mod tests {
         }
         // The map opens clean: no Layers panel, no legend.
         assert!(!v.side && !v.legend);
-        for label in ["Sites", "Cluster", "Tree", "Zones", "Layers", "Legend", "⋯"] {
+        // On a laptop the layouts are one drop-down (it shows the one in
+        // use), so the toolbar has room beside a card's inspector.
+        for label in ["Cluster", "Layers", "Legend", "⋯"] {
             at(&shown, label);
         }
         assert!(
@@ -782,6 +843,7 @@ mod tests {
             "Re-layout",
             "Reload",
             "Examples",
+            "Export",
             "Saved maps",
             "Copy findings",
             "Clear map…",
@@ -843,6 +905,185 @@ mod tests {
         frame(&ctx, &mut v, &src, vec![]);
         assert!(v.selection().is_empty());
         assert!(v.pick_ip.is_none(), "asked once");
+    }
+
+    /// Example 0's files, with no host info and the default redaction.
+    fn example() -> (
+        crate::tools::export::ExportTool,
+        crate::net::hostinfo::HostInfo,
+        crate::redact::Overrides,
+    ) {
+        (
+            crate::tools::export::ExportTool::with_example(0),
+            crate::net::hostinfo::HostInfo::default(),
+            crate::redact::Overrides::default(),
+        )
+    }
+
+    /// A card with an address on example 0, not the internet.
+    fn a_device(v: &MapView) -> usize {
+        v.map
+            .nodes
+            .iter()
+            .position(|n| n.ip.is_some() && n.zone != Zone::Internet)
+            .expect("a device")
+    }
+
+    /// On a laptop the inspector floats over the map: the canvas keeps its
+    /// width and the map its zoom, and the controls on the right move
+    /// beside it rather than under it.
+    #[test]
+    fn a_cards_inspector_floats_over_the_map_on_a_laptop() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let mut v = MapView::new(None);
+        let mut shown = Vec::new();
+        for _ in 0..6 {
+            shown = frame(&ctx, &mut v, &src, vec![]);
+        }
+        let zoom = v.zoom;
+        let layers = at(&shown, "Layers");
+        assert!(
+            at(&shown, "Fit").x > 1280.0 - 120.0,
+            "zoom controls in the corner"
+        );
+        let i = a_device(&v);
+        v.select(Some(i));
+        for _ in 0..12 {
+            shown = frame(&ctx, &mut v, &src, vec![]);
+        }
+        // Its inspector: the name, and what can be run against it.
+        at(&shown, &v.map.nodes[i].label);
+        for label in ["Ping", "Port Check", "Traceroute", "DETAILS"] {
+            at(&shown, label);
+        }
+        // Over the canvas, not beside it.
+        assert_eq!(v.panel_now, 0.0);
+        assert_eq!(v.cover, 320.0);
+        assert!(
+            (v.zoom - zoom).abs() < 1e-3,
+            "zoom {zoom} became {}",
+            v.zoom
+        );
+        // Layers, Legend and the zoom controls sit left of it.
+        let edge = 1280.0 - 320.0;
+        assert!(at(&shown, "Layers").x < edge && at(&shown, "Layers").x < layers.x);
+        assert!(at(&shown, "Legend").x < edge);
+        assert!(at(&shown, "Fit").x < edge);
+        // Esc lets the card go and the inspector shuts.
+        frame(
+            &ctx,
+            &mut v,
+            &src,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let shown = frame(&ctx, &mut v, &src, vec![]);
+        assert!(v.selection().is_empty());
+        assert!(!shown.iter().any(|(s, _)| s == "Traceroute"));
+        assert_eq!(v.cover, 0.0);
+    }
+
+    /// From 1440 points wide it docks beside the canvas; the map keeps its
+    /// zoom all the same.
+    #[test]
+    fn a_cards_inspector_docks_on_a_wide_window() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let size = vec2(1600.0, 900.0);
+        let mut v = MapView::new(None);
+        for _ in 0..6 {
+            frame_at(&ctx, &mut v, &src, vec![], size);
+        }
+        let zoom = v.zoom;
+        v.select(Some(a_device(&v)));
+        let mut shown = Vec::new();
+        for _ in 0..12 {
+            shown = frame_at(&ctx, &mut v, &src, vec![], size);
+        }
+        at(&shown, "Traceroute");
+        assert!((v.panel_now - 360.0).abs() < 1.0, "docked: {}", v.panel_now);
+        assert_eq!(v.cover, 0.0);
+        assert!(
+            (v.zoom - zoom).abs() < 1e-3,
+            "zoom {zoom} became {}",
+            v.zoom
+        );
+    }
+
+    /// On a laptop, opening Layers shuts the floating inspector, the card
+    /// still selected; picking a card opens it again, and so does shutting
+    /// Layers.
+    #[test]
+    fn layers_shuts_a_floating_inspector_and_keeps_the_selection() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let mut v = MapView::new(None);
+        let mut shown = Vec::new();
+        for _ in 0..4 {
+            shown = frame(&ctx, &mut v, &src, vec![]);
+        }
+        let i = a_device(&v);
+        v.select(Some(i));
+        for _ in 0..4 {
+            shown = frame(&ctx, &mut v, &src, vec![]);
+        }
+        assert!(shown.iter().any(|(s, _)| s == "Traceroute"));
+        let shown = click(&ctx, &mut v, &src, at(&shown, "Layers"));
+        assert!(v.side, "Layers opens");
+        assert_eq!(v.selection(), vec![i], "the card stays selected");
+        assert!(
+            !shown.iter().any(|(s, _)| s == "Traceroute"),
+            "inspector shut"
+        );
+        assert_eq!(v.cover, 0.0);
+        // A card picked with Layers open: its inspector shows.
+        v.select(Some(i));
+        let shown = frame(&ctx, &mut v, &src, vec![]);
+        assert!(shown.iter().any(|(s, _)| s == "Traceroute"));
+        // Hidden again, then Layers shut: it comes back.
+        v.insp_hidden = true;
+        v.side = false;
+        let shown = frame(&ctx, &mut v, &src, vec![]);
+        assert!(shown.iter().any(|(s, _)| s == "Traceroute"));
     }
 
     #[test]
