@@ -53,7 +53,7 @@ packaging/linux/build-appimage.sh
 # -> target/appimage/is-alive-x86_64.AppImage
 ```
 
-Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes). The user manual's screenshots are remade for full releases (x.y.0) only, with `scripts/manual-shots.sh` (see the manual's [last chapter](docs/manual/MANUAL.md#22-updating-this-manual)).
+Releases, CI, the screenshot tour and building in a container are in [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing). Each version's highlights are in the [release notes](https://github.com/hammerknife404/is-alive/wiki/Release-notes). The [user manual](docs/manual/MANUAL.md) is text only and changes with each release that changes what it describes.
 
 ## License
 

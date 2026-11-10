@@ -1,10 +1,11 @@
 //! Screenshot tours. With `IS_ALIVE_SHOTS=<dir>` set, the app visits every
 //! tab, saves `<dir>/NN-<tab>.png` of each, then closes. With
-//! `IS_ALIVE_SHOTS_MANUAL=1` as well it takes the user manual's pictures
-//! instead (see `MANUAL` and scripts/manual-shots.sh), each saved as
-//! `<dir>/<name>.png` once the run it shows has finished; a scene whose
-//! run failed is tried once more, and one that still failed, or was taken
-//! late, makes the app exit non-zero (see `failed`).
+//! `IS_ALIVE_SHOTS_SCENES=1` as well it takes the scene tour instead (see
+//! `SCENES`): each tool after a run, the Map with cards picked, Settings and
+//! the windows, each saved as `<dir>/<name>.png` once the run it shows has
+//! finished, for checking a UI change by eye at a window size. A scene
+//! whose run failed is tried once more, and one that still failed, or was
+//! taken late, makes the app exit non-zero (see `failed`).
 //! Off (and free) unless the variable is set.
 
 use crate::{App, Tab, theme};
@@ -17,10 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const SETTLE: u32 = 30;
 const SETTLE_SECS: f64 = 0.6;
 
-/// Seconds a manual scene may wait for its run before it's taken anyway.
+/// Seconds a scene may wait for its run before it's taken anyway.
 const PATIENCE: f64 = 120.0;
 
-/// Seconds before a manual scene whose run failed is run once more (a
+/// Seconds before a scene whose run failed is run once more (a
 /// speed test refused with 429 often goes through a little later).
 const RETRY: f64 = 45.0;
 
@@ -29,12 +30,12 @@ const RETRY: f64 = 45.0;
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 /// True once any picture of this tour went wrong: the app then exits with
-/// status 1, so scripts/manual-shots.sh keeps the pictures it had.
+/// status 1, so a script running the tour knows.
 pub fn failed() -> bool {
     FAILED.load(Ordering::Relaxed)
 }
 
-/// What a failed manual scene does this frame.
+/// What a failed scene does this frame.
 enum Retry {
     /// Waits for its second try.
     Wait,
@@ -49,8 +50,8 @@ pub struct Shots {
     next: usize,
     frames: u32,
     asked: bool,
-    /// The manual's tour: plain names, and each scene waits for its run.
-    manual: bool,
+    /// The scene tour: plain names, and each scene waits for its run.
+    scenes: bool,
     /// The scene whose setup has run, and when it started.
     begun: Option<(usize, f64)>,
     /// When the current shot became ready.
@@ -72,7 +73,7 @@ impl Shots {
             next: 0,
             frames: 0,
             asked: false,
-            manual: std::env::var_os("IS_ALIVE_SHOTS_MANUAL").is_some_and(|v| v != "0"),
+            scenes: std::env::var_os("IS_ALIVE_SHOTS_SCENES").is_some_and(|v| v != "0"),
             begun: None,
             ready_at: None,
             retry_at: None,
@@ -81,9 +82,9 @@ impl Shots {
         })
     }
 
-    /// True for the user manual's tour (IS_ALIVE_SHOTS_MANUAL).
-    pub fn manual(&self) -> bool {
-        self.manual
+    /// True for the scene tour (IS_ALIVE_SHOTS_SCENES).
+    pub fn scenes(&self) -> bool {
+        self.scenes
     }
 
     /// Called once a frame with the shot names; returns the index of the
@@ -166,7 +167,7 @@ impl Shots {
         let [w, h] = img.size;
         let raw: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
         let name = name.to_lowercase().replace(' ', "-");
-        let file = if self.manual {
+        let file = if self.scenes {
             format!("{name}.png")
         } else {
             format!("{:02}-{name}.png", self.next)
@@ -181,7 +182,7 @@ impl Shots {
     }
 }
 
-/// Where a manual scene's run is.
+/// Where a scene's run is.
 enum Ready {
     Wait,
     Yes,
@@ -198,8 +199,8 @@ fn over(running: bool, err: Option<&str>) -> Ready {
     }
 }
 
-/// One picture in the user manual: its file name, the tab it shows, what
-/// to do on its first frame, and (each frame) whether its run is over.
+/// One picture of the scene tour: its file name, the tab it shows, what to
+/// do on its first frame, and (each frame) whether its run is over.
 struct Scene {
     name: &'static str,
     tab: Tab,
@@ -227,12 +228,11 @@ fn at_once(_: &mut App) -> Ready {
     Ready::Yes
 }
 
-/// The manual's pictures, in order. Runs go to public test targets only
+/// The scene tour, in order. Runs go to public test targets only
 /// (1.1.1.1, example.com, Cloudflare's download file) and to this
 /// machine's own LAN address; nothing is swept or traced, and the public
-/// IP is never looked up. docs/manual/MANUAL.md links to these names:
-/// keep them stable.
-const MANUAL: &[Scene] = &[
+/// IP is never looked up.
+const SCENES: &[Scene] = &[
     scene("window", Tab::Ping, nothing, at_once),
     scene(
         "ping",
@@ -357,15 +357,15 @@ const MANUAL: &[Scene] = &[
 ];
 
 impl App {
-    /// The manual's tour: each scene's setup once, then its picture once
-    /// its run has finished. A run that failed gets a second try; if that
-    /// fails too, the picture is taken and the tour reported as failed.
-    pub(crate) fn manual_shots_step(&mut self, ctx: &egui::Context) {
-        let names: Vec<&str> = MANUAL.iter().map(|s| s.name).collect();
+    /// The scene tour: each scene's setup once, then its picture once its
+    /// run has finished. A run that failed gets a second try; if that fails
+    /// too, the picture is taken and the tour reported as failed.
+    pub(crate) fn scene_shots_step(&mut self, ctx: &egui::Context) {
+        let names: Vec<&str> = SCENES.iter().map(|s| s.name).collect();
         let now = ctx.input(|i| i.time);
         let Some(s) = &mut self.shots else { return };
         let i = s.next;
-        let ready = match MANUAL.get(i) {
+        let ready = match SCENES.get(i) {
             Some(scene) => {
                 self.tab = scene.tab;
                 if s.begin(i, now) {
@@ -400,13 +400,13 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::MANUAL;
+    use super::SCENES;
 
-    /// The manual links to these files by name: each once, file-safe.
+    /// Each scene's picture is saved by its name: each once, file-safe.
     #[test]
-    fn manual_names_are_unique_and_plain() {
+    fn scene_names_are_unique_and_plain() {
         let mut seen = std::collections::HashSet::new();
-        for s in MANUAL {
+        for s in SCENES {
             assert!(seen.insert(s.name), "{} twice", s.name);
             assert!(
                 s.name.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
@@ -414,19 +414,5 @@ mod tests {
                 s.name
             );
         }
-    }
-
-    /// Every picture the manual shows is one the tour takes, and the tour
-    /// takes none the manual doesn't show.
-    #[test]
-    fn manual_shows_every_picture_the_tour_takes() {
-        let text = include_str!("../docs/manual/MANUAL.md");
-        let linked: std::collections::BTreeSet<&str> = text
-            .split("](img/")
-            .skip(1)
-            .filter_map(|s| s.split_once(".png)").map(|(name, _)| name))
-            .collect();
-        let taken: std::collections::BTreeSet<&str> = MANUAL.iter().map(|s| s.name).collect();
-        assert_eq!(linked, taken);
     }
 }

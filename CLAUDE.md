@@ -8,12 +8,13 @@ The owner wants point releases: each finished change ships on its own, not in a 
 - **PRs go straight into `main`.** No `release-*` branch collecting several PRs.
 - **Take the next free number when merging.** If another release landed first, merge `main` into the branch and bump to the next patch (0.25.2).
 - **No bump** for what users don't get: docs, the wiki, CI, tests only.
-- **x.y.0 only when the owner asks** for a feature release. That's a "full release": the manual's screenshots are remade with `scripts/manual-shots.sh` (see the manual's last chapter). Patch releases never touch `docs/manual/img`.
+- **x.y.0 only when the owner asks** for a feature release.
 - **The PR title is the release note.** GitHub builds the notes from merged PR titles, so write them for users ("Sweep: several networks in one box").
 - **Before asking to merge:** `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`.
 - **After merging:** check the `build` run on `main` passed and the release has `is-alive.exe`, `is-alive-x86_64.AppImage` and both `.sha256` files.
 - **Wiki:** the app's Help (F1) opens the wiki (`is-alive.wiki`). Its pages live in `docs/wiki/`: add the release to `Release-notes.md` and update any page the release changes, in the same PR, as with the manual's text (`docs/manual/MANUAL.md`). Merging to `main` publishes them (`.github/workflows/wiki.yml`, `scripts/wiki_sync.py`): what changed since the last sync is merged into the wiki page by page, so an edit made on the wiki itself is kept. Where both changed the same lines, the run fails and writes nothing: bring the wiki's version into `docs/wiki/` and push again. Don't clone the wiki to edit it or hand out patches: a cloud session can't push it, and the workflow can.
-- **Manual screenshots** come from `scripts/manual-shots.sh` on the owner's machine (podman, a made-up LAN). A cloud sandbox has no ping, DNS or speed-test access: there, `--here --out <dir>` makes the offline pictures, and the network ones (ping, dns-lookup, advanced, speed-test, results) stay as they are.
+- **The manual is text only**: no screenshots. Every PR that changes what a chapter of `docs/manual/MANUAL.md` describes updates that chapter. Say what's on screen in words, with the names the app shows and a table where it helps; an emoji or the app's own symbols (⋯ ▶ ■ ⟲ 📌 🔑) only where it makes a line quicker to find. `the_manual_has_no_pictures` (src/manual.rs) fails on an image link.
+- **Checking the window by eye:** the scene tour (`IS_ALIVE_SHOTS=<dir> IS_ALIVE_SHOTS_SCENES=1`, src/shots.rs) saves a picture of each tool after a run, the Map with cards picked, Settings and Help, at the window size in the settings file (`size=1280x720`). A cloud sandbox has no ping, DNS or speed test: those scenes show their errors.
 
 ## UI: built for a field laptop first
 

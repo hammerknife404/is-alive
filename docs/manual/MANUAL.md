@@ -1,7 +1,7 @@
 <!--
-Maintainers: the screenshots in img/ are made by scripts/manual-shots.sh and
-are updated only for full releases (x.y.0). See "Updating this manual" at the
-end.
+Maintainers: the manual is text only, no screenshots. Say what's on screen in
+words, and update a chapter in the same pull request as the change it
+describes. See "Updating this manual" at the end.
 -->
 
 # is-alive user manual
@@ -53,7 +53,7 @@ It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. 
 
 **Who it's for:** field technicians and anyone who looks after small and medium networks. You don't need to know the theory: each chapter says what to type, what you'll see and what it means.
 
-> **Before you scan someone's network:** Port Check and Subnet Sweep (and the **Full scan**, which includes both) probe other devices. That's normal network testing, but security software can flag it as a scan. Only scan networks you're allowed to test, and tell the site's IT contact first.
+> ⚠️ **Before you scan someone's network:** Port Check and Subnet Sweep (and the **Full scan**, which includes both) probe other devices. That's normal network testing, but security software can flag it as a scan. Only scan networks you're allowed to test, and tell the site's IT contact first.
 
 ---
 
@@ -108,7 +108,15 @@ When is-alive starts, it asks GitHub whether a newer release is out (you can tur
 
 ## 3. The window
 
-![The is-alive window on the Ping tab: the tab bar across the top, the Ping tab's fields, and the footer with this machine's addresses](img/window.png)
+Five parts, the same on every tab:
+
+| Where | What's there |
+|---|---|
+| **Top**: the title bar | **is-alive**, the site you're working on (**● Scratch ▾** until you make one), then **Report…** and **Full scan** on the right |
+| **Left**: the nav | Every tool in its group, a dot on the ones running; **Settings** and **Help** at the foot |
+| **Middle** | The tab you're on: its run bar, **Options**, the status row and the results |
+| **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
+| **Bottom**: the status bar | This computer's LAN address, gateway and public (WAN) address, **Refresh**; what's running and the version on the right |
 
 ### The title bar (top)
 
@@ -171,7 +179,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.8** is the version you're running: worth including when you report a problem.
+- **v0.28.9** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -191,8 +199,6 @@ In under a minute you know whether a problem is this computer, the local network
 When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
 
 ### Site report
-
-![The Site Report window over the Contoso Health example: the title, then Map, Findings, Changes since, Infrastructure, Clients, Tech notes and Test results, each saying what it holds, and Save report…](img/site-report.png)
 
 **Report…** (top right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
 
@@ -219,8 +225,6 @@ Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` 
 
 ## 4. Ping
 
-![Ping tab after ten pings to 1.1.1.1: the latency graph, the replies, and Sent, Received, Loss and Min/Avg/Max in the status row](img/ping.png)
-
 **What it's for:** checking a device answers, how fast, and whether any replies go missing. It's the first test for "the internet is slow" or "the printer is offline".
 
 ### Controls
@@ -241,7 +245,7 @@ Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` 
 
 - **The status row** shows the address being pinged, **Sent** and **Received**, **Loss** (green at 0%, amber for some loss, red for 100%) and **Min / Avg / Max** round-trip time.
 - **The graph** draws each reply as a point on a green line; a red tick is a reply that never came back. The scale in the top left corner is the highest reply time on screen.
-- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (The picture above was taken on a made-up network that answers pings itself, so its replies say `ttl=255`; from a real network, `1.1.1.1` shows around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
+- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
 
 ### Example: is the internet connection healthy?
 
@@ -277,8 +281,6 @@ How to read it:
 ---
 
 ## 5. Port Check
-
-![Port Check of a test machine with the Common preset: six open ports listed with their service names and connection times](img/port-check.png)
 
 **What it's for:** finding which services a device offers: is the web interface on, is Remote Desktop open, is the mail server listening. It checks TCP ports only.
 
@@ -374,8 +376,6 @@ A device you expect to see with nothing open and every port *filtered* (tick **S
 
 ## 6. Traceroute
 
-![Traceroute tab, ready to trace: Host, Max hops, Timeout, Resolve names and Prefer IPv6](img/traceroute.png)
-
 **What it's for:** seeing every router between you and a destination, and where along the way delays or losses start.
 
 ### Controls
@@ -417,8 +417,6 @@ How to read it:
 ---
 
 ## 7. Subnet Sweep
-
-![Subnet Sweep tab before a run: four networks in Ranges, with how many targets and addresses they come to beside Start, then Speed, Resolve names and Check mgmt ports](img/subnet-sweep.png)
 
 **What it's for:** listing every device that's alive on a network, with its name, MAC address and maker. It also feeds the [Map](#11-map) and the Site Bundle's inventory.
 
@@ -486,8 +484,6 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 
 ## 8. DNS Lookup
 
-![DNS Lookup of example.com: two A and two AAAA records from the system resolver](img/dns-lookup.png)
-
 **What it's for:** checking that names turn into the right addresses, seeing any DNS record, spotting when different DNS servers give different answers, and looking up who a domain is registered with.
 
 **DNS records** and **WHOIS registration** at the top of the tab switch between the two. **DNS records** is the lookup described here; **WHOIS registration** is [below](#whois-registration).
@@ -549,8 +545,6 @@ Big websites behind CDNs (Google, Microsoft, Cloudflare) legitimately answer dif
 
 ## 9. Advanced (mail and domain health)
 
-![Advanced tab after checking example.com: Core (email) and Nice-to-haves, each check marked PASS, WARN or INFO, with DMARC opened](img/advanced.png)
-
 **What it's for:** checking a domain's email and DNS setup the way the rest of the internet sees it: whether mail gets delivered, whether others can send mail pretending to be the domain, and whether anything is broken or about to expire.
 
 ### Controls
@@ -593,7 +587,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 ### Example: SPF and DMARC for example.com
 
 1. Type `example.com` in **Domain** and press **Enter**.
-2. The result (shown above) is mostly PASS and INFO:
+2. The result is mostly PASS and INFO:
    - **MX: INFO** *null MX (RFC 7505): this domain explicitly accepts no mail*. example.com is set up to say "no email here", and the check recognises it rather than calling it broken.
    - **SPF: PASS** *ends in -all (hard fail)*. The record `v=spf1 -all` lists no servers and ends in `-all`: no server may send as example.com. That's exactly right for a domain that sends no mail.
    - **DMARC: WARN** *no rua= address*. The policy is `p=reject` (PASS: forged mail is refused), but there's no report address, so the owner never hears who tries to send as them.
@@ -627,8 +621,6 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 ## 10. Config Export
 
-![Config Export with an example /mapnetwork map open: its sub-tab, the summary of what was read, and Save JSON, Copy and Clear](img/config-export.png)
-
 **What it's for:** reading a site's network configuration files on this computer, removing every secret, and turning them into clean JSON for Claude's `/unifidump` and `/mapnetwork` skills. What it reads also draws the [Map](#11-map).
 
 ### What it opens
@@ -643,9 +635,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | `.json` | Meraki MX configuration saved from the Dashboard API (see below) |
 | `.dc.html`, or a zip holding one | A map made by Claude's `/mapnetwork` |
 
-Open them with **Open file…** (pick several at once if you like), by dropping them on the window from any tab, or with **Open with → is-alive**. Everything happens on this computer: nothing is uploaded.
-
-![Config Export before anything is opened](img/config-export-empty.png)
+Open them with **Open file…** (pick several at once if you like), by dropping them on the window from any tab, or with **Open with → is-alive**. 🔒 Everything happens on this computer: nothing is uploaded.
 
 ### Controls
 
@@ -691,8 +681,6 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 ---
 
 ## 11. Map
-
-![The Map with the Acme Distribution example open in the Cluster layout: sites, roles and action items on the left, the findings band above the map](img/map.png)
 
 **What it's for:** one picture of the network, built from what is-alive has seen: a sweep, a UniFi backup, a SonicWall export or report, or a map Claude made with `/mapnetwork`. The internet is at the top, then the firewall, switches, access points and servers, each a card coloured by its role.
 
@@ -763,8 +751,6 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
 
-![The Acme example in the Zones layout with the Access points box selected by its title: the box outlined, its cards in the inspector on the right](img/map-zones.png)
-
 - **Click a role box's title** to select all its cards (**Ctrl+click** or **Shift+click** adds them to the selection). A box whose cards are all selected is outlined. A site box's title folds the site instead, as before.
 - **Drag the title** to move the box (see *Moving around*). A move is one undo step (*Undo: move the Clients box*) and is kept in saved maps.
 - **Right-click the title, or the box's empty background,** for **Select its N cards**, **Add its N cards to the selection**, **Put back in the layout** (cards you dragged), **Collapse** or **Expand** its site (in Sites), **Put the box back** (once it's been moved), **Move group** (left, right, up or down a step; drag the title to place it freely) and **Copy group name**, then the map's own items: **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links**, **Legend** and **Export**. Boxes cover most of the map in Zones and Sites, so those stay a right-click away.
@@ -825,8 +811,6 @@ Back at a site, **⋯ › Compare** (on the live map) lists this site's saved ma
 **Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **⋯ › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
 
 ### Selecting cards
-
-![A card selected on the Acme example: its path to the internet lit, and its inspector on the right with its action items, details and connections](img/map-selected.png)
 
 - **Click a card** to select it. Its [inspector](#the-inspector-right) opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes.
 - A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing up it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
@@ -922,8 +906,6 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 5. Open **⋯ › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
 6. **⋯ › Examples › Close the example** goes back to this network's map.
 
-![The Contoso Health example in the Sites layout: 23 clinics, each in its own box](img/map-sites.png)
-
 **The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…** for an accurate one from `/mapnetwork`. **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
 
 **Updating.** The map rebuilds by itself as a sweep finds devices and when a file is loaded in Config Export. Rebuilds keep pins, selections, moved cards and spot-check results. A pinned card that's no longer in the data stays, drawn in red with a dashed outline and marked *Not in the latest data*, so you can check it before unpinning it.
@@ -931,8 +913,6 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 ---
 
 ## 12. Notes
-
-![Notes in Split view with a site visit's notes: the Markdown on the left; on the right the preview, with a heading, a task list with ticks, a quote, inline code and emoji](img/notes.png)
 
 **What it's for:** writing up the visit as you go, in Markdown, saved automatically and kept free of passwords.
 
@@ -1031,8 +1011,6 @@ Select `Sunny-Harbor-2026` and press **Ctrl+R**: the line becomes `Guest Wi-Fi p
 
 ## 13. Speed Test
 
-![Speed Test after a 10-second download: tiles for download, latency, jitter, loss, VoIP MOS and the bufferbloat grade, with the latency graph, the table per phase and the findings](img/speed-test.png)
-
 **What it's for:** measuring the line's speed and, more importantly for phones and video calls, how latency, jitter and loss behave when the line is busy.
 
 ### Controls
@@ -1101,8 +1079,6 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ## 14. Subnet Calc
 
-![Subnet Calc showing this computer's subnet (here 192.0.2.2/24, an address range kept for documentation): the block's details, Check address, and Split into /25 with the two halves listed](img/subnet-calc.png)
-
 **What it's for:** working out subnets without pen and paper: what a block holds, whether an address is in it, how to split it, and which blocks cover a range. It works offline.
 
 ### Controls
@@ -1143,8 +1119,6 @@ A rule must cover `10.0.0.5` to `10.0.1.20`, but the firewall only takes CIDR bl
 ---
 
 ## 15. Results
-
-![Results with the runs of a session: Ping, Port Check, DNS Lookup, Advanced and Speed Test, each with its start and end time and its own Copy, Save and Export](img/results.png)
 
 **What it's for:** everything you ran at this site in one place, with start and end times, to copy into a ticket or export for a report.
 
@@ -1188,8 +1162,6 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ## 16. Settings and themes
 
-![Settings: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note and the settings folder are further down](img/settings.png)
-
 Click **Settings** at the foot of the nav to open it. Changes apply at once and are remembered. In a small window, scroll it for the rest.
 
 ### Theme
@@ -1208,8 +1180,6 @@ Click **Settings** at the foot of the nav to open it. Changes apply at once and 
 | **Paper** | Warm light, like a printed site map |
 
 The dots beside each name are that theme's Map colours for each role.
-
-![The Contoso Health example map in the Light theme](img/map-light.png)
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
@@ -1298,8 +1268,6 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 
 ## 18. Site Bundle and Claude
 
-![The Site Bundle window: site name, known problems, UniFi client handling, and the list of what the bundle includes](img/site-bundle.png)
-
 This chapter is about handing the visit to Claude. For a document people read, use the [Site report](#site-report).
 
 is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Site Bundle…** (in the site menu, top left) gathers it all into one zip.
@@ -1355,7 +1323,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
 
-**Scanning is visible.** Port Check, Subnet Sweep, Check mgmt ports and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
+⚠️ **Scanning is visible.** Port Check, Subnet Sweep, Check mgmt ports and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
 
 ---
 
@@ -1471,16 +1439,10 @@ The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For 
 
 *For maintainers.*
 
-The text is updated with any release that changes what it describes. The **screenshots are updated only for full releases** (x.y.0), so they always match a version people download:
+The manual is text only: no screenshots to fall out of date. Each chapter is updated in the same pull request as the change it describes, so the copy built into each version (**Help**, **F1**) always matches it.
 
-1. Bump the version to x.y.0 in `Cargo.toml` (and `Cargo.lock`) as usual.
-2. Run `scripts/manual-shots.sh`. It builds the release binary in the `isalive-dev` container and runs the app's manual tour (`IS_ALIVE_SHOTS_MANUAL`, in `src/shots.rs`) on a made-up network, writing `docs/manual/img/<name>.png`. On a patch version it refuses to touch `docs/manual/img` and says why; `scripts/manual-shots.sh --out <dir>` renders a preview anywhere, at any version.
-3. Look at every picture, then commit them with the release.
+- Say what's on screen in words, with the names the app shows (**▶ Start**, **⋯ › Examples**), and a table where it helps.
+- An emoji or one of the app's own symbols (⋯, ▶, ■, ⟲, 📌, 🔑) where it makes a line quicker to find, not as decoration.
+- Chapters keep their numbers and titles: **Help › This tab** and **F1** find a tab's chapter by its title.
 
-The tour pings `1.1.1.1`, checks `example.com`, runs a 10-second download from Cloudflare and port-checks a few listeners on its own made-up address (`192.168.1.50`); it never sweeps, traces, looks up the public IP or checks for updates (its Settings has both turned off, so the status bar's *WAN not looked up* matches), so the pictures show no real network. The made-up network answers pings itself, so the Ping picture's replies say `ttl=255`.
-
-The pictures are rendered into `docs/manual/img/.incoming` first. A run that fails (a lookup error, a speed test refused with *http status: 429*) is tried once more after 45 seconds; if it still fails, or a run doesn't finish in two minutes, the script says which picture and why, fails, and leaves `docs/manual/img` as it was, with this run's pictures in `.incoming` to look at. A 429 means Cloudflare is rate-limiting your address after several runs: wait an hour and run the script again.
-
-The names the tour writes are the ones this manual links to, and a test (`manual_shows_every_picture_the_tour_takes`) fails if the two lists differ. To add a picture, add a scene to `MANUAL` in `src/shots.rs` and link `img/<name>.png` here.
-
-On a full-release tag, the **manual screenshots** workflow (`.github/workflows/manual-shots.yml`, also runnable by hand) produces the same set as an artifact. GitHub's runners don't pass ping, so the committed pictures come from the local run.
+To check a change to the window by eye, the scene tour (`IS_ALIVE_SHOTS=<dir> IS_ALIVE_SHOTS_SCENES=1`, in `src/shots.rs`) runs each tool and saves a picture of every tab, the Map with cards picked, Settings and the Help windows, at the window size in the settings. The wiki's [Developing](https://github.com/hammerknife404/is-alive/wiki/Developing) page has the details.

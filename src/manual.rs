@@ -1,45 +1,13 @@
-//! The user manual, built in: docs/manual/MANUAL.md and its pictures are
-//! compiled into the app, so Help and F1 work with no network (the usual
-//! state of a site with a problem) and always describe this version. A
-//! window with the chapters down the left; a chapter's pictures are
-//! decoded the first time it's shown.
+//! The user manual, built in: docs/manual/MANUAL.md is compiled into the
+//! app, so Help and F1 work with no network (the usual state of a site with
+//! a problem) and always describe this version. A window with the chapters
+//! down the left. It's text only: no screenshots to fall out of date.
 
 use crate::{Tab, widgets};
 use eframe::egui;
 use std::sync::OnceLock;
 
 const TEXT: &str = include_str!("../docs/manual/MANUAL.md");
-
-macro_rules! pictures {
-    ($($name:literal),* $(,)?) => {
-        &[$(($name, include_bytes!(concat!("../docs/manual/img/", $name, ".png")) as &[u8])),*]
-    };
-}
-
-/// Every picture the manual shows, by file name without `.png`.
-const PICTURES: &[(&str, &[u8])] = pictures![
-    "window",
-    "ping",
-    "port-check",
-    "traceroute",
-    "subnet-sweep",
-    "dns-lookup",
-    "advanced",
-    "config-export",
-    "config-export-empty",
-    "map",
-    "map-zones",
-    "map-selected",
-    "map-sites",
-    "notes",
-    "speed-test",
-    "subnet-calc",
-    "results",
-    "settings",
-    "map-light",
-    "site-bundle",
-    "site-report",
-];
 
 pub struct Chapter {
     /// As the manual numbers it: "4. Ping".
@@ -256,8 +224,7 @@ fn matching(find: &str) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// A chapter's Markdown: tables and pictures here, the rest by the Notes
-/// renderer.
+/// A chapter's Markdown: tables here, the rest by the Notes renderer.
 fn text(ui: &mut egui::Ui, body: &str) {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let mut plain = String::new();
@@ -275,11 +242,6 @@ fn text(ui: &mut egui::Ui, body: &str) {
             fence = !fence;
         }
         if !fence {
-            if let Some((alt, name)) = picture_ref(t) {
-                flush(ui, &mut plain);
-                picture(ui, alt, name);
-                continue;
-            }
             if t.starts_with('|') {
                 flush(ui, &mut plain);
                 let mut rows = vec![t];
@@ -300,48 +262,6 @@ fn text(ui: &mut egui::Ui, body: &str) {
         plain.push('\n');
     }
     flush(ui, &mut plain);
-}
-
-/// `![alt](img/name.png)` on a line of its own.
-fn picture_ref(line: &str) -> Option<(&str, &str)> {
-    let (alt, rest) = line.strip_prefix("![")?.split_once("](img/")?;
-    let name = rest.strip_suffix(".png)")?;
-    Some((alt, name))
-}
-
-fn picture(ui: &mut egui::Ui, alt: &str, name: &str) {
-    let id = egui::Id::new(("manual_picture", name));
-    let cached = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id));
-    let texture = cached.or_else(|| {
-        let bytes = PICTURES.iter().find(|(n, _)| *n == name)?.1;
-        let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-            .ok()?
-            .to_rgba8();
-        let color = egui::ColorImage::from_rgba_unmultiplied(
-            [image.width() as usize, image.height() as usize],
-            image.as_raw(),
-        );
-        let t = ui
-            .ctx()
-            .load_texture(format!("manual-{name}"), color, Default::default());
-        ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
-        Some(t)
-    });
-    ui.add_space(4.0);
-    match texture {
-        Some(t) => {
-            ui.add(
-                egui::Image::new(&t)
-                    .max_width(ui.available_width().min(t.size_vec2().x))
-                    .corner_radius(6),
-            )
-            .on_hover_text(alt);
-        }
-        None => {
-            ui.weak(format!("(picture: {alt})"));
-        }
-    }
-    ui.add_space(4.0);
 }
 
 /// The cells of a table row: `| a | b |` is `["a", "b"]`.
@@ -437,16 +357,11 @@ mod tests {
         }
     }
 
-    /// Every picture the manual shows is built in, and none it doesn't.
+    /// Text only: no screenshots to fall out of date (CLAUDE.md).
     #[test]
-    fn every_picture_is_built_in() {
-        let shown: std::collections::BTreeSet<&str> = TEXT
-            .lines()
-            .filter_map(|l| picture_ref(l.trim()))
-            .map(|(_, n)| n)
-            .collect();
-        let built: std::collections::BTreeSet<&str> = PICTURES.iter().map(|(n, _)| *n).collect();
-        assert_eq!(shown, built);
+    fn the_manual_has_no_pictures() {
+        assert!(!TEXT.contains("](img/"));
+        assert!(TEXT.lines().all(|l| !l.trim().starts_with("![")));
     }
 
     #[test]
