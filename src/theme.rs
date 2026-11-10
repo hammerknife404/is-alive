@@ -924,6 +924,11 @@ pub struct Settings {
     /// The nav pinned open (true) or folded (false); None follows the
     /// window's width (see `nav::open`).
     pub nav: Option<bool>,
+    /// Where Save… dialogs start (Settings › Files); None leaves it to the
+    /// system's dialog.
+    pub save_dir: Option<std::path::PathBuf>,
+    /// Inside `save_dir`, a folder named after the open site.
+    pub save_by_site: bool,
     /// How a UniFi backup's client table is read (Config Export's "UniFi
     /// clients"): kept, so a site's backup reopens with the clients the Map
     /// shows. None (the default) leaves them out: they're often people's names.
@@ -966,6 +971,8 @@ impl Default for Settings {
             map_legend: false,
             nav: None,
             unifi_clients: crate::unifi::Clients::None,
+            save_dir: None,
+            save_by_site: false,
             renderer: None,
         }
     }
@@ -1000,6 +1007,14 @@ impl Settings {
                 }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 "map_legend" => s.map_legend = v.trim() == "1",
+                "save_dir" => {
+                    let v = v.trim();
+                    // A path, as the backdrop's: no control characters.
+                    if !v.is_empty() && v.len() <= 4096 && !v.chars().any(char::is_control) {
+                        s.save_dir = Some(v.into());
+                    }
+                }
+                "save_by_site" => s.save_by_site = v.trim() == "1",
                 "unifi_clients" => {
                     s.unifi_clients =
                         crate::unifi::Clients::from_label(v.trim()).unwrap_or_default()
@@ -1118,6 +1133,12 @@ impl Settings {
         }
         if let Some(open) = self.nav {
             s += if open { "nav=open\n" } else { "nav=rail\n" };
+        }
+        if let Some(d) = &self.save_dir {
+            s += &format!("save_dir={}\n", d.display());
+        }
+        if self.save_by_site {
+            s += "save_by_site=1\n";
         }
         if self.unifi_clients != crate::unifi::Clients::None {
             s += &format!("unifi_clients={}\n", self.unifi_clients.label());
@@ -1493,6 +1514,8 @@ mod tests {
             map_legend: false,
             nav: Some(false),
             unifi_clients: crate::unifi::Clients::Anonymized,
+            save_dir: Some("/home/me/Clients".into()),
+            save_by_site: true,
             renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);

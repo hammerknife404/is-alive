@@ -180,7 +180,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.10** is the version you're running: worth including when you report a problem.
+- **v0.28.11** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -1208,6 +1208,15 @@ The small line under them says what's drawing the backdrop (graphics card or pro
 ### Map
 
 - **Show the accuracy note**: brings back the note under the Map's toolbar if you closed it.
+
+### Files
+
+Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site report](#site-report) and the Site Bundle open the system's Save dialog; you can always pick another folder there.
+
+| Setting | What it does |
+|---|---|
+| **Save to** | The folder that dialog starts in. **Choose folder…** picks it; **Reset** lets the system pick again. A folder that isn't there (an unplugged drive) is shown in amber, and saves start where the system says until it's back |
+| **A folder for each site** | Inside it, a folder named after the open site, made on the first save, so each client's files stay together. Scratch saves straight into the folder |
 
 ### Where settings and notes are kept
 
