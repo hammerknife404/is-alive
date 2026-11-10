@@ -413,7 +413,13 @@ impl SweepTool {
         let mut ask = None;
         let address = ip.to_string();
         insp::show(ui, "sweep_inspector", &mut open, |ui, open| {
-            insp::header(ui, kind, &title, named.then_some(address.as_str()), open);
+            insp::header(
+                ui,
+                kind,
+                &title,
+                named.then_some(address.as_str()),
+                Some(open),
+            );
             let web_tip = format!("Open {web} in the browser");
             let acts = [
                 Act {

@@ -28,7 +28,7 @@ You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **
 
 ## 2. One-click health check (watch along)
 
-The presenter clicks **Full scan** at the top right. Several checks start at once and the app jumps to the **Results** tab.
+The presenter clicks **Full scan** at the top right. Several checks start at once and the app jumps to the **Results** tab, where each check is listed down the left as it finishes.
 
 | Result | What it tells you |
 |---|---|
@@ -118,8 +118,8 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 ## 7. Results and sharing
 
-1. Click the **Results** tab. Every check you ran is listed with its start and end time.
-2. **Copy** puts everything on the clipboard, ready to paste into an email or support ticket. **Save** writes it to a text file.
+1. Click the **Results** tab. Every check you ran is listed down the left, newest first, with a few words on what it found. Click one to read it in full.
+2. **Copy** puts that run on the clipboard, ready to paste into an email or support ticket; **Save…** writes it to a text file. **⋯** at the top of the list copies or saves all of them.
 3. Click **Report…** at the top right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
 
 ---

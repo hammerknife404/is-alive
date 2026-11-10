@@ -170,7 +170,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.3** is the version you're running: worth including when you report a problem.
+- **v0.28.4** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -1119,28 +1119,41 @@ A rule must cover `10.0.0.5` to `10.0.1.20`, but the firewall only takes CIDR bl
 
 **What it's for:** everything you ran at this site in one place, with start and end times, to copy into a ticket or export for a report.
 
-Every finished run from every tab is logged here (Full scan runs too). Runs still going show at the bottom with *running…*. The 12 newest are open; older ones are folded: click a header to open it.
+Every finished run from every tab is logged here (Full scan runs too).
+
+**The list** on the left has every run, newest first, under the day it ran (**Today**, then earlier dates), with what's still going at the top under **Running**. Each row has the tool, its target and the time, and a few words on what it found: *2 open of 14 checked*, *37 alive*, *Down 412 · up 38 Mbps*, *1 failed · 2 warnings*, or a ping's totals. Click a run to open it beside the list. The newest opens by itself, and after a **Full scan** its first run does.
+
+**The run** shows the tool and its target, when it started and ended and how long it took, then:
+
+| Button | What it does |
+|---|---|
+| **Run again** | The same tool on the same target, with its tab's settings as they are now (a ping sends 4); the new run opens here as it goes. Not for Lookup, whose record type and resolver a rerun wouldn't repeat |
+| **On map** | Select its target on the Map, when the target is an address |
+| **Copy / Save…** | This run as text |
+| **Export ⏷** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
+| **Output / Table** | The output as the tool printed it, or the run's data as a table (the columns its CSV has) |
+
+At the top of the list:
 
 | Control | What it does |
 |---|---|
 | **Filter** | Show only runs whose tool name or output contains this text (`FAIL`, `443`, `timeout`, a hostname). × clears it |
-| **Copy / Save…** | All shown runs as text |
-| **Export ⏷** | All shown runs as **CSV**, **JSON**, **Markdown** or **HTML** |
-| **Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
-| **Clear** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
-| Each run's **Copy**, **Save…**, **Export ⏷** | Just that run |
+| **⋯ › Copy all / Save all…** | Every run listed, as text |
+| **⋯ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
+| **⋯ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
+| **⋯ › Clear all** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
 
 Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
-**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, or with it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the status row says how many.
+**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, or with it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the list says how many.
 
 ### Example: a report for the ticket
 
 1. After a Full scan and a few tests, open **Results**.
 2. Type `FAIL` in **Filter** to see only runs that found a failure, or a hostname to see everything about one device.
-3. **Export ⏷ → HTML**, save, and attach it to the ticket.
+3. **⋯ › Export ⏷ → HTML**, save, and attach it to the ticket.
 
 ---
 
