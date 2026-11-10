@@ -1,5 +1,5 @@
-//! The site switcher: the chip beside the app's name, its menu, the
-//! dialogs it opens (switch, new, rename, delete), and the switch itself.
+//! The site switcher: the chip beside the app's name, its menu (the sites,
+//! Site Bundle, new, rename, delete), the dialogs it opens, and the switch itself.
 //! See site.rs for what a site keeps.
 
 use crate::{App, VERSION, site, theme, widgets};
@@ -79,6 +79,7 @@ impl App {
             self.sites = site::list();
         }
         let mut ask = None;
+        let mut bundle = false;
         let current = site::current();
         egui::Popup::menu(&chip)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -139,6 +140,15 @@ impl App {
                     }
                 }
                 ui.separator();
+                if ui
+                    .button("Site Bundle…")
+                    .on_hover_text("Zip this site for /unifidump and /mapnetwork")
+                    .clicked()
+                {
+                    bundle = true;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("New site…").clicked() {
                     ask = Some(SiteAsk::New {
                         name: String::new(),
@@ -179,6 +189,9 @@ impl App {
             });
         if ask.is_some() {
             self.site_ask = ask;
+        }
+        if bundle {
+            self.bundle.open = true;
         }
     }
 

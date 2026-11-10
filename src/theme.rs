@@ -75,7 +75,7 @@ impl Theme {
         matches!(self, Theme::Light | Theme::Paper)
     }
 
-    /// A rule with moving colours along the tab bar.
+    /// A rule with moving colours under the title bar.
     fn has_rule(self) -> bool {
         matches!(self, Theme::Miami | Theme::Rgb | Theme::Scanner)
     }
@@ -441,7 +441,7 @@ pub fn accent() -> Color32 {
     accent_for(current())
 }
 
-fn accent_for(t: Theme) -> Color32 {
+pub(crate) fn accent_for(t: Theme) -> Color32 {
     match t {
         Theme::Dark => Visuals::dark().hyperlink_color,
         Theme::Light => Color32::from_rgb(28, 104, 176),
@@ -738,7 +738,7 @@ fn miami() -> Visuals {
     v
 }
 
-/// Miami's sunset rule along the bottom of the tab bar: pink, orange
+/// Miami's sunset rule along the bottom of the title bar: pink, orange
 /// and teal, drifting slowly from side to side and back when animating.
 pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
     let theme = current();
@@ -877,13 +877,6 @@ fn scanner_rule(ctx: &egui::Context, y: f32, animate: bool) {
     }
 }
 
-/// Extra glow under the selected tab's underline, Miami, RGB and Scanner only.
-pub fn glow(painter: &egui::Painter, x: std::ops::RangeInclusive<f32>, y: f32) {
-    if current().has_rule() {
-        painter.hline(x, y, Stroke::new(6.0, accent().gamma_multiply(0.25)));
-    }
-}
-
 /// Everything remembered between launches.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
@@ -928,6 +921,9 @@ pub struct Settings {
     pub map_layout: Option<crate::map::layout::Mode>,
     /// Show the legend on the map.
     pub map_legend: bool,
+    /// The nav pinned open (true) or folded (false); None follows the
+    /// window's width (see `nav::open`).
+    pub nav: Option<bool>,
     /// What draws the window: wgpu once it has opened it here (after
     /// OpenGL failed, or when asked for); None means OpenGL. See `startup`.
     pub renderer: Option<eframe::Renderer>,
@@ -964,6 +960,7 @@ impl Default for Settings {
             backdrop: Source::Scene,
             map_layout: None,
             map_legend: true,
+            nav: None,
             renderer: None,
         }
     }
@@ -998,6 +995,13 @@ impl Settings {
                 }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 "map_legend" => s.map_legend = v.trim() != "0",
+                "nav" => {
+                    s.nav = match v.trim() {
+                        "open" => Some(true),
+                        "rail" => Some(false),
+                        _ => None,
+                    }
+                }
                 "renderer" => s.renderer = v.trim().parse().ok(),
                 // 0.18 builds wrote sans / mono.
                 "notes_font" => {
@@ -1102,6 +1106,9 @@ impl Settings {
         }
         if !self.map_legend {
             s += "map_legend=0\n";
+        }
+        if let Some(open) = self.nav {
+            s += if open { "nav=open\n" } else { "nav=rail\n" };
         }
         if let Some(r) = self.renderer {
             s += &format!("renderer={r}\n");
@@ -1472,6 +1479,7 @@ mod tests {
             notes_emoji: EmojiStyle::Neon,
             map_layout: Some(crate::map::layout::Mode::Zones),
             map_legend: false,
+            nav: Some(false),
             renderer: Some(eframe::Renderer::Wgpu),
         };
         assert_eq!(Settings::parse(&s.text()), s);
@@ -1481,6 +1489,12 @@ mod tests {
         assert!(s.text().contains("map_legend=0\n"));
         assert!(Settings::parse("map_legend=1\n").map_legend);
         assert!(!Settings::parse("map_legend=0\n").map_legend);
+        // The nav: follows the window unless pinned, and only a pin is written.
+        assert_eq!(Settings::default().nav, None);
+        assert!(!Settings::default().text().contains("nav="));
+        assert_eq!(Settings::parse("nav=open\n").nav, Some(true));
+        assert_eq!(Settings::parse("nav=rail\n").nav, Some(false));
+        assert_eq!(Settings::parse("nav=sideways\n").nav, None);
         assert_eq!(Settings::parse("renderer=vulkan\n").renderer, None);
         assert_eq!(
             Settings::parse("notes_font=sans\n").notes_font,

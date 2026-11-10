@@ -15,6 +15,21 @@ The owner wants point releases: each finished change ships on its own, not in a 
 - **Wiki:** the app's Help (F1) opens the wiki (`is-alive.wiki`). Add the release to its Release-notes page and update any page the release changes. A cloud session can clone the wiki but not push it (it isn't an attached repository): commit there and hand the owner the commit as a patch (`git format-patch -1`) with the commands to push it. The manual's text (`docs/manual/MANUAL.md`) is updated in the same PR as the change.
 - **Manual screenshots** come from `scripts/manual-shots.sh` on the owner's machine (podman, a made-up LAN). A cloud sandbox has no ping, DNS or speed-test access: there, `--here --out <dir>` makes the offline pictures, and the network ones (ping, dns-lookup, advanced, speed-test, results) stay as they are.
 
+## UI: built for a field laptop first
+
+Techs run this on site, on small laptops. Every UI change, and every step of the side-panel rework (mocks: https://claude.ai/artifact/6JjJnabWUj1QjwaVfc65zh), has to work there before it looks good on a big monitor.
+
+- **Target 1280 × 720 points**: a 1080p laptop at 150% scaling. The app already opens at 1120 × 720 and allows 620 × 400; those have to keep working too.
+- **Lay out by window width, not screen size.** Half a 4K monitor gets the same layout as a small laptop.
+  - **1440 and up:** nav open (216), inspector docked (360), side panel docked (272).
+  - **1100–1439:** nav folds to the icon rail (56). Inspector docked at 320 on tool pages; on the Map it floats over the canvas. Opening the Map's side panel closes the inspector.
+  - **Under 1100:** inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
+- **Height is the tighter limit.** At 720, the title bar, status bar and run bar together stay under 130 points, so results get most of the window.
+- **The Map keeps its zoom** when a panel opens over it. Panels float over the canvas; they don't shrink it.
+- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC). Anything a row loses still shows in the inspector.
+- **Click targets stay at least 28 points tall**, for a trackpad on a tailgate.
+- **Check every UI change at 1280 × 720 and at 1120 × 720** before asking to merge, and say in the PR that you did.
+
 ## Bundled skills: keep them in step with the app
 
 `skills/unifidump` and `skills/mapnetwork` ship inside every Site Bundle, and the Map opens their example maps. They're how Claude reads what is-alive writes, so they're part of the change, not docs to catch up on later.

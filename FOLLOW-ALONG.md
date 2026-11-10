@@ -20,7 +20,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 
 > **Nothing opens, or the window stays blank?** See [If the window doesn't open](README.md#if-the-window-doesnt-open): what to try, and where the app writes down why.
 
-You'll see a row of tabs across the top: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**, with **Site Bundle…** at the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Help**, the version, **Full scan** and **Refresh** on the right. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Clicking **is-alive ▾** at the top left opens Settings (theme and the like).
+You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**. On a laptop they're icons only; hover one for its name. **Settings** (theme and the like) and **Help** are at the bottom of that column. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Across the top are **Full scan** and **Report…** on the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Refresh** beside them and the version on the right.
 
 > **Please watch, don't run, the Ports and Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -28,7 +28,7 @@ You'll see a row of tabs across the top: **Ping**, **Ports**, **Traceroute**, **
 
 ## 2. One-click health check (watch along)
 
-The presenter clicks **Full scan** at the bottom right. Several checks start at once and the app jumps to the **Results** tab.
+The presenter clicks **Full scan** at the top right. Several checks start at once and the app jumps to the **Results** tab.
 
 | Result | What it tells you |
 |---|---|
@@ -120,7 +120,7 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 1. Click the **Results** tab. Every check you ran is listed with its start and end time.
 2. **Copy** puts everything on the clipboard, ready to paste into an email or support ticket. **Save** writes it to a text file.
-3. Click **Report…** at the bottom right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
+3. Click **Report…** at the top right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
 
 ---
 
