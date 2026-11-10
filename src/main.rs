@@ -6,6 +6,7 @@ mod chrome;
 mod connect;
 mod fonts;
 mod help;
+mod icons;
 mod input;
 mod job;
 mod log;
@@ -15,6 +16,7 @@ mod mapnetwork;
 mod markdown;
 mod markdown_out;
 mod meraki;
+mod nav;
 mod net;
 mod photos;
 mod redact;
@@ -40,7 +42,7 @@ use net::hostinfo::HostInfo;
 /// Internet target for the full scan's traceroute (and ping when there's no gateway).
 const WAN_TARGET: &str = "1.1.1.1";
 const DNS_TEST_NAME: &str = "cloudflare.com";
-/// Shown in the title bar, the footer and the full scan's Host info entry,
+/// Shown in the window title, the status bar and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN. Results opens to show them. (Speed Test runs from its own tab.)";
@@ -222,8 +224,9 @@ impl eframe::App for App {
                 self.look.vhs,
             );
         }
-        self.header(ui);
+        self.title_bar(ui);
         self.footer(ui);
+        self.nav(ui);
         self.central(ui, now);
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
@@ -393,7 +396,7 @@ impl App {
         if let Some(f) = found {
             match &f {
                 update::Found::Newer(r) => widgets::toast(
-                    format!("Version {} is out: see the footer", r.version),
+                    format!("Version {} is out: see the status bar", r.version),
                     true,
                 ),
                 update::Found::UpToDate if self.update_asked => {

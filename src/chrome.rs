@@ -1,139 +1,75 @@
-//! The window's frame around the tabs: the header (the app's name, which
-//! opens Settings, the tabs and Site Bundle), the footer (this machine's
-//! addresses, Full scan, Report…, Refresh), and Settings itself.
+//! The window's frame around the tabs: the title bar (the app's name, the
+//! site switcher, Report and Full scan), the status bar (this machine's
+//! addresses, Refresh, what's running) and Settings. The nav is in nav.rs.
 
 use crate::job::Job;
-use crate::{App, FULL_SCAN_TIP, TABS, Tab, VERSION, tab_key, theme, widgets};
+use crate::{App, FULL_SCAN_TIP, TABS, VERSION, theme, widgets};
 use eframe::egui;
 
 impl App {
-    /// The tab bar.
-    pub(crate) fn header(&mut self, ui: &mut egui::Ui) {
-        let tabs = egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(8.0);
-            // Wraps to a second row when the window (or display scaling)
-            // leaves too little width, so every tab stays reachable.
-            ui.horizontal_wrapped(|ui| {
-                // The app's name, drawn as a title; it opens Settings.
-                let name = ui
-                    .add(
-                        egui::Button::new(egui::RichText::new("is-alive ▾").heading().strong())
-                            .frame(false),
-                    )
-                    .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
-                if self.shots_settings {
-                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&name));
-                }
-                egui::Popup::menu(&name)
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .show(|ui| {
-                        // A menu stops at the window's edge: scroll rather
-                        // than cut off Keyboard and mouse and the folder at
-                        // the default window size. The popup starts at
-                        // egui's default area size (400 high), so the height
-                        // is asked for: down to the footer, or the content's
-                        // own where that's less.
-                        let room = (ui.ctx().content_rect().height() - 90.0).max(200.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(room)
-                            .min_scrolled_height(room)
-                            .show(ui, |ui| self.settings_ui(ui));
-                    });
+    /// The title bar: the app's name and the site switcher on the left,
+    /// Report and Full scan on the right.
+    pub(crate) fn title_bar(&mut self, ui: &mut egui::Ui) {
+        let bar = egui::Panel::top("title").exact_size(40.0).show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("is-alive").heading().strong());
+                ui.add_space(6.0);
                 self.site_chip(ui);
-                ui.separator();
-                // The selected tab is marked by a sliding underline rather
-                // than a filled box; running jobs get a pulsing dot that
-                // doesn't change the tab's width.
-                let fill = ui.visuals().selection.bg_fill;
-                ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
-                // Tabs sit closer than other controls: twelve of them and
-                // Site Bundle fit one row at the default width in any theme.
-                let gap = ui.spacing().item_spacing.x;
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let mut selected = None;
-                let mut dots = Vec::new();
-                let call = self.map_call(ui);
-                for (n, (tab, name, tip)) in TABS.iter().enumerate() {
-                    if matches!(tab, Tab::Dns | Tab::Export | Tab::Notes | Tab::Results) {
-                        ui.separator();
-                    }
-                    let on = self.tab == *tab;
-                    let mut text = egui::RichText::new(*name);
-                    if on {
-                        text = text.color(theme::accent());
-                    }
-                    // Behind the Map tab's label, for its glow after a full scan.
-                    let behind = (*tab == Tab::Map).then(|| ui.painter().add(egui::Shape::Noop));
-                    let glow = match call {
-                        Call::Glow { glow, .. } if *tab == Tab::Map => glow,
-                        _ => 0.0,
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    let busy = self.any_running();
+                    let tip = if busy {
+                        "Wait for running tools to finish (or stop them) to run a full scan."
+                    } else {
+                        FULL_SCAN_TIP
                     };
-                    if glow > 0.0 {
-                        let plain = ui.visuals().text_color();
-                        text = text.color(plain.lerp_to_gamma(theme::accent(), glow));
+                    let accent = theme::accent();
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            egui::Button::new(
+                                egui::RichText::new("Full scan").strong().color(on(accent)),
+                            )
+                            .fill(accent)
+                            .min_size(egui::vec2(0.0, 28.0)),
+                        )
+                        .on_hover_text(tip)
+                        .on_disabled_hover_text(tip)
+                        .clicked()
+                    {
+                        self.full_scan(ui.ctx());
                     }
-                    let r = ui
-                        .selectable_label(on, text)
-                        .on_hover_text(match tab_key(n) {
-                            Some(d) => format!("{tip}\n\nCtrl+{d}"),
-                            None => tip.to_string(),
-                        });
-                    if r.clicked() {
-                        self.tab = *tab;
+                    if ui
+                        .add(
+                            egui::Button::new("Report…")
+                                .selected(self.report.open)
+                                .min_size(egui::vec2(0.0, 28.0)),
+                        )
+                        .on_hover_text(
+                            "One web page documenting the visit: the map, findings, every \
+                             device and the notes. Opens in any browser; prints to PDF",
+                        )
+                        .clicked()
+                    {
+                        self.report.open = !self.report.open;
                     }
-                    if let Some(at) = behind {
-                        map_glow(ui, at, r.rect, glow);
-                        if call != Call::Off {
-                            map_ring(ui, r.rect);
-                        }
+                    if self.look.theme == theme::Theme::Miami
+                        && let Some(e) = &self.backdrop.err
+                    {
+                        ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
+                            .on_hover_text(e.as_str());
                     }
-                    if on {
-                        selected = Some(r.rect);
-                    }
-                    if self.tab_running(*tab) {
-                        dots.push(r.rect);
-                    }
-                }
-                ui.visuals_mut().selection.bg_fill = fill;
-                ui.spacing_mut().item_spacing.x = gap;
-                if let Some(r) = selected {
-                    tab_underline(ui, r);
-                }
-                let bundle = |ui: &mut egui::Ui| {
-                    ui.button("Site Bundle…")
-                        .on_hover_text("Zip everything for /unifidump and /mapnetwork")
-                };
-                // Right-aligned when the row has room; otherwise it wraps with the tabs.
-                let need = egui::WidgetText::from("Site Bundle…")
-                    .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Button)
-                    .size()
-                    .x
-                    + 2.0 * ui.spacing().button_padding.x
-                    + ui.spacing().item_spacing.x
-                    + 8.0;
-                let button = if ui.available_size_before_wrap().x > need {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), bundle)
-                        .inner
-                } else {
-                    bundle(ui)
-                };
-                if button.clicked() {
-                    self.bundle.open = !self.bundle.open;
-                }
-                if self.bundle.is_running() {
-                    dots.push(button.rect);
-                }
-                running_dots(ui, &dots);
+                });
             });
-            ui.add_space(2.0);
         });
-        theme::top_rule(ui.ctx(), tabs.response.rect.bottom(), self.look.animate);
+        theme::top_rule(ui.ctx(), bar.response.rect.bottom(), self.look.animate);
     }
 
     /// How the Map tab calls for attention this frame, asking for the
     /// frames its pulse needs. While the window isn't focused the pulse
     /// waits, so it plays when the user comes back.
-    fn map_call(&mut self, ui: &egui::Ui) -> Call {
+    pub(crate) fn map_call(&mut self, ui: &egui::Ui) -> Call {
         let (now, focused) = ui.input(|i| (i.time, i.viewport().focused != Some(false)));
         let animate = self.look.animate;
         let call = self.map_call.frame(now, focused, animate);
@@ -150,8 +86,8 @@ impl App {
         call
     }
 
-    /// LAN, gateway and WAN on the left; Full scan, Refresh and the version
-    /// on the right.
+    /// The status bar: LAN, gateway and WAN on the left; what's running,
+    /// a newer release and the version on the right.
     pub(crate) fn footer(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("footer").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -177,8 +113,20 @@ impl App {
                     "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
                          on Refresh or a full scan",
                 );
+                if ui
+                    .add_enabled(
+                        self.info_job.is_none(),
+                        egui::Button::new("Refresh").small(),
+                    )
+                    .on_hover_text("Re-read LAN and gateway, look up the public IP")
+                    .clicked()
+                {
+                    self.refresh_info(ui.ctx());
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.weak(format!("v{VERSION}"));
                     if let Some(crate::update::Found::Newer(r)) = &self.update {
+                        ui.separator();
                         ui.hyperlink_to(
                             egui::RichText::new(format!("Update: v{}", r.version))
                                 .color(widgets::ok())
@@ -190,79 +138,35 @@ impl App {
                              nothing is downloaded.",
                             r.version
                         ));
+                    }
+                    let running = self.running_names();
+                    if !running.is_empty() {
                         ui.separator();
-                    }
-                    if ui
-                        .add_enabled(
-                            self.info_job.is_none(),
-                            egui::Button::new("Refresh").small(),
-                        )
-                        .on_hover_text("Re-read LAN and gateway, look up the public IP")
-                        .clicked()
-                    {
-                        self.refresh_info(ui.ctx());
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new("Report…")
-                                .small()
-                                .selected(self.report.open),
-                        )
-                        .on_hover_text(
-                            "One web page documenting the visit: the map, findings, every \
-                             device and the notes. Opens in any browser; prints to PDF",
-                        )
-                        .clicked()
-                    {
-                        self.report.open = !self.report.open;
-                    }
-                    let busy = self.any_running();
-                    let tip = if busy {
-                        "Wait for running tools to finish (or stop them) to run a full scan."
-                    } else {
-                        FULL_SCAN_TIP
-                    };
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Full scan").small())
-                        .on_hover_text(tip)
-                        .on_disabled_hover_text(tip)
-                        .clicked()
-                    {
-                        self.full_scan(ui.ctx());
-                    }
-                    ui.separator();
-                    ui.weak(format!("v{VERSION}"));
-                    ui.separator();
-                    let help = ui.add(egui::Button::new("Help ▴").small()).on_hover_text(
-                        "The manual (built in, works offline), the wiki, release notes \
-                             and where to report a problem. F1 opens this tab's chapter.",
-                    );
-                    if self.shots_help {
-                        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&help));
-                    }
-                    let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1);
-                    let tab = self.tab;
-                    let picked = egui::Popup::menu(&help)
-                        .align(egui::RectAlign::TOP_END)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| crate::help::menu(ui, tab, name))
-                        .and_then(|r| r.inner);
-                    if let Some(i) = picked {
-                        self.manual.show(i);
-                    }
-                    if self.look.theme == theme::Theme::Miami
-                        && let Some(e) = &self.backdrop.err
-                    {
-                        ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
-                            .on_hover_text(e.as_str());
+                        ui.label(format!("{} running", running.join(", ")));
+                        let (dot, _) =
+                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                        ui.painter().circle_filled(dot.center(), 3.0, widgets::ok());
                     }
                 });
             });
         });
     }
 
-    /// Settings, opened from the app's name: appearance, the network, the
-    /// Map and where the app keeps its files.
+    /// The names of the tools running now, for the status bar.
+    fn running_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = TABS
+            .iter()
+            .filter(|(tab, ..)| self.tab_running(*tab))
+            .map(|t| t.1)
+            .collect();
+        if self.bundle.is_running() {
+            names.push("Site Bundle");
+        }
+        names
+    }
+
+    /// Settings, opened from the nav: appearance, the network, the Map and
+    /// where the app keeps its files.
     pub(crate) fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(320.0);
         ui.horizontal(|ui| {
@@ -301,7 +205,7 @@ impl App {
             )
             .on_hover_text(
                 "One DNS query to OpenDNS when the app opens, for the WAN address in the \
-                 footer. Off, nothing leaves this machine until you run something (Refresh \
+                 status bar. Off, nothing leaves this machine until you run something (Refresh \
                  or a full scan look it up).",
             )
             .changed()
@@ -316,7 +220,7 @@ impl App {
                 )
                 .on_hover_text(
                     "Asks GitHub for the latest release when the app opens (one HTTPS \
-                     request). A newer one shows in the footer with a link; nothing is \
+                     request). A newer one shows in the status bar with a link; nothing is \
                      downloaded.",
                 )
                 .changed()
@@ -383,21 +287,6 @@ fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
         .inactive
         .weak_bg_fill;
     b.frame(true).fill(fill)
-}
-
-/// Underline under the selected tab, sliding to the new one on a switch.
-fn tab_underline(ui: &egui::Ui, r: egui::Rect) {
-    let ctx = ui.ctx();
-    let ease =
-        |k: &str, v: f32| ctx.animate_value_with_time(egui::Id::new(("tab_line", k)), v, 0.16);
-    let (x0, x1, y) = (
-        ease("x0", r.left() + 4.0),
-        ease("x1", r.right() - 4.0),
-        ease("y", r.bottom() + 1.0),
-    );
-    theme::glow(ui.painter(), x0..=x1, y);
-    ui.painter()
-        .hline(x0..=x1, y, egui::Stroke::new(2.0, theme::accent()));
 }
 
 /// Seconds the Map tab pulses for after a full scan (three slow pulses);
@@ -474,65 +363,75 @@ fn glow_secs(animate: bool) -> f64 {
     if animate { PULSE_SECS } else { STILL_SECS }
 }
 
-/// A soft accent fill behind the Map tab, `glow` 0–1, in the slot `at`
-/// reserved under its label.
-fn map_glow(ui: &egui::Ui, at: egui::layers::ShapeIdx, r: egui::Rect, glow: f32) {
+/// A soft accent fill behind the Map's nav row, `glow` 0–1.
+pub(crate) fn map_glow(p: &egui::Painter, r: egui::Rect, glow: f32) {
     if glow <= 0.0 {
         return;
     }
     let accent = theme::accent();
-    ui.painter().set(
-        at,
-        egui::epaint::RectShape::new(
-            r.expand2(egui::vec2(2.0, 1.0)),
-            4.0,
-            accent.gamma_multiply(0.3 * glow),
-            egui::Stroke::new(1.0, accent.gamma_multiply(0.7 * glow)),
-            egui::StrokeKind::Inside,
-        ),
-    );
+    p.add(egui::epaint::RectShape::new(
+        r,
+        6.0,
+        accent.gamma_multiply(0.3 * glow),
+        egui::Stroke::new(1.0, accent.gamma_multiply(0.7 * glow)),
+        egui::StrokeKind::Inside,
+    ));
 }
 
-/// A small ring in the Map tab's top-right corner until it's opened: hollow,
-/// so it isn't read as a running job's dot.
-fn map_ring(ui: &egui::Ui, r: egui::Rect) {
-    ui.painter().circle_stroke(
-        egui::pos2(r.right() - 2.5, r.top() + 3.5),
-        2.75,
+/// A small ring at the top-right corner of `r` (the Map's icon) until the
+/// Map is opened: hollow, so it isn't read as a running job's dot.
+pub(crate) fn map_ring(p: &egui::Painter, r: egui::Rect) {
+    p.circle_stroke(
+        egui::pos2(r.right() - 1.0, r.top() + 1.0),
+        3.0,
         egui::Stroke::new(1.5, theme::accent()),
     );
 }
 
-/// Pulsing dot in the top-right corner of each tab whose job is running.
-fn running_dots(ui: &egui::Ui, rects: &[egui::Rect]) {
-    if rects.is_empty() {
-        return;
-    }
-    // Slow pulse at 10 fps, held still while the window isn't focused: a
-    // continuous ping can run for hours, and each frame redraws the window.
-    let focused = ui.input(|i| i.viewport().focused != Some(false));
-    let t = ui.input(|i| i.time) as f32;
-    let a = if focused {
-        0.35 + 0.65 * (0.5 + 0.5 * (t * 3.0).sin())
+/// Text that reads on a fill of `colour`: near-black or white, whichever
+/// contrasts more (WCAG relative luminance).
+pub(crate) fn on(colour: egui::Color32) -> egui::Color32 {
+    let dark = egui::Color32::from_rgb(0x10, 0x12, 0x16);
+    if contrast(colour, dark) >= contrast(colour, egui::Color32::WHITE) {
+        dark
     } else {
-        1.0
+        egui::Color32::WHITE
+    }
+}
+
+fn luminance(c: egui::Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
     };
-    for r in rects {
-        ui.painter().circle_filled(
-            egui::pos2(r.right() - 2.0, r.top() + 3.0),
-            2.5,
-            widgets::ok().gamma_multiply(a),
-        );
-    }
-    if focused {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
-    }
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio between two colours, 1 to 21.
+pub(crate) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
+    let (x, y) = (luminance(a), luminance(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_scan_text_reads_on_every_themes_accent() {
+        for t in theme::Theme::ALL {
+            let a = theme::accent_for(t);
+            assert!(
+                contrast(a, on(a)) >= 4.5,
+                "{t:?}: {:.2}",
+                contrast(a, on(a))
+            );
+        }
+    }
 
     #[test]
     fn map_tab_glows_then_keeps_a_ring_until_opened() {

@@ -102,7 +102,7 @@ You can open a config or map file in is-alive straight from your file manager (*
 
 ### Updates
 
-When is-alive starts, it asks GitHub whether a newer release is out (you can turn this off: see [Settings](#16-settings-and-themes)). If one is, a green **Update: v…** link appears at the bottom right. Clicking it opens that release's download page; nothing is downloaded or installed for you. To update, download the new file and replace the old one. Your settings and notes are kept: they live in your profile folder, not next to the program.
+When is-alive starts, it asks GitHub whether a newer release is out (you can turn this off: see [Settings](#16-settings-and-themes)). If one is, a green **Update: v…** link appears at the bottom right, in the status bar. Clicking it opens that release's download page; nothing is downloaded or installed for you. To update, download the new file and replace the old one. Your settings and notes are kept: they live in your profile folder, not next to the program.
 
 ---
 
@@ -110,13 +110,20 @@ When is-alive starts, it asks GitHub whether a newer release is out (you can tur
 
 ![The is-alive window on the Ping tab: the tab bar across the top, the Ping tab's fields, and the footer with this machine's addresses](img/window.png)
 
-### The tab bar (top)
+### The title bar (top)
 
-- **is-alive ▾** (top left) opens **Settings**: theme, network options and the list of shortcuts. See [Settings and themes](#16-settings-and-themes).
-- **The site** beside it (**● Scratch ▾** until you make one) is the client site you're working on. See [Sites](#sites) below.
-- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results). In a narrow window the tabs wrap onto a second row.
+- **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#18-site-bundle-and-claude).
+- **Full scan** (top right) runs a quick health check of this network (below).
+- **Report…** beside it opens the [Site report](#site-report): one web page documenting the visit.
+
+### The nav (left)
+
+- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
+- **Open or folded.** In a window 1440 points wide or more the nav is open, with each tab's icon and name. In a smaller window (a laptop, or half a big screen) it folds to a rail of icons, and on the **Map** it's always a rail so the map gets the room. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
-- **Site Bundle…** (top right) zips the visit's results for Claude. See [Site Bundle and Claude](#18-site-bundle-and-claude).
+- **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#16-settings-and-themes).
+- **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
+- **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
 
 ### Sites
 
@@ -155,17 +162,14 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | `https://portal.example.com/login` | `portal.example.com` |
 | `bücher.de`, `пример.рф` | Names in any language (looked up in their DNS form) |
 
-### The footer (bottom)
+### The status bar (bottom)
 
 - **LAN** is this computer's address and subnet (for example `192.168.1.50/24`).
 - **Gateway** is the router this computer sends internet traffic to.
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
-- **Help ▴** opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
-- **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
-- **v0.28.0** is the version you're running: worth including when you report a problem.
-- **Full scan** runs a quick health check of this network (below).
-- **Report…** opens the [Site report](#site-report): one web page documenting the visit.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
+- **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
+- **v0.28.1** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
@@ -188,7 +192,7 @@ When every check is done and the sweep found something, the **Map** tab glows fo
 
 ![The Site Report window over the Contoso Health example: the title, then Map, Findings, Changes since, Infrastructure, Clients, Tech notes and Test results, each saying what it holds, and Save report…](img/site-report.png)
 
-**Report…** (bottom right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
+**Report…** (top right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
 
 | Field or row | What it's for |
 |---|---|
@@ -258,7 +262,7 @@ How to read it:
 | Every reply lost, but the site works in a browser | ICMP is blocked on the way: switch to **TCP** port 443 |
 | Max much higher than Avg over Wi-Fi | Normal for Wi-Fi up to a point; for calls, check jitter in the Speed Test |
 
-**Ping the gateway too.** Run the same test against the address after **Gateway** in the footer. Comparing the two tells you which side of the router a problem is on.
+**Ping the gateway too.** Run the same test against the address after **Gateway** in the status bar. Comparing the two tells you which side of the router a problem is on.
 
 ### Common problems
 
@@ -340,7 +344,7 @@ With **Certificates** ticked, each open port that speaks TLS gets a **Certificat
 
 ### Example: what does the router offer?
 
-1. Type the gateway's address (from the footer), say `192.168.1.1`, in **Host**.
+1. Type the gateway's address (from the status bar), say `192.168.1.1`, in **Host**.
 2. Leave **Ports** on the **Common** preset and press **Enter**.
 3. A typical small-office firewall:
 
@@ -1113,9 +1117,9 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ## 16. Settings and themes
 
-![Settings, opened from the app's name: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note and the settings folder are further down](img/settings.png)
+![Settings: themes with their map colours, Emoji, Animate, the Miami backdrop and the Network options; the Map note and the settings folder are further down](img/settings.png)
 
-Click **is-alive ▾** at the top left to open Settings. Changes apply at once and are remembered. In a small window, scroll it for the rest.
+Click **Settings** at the foot of the nav to open it. Changes apply at once and are remembered. In a small window, scroll it for the rest.
 
 ### Theme
 
@@ -1138,7 +1142,7 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
-**Animate** (on by default, in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, and in Miami the backdrop and the line under the tabs drift (the RGB line too). Everything pauses while the window isn't in front. Off, the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. Turn it off on battery or if motion bothers you.
+**Animate** (on by default, in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front. Off, the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. Turn it off on battery or if motion bothers you.
 
 ### Miami backdrop
 
@@ -1152,7 +1156,7 @@ The small line under them says what's drawing the backdrop (graphics card or pro
 
 ### Network
 
-- **Look up the public IP on start** (on by default): one DNS query to OpenDNS when the app opens, for the WAN address in the footer. Off, nothing leaves the computer until you run something.
+- **Look up the public IP on start** (on by default): one DNS query to OpenDNS when the app opens, for the WAN address in the status bar. Off, nothing leaves the computer until you run something.
 - **Check for updates on start** (on by default): one request to GitHub for the latest version. **Check now** checks at any time and says if you're up to date or why it couldn't check.
 
 ### Map
@@ -1222,7 +1226,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 
 This chapter is about handing the visit to Claude. For a document people read, use the [Site report](#site-report).
 
-is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Site Bundle…** (top right, any tab) gathers it all into one zip.
+is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Site Bundle…** (in the site menu, top left) gathers it all into one zip.
 
 ### The window
 
@@ -1255,7 +1259,7 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 ### The round trip
 
 1. **On site:** run a Subnet Sweep, open the site's UniFi backup and SonicWall or Meraki export in Config Export, take notes.
-2. **Bundle:** click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
+2. **Bundle:** open the site menu (top left) and click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
 3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on the UniFi export, then `/mapnetwork` with everything else.
 4. **Back in is-alive:** open the `.dc.html` map Claude makes in Config Export (or drop it on the window). The Map redraws it, and a sweep of the same network marks which devices answer.
 5. **Next visit:** keep that map open when you make the next bundle. Claude updates the existing map, under its original name, instead of starting again.
@@ -1324,7 +1328,7 @@ sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 | Advanced: blacklists *couldn't check* | Those lists refuse public resolvers: set **Resolver** to the office's DNS |
 | Speed Test blocked or 403 | Web filtering, or Cloudflare rate-limiting: use **Download a file** with a server from **Servers** |
 | Map empty | Nothing seen yet: **Scan this network**, or open a backup in Config Export |
-| Footer WAN says *unknown* | No internet, or OpenDNS blocked; *not looked up* means it's turned off in Settings |
+| Status bar WAN says *unknown* | No internet, or OpenDNS blocked; *not looked up* means it's turned off in Settings |
 | Security software alerts during a scan | Expected: agree scans with the site and use the **Gentle** speed |
 
 ### Help or a link doesn't open the browser
@@ -1397,7 +1401,7 @@ The text is updated with any release that changes what it describes. The **scree
 2. Run `scripts/manual-shots.sh`. It builds the release binary in the `isalive-dev` container and runs the app's manual tour (`IS_ALIVE_SHOTS_MANUAL`, in `src/shots.rs`) on a made-up network, writing `docs/manual/img/<name>.png`. On a patch version it refuses to touch `docs/manual/img` and says why; `scripts/manual-shots.sh --out <dir>` renders a preview anywhere, at any version.
 3. Look at every picture, then commit them with the release.
 
-The tour pings `1.1.1.1`, checks `example.com`, runs a 10-second download from Cloudflare and port-checks a few listeners on its own made-up address (`192.168.1.50`); it never sweeps, traces, looks up the public IP or checks for updates (its Settings has both turned off, so the footer's *WAN not looked up* matches), so the pictures show no real network. The made-up network answers pings itself, so the Ping picture's replies say `ttl=255`.
+The tour pings `1.1.1.1`, checks `example.com`, runs a 10-second download from Cloudflare and port-checks a few listeners on its own made-up address (`192.168.1.50`); it never sweeps, traces, looks up the public IP or checks for updates (its Settings has both turned off, so the status bar's *WAN not looked up* matches), so the pictures show no real network. The made-up network answers pings itself, so the Ping picture's replies say `ttl=255`.
 
 The pictures are rendered into `docs/manual/img/.incoming` first. A run that fails (a lookup error, a speed test refused with *http status: 429*) is tried once more after 45 seconds; if it still fails, or a run doesn't finish in two minutes, the script says which picture and why, fails, and leaves `docs/manual/img` as it was, with this run's pictures in `.incoming` to look at. A 429 means Cloudflare is rate-limiting your address after several runs: wait an hour and run the script again.
 

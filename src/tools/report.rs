@@ -1,4 +1,4 @@
-//! Site Report (Report… in the footer): one web page that documents the
+//! Site Report (Report… in the title bar): one web page that documents the
 //! visit, put together from what the other tabs hold. The page itself is
 //! written by `crate::report`; this is the window that picks what goes in.
 

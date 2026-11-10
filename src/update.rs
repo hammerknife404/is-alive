@@ -1,5 +1,5 @@
 //! Update check: asks GitHub for the latest release and says whether it's
-//! newer than this build. Nothing is downloaded or replaced; the footer
+//! newer than this build. Nothing is downloaded or replaced; the status bar
 //! links to the release page.
 
 /// Where releases are published.

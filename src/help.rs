@@ -1,4 +1,4 @@
-//! Help: the footer's Help menu. The manual built into the app comes
+//! Help: the nav's Help menu. The manual built into the app comes
 //! first (F1 opens it at the tab on screen); then the wiki, the follow-along
 //! guide, release notes and where to report a problem, online.
 
@@ -127,7 +127,7 @@ fn links(tab: Tab, tab_name: &str) -> [(&'static str, Vec<Link>); 2] {
     ]
 }
 
-/// The Help menu, opened from the footer. Opens a page online itself;
+/// The Help menu, opened from the nav. Opens a page online itself;
 /// returns the manual's chapter to show.
 pub fn menu(ui: &mut egui::Ui, tab: Tab, tab_name: &str) -> Option<usize> {
     ui.set_min_width(380.0);
