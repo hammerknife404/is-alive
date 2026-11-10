@@ -9,6 +9,11 @@ use std::collections::VecDeque;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "target", "mode", "port", "seq", "from", "status", "rtt_ms", "ttl", "bytes",
+];
+
 #[derive(PartialEq, Clone, Copy)]
 enum Mode {
     Icmp,
@@ -271,9 +276,7 @@ impl PingTool {
 
     fn table(&self) -> Option<Table> {
         Some(Table {
-            columns: &[
-                "target", "mode", "port", "seq", "from", "status", "rtt_ms", "ttl", "bytes",
-            ],
+            columns: COLUMNS,
             rows: self.rows.iter().cloned().collect(),
         })
     }

@@ -3,6 +3,9 @@
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &["field", "value"];
+
 #[derive(Clone, Debug, Default)]
 pub struct HostInfo {
     /// Address and prefix length on the default-route interface.
@@ -82,7 +85,7 @@ impl HostInfo {
     pub fn table(&self, version: &str) -> crate::log::Table {
         let row = |k: &str, v: String| vec![k.to_string(), v];
         crate::log::Table {
-            columns: &["field", "value"],
+            columns: COLUMNS,
             rows: vec![
                 row("version", version.to_string()),
                 row(

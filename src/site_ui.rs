@@ -2,7 +2,7 @@
 //! dialogs it opens (switch, new, rename, delete), and the switch itself.
 //! See site.rs for what a site keeps.
 
-use crate::{App, Tab, VERSION, site, theme, widgets};
+use crate::{App, VERSION, site, theme, widgets};
 use eframe::egui::{self, RichText};
 use std::path::PathBuf;
 
@@ -194,6 +194,7 @@ impl App {
         let here = self.site_name.clone();
         let remembered = self.site_configs.len();
         let scratch = site::current().is_none();
+        let keep = self.look.results_keep;
         let Some(ask) = &mut self.site_ask else {
             return;
         };
@@ -209,6 +210,9 @@ impl App {
                         c[0].strong(format!("{here} keeps"));
                         c[0].label("• Its notes");
                         c[0].label("• Its saved maps and card notes");
+                        if !scratch && keep {
+                            c[0].label("• Its Results");
+                        }
                         if !scratch {
                             c[0].label(match remembered {
                                 0 => "• No configs to remember".to_string(),
@@ -223,7 +227,8 @@ impl App {
                     });
                     ui.add_space(4.0);
                     ui.weak(if to.is_some() {
-                        format!("{name} opens as it was left: its notes and maps, its configs read again from where they are.")
+                        let results = if keep { ", its Results" } else { "" };
+                        format!("{name} opens as it was left: its notes and maps{results}, its configs read again from where they are.")
                     } else {
                         "Scratch is no site: the notes and maps kept outside any site.".to_string()
                     });
@@ -397,6 +402,7 @@ impl App {
             self.notes.flush();
         }
         self.remember_site_configs();
+        self.keep_results();
         site::set_current(to);
         site::touch();
         self.look.site = site::current();
@@ -407,10 +413,12 @@ impl App {
             self.notes.rehome(now);
             self.map.switch_site(true);
             self.site_configs.clear();
+            // Results too: written to the new site's folder next frame.
+            self.log_saved = (usize::MAX, usize::MAX, usize::MAX);
         } else {
             self.export.clear();
             self.sweep.clear_results();
-            self.log.clear();
+            self.load_results();
             self.notes = Default::default();
             // A fresh Notes starts with Autosave on: keep the user's choice.
             self.notes.set_autosave(self.look.notes_autosave);
@@ -423,9 +431,6 @@ impl App {
         self.bundle.for_site(named.as_deref());
         self.report.for_site(named.as_deref());
         self.retitle(ctx);
-        if self.tab == Tab::Results {
-            self.tab = Tab::Notes;
-        }
         widgets::toast(format!("{} is open", self.site_name), true);
     }
 

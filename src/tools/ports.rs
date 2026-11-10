@@ -10,6 +10,21 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "host",
+    "ip",
+    "port",
+    "state",
+    "service",
+    "rtt_ms",
+    "error",
+    "tls_status",
+    "tls_issued_to",
+    "tls_issued_by",
+    "tls_expires",
+];
+
 enum Ev {
     Resolved(IpAddr, usize),
     Result(u16, TcpState, f64),
@@ -383,19 +398,7 @@ impl PortTool {
             })
             .collect();
         Some(Table {
-            columns: &[
-                "host",
-                "ip",
-                "port",
-                "state",
-                "service",
-                "rtt_ms",
-                "error",
-                "tls_status",
-                "tls_issued_to",
-                "tls_issued_by",
-                "tls_expires",
-            ],
+            columns: COLUMNS,
             rows,
         })
     }

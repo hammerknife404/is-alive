@@ -13,6 +13,19 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "range",
+    "ip",
+    "rtt_ms",
+    "ttl",
+    "mac",
+    "vendor",
+    "name",
+    "open_ports",
+    "found_by",
+];
+
 struct Host {
     ip: Ipv4Addr,
     /// None for a host that never answered ping but did answer ARP.
@@ -374,17 +387,7 @@ impl SweepTool {
             })
             .collect();
         Some(Table {
-            columns: &[
-                "range",
-                "ip",
-                "rtt_ms",
-                "ttl",
-                "mac",
-                "vendor",
-                "name",
-                "open_ports",
-                "found_by",
-            ],
+            columns: COLUMNS,
             rows,
         })
     }

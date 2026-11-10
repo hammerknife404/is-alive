@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &["lookup", "source", "type", "value"];
+
 /// Where a lookup is sent.
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
@@ -272,7 +275,7 @@ impl DnsTool {
             )
             .collect();
         Some(Table {
-            columns: &["lookup", "source", "type", "value"],
+            columns: COLUMNS,
             rows,
         })
     }

@@ -8,6 +8,27 @@ use std::net::{IpAddr, SocketAddr};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+/// Results (CSV export, the saved log): one row per result, these columns.
+pub const COLUMNS: &[&str] = &[
+    "server",
+    "ip",
+    "phase",
+    "mbps",
+    "mb",
+    "seconds",
+    "streams",
+    "probe",
+    "probes",
+    "lost",
+    "latency_avg_ms",
+    "latency_min_ms",
+    "latency_max_ms",
+    "jitter_ms",
+    "loss_pct",
+    "added_ms",
+    "mos",
+];
+
 /// Probes at idle, and the spacing of every probe: 10 a second, enough
 /// samples for jitter without looking like a flood.
 const IDLE_PROBES: usize = 40;
@@ -800,25 +821,7 @@ loss is less reliable that way."
             })
             .collect();
         Table {
-            columns: &[
-                "server",
-                "ip",
-                "phase",
-                "mbps",
-                "mb",
-                "seconds",
-                "streams",
-                "probe",
-                "probes",
-                "lost",
-                "latency_avg_ms",
-                "latency_min_ms",
-                "latency_max_ms",
-                "jitter_ms",
-                "loss_pct",
-                "added_ms",
-                "mos",
-            ],
+            columns: COLUMNS,
             rows,
         }
     }
