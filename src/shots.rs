@@ -328,10 +328,19 @@ const MANUAL: &[Scene] = &[
         at_once,
     ),
     scene(
+        "site-report",
+        Tab::Map,
+        |a, _| {
+            a.bundle.open = false;
+            a.report.open = true;
+        },
+        at_once,
+    ),
+    scene(
         "map-light",
         Tab::Map,
         |a, ctx| {
-            a.bundle.open = false;
+            a.report.open = false;
             theme::apply(ctx, theme::Theme::Light);
         },
         at_once,

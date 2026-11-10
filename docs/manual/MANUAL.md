@@ -8,7 +8,7 @@ end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.27.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.28.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -162,7 +162,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Help ▴** opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
 - **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
-- **v0.25.0** is the version you're running: worth including when you report a problem.
+- **v0.28.0** is the version you're running: worth including when you report a problem.
 - **Full scan** runs a quick health check of this network (below).
 - **Report…** opens the [Site report](#site-report): one web page documenting the visit.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
@@ -185,6 +185,8 @@ In under a minute you know whether a problem is this computer, the local network
 When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
 
 ### Site report
+
+![The Site Report window over the Contoso Health example: the title, then Map, Findings, Changes since, Infrastructure, Clients, Tech notes and Test results, each saying what it holds, and Save report…](img/site-report.png)
 
 **Report…** (bottom right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
 
