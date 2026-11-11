@@ -133,6 +133,8 @@ Five parts, the same on every tab:
 - **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#16-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
 - **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
+  - **Pop out** (top right, beside the chapter's title) moves it into a window of its own, to keep beside is-alive or on another screen while you work; **Back in is-alive** puts it back over the app. It opens the same way next time, and **F1** brings the window to the front at the tab's chapter.
+  - **Links** in it work: one to another chapter or heading (*see [Sites](#sites)*) opens it there, and a web link opens in your browser.
 
 ### Sites
 

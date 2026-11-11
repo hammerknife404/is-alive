@@ -1,7 +1,8 @@
 //! Just enough Markdown for tech notes, drawn with egui: headings, lists,
 //! task boxes, quotes, code blocks, rules, and **bold**, *italic*, `code`
-//! and [links](…) inline. Links are shown, not followed. Redaction markers
-//! are picked out so it's plain what was removed.
+//! and [links](…) inline. In Notes links are shown, not followed; the
+//! manual follows them (`render_following`). Redaction markers are picked
+//! out so it's plain what was removed.
 
 use eframe::egui::{self, FontFamily, FontId, RichText, Stroke, TextFormat, Ui, text::LayoutJob};
 
@@ -104,6 +105,10 @@ pub(crate) fn shortcode(rest: &str) -> Option<(&'static str, usize)> {
         .map(|(e, ..)| (*e, end))
 }
 
+/// A link in a laid-out line: the characters it covers (not bytes, as a
+/// galley's cursors count) and where it goes, as written.
+pub type Links = Vec<(std::ops::Range<usize>, String)>;
+
 /// Inline spans of one line, styled.
 pub(crate) fn inline(
     ui: &Ui,
@@ -112,6 +117,18 @@ pub(crate) fn inline(
     strong: bool,
     family: &FontFamily,
 ) -> LayoutJob {
+    inline_links(ui, text, size, strong, family).0
+}
+
+/// `inline`, and where each link in it is and goes.
+pub(crate) fn inline_links(
+    ui: &Ui,
+    text: &str,
+    size: f32,
+    strong: bool,
+    family: &FontFamily,
+) -> (LayoutJob, Links) {
+    let mut links = Links::new();
     let vis = ui.visuals();
     let body = if strong {
         vis.strong_text_color()
@@ -182,7 +199,10 @@ pub(crate) fn inline(
             let mut f = base.clone();
             f.color = vis.hyperlink_color;
             f.underline = Stroke::new(1.0, vis.hyperlink_color);
+            let from = job.text.chars().count();
             job.append(&rest[1..mid], 0.0, f);
+            let to = rest[mid + 2..mid + end].to_string();
+            links.push((from..job.text.chars().count(), to));
             rest = &rest[mid + end + 1..];
         } else if (rest.starts_with('*') || rest.starts_with('_'))
             // A lone * or _ before a space isn't emphasis.
@@ -202,7 +222,84 @@ pub(crate) fn inline(
             rest = &rest[1..];
         }
     }
-    job
+    (job, links)
+}
+
+/// A label whose links can be clicked: the pointer turns to a hand over
+/// one, a web link's address shows on hover, and the clicked link's
+/// target comes back with the label's response. Text stays selectable,
+/// as other labels are.
+pub fn linked_label(
+    ui: &mut Ui,
+    job: LayoutJob,
+    links: &[(std::ops::Range<usize>, String)],
+    wrap: bool,
+) -> (egui::Response, Option<String>) {
+    let label = egui::Label::new(job);
+    let label = if wrap { label.wrap() } else { label };
+    if links.is_empty() {
+        return (ui.add(label), None);
+    }
+    let (pos, galley, response) = label.sense(egui::Sense::click()).layout_in_ui(ui);
+    let hit = response.hover_pos().and_then(|p| {
+        let rel = p - pos;
+        let c = galley.cursor_from_pos(rel);
+        // The cursor sits between characters: the one under the pointer
+        // is before it when the pointer is left of it.
+        let k = if galley.pos_from_cursor(c).min.x > rel.x {
+            c.index.0.saturating_sub(1)
+        } else {
+            c.index.0
+        };
+        links
+            .iter()
+            .find(|(r, _)| r.contains(&k))
+            .map(|(_, to)| to.clone())
+    });
+    let colour = ui.visuals().text_color();
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        pos,
+        galley,
+        colour,
+        Stroke::NONE,
+    );
+    let Some(to) = hit else {
+        return (response, None);
+    };
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    let clicked = response.clicked();
+    let response = if to.starts_with("http") {
+        response.on_hover_text(to.as_str())
+    } else {
+        response
+    };
+    (response, clicked.then_some(to))
+}
+
+/// A heading's anchor as GitHub makes it: "13. Speed Test" is
+/// "13-speed-test", "The inspector (right)" is "the-inspector-right".
+pub fn anchor(heading: &str) -> String {
+    heading
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter_map(|c| match c {
+            ' ' => Some('-'),
+            '-' | '_' => Some(c),
+            c if c.is_alphanumeric() => Some(c),
+            _ => None,
+        })
+        .collect()
+}
+
+/// For a renderer that follows links (the manual): the heading to bring
+/// into view, by its anchor, and the link clicked this frame.
+#[derive(Default)]
+pub struct Follow {
+    pub show: Option<String>,
+    pub clicked: Option<String>,
 }
 
 /// List marker and the rest: ("•", "text"), ("3.", "text") or a task box.
@@ -233,8 +330,54 @@ fn item(line: &str) -> Option<(usize, Item<'_>)> {
 }
 
 /// Draw `text` in `font` (headings scale from its size). Returns the line
-/// of a task box that was clicked.
+/// of a task box that was clicked. Links are shown, not followed.
 pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
+    render_in(ui, text, font, None)
+}
+
+/// `render` with links that can be clicked (`follow.clicked`), bringing
+/// the heading `follow.show` names into view.
+pub fn render_following(ui: &mut Ui, text: &str, font: &FontId, follow: &mut Follow) {
+    render_in(ui, text, font, Some(follow));
+}
+
+/// One line of inline text: a plain label, or one whose links can be
+/// clicked when they're followed.
+fn say(
+    ui: &mut Ui,
+    follow: &mut Option<&mut Follow>,
+    text: &str,
+    size: f32,
+    strong: bool,
+    family: &FontFamily,
+    wrap: bool,
+) -> egui::Response {
+    match follow {
+        Some(f) => {
+            let (job, links) = inline_links(ui, text, size, strong, family);
+            let (r, to) = linked_label(ui, job, &links, wrap);
+            if to.is_some() {
+                f.clicked = to;
+            }
+            r
+        }
+        None => {
+            let job = inline(ui, text, size, strong, family);
+            if wrap {
+                ui.add(egui::Label::new(job).wrap())
+            } else {
+                ui.label(job)
+            }
+        }
+    }
+}
+
+fn render_in(
+    ui: &mut Ui,
+    text: &str,
+    font: &FontId,
+    mut follow: Option<&mut Follow>,
+) -> Option<usize> {
     let mut toggled = None;
     let body = font.size;
     let mut lines = text.lines().enumerate().peekable();
@@ -269,7 +412,7 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
                 rows.push(next.trim_start());
                 lines.next();
             }
-            table(ui, &rows, font);
+            table(ui, &rows, font, &mut follow);
             continue;
         }
         if t.is_empty() {
@@ -284,7 +427,14 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
         if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
             let size = body * [1.6, 1.35, 1.15, 1.05, 1.0, 1.0][hashes - 1];
             ui.add_space(body * 0.3);
-            ui.label(inline(ui, t[hashes..].trim(), size, true, &font.family));
+            let title = t[hashes..].trim();
+            let r = say(ui, &mut follow, title, size, true, &font.family, false);
+            if let Some(f) = follow.as_deref_mut()
+                && f.show.as_deref() == Some(anchor(title).as_str())
+            {
+                r.scroll_to_me(Some(egui::Align::TOP));
+                f.show = None;
+            }
             if hashes <= 2 {
                 let r = ui.min_rect();
                 let y = ui.cursor().top();
@@ -303,7 +453,7 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
                     ui.allocate_exact_size(egui::vec2(3.0, body * 1.3), egui::Sense::hover());
                 ui.painter()
                     .rect_filled(r, 1, crate::theme::accent().gamma_multiply(0.6));
-                ui.label(inline(ui, q.trim(), body, false, &font.family));
+                say(ui, &mut follow, q.trim(), body, false, &font.family, true);
             });
             continue;
         }
@@ -313,11 +463,11 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
                 match it {
                     Item::Bullet(r) => {
                         ui.label(RichText::new("•").size(body).color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false, &font.family));
+                        say(ui, &mut follow, r, body, false, &font.family, true);
                     }
                     Item::Number(num, r) => {
                         ui.label(RichText::new(num).size(body).color(crate::theme::accent()));
-                        ui.label(inline(ui, r, body, false, &font.family));
+                        say(ui, &mut follow, r, body, false, &font.family, true);
                     }
                     Item::Task(done, r) => {
                         let mut d = done;
@@ -332,13 +482,14 @@ pub fn render(ui: &mut Ui, text: &str, font: &FontId) -> Option<usize> {
                                 s.format.color = ui.visuals().weak_text_color();
                             }
                         }
-                        ui.label(job);
+                        // In a row, a label runs on unless told to wrap.
+                        ui.add(egui::Label::new(job).wrap());
                     }
                 }
             });
             continue;
         }
-        ui.label(inline(ui, line, body, false, &font.family));
+        say(ui, &mut follow, line, body, false, &font.family, false);
     }
     toggled
 }
@@ -351,7 +502,7 @@ fn cells(row: &str) -> Vec<&str> {
 
 /// A Markdown table as a striped grid: the first row as its header, the
 /// `|---|` row left out, text wrapped to share the width.
-fn table(ui: &mut Ui, rows: &[&str], font: &FontId) {
+fn table(ui: &mut Ui, rows: &[&str], font: &FontId, follow: &mut Option<&mut Follow>) {
     let Some((head, rest)) = rows.split_first() else {
         return;
     };
@@ -388,10 +539,7 @@ fn table(ui: &mut Ui, rows: &[&str], font: &FontId) {
                         ui.set_max_width(*w);
                         // A grid's cells sit in a row, where text runs on
                         // unless told to wrap.
-                        ui.add(
-                            egui::Label::new(inline(ui, cell, font.size, strong, &font.family))
-                                .wrap(),
-                        );
+                        say(ui, follow, cell, font.size, strong, &font.family, true);
                     });
                 }
                 ui.end_row();
@@ -442,6 +590,66 @@ pub fn continue_list(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A link in a followed line can be clicked, and goes where it says;
+    /// the plain text beside it doesn't.
+    #[test]
+    fn a_followed_link_is_clicked_by_its_text() {
+        let ctx = egui::Context::default();
+        let text = "Plain words first, then [the Speed Test](#13-speed-test) after.";
+        let frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 200.0),
+                )),
+                time: Some(ctx.input(|i| i.time) + 0.5),
+                ..Default::default()
+            };
+            let mut follow = Follow::default();
+            let mut out = ctx.run_ui(input, |ui| {
+                render_following(ui, text, &FontId::proportional(14.0), &mut follow);
+            });
+            out.textures_delta.clear();
+            let mut row = egui::Rect::NOTHING;
+            for c in &out.shapes {
+                if let egui::Shape::Text(t) = &c.shape {
+                    row = t.visual_bounding_rect();
+                }
+            }
+            (row, follow.clicked)
+        };
+        let click = |at: egui::Pos2| {
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame(vec![egui::Event::PointerMoved(at)]);
+            frame(vec![press(true)]);
+            frame(vec![press(false)]).1
+        };
+        let (row, _) = frame(vec![]);
+        assert!(row.is_positive());
+        // "the Speed Test" sits from about half to four fifths along;
+        // "Plain" at the start.
+        let at = |share: f32| egui::pos2(row.left() + row.width() * share, row.center().y);
+        assert_eq!(click(at(0.65)), Some("#13-speed-test".to_string()));
+        assert_eq!(click(at(0.05)), None);
+    }
+
+    #[test]
+    fn anchors_are_githubs() {
+        assert_eq!(anchor("13. Speed Test"), "13-speed-test");
+        assert_eq!(anchor("The inspector (right)"), "the-inspector-right");
+        assert_eq!(anchor("The .exe doesn't open"), "the-exe-doesnt-open");
+        assert_eq!(
+            anchor("9. Advanced (mail and domain health)"),
+            "9-advanced-mail-and-domain-health"
+        );
+    }
 
     #[test]
     fn draws_the_format_test_file() {

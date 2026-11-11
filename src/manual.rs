@@ -1,7 +1,10 @@
 //! The user manual, built in: docs/manual/MANUAL.md is compiled into the
 //! app, so Help and F1 work with no network (the usual state of a site with
 //! a problem) and always describe this version. A window with the chapters
-//! down the left. It's text only: no screenshots to fall out of date.
+//! down the left, over the app or (Pop out) a window of its own to keep
+//! beside it or on another screen. Its links go to the chapter or heading
+//! they name, or open in the browser. It's text only: no screenshots to
+//! fall out of date.
 
 use crate::{Tab, widgets};
 use eframe::egui;
@@ -87,9 +90,19 @@ pub fn chapter_named(name: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// The manual's own window, when it's popped out.
+const OWN: &str = "manual_window";
+
 #[derive(Default)]
 pub struct Manual {
     pub open: bool,
+    /// In a window of its own (Pop out) rather than over the app; kept in
+    /// the settings.
+    pub own_window: bool,
+    /// Bring its own window to the front on the next frame (F1, Help).
+    focus: bool,
+    /// The heading a link named, to bring into view: its anchor.
+    heading: Option<String>,
     chapter: usize,
     /// Scroll the text back to the top, and the list to the chapter, on
     /// the next frame.
@@ -99,6 +112,14 @@ pub struct Manual {
 }
 
 impl Manual {
+    /// Closed, over the app or (`own_window`) popped out, as last left.
+    pub fn new(own_window: bool) -> Self {
+        Self {
+            own_window,
+            ..Default::default()
+        }
+    }
+
     /// The chapter on show.
     pub fn chapter(&self) -> usize {
         self.chapter
@@ -107,14 +128,79 @@ impl Manual {
     /// Open the window at chapter `i`.
     pub fn show(&mut self, i: usize) {
         self.open = true;
+        self.focus = true;
         self.chapter = i.min(chapters().len().saturating_sub(1));
         self.top = true;
+        self.heading = None;
     }
 
-    pub fn window(&mut self, ctx: &egui::Context) {
-        if !self.open {
-            return;
+    /// Follow a link: another chapter or one of its headings
+    /// (`#13-speed-test`, `#bufferbloat-grades`), a web page, or a file in
+    /// the repository (`../../FOLLOW-ALONG.md`), opened on GitHub.
+    fn follow(&mut self, to: &str) {
+        match place(to) {
+            Some(Place::Chapter(i)) => self.show(i),
+            Some(Place::Heading(i, anchor)) => {
+                self.chapter = i;
+                self.top = true;
+                self.heading = Some(anchor);
+            }
+            Some(Place::Web(url)) => widgets::open_url(url),
+            None => widgets::toast(format!("The manual can't open {to}"), false),
         }
+    }
+
+    /// Draw the manual if it's open, over the app or in its own window.
+    /// True when Pop out or Back in is-alive was clicked (to save it).
+    pub fn window(&mut self, ctx: &egui::Context) -> bool {
+        if !self.open {
+            return false;
+        }
+        let was = self.own_window;
+        if self.own_window {
+            self.own(ctx);
+        } else {
+            self.over_app(ctx);
+        }
+        was != self.own_window
+    }
+
+    /// A window of its own: moved, sized and closed like any other, and
+    /// left where it is while the app is used.
+    fn own(&mut self, ctx: &egui::Context) {
+        static ICON: OnceLock<std::sync::Arc<egui::IconData>> = OnceLock::new();
+        let icon = ICON
+            .get_or_init(|| std::sync::Arc::new(crate::icon()))
+            .clone();
+        let builder = egui::ViewportBuilder::default()
+            .with_title(format!("is-alive {} manual", crate::VERSION))
+            .with_app_id("is-alive")
+            .with_icon(icon)
+            .with_inner_size([940.0, 680.0])
+            .with_min_inner_size([560.0, 300.0]);
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(OWN), builder, |ui, _| {
+            if ui.input(|i| i.viewport().close_requested()) {
+                self.open = false;
+            }
+            if std::mem::take(&mut self.focus) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            // Opaque: Miami's panels are see-through over a backdrop this
+            // window doesn't have.
+            let bg = ui.visuals().window_fill.to_opaque();
+            ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
+            egui::Frame::new()
+                .inner_margin(8)
+                .show(ui, |ui| self.body(ui));
+            // This window's links and copies, as the app's own go.
+            widgets::open_requested_links(ui.ctx());
+            widgets::route_copies(ui.ctx());
+        });
+    }
+
+    /// Over the app, inside its window.
+    fn over_app(&mut self, ctx: &egui::Context) {
+        self.focus = false;
         let mut open = self.open;
         let screen = ctx.content_rect();
         widgets::compact_title(ctx, || {
@@ -181,7 +267,36 @@ impl Manual {
             return;
         };
         let top = std::mem::take(&mut self.top);
+        let mut follow = crate::markdown::Follow {
+            show: self.heading.clone(),
+            clicked: None,
+        };
         egui::CentralPanel::no_frame().show(ui, |ui| {
+            // The chapter's title stays put while its text scrolls, with
+            // Pop out (or Back in is-alive) beside it.
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(c.title).heading().size(22.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let (label, tip) = if self.own_window {
+                        ("Back in is-alive", "Put the manual back over the app")
+                    } else {
+                        (
+                            "Pop out",
+                            "Open the manual in a window of its own, to keep beside is-alive \
+                             or on another screen",
+                        )
+                    };
+                    if ui
+                        .add(egui::Button::new(label).min_size(egui::vec2(0.0, widgets::TARGET_H)))
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        self.own_window = !self.own_window;
+                        self.focus = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
             let mut area = egui::ScrollArea::vertical()
                 .id_salt("manual_text")
                 .auto_shrink([false, false]);
@@ -189,13 +304,18 @@ impl Manual {
                 area = area.vertical_scroll_offset(0.0);
             }
             area.show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(c.title).heading().size(22.0).strong());
-                ui.add_space(6.0);
-                text(ui, c.body);
+                ui.add_space(2.0);
+                text(ui, c.body, &mut follow);
                 ui.add_space(12.0);
             });
         });
+        // Brought into view: done with it. Not found (yet): kept a frame.
+        if follow.show.is_none() {
+            self.heading = None;
+        }
+        if let Some(to) = follow.clicked {
+            self.follow(&to);
+        }
     }
 }
 
@@ -224,13 +344,63 @@ fn matching(find: &str) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// A chapter's Markdown: tables here, the rest by the Notes renderer.
-fn text(ui: &mut egui::Ui, body: &str) {
+/// Where a link in the manual goes.
+#[derive(Debug, PartialEq)]
+enum Place {
+    Chapter(usize),
+    /// A heading inside a chapter, by its anchor.
+    Heading(usize, String),
+    Web(String),
+}
+
+/// What a link's target names: a chapter or heading (`#…`), a web page,
+/// or a file in the repository (`../../FOLLOW-ALONG.md`, this version's
+/// copy on GitHub). None for anything else.
+fn place(to: &str) -> Option<Place> {
+    if let Some(anchor) = to.strip_prefix('#') {
+        let list = chapters();
+        if let Some(i) = list
+            .iter()
+            .position(|c| crate::markdown::anchor(c.title) == anchor)
+        {
+            return Some(Place::Chapter(i));
+        }
+        let mut fence = false;
+        return list.iter().enumerate().find_map(|(i, c)| {
+            c.body.lines().find_map(|l| {
+                let t = l.trim();
+                if t.starts_with("```") {
+                    fence = !fence;
+                }
+                let title = t.strip_prefix('#')?.trim_start_matches('#');
+                (!fence && title.starts_with(' ') && crate::markdown::anchor(title) == anchor)
+                    .then(|| Place::Heading(i, anchor.to_string()))
+            })
+        });
+    }
+    let lower = to.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        return Some(Place::Web(to.to_string()));
+    }
+    // The manual is docs/manual/MANUAL.md: ../../ is the repository.
+    let file = to.strip_prefix("../../")?;
+    (!file.is_empty() && !file.contains("..")).then(|| {
+        Place::Web(format!(
+            "{}/blob/v{}/{file}",
+            crate::help::REPO,
+            crate::VERSION
+        ))
+    })
+}
+
+/// A chapter's Markdown: tables here, the rest by the Notes renderer, with
+/// links to follow.
+fn text(ui: &mut egui::Ui, body: &str, follow: &mut crate::markdown::Follow) {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let mut plain = String::new();
-    let flush = |ui: &mut egui::Ui, plain: &mut String| {
+    let flush = |ui: &mut egui::Ui, plain: &mut String, follow: &mut crate::markdown::Follow| {
         if !plain.trim().is_empty() {
-            crate::markdown::render(ui, plain, &font);
+            crate::markdown::render_following(ui, plain, &font, follow);
         }
         plain.clear();
     };
@@ -243,7 +413,7 @@ fn text(ui: &mut egui::Ui, body: &str) {
         }
         if !fence {
             if t.starts_with('|') {
-                flush(ui, &mut plain);
+                flush(ui, &mut plain, follow);
                 let mut rows = vec![t];
                 while let Some(next) = lines.peek().map(|l| l.trim())
                     && next.starts_with('|')
@@ -251,7 +421,9 @@ fn text(ui: &mut egui::Ui, body: &str) {
                     rows.push(next);
                     lines.next();
                 }
-                table(ui, &rows);
+                if let Some(to) = table(ui, &rows) {
+                    follow.clicked = Some(to);
+                }
                 continue;
             }
             if t == "---" {
@@ -261,7 +433,7 @@ fn text(ui: &mut egui::Ui, body: &str) {
         plain.push_str(line);
         plain.push('\n');
     }
-    flush(ui, &mut plain);
+    flush(ui, &mut plain, follow);
 }
 
 /// The cells of a table row: `| a | b |` is `["a", "b"]`.
@@ -270,10 +442,10 @@ fn cells(row: &str) -> Vec<&str> {
     row.split('|').map(str::trim).collect()
 }
 
-fn table(ui: &mut egui::Ui, rows: &[&str]) {
-    let Some((head, rest)) = rows.split_first() else {
-        return;
-    };
+/// A table, as a striped grid; the link clicked in it, if one was.
+fn table(ui: &mut egui::Ui, rows: &[&str]) -> Option<String> {
+    let (head, rest) = rows.split_first()?;
+    let mut clicked = None;
     let head = cells(head);
     let body: Vec<Vec<&str>> = rest
         .iter()
@@ -311,18 +483,19 @@ fn table(ui: &mut egui::Ui, rows: &[&str]) {
                         ui.set_max_width(*w);
                         // A grid's cells sit in a row, where text runs on
                         // unless told to wrap.
-                        ui.add(
-                            egui::Label::new(crate::markdown::inline(
-                                ui, cell, size, strong, &family,
-                            ))
-                            .wrap(),
-                        );
+                        let (job, links) =
+                            crate::markdown::inline_links(ui, cell, size, strong, &family);
+                        if let (_, Some(to)) = crate::markdown::linked_label(ui, job, &links, true)
+                        {
+                            clicked = Some(to);
+                        }
                     });
                 }
                 ui.end_row();
             }
         });
     ui.add_space(6.0);
+    clicked
 }
 
 #[cfg(test)]
@@ -375,6 +548,69 @@ mod tests {
         );
         assert!(found.iter().all(|&(_, n)| n > 0));
         assert!(matching("no chapter says xyzzy").is_empty());
+    }
+
+    /// Every link in the manual's chapters goes somewhere: a chapter, a
+    /// heading in one, a web page or a file in the repository. (Links in
+    /// code, shown as examples, aren't links.)
+    #[test]
+    fn every_link_in_the_manual_goes_somewhere() {
+        let mut checked = 0;
+        for c in chapters() {
+            let mut fence = false;
+            for line in c.body.lines() {
+                if line.trim_start().starts_with("```") {
+                    fence = !fence;
+                }
+                if fence {
+                    continue;
+                }
+                // Code spans out: `[text](https://)` is an example.
+                let prose: String = line
+                    .split('`')
+                    .enumerate()
+                    .filter(|(i, _)| i % 2 == 0)
+                    .map(|(_, s)| s)
+                    .collect();
+                let mut rest = prose.as_str();
+                while let Some(at) = rest.find("](") {
+                    let after = &rest[at + 2..];
+                    let Some(end) = after.find(')') else { break };
+                    let to = &after[..end];
+                    assert!(place(to).is_some(), "{}: [..]({to}) goes nowhere", c.title);
+                    checked += 1;
+                    rest = &after[end..];
+                }
+            }
+        }
+        assert!(checked >= 40, "only {checked} links found");
+    }
+
+    #[test]
+    fn links_go_to_chapters_headings_and_the_web() {
+        let speed = chapter_named("Speed Test");
+        assert_eq!(place("#13-speed-test"), Some(Place::Chapter(speed)));
+        assert_eq!(
+            place("#bufferbloat-grades"),
+            Some(Place::Heading(speed, "bufferbloat-grades".into()))
+        );
+        assert_eq!(
+            place("https://github.com/hammerknife404/is-alive/wiki"),
+            Some(Place::Web(
+                "https://github.com/hammerknife404/is-alive/wiki".into()
+            ))
+        );
+        assert_eq!(
+            place("../../FOLLOW-ALONG.md"),
+            Some(Place::Web(format!(
+                "{}/blob/v{}/FOLLOW-ALONG.md",
+                crate::help::REPO,
+                crate::VERSION
+            )))
+        );
+        assert_eq!(place("#no-such-heading"), None);
+        assert_eq!(place("file:///etc/passwd"), None);
+        assert_eq!(place("../../../../etc/passwd"), None);
     }
 
     #[test]
