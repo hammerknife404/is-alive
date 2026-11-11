@@ -318,6 +318,12 @@ const SCENES: &[Scene] = &[
         |a| over(a.speed.is_running(), a.speed.error().as_deref()),
     ),
     scene("subnet-calc", Tab::Calc, nothing, at_once),
+    scene(
+        "domain-join",
+        Tab::Join,
+        |a, ctx| a.join.check(ctx, true),
+        |a| over(a.join.is_running(), None),
+    ),
     scene("results", Tab::Results, nothing, at_once),
     // Over the Map, not the Results log: what's behind the window then
     // doesn't depend on the network the tour ran on.

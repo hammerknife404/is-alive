@@ -44,6 +44,7 @@ pub fn tint(tab: Tab, theme: theme::Theme) -> egui::Color32 {
         Tab::Notes => Zone::Server,
         Tab::Speed => Zone::Wireless,
         Tab::Calc => Zone::Gateway,
+        Tab::Join => Zone::Server,
         Tab::Results => Zone::Switch,
     };
     zone.colour_in(theme)
@@ -62,6 +63,7 @@ pub fn icon(tab: Tab) -> Icon {
         Tab::Notes => Icon::Notes,
         Tab::Speed => Icon::Speed,
         Tab::Calc => Icon::Calc,
+        Tab::Join => Icon::Join,
         Tab::Results => Icon::Results,
     }
 }

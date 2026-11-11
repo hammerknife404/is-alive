@@ -17,6 +17,8 @@ pub enum Icon {
     Notes,
     Speed,
     Calc,
+    /// Domain join: a building with columns, an organisation.
+    Join,
     Results,
     Settings,
     Help,
@@ -145,6 +147,13 @@ fn parts(icon: Icon) -> &'static [Part] {
             Dot(12.0, 16.0),
             Dot(15.0, 16.0),
         ],
+        Icon::Join => &[
+            Line(&[(3.0, 9.0), (12.0, 4.0), (21.0, 9.0), (3.0, 9.0)]),
+            Line(&[(6.5, 12.0), (6.5, 17.0)]),
+            Line(&[(12.0, 12.0), (12.0, 17.0)]),
+            Line(&[(17.5, 12.0), (17.5, 17.0)]),
+            Line(&[(3.0, 20.0), (21.0, 20.0)]),
+        ],
         Icon::Results => &[
             Line(&[(9.0, 6.0), (20.0, 6.0)]),
             Line(&[(9.0, 12.0), (20.0, 12.0)]),
@@ -235,7 +244,7 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, colour: Color32) {
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 16] = [
+    const ALL: [Icon; 17] = [
         Icon::Ping,
         Icon::Ports,
         Icon::Trace,
@@ -247,6 +256,7 @@ mod tests {
         Icon::Notes,
         Icon::Speed,
         Icon::Calc,
+        Icon::Join,
         Icon::Results,
         Icon::Settings,
         Icon::Help,

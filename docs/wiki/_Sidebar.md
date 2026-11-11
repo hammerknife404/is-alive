@@ -12,6 +12,7 @@
 - [[Notes|Notes]]
 - [[Speed Test|Speed-Test]]
 - [[Subnet Calc|Subnet-Calc]]
+- [[Domain join|Domain-join]]
 - [[Results|Results]]
 
 **Guides**

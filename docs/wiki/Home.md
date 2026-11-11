@@ -17,6 +17,7 @@
 | [Notes](Notes) | Markdown notes for the visit, with redaction |
 | [Speed Test](Speed-Test) | Throughput, latency, jitter and loss under load, bufferbloat grade and VoIP MOS |
 | [Subnet Calc](Subnet-Calc) | IPv4 and IPv6 subnet calculator: details, address check, split, ranges to CIDR |
+| [Domain join](Domain-join) | How this computer is joined (Active Directory, Entra ID, hybrid or workgroup) and to which domain, from `dsregcmd /status`; also in the status bar |
 | [Results](Results) | Every finished run, with Filter and Export to CSV, JSON, Markdown or HTML |
 
 Every tab is laid out the same way: the main input and **Start** in the run bar, the rest of the settings folded under **Options** (their values shown as small chips), a status row with **Copy** and **Save…**, and a short explanation before the first run. **Ctrl+1 … Ctrl+9** and **Ctrl+0** switch tabs. **Help** at the foot of the nav (or **F1**) opens this wiki.

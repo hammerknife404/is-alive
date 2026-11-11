@@ -140,6 +140,13 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   keeps its runs from one visit to the next, so they can span visits: judge
   each check by its **newest** run (`started`); an older failure that a later
   run of the same check doesn't repeat is history, not a finding.
+  `Host info` and `Domain join` runs describe the computer is-alive ran on,
+  not a device to draw: `Domain join` says how it's joined (`kind`: hybrid,
+  domain, entra, registered, workgroup, unknown) and to which `domain`. On a
+  client's own PC that names the client's AD domain or Entra tenant; on the
+  technician's laptop it's the technician's own, so say which it was before
+  using it. A join that's broken (`DeviceAuthStatus` not SUCCESS,
+  `AzureAdPrt` NO on a joined PC) is a finding.
 - **Several of a kind** (one visit, more than one controller or firewall):
   the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
   `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`

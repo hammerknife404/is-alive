@@ -16,5 +16,6 @@ CSV export uses each tool's own columns, one row per result, with the run's star
 | DNS Lookup | lookup, source, type, value (Compare notes as type `note`) |
 | Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
 | Host info | field, value |
+| Domain join | section, field, value (the first rows: `join`, `kind` and `domain`) |
 
 Exporting the whole log gives one CSV: a `tool` column plus every tool's columns (shared ones like `ip` and `rtt_ms` line up), so filter on `tool` in Excel. Runs that failed before producing results carry their text in an `output` column.

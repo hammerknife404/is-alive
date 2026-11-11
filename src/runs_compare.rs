@@ -89,6 +89,7 @@ fn spec(tool: &str) -> Option<Spec> {
         "DNS Lookup" => s(&["lookup", "source", "type", "value"], &[]),
         "Domain Health" => s(&["section", "check", "kind"], &["status", "text"]),
         "Network checks" => s(&["check"], &["status"]),
+        "Domain join" => s(&["section", "field"], &["value"]),
         "Speed Test" => s(
             &["phase"],
             &["mbps", "latency_avg_ms", "jitter_ms", "loss_pct", "mos"],

@@ -26,14 +26,15 @@ This manual describes **is-alive 0.28.0**, and is built into the app: **Help** a
 12. [Notes](#12-notes)
 13. [Speed Test](#13-speed-test)
 14. [Subnet Calc](#14-subnet-calc)
-15. [Results](#15-results)
-16. [Settings and themes](#16-settings-and-themes)
-17. [Keyboard and mouse](#17-keyboard-and-mouse)
-18. [Site Bundle and Claude](#18-site-bundle-and-claude)
-19. [Privacy and security](#19-privacy-and-security)
-20. [Troubleshooting](#20-troubleshooting)
-21. [Glossary](#21-glossary)
-22. [Updating this manual](#22-updating-this-manual)
+15. [Domain join](#15-domain-join)
+16. [Results](#16-results)
+17. [Settings and themes](#17-settings-and-themes)
+18. [Keyboard and mouse](#18-keyboard-and-mouse)
+19. [Site Bundle and Claude](#19-site-bundle-and-claude)
+20. [Privacy and security](#20-privacy-and-security)
+21. [Troubleshooting](#21-troubleshooting)
+22. [Glossary](#22-glossary)
+23. [Updating this manual](#23-updating-this-manual)
 
 ---
 
@@ -49,7 +50,7 @@ is-alive answers the questions you have on a site visit, from one small program:
 - **How is it wired?** Read UniFi, SonicWall and Meraki configs offline, and draw the network as a map from the UniFi and SonicWall ones. Meraki configs go into the Site Bundle and JSON for Claude, but aren't drawn on the Map.
 - **What did I find?** Keep notes for the visit, collect every result, and export them for a ticket or report.
 
-It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. There's no installer, it doesn't need administrator rights, and it doesn't send anything anywhere unless you run something (see [Privacy and security](#19-privacy-and-security)).
+It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. There's no installer, it doesn't need administrator rights, and it doesn't send anything anywhere unless you run something (see [Privacy and security](#20-privacy-and-security)).
 
 **Who it's for:** field technicians and anyone who looks after small and medium networks. You don't need to know the theory: each chapter says what to type, what you'll see and what it means.
 
@@ -102,7 +103,7 @@ You can open a config or map file in is-alive straight from your file manager (*
 
 ### Updates
 
-When is-alive starts, it asks GitHub whether a newer release is out (you can turn this off: see [Settings](#16-settings-and-themes)). If one is, a green **Update: v…** link appears at the bottom right, in the status bar. Clicking it opens that release's download page; nothing is downloaded or installed for you. To update, download the new file and replace the old one. Your settings and notes are kept: they live in your profile folder, not next to the program.
+When is-alive starts, it asks GitHub whether a newer release is out (you can turn this off: see [Settings](#17-settings-and-themes)). If one is, a green **Update: v…** link appears at the bottom right, in the status bar. Clicking it opens that release's download page; nothing is downloaded or installed for you. To update, download the new file and replace the old one. Your settings and notes are kept: they live in your profile folder, not next to the program.
 
 ---
 
@@ -116,23 +117,23 @@ Five parts, the same on every tab:
 | **Left**: the nav | Every tool in its group, a dot on the ones running; **Settings** and **Help** at the foot |
 | **Middle** | The tab you're on: its run bar, **Options**, the status row and the results |
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
-| **Bottom**: the status bar | This computer's LAN address, gateway and public (WAN) address, **Refresh**; what's running and the version on the right |
+| **Bottom**: the status bar | This computer's LAN address, gateway, the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right |
 
 The first time it opens, is-alive takes 1120 × 720, or the whole screen on a small one (a 1080p laptop at 150%, or 1366 × 768), so the status bar isn't left under the taskbar. After that it opens at the size you left it, maximised if it was.
 
 ### The title bar (top)
 
-- **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#18-site-bundle-and-claude).
+- **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#19-site-bundle-and-claude).
 - **Full scan** (top right) runs a quick health check of this network (below).
 - **Report…** beside it opens the [Site report](#site-report): one web page documenting the visit.
 
 ### The nav (left)
 
-- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
+- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc**, **Domain join** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
 - **Open or folded.** The nav is open, with each tab's icon and name, in any window 1100 points wide or more, on every tab. In a narrower window it folds to a rail of icons. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
 - **Each tool's icon has its own colour**, taken from the theme's Map colours, so neighbouring tabs never share one and a tool is quick to spot in the rail. Settings, Help and Fold are in the text's colour.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
-- **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#16-settings-and-themes).
+- **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#17-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
 - **The manual** opens in a window of its own: the chapters down the left, **Find** above them to list only the chapters that mention a word. Keep it beside is-alive or on another screen while you work; close it like any window.
   - **The app keeps the keyboard.** The manual opens beside it without taking focus, and the two work independently: click either to use it. **F1** with the manual open turns it to the tab's chapter and flashes it in the taskbar rather than pulling it in front of your work.
@@ -166,7 +167,7 @@ All the testing tabs work the same way:
 
 Every text box has a right-click menu with **Cut**, **Copy**, **Paste** and **Select all**.
 
-**What the boxes accept.** Every text box has a length limit (see [Privacy and security](#19-privacy-and-security)) and quietly drops hidden characters that come along with a paste: control characters, zero-width spaces and the invisible marks that can make one name look like another. A value the box can't use gets a plain message saying why, and the run doesn't start until it's fixed. For example, typing `22,99999` in Port Check's **Ports** says *'99999' isn't a port (1 to 65535)*.
+**What the boxes accept.** Every text box has a length limit (see [Privacy and security](#20-privacy-and-security)) and quietly drops hidden characters that come along with a paste: control characters, zero-width spaces and the invisible marks that can make one name look like another. A value the box can't use gets a plain message saying why, and the run doesn't start until it's fixed. For example, typing `22,99999` in Port Check's **Ports** says *'99999' isn't a port (1 to 65535)*.
 
 A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can paste what you have without tidying it first:
 
@@ -183,14 +184,15 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 - **LAN** is this computer's address and subnet (for example `192.168.1.50/24`).
 - **Gateway** is the router this computer sends internet traffic to.
+- **Domain** is how this computer is joined: the Active Directory domain (`corp.example.com`), **Entra · tenant** for a computer joined only to Entra ID, **none** for a workgroup computer. Hover it for the details, click it for the [Domain join](#15-domain-join) tab.
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
-- **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
+- **Refresh** reads the LAN, gateway and domain again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
 - **v0.28.13** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
-**Full scan** runs six checks at once and opens the **Results** tab to show them:
+**Full scan** runs these checks at once and opens the **Results** tab to show them:
 
 | Check | What it does |
 |---|---|
@@ -201,6 +203,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | DNS Lookup | `cloudflare.com` through this computer's own DNS settings |
 | Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it), then the web page of each device with a web port open, for what it calls itself |
 | Network checks | **HTTPS inspection**: whether a firewall or security software decrypts HTTPS and re-signs it, from the certificates three well-known sites present here (a known inspection product as their issuer, or one issuer on unrelated sites). A warning when it does; a failure when this computer doesn't trust the issuer, since browsers then show certificate errors. **Clock**: how far this computer's clock is off, from a time server (or, where that's blocked, an HTTPS site's date): within 30 seconds is fine, past 5 minutes Active Directory sign-in fails |
+| Domain join | How this computer is joined (Active Directory, Entra ID, hybrid or a workgroup) and to which domain, from `dsregcmd /status` or `realm list`: see [Domain join](#15-domain-join) |
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
@@ -693,13 +696,13 @@ Open everything the visit has, even several of one kind: a client with two sites
 1. In the UniFi Network app, go to **Settings → System → Backups** and download a backup (`.unf`).
 2. Drop it on the is-alive window. Config Export opens with a *UniFi · …* sub-tab.
 3. Read the summary: it should list `site`, `device`, `networkconf`, `portconf`, `wlanconf` as kept, and fields like `x_passphrase` as removed.
-4. Click **Save JSON…**: it suggests `<name>.unifidump.json`. That file, not the backup, is what you give to `/unifidump`. Or simply use [Site Bundle…](#18-site-bundle-and-claude), which includes it for you.
+4. Click **Save JSON…**: it suggests `<name>.unifidump.json`. That file, not the backup, is what you give to `/unifidump`. Or simply use [Site Bundle…](#19-site-bundle-and-claude), which includes it for you.
 
 ### Several sites or firewalls
 
 A visit can cover more than one controller or firewall. Open them all, together or one after another; each kind is used like this:
 
-| Open | On the [Map](#11-map) | In the [Site Bundle](#18-site-bundle-and-claude) |
+| Open | On the [Map](#11-map) | In the [Site Bundle](#19-site-bundle-and-claude) |
 |---|---|---|
 | Several UniFi backups | Every controller's devices and clients on one map. A device or client in two backups (one controller's backups from two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)* and *Default (south)* | A file each: `unifi.unifidump.json`, then `unifi-2.unifidump.json` and so on |
 | Several SonicWall exports or reports | Each firewall is a gateway of its own under the internet, with what it heard. A settings export and a report of the same firewall are one card | `sonicwall.json`, `sonicwall-2.json`, … |
@@ -1013,7 +1016,7 @@ Everything is in one row above the notes:
 - On the right: when the notes were last saved (or **Not saved** with **Save**, with Autosave off), how much is redacted (*🔑 2 redacted*: click it to highlight them in the editor or stop), and **File ▾** (below).
 - **Undo** and **redo**: **Ctrl+Z** and **Ctrl+Y** (or **Ctrl+Shift+Z**).
 - **Lists continue**: press **Enter** at the end of a list item and the next one starts; Enter on an empty item ends the list.
-- **The font and size** are in [Settings](#16-settings-and-themes) under **Notes**: Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
+- **The font and size** are in [Settings](#17-settings-and-themes) under **Notes**: Sans, Mono, and the log-friendly monospace fonts this computer already has; 8 to 32 points.
 
 ### The outline
 
@@ -1048,7 +1051,7 @@ Everything is in one row above the notes:
 
 **Dropping files on Notes:** a photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) dropped on the Notes tab is taken as **Open…** takes it: the photo goes in at the end, and notes ask **Replace the notes**, **Add at the end** or **Read only** (one file at a time, when several are dropped). Anything else dropped here (a backup, an export, a map) goes to [Config Export](#10-config-export); see [Dropping files](#dropping-files).
 
-**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
+**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#17-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
@@ -1198,7 +1201,55 @@ A rule must cover `10.0.0.5` to `10.0.1.20`, but the firewall only takes CIDR bl
 
 ---
 
-## 15. Results
+## 15. Domain join
+
+**What it's for:** saying at a glance how this computer is joined, and to which domain: Active Directory, Microsoft Entra ID (Azure AD), both (hybrid), only registered with a work account, or nothing (a workgroup). On Windows it asks `dsregcmd /status`, as you would at a prompt; on Linux it asks realmd (`realm list`). It looks only at this computer; dsregcmd's own diagnostics may contact the domain.
+
+It's checked once when is-alive opens, and the answer is in the status bar as **Domain …** (see [The status bar](#the-status-bar-bottom)). Click it to open this tab.
+
+### Controls
+
+| Control | What it does |
+|---|---|
+| **▶ Check** | Ask again, and log the answer to [Results](#16-results) as a **Domain join** run. The check on start and the status bar's **Refresh** aren't logged |
+| **Everything** | Show every field the tool printed, the signed-in account and diagnostics among them. Off: only the fields that say how it's joined and whether that works, which is what Results keeps |
+| **Copy / Save…** | What's on screen as text: the Results summary, or with **Everything** on, the tool's output as printed |
+
+### What it shows
+
+The verdict in bold under the controls, then the names it found, then the fields by the section the tool printed them in.
+
+| Verdict | Meaning | The status bar says |
+|---|---|---|
+| **Hybrid joined: Active Directory and Entra ID** | `DomainJoined` and `AzureAdJoined` are both YES | **Domain corp.example.com + Entra** |
+| **Joined to Active Directory** | `DomainJoined` is YES (on Linux: realmd says it's a member) | **Domain corp.example.com** |
+| **Joined to Entra ID** | `AzureAdJoined` is YES, `DomainJoined` NO | **Domain Entra · tenant name** |
+| **Not joined; a work account is registered** | Only `WorkplaceJoined` is YES (Entra registered: a personal device with a work account) | **Domain none (registered)** |
+| **Not joined to a domain (workgroup)** | All NO; on Linux, realmd lists no domain it's a member of | **Domain none** |
+| **Couldn't tell** | dsregcmd didn't answer, or realmd isn't installed; the reason is shown in amber | **Domain unknown** |
+
+| Name | Where it comes from |
+|---|---|
+| **AD domain** | The domain's DNS name: from dsregcmd's **Device Name** (`PC01.corp.example.com`), else this computer's primary DNS suffix; on Linux realmd's `domain-name` |
+| **Short name** | The domain's NetBIOS name (dsregcmd's `DomainName`, `CORP`) |
+| **Entra tenant** | dsregcmd's `TenantName` |
+| **Asked** | `dsregcmd /status` or `realm list` |
+
+The fields that matter most when a join is broken: **DeviceAuthStatus** (*SUCCESS* when the device can prove itself to Entra ID), **AzureAdPrt** (*YES* when the user has a Primary Refresh Token, needed for single sign-on to Microsoft 365), **TpmProtected**, **MdmUrl** (set when the device is enrolled in Intune or another MDM), and the diagnostic tests **DRS Discovery Test**, **AD Connectivity Test** and **DC Test**. YES and SUCCESS are shown in green, NO dimmed.
+
+**In Results**, a Domain join run reads like *hybrid · corp.example.com*. It keeps the verdict, the domain and the fields above, not the signed-in account's name, so a Site Bundle or Site report doesn't carry it. **Compare** matches fields by name, so a join that broke since the last visit shows as a change (`AzureAdPrt` YES → NO).
+
+**On Linux**, only a join made through realmd (`realm join`, used by sssd) is seen. A computer joined with winbind or set up by hand reads as *Couldn't tell* when realmd isn't installed, or as a workgroup when it is.
+
+### Example: is this laptop on the client's domain?
+
+1. Click **Domain** in the status bar (or open **Domain join** in the nav).
+2. It reads *Hybrid joined: Active Directory and Entra ID*, **AD domain** `corp.example.com`, **Entra tenant** *Example Ltd*.
+3. **AzureAdPrt** reads NO, and the user is asked to sign in to Outlook again and again. That's the missing Primary Refresh Token: sign out of Windows and back in while the computer can reach a domain controller, then **▶ Check** again.
+
+---
+
+## 16. Results
 
 **What it's for:** everything you ran at this site in one place, with start and end times, to copy into a ticket or export for a report.
 
@@ -1227,6 +1278,7 @@ Every finished run from every tab is logged here (Full scan runs too).
 | Traceroute | hop | its address or name |
 | DNS Lookup | the answer itself | an answer new or gone |
 | Domain Health | section and check | its status or text |
+| Domain join | the field's section and name | its value (`AzureAdPrt` YES → NO) |
 | Speed Test | phase | its speed, latency, jitter, loss or MOS, with how much it moved (*412 → 380 (−32)*) |
 | Ping | | replies, loss and Avg / Min / Max side by side, with the difference |
 
@@ -1256,7 +1308,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 ---
 
-## 16. Settings and themes
+## 17. Settings and themes
 
 Click **Settings** at the foot of the nav to open it. Changes apply at once and are remembered. In a small window, scroll it for the rest.
 
@@ -1295,7 +1347,7 @@ With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (d
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 
-What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#20-troubleshooting)), not in Settings.
+What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#21-troubleshooting)), not in Settings.
 
 ### Network
 
@@ -1330,7 +1382,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 
 ---
 
-## 17. Keyboard and mouse
+## 18. Keyboard and mouse
 
 | Keys | Where | What it does |
 |---|---|---|
@@ -1380,7 +1432,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 
 ---
 
-## 18. Site Bundle and Claude
+## 19. Site Bundle and Claude
 
 This chapter is about handing the visit to Claude. For a document people read, use the [Site report](#site-report).
 
@@ -1435,7 +1487,7 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 
 ---
 
-## 19. Privacy and security
+## 20. Privacy and security
 
 is-alive was built for sites with regulated data (healthcare, finance): it sends as little as possible and keeps secrets out of everything it writes.
 
@@ -1452,7 +1504,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 
 ---
 
-## 20. Troubleshooting
+## 21. Troubleshooting
 
 ### The .exe doesn't open
 
@@ -1510,7 +1562,7 @@ The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For 
 
 ---
 
-## 21. Glossary
+## 22. Glossary
 
 | Term | Plain meaning |
 |---|---|
@@ -1560,7 +1612,7 @@ The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For 
 
 ---
 
-## 22. Updating this manual
+## 23. Updating this manual
 
 *For maintainers.*
 
