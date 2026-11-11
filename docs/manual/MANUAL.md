@@ -209,7 +209,7 @@ When every check is done and the sweep found something, the **Map** tab glows fo
 | **Title** | The page's heading and file name (`<title>-report-<date>.html`). The open site's name, else the map's title |
 | **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section |
 | **Findings** | The map's findings, worst first, each with the devices it names |
-| **Changes since** | What changed since the saved map you're comparing with (**⋯ › Compare** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
+| **Changes since** | What changed since the saved map you're comparing with (**More › Compare** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
 | **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A link the data didn't show is marked *(assumed)* |
 | **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
 | **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
@@ -647,7 +647,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | `.dc.html`, or a zip holding one | A map made by Claude's `/mapnetwork` | Yes: it becomes the map |
 | `.json` | A saved map (the Map's **Export JSON…**, yours or a colleague's) | Opens on the Map as a saved map, keeping its date |
 
-Open them with **Open file…** (pick several at once if you like), from the Map (**⋯ › Open…**, the same file dialog), by dropping them on the window (see [Dropping files](#dropping-files)), or with **Open with → is-alive**. Opening from Config Export keeps you here; a saved map opens on the Map. 🔒 Everything happens on this computer: nothing is uploaded.
+Open them with **Open file…** (pick several at once if you like), from the Map (**More › Open…**, the same file dialog), by dropping them on the window (see [Dropping files](#dropping-files)), or with **Open with → is-alive**. Opening from Config Export keeps you here; a saved map opens on the Map. 🔒 Everything happens on this computer: nothing is uploaded.
 
 **While a file is being read** its name shows beside **Open file…** with a spinner. Files opened or dropped meanwhile wait their turn and are read right after, as are example maps picked on the Map.
 
@@ -732,7 +732,7 @@ A map with nothing to show says what it's built from (and that Meraki configs ar
 
 ### Opening files on the Map
 
-**Open a backup or map…** on the empty map, **⋯ › Open…** and the saved maps bar's **Open…** all show the same file dialog as Config Export's **Open file…**, with every kind it reads: UniFi backups, SonicWall exports and reports, Meraki configs, `/mapnetwork` maps (`.dc.html`, or a zip holding one) and saved maps (`.json`). Pick several at once if you like. You stay on the Map:
+**Open a backup or map…** on the empty map, **More › Open…** and the saved maps bar's **Open…** all show the same file dialog as Config Export's **Open file…**, with every kind it reads: UniFi backups, SonicWall exports and reports, Meraki configs, `/mapnetwork` maps (`.dc.html`, or a zip holding one) and saved maps (`.json`). Pick several at once if you like. You stay on the Map:
 
 - **Backups, exports and `/mapnetwork` maps** are read by [Config Export](#10-config-export) (they get its sub-tabs too) and the live map redraws with them. While a file is read, *Reading …* and its name show under the toolbar.
 - **A saved map** opens as a saved map (see *Undo and saved maps*, below).
@@ -762,12 +762,12 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Scan** | Sweep this computer's subnet again and update the map as devices answer |
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **⚠ 2 high · 4 med** | The map's findings, worst first: click to open them in **Layers** (below). Only there when the map has findings |
-| **⋯** | Everything used less often (below) |
+| **More ▾** | Everything used less often (below) |
 | **Layers** (top right) | The panel of sites, roles and findings (below) |
 | **Legend** (top right) | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Off until you turn it on; your choice is remembered |
-| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **⋯** instead |
+| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **More** instead |
 
-**⋯** holds:
+**More ▾** holds:
 
 | Item | What it does |
 |---|---|
@@ -849,16 +849,16 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
   | A saved map with changes (**•**) | Writes the changes into it |
   | A saved map with no changes | Greyed out: nothing to save |
 
-- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **⏷** hides it and **⋯ › Saved maps** shows it again.
+- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **⏷** hides it and **More › Saved maps** shows it again.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
-- **Open…** (here, in **⋯** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
+- **Open…** (here, in **More** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
 - **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
 
 ### Compare with the last visit
 
-Back at a site, **⋯ › Compare** (on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
+Back at a site, **More › Compare** (on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
 
 - **NEW** on a card (green) is a device that wasn't on the saved map; **CHANGED** (amber) is one whose address, open ports or name changed. Zoomed far out, each is a dot on the card's corner.
 - **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
@@ -872,7 +872,7 @@ Back at a site, **⋯ › Compare** (on the live map) lists this site's saved ma
 - **New clients** (phones, laptops), unless the saved map was saved with **Clients: All**: a map holds only the clients it shows, so one saved with **Some** can't say whether a client is new. Clients gone or changed are still listed, since the live map is compared with every client, whatever **Clients** shows now. To compare clients next time, set **Clients: All** before **+ Save current**.
 - Only maps marked **As found** are offered (not a plan or a training map), and not on an example. Opening another site stops the comparison.
 
-**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **⋯ › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
+**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **More › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
 
 ### Selecting cards
 
@@ -915,7 +915,7 @@ Each item shows only when it applies, with how many cards it takes, and a line s
 
 ### The inspector (right)
 
-A card's details open in the [inspector](#how-every-tab-is-laid-out), the same panel a device opens in on Subnet Sweep. From 1440 points wide it sits beside the map, 360 wide; on a smaller window (a laptop) it floats over the map's right edge, so the map keeps its size and its zoom: the selected card is kept clear of it, and **Layers**, **Legend** and the zoom controls move beside it. On the smallest windows Layers and Legend go into **⋯** while it's open. **×** or **Esc** lets the card go (pinned cards stay).
+A card's details open in the [inspector](#how-every-tab-is-laid-out), the same panel a device opens in on Subnet Sweep. From 1440 points wide it sits beside the map, 360 wide; on a smaller window (a laptop) it floats over the map's right edge, so the map keeps its size and its zoom: the selected card is kept clear of it, and **Layers**, **Legend** and the zoom controls move beside it. On the smallest windows Layers and Legend go into **More** while it's open. **×** or **Esc** lets the card go (pinned cards stay).
 
 Each selected card gets a section, newest on top:
 
@@ -959,16 +959,16 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 - **Roles** with counts; click one to fade those cards out.
 - **Action items** (the findings), worst first; click one to select the devices it's about.
 
-**Findings** come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **⋯ › Copy findings** puts them in a ticket.
+**Findings** come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **More › Copy findings** puts them in a ticket.
 
 ### Example: walking a site with the Acme example
 
-1. Open the **Map** tab, click **⋯ › Examples**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
+1. Open the **Map** tab, click **More › Examples**, and pick **Acme Distribution: one campus, HA firewalls, dual WAN**.
 2. Click the **SonicWall NSA 3700** card. Its inspector shows it's the primary of an HA pair with a high-priority action item (*WAN2 failover not recently tested*), and the line to the internet lights up.
 3. Right-click a server card and choose **Select its path to the WAN**: the switch, firewall and internet link it depends on light up. If that switch failed, everything under it would lose its connection.
 4. Switch to **Zones** to see the devices grouped by role, then back to **Cluster**.
-5. Open **⋯ › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
-6. **⋯ › Examples › Close the example** goes back to this network's map.
+5. Open **More › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
+6. **More › Examples › Close the example** goes back to this network's map.
 
 **The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…**: upload the bundle to Claude or another AI for an accurate one (the skills that draw it come inside the bundle). **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
 
@@ -1207,10 +1207,10 @@ At the top of the list:
 | Control | What it does |
 |---|---|
 | **Filter** | Show only runs whose tool name or output contains this text (`FAIL`, `443`, `timeout`, a hostname). × clears it |
-| **⋯ › Copy all / Save all…** | Every run listed, as text |
-| **⋯ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
-| **⋯ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
-| **⋯ › Clear all** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
+| **All runs ▾ › Copy all / Save all…** | Every run listed, as text |
+| **All runs ▾ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
+| **All runs ▾ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
+| **All runs ▾ › Clear all** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
 
 Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 
@@ -1222,7 +1222,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 1. After a Full scan and a few tests, open **Results**.
 2. Type `FAIL` in **Filter** to see only runs that found a failure, or a hostname to see everything about one device.
-3. **⋯ › Export ⏷ → HTML**, save, and attach it to the ticket.
+3. **All runs ▾ › Export ⏷ → HTML**, save, and attach it to the ticket.
 
 ---
 
@@ -1394,7 +1394,7 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 1. **On site:** run a Subnet Sweep, open the site's UniFi backups and SonicWall or Meraki exports in Config Export (every controller and firewall the visit covers), take notes.
 2. **Bundle:** open the site menu (top left) and click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
 3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on each UniFi export, then `/mapnetwork` with everything else.
-4. **Back in is-alive:** open the `.dc.html` map Claude makes: on the Map with **⋯ › Open…** (or drop it on the Map), or in Config Export. The Map redraws it, and a sweep of the same network marks which devices answer. (The bundle zip itself isn't read back: it says so if you open it.)
+4. **Back in is-alive:** open the `.dc.html` map Claude makes: on the Map with **More › Open…** (or drop it on the Map), or in Config Export. The Map redraws it, and a sweep of the same network marks which devices answer. (The bundle zip itself isn't read back: it says so if you open it.)
 5. **Next visit:** keep that map open when you make the next bundle. Claude updates the existing map, under its original name, instead of starting again.
 
 ---
@@ -1530,7 +1530,7 @@ The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For 
 
 The manual is text only: no screenshots to fall out of date. Each chapter is updated in the same pull request as the change it describes, so the copy built into each version (**Help**, **F1**) always matches it.
 
-- Say what's on screen in words, with the names the app shows (**▶ Start**, **⋯ › Examples**), and a table where it helps.
+- Say what's on screen in words, with the names the app shows (**▶ Start**, **More › Examples**), and a table where it helps.
 - An emoji or one of the app's own symbols (⋯, ▶, ■, ⟲, 📌, 🔑) where it makes a line quicker to find, not as decoration.
 - Chapters keep their numbers and titles: **Help › This tab** and **F1** find a tab's chapter by its title.
 

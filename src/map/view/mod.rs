@@ -249,7 +249,7 @@ pub struct MapView {
     /// A training map's answer key, kept to be saved again. Never shown:
     /// only how many, in its sub-tab's tooltip.
     faults: Vec<saved::Fault>,
-    /// The saved maps bar is showing (⋯ › Saved maps), and that was
+    /// The saved maps bar is showing (More › Saved maps), and that was
     /// clicked.
     bar: bool,
     bar_flip: bool,
@@ -268,14 +268,14 @@ pub struct MapView {
     /// from the toolbar, which is drawn after the canvas).
     fit_next: bool,
     search_next: bool,
-    /// ⋯ › Clear map… is asking to be sure.
+    /// More › Clear map… is asking to be sure.
     ask_clear: bool,
     /// Select the card at this address next frame (another tab's On map).
     pick_ip: Option<std::net::Ipv4Addr>,
-    /// The canvas is narrow: Export is in ⋯ rather than beside Legend.
+    /// The canvas is narrow: Export is in More rather than beside Legend.
     export_in_menu: bool,
     /// A floating inspector leaves too little room: Layers and Legend are
-    /// in ⋯ as well.
+    /// in More as well.
     controls_in_menu: bool,
     /// How wide Layers, Legend and Export were last frame.
     right_w: f32,
@@ -310,7 +310,7 @@ pub struct MapView {
     animate: bool,
     /// The lit links as last drawn, kept while they don't change.
     lit_drawn: std::cell::RefCell<crate::map::colours::Lit>,
-    /// The saved map the live map is compared with (⋯ › Compare), if any.
+    /// The saved map the live map is compared with (More › Compare), if any.
     since: Option<since::Since>,
 }
 

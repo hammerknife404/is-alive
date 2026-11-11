@@ -1,7 +1,7 @@
 //! The Map tab with its saved maps: the live map (from the sweep and the
 //! files loaded) and maps saved as they were, each a sub-tab in a bar
 //! along the bottom. Save, by the zoom controls, keeps the map on show;
-//! the bar is hidden until a map is saved or ⋯ › Saved maps opens it.
+//! the bar is hidden until a map is saved or More › Saved maps opens it.
 
 use super::history::Edits;
 use super::saved::{self, Purpose, Snapshot};
@@ -635,7 +635,7 @@ impl MapTabs {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("⏷")
-                    .on_hover_text("Hide this bar (⋯ › Saved maps opens it again)")
+                    .on_hover_text("Hide this bar (More › Saved maps opens it again)")
                     .clicked()
                 {
                     self.bar = false;
@@ -1110,7 +1110,7 @@ fn tab_menu(
         ui,
         true,
         "Export JSON…",
-        "Save it as a file to share: Open… (here, in ⋯ or in Config Export) reads it, with \
+        "Save it as a file to share: Open… (here, in More or in Config Export) reads it, with \
          its date",
         TabEv::Export(i),
     );

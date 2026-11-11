@@ -1,6 +1,6 @@
 Every finished run from every tab is listed here, newest first, under the day it ran, with what's still running at the top. Each row has the tool, its target, the time and a few words on what it found (*2 open of 14 checked*, *37 alive*, *Down 412 · up 38 Mbps*, *1 failed · 2 warnings*). Click one to open it beside the list: when it ran and how long it took, **Run again** (same tool and target, with its tab's settings as they are now; not for Lookup), **On map** when the target is an address, **Copy**, **Save…**, **Export**, and the output as printed or its data as a **Table**.
 
-The **Filter** box at the top of the list matches tool names and output text. **⋯** copies, saves or exports every run listed (CSV, JSON, Markdown or HTML: the filter decides which), turns **Keep with site** on or off (a site keeps its Results in its folder from one visit to the next; Scratch keeps them in memory only) and has **Clear all**, which asks for a second click.
+The **Filter** box at the top of the list matches tool names and output text. **All runs ▾** copies, saves or exports every run listed (CSV, JSON, Markdown or HTML: the filter decides which), turns **Keep with site** on or off (a site keeps its Results in its folder from one visit to the next; Scratch keeps them in memory only) and has **Clear all**, which asks for a second click.
 
 CSV export uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel:
 
