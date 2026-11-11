@@ -212,6 +212,7 @@ mod tests {
                 open: vec![23],
                 checked: true,
                 also: vec![],
+                web: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             range: Some("10.0.0.0/24".into()),
@@ -337,6 +338,7 @@ mod tests {
             open: vec![],
             checked: true,
             also: vec![],
+            web: None,
         };
         let m = build(&Input {
             sweep: vec![host("10.0.0.9", "laptop"), host("10.0.0.10", "desktop")],

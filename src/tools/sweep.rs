@@ -48,7 +48,13 @@ struct Host {
     /// Other MACs this address answered from during the sweep (the ARP
     /// table confirmed each): a duplicate IP, or a failover mid-sweep.
     also: Vec<Mac>,
+    /// What its own web page calls it (its title, else its server), read
+    /// after the port check where a web port answered.
+    web: Option<String>,
 }
+
+/// Ports a device's own web page may be on.
+const WEB_PORTS: [u16; 6] = [80, 443, 4433, 5000, 8080, 8443];
 
 /// The addresses that answered from more than one MAC, with every MAC
 /// each answered from, in address order. `readings` is each confirmed
@@ -141,6 +147,10 @@ enum Ev {
     PortTargets(Vec<Ipv4Addr>),
     /// This address answered from all these MACs.
     Conflict(Ipv4Addr, Vec<Mac>),
+    /// This many more steps for the progress bar.
+    More(usize),
+    /// What this host's web page calls it.
+    Web(Ipv4Addr, String),
     Open(Ipv4Addr, u16),
 }
 
@@ -252,6 +262,13 @@ impl SweepTool {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                         h.mac = Some(m);
                         h.mac_from = Some("arp");
+                        changed = true;
+                    }
+                }
+                Ev::More(n) => self.total += n,
+                Ev::Web(ip, title) => {
+                    if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                        h.web = Some(title);
                         changed = true;
                     }
                 }
@@ -534,6 +551,7 @@ impl SweepTool {
         let (rtt, ttl, ports_open) = (h.rtt, h.ttl, h.open.clone());
         let web = insp::web_url(ip, &ports_open);
         let (checked, ran) = (h.checked, self.ran_ports);
+        let web_title = h.web.clone();
         let also: Vec<String> = h
             .also
             .iter()
@@ -600,6 +618,9 @@ impl SweepTool {
             }
             if !vendor.is_empty() {
                 insp::row(ui, "Vendor", &vendor, false);
+            }
+            if let Some(t) = &web_title {
+                insp::row(ui, "Web page", t, false);
             }
             for m in &also {
                 insp::row(ui, "Also from", m, true);
@@ -736,6 +757,9 @@ impl SweepTool {
             if !h.open.is_empty() {
                 line += &format!("  [{}]", port_list(&h.open));
             }
+            if let Some(t) = &h.web {
+                line += &format!("  \"{t}\"");
+            }
             if !h.also.is_empty() {
                 let also: Vec<String> = h.also.iter().map(mac::fmt).collect();
                 line += &format!("  ⚠ also from {}", also.join(", "));
@@ -799,6 +823,7 @@ impl SweepTool {
                         "service": ports::service_name(p),
                     })).collect::<Vec<_>>()),
                     "other_macs": h.also.iter().map(mac::fmt).collect::<Vec<_>>(),
+                    "web_title": h.web,
                     "is_gateway": self.local.gateway == Some(h.ip),
                     "is_this_machine": self.local.lan.is_some_and(|(ip, _)| ip == h.ip),
                     "on_scanner_lan": lan.map(|(ip, bits)| same_subnet(ip, h.ip, bits)),
@@ -822,6 +847,7 @@ impl SweepTool {
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
+                "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung). Null is not \"none open\"; an empty list is.",
             ],
@@ -912,6 +938,7 @@ impl SweepTool {
                 open: h.open.clone(),
                 checked: h.checked,
                 also: h.also.clone(),
+                web: h.web.clone(),
             })
             .collect()
     }
@@ -1024,6 +1051,7 @@ impl SweepTool {
                         open: Vec::new(),
                         checked: false,
                         also: Vec::new(),
+                        web: None,
                     }));
                 }
                 tx.send(Ev::Probed);
@@ -1077,6 +1105,7 @@ impl SweepTool {
                     open: Vec::new(),
                     checked: false,
                     also: Vec::new(),
+                    web: None,
                 }));
             });
             seen.extend(silent.iter().map(|s| s.0));
@@ -1102,10 +1131,34 @@ impl SweepTool {
             }
             tx.send(Ev::PortTargets(targets));
             let wait = Duration::from_millis(timeout as u64);
+            let opened: Mutex<HashMap<Ipv4Addr, Vec<u16>>> = Mutex::new(HashMap::new());
             net::par_for(&probes, threads, rate, tx.cancel_flag(), |&(ip, port)| {
                 let addr = SocketAddr::new(IpAddr::V4(ip), port);
                 if net::tcp_check(addr, wait).0 == TcpState::Open {
                     tx.send(Ev::Open(ip, port));
+                    opened.lock().unwrap().entry(ip).or_default().push(port);
+                }
+                tx.send(Ev::Probed);
+            });
+
+            // What each device with a web page open calls itself: one GET
+            // of its own page (two at most, and one redirect on itself).
+            if tx.cancelled() {
+                return;
+            }
+            let mut webby: Vec<(Ipv4Addr, Vec<u16>)> = opened
+                .into_inner()
+                .unwrap()
+                .into_iter()
+                .filter(|(_, ps)| ps.iter().any(|p| WEB_PORTS.contains(p)))
+                .collect();
+            webby.sort_unstable();
+            tx.send(Ev::More(webby.len()));
+            // A printer's or a switch's TLS takes a while.
+            let page_wait = Duration::from_millis(timeout.max(2000) as u64);
+            net::par_for(&webby, threads, rate, tx.cancel_flag(), |(ip, ps)| {
+                if let Some(t) = net::web::identify(IpAddr::V4(*ip), ps, page_wait) {
+                    tx.send(Ev::Web(*ip, t));
                 }
                 tx.send(Ev::Probed);
             });
@@ -1276,6 +1329,7 @@ mod tests {
             open: Vec::new(),
             checked: false,
             also: Vec::new(),
+            web: None,
         }
     }
 
@@ -1652,6 +1706,16 @@ mod tests {
         assert_eq!(v["hosts"][1]["other_macs"], json!(["00:11:32:00:00:09"]));
         assert_eq!(v["hosts"][0]["other_macs"], json!([]));
         assert_eq!(s.seen()[1].also, [mac(9)]);
+
+        // A web page's title rides along the same way.
+        s.apply(vec![Ev::More(1), Ev::Web(ip(5), "UniFi OS".into())]);
+        assert_eq!(s.alive[0].web.as_deref(), Some("UniFi OS"));
+        assert!(s.report().contains("\"UniFi OS\""));
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        assert_eq!(v["hosts"][0]["web_title"], "UniFi OS");
+        assert!(v["hosts"][1]["web_title"].is_null());
+        assert_eq!(s.seen()[0].web.as_deref(), Some("UniFi OS"));
     }
 
     /// The port pass only adds: every host the sweep found stays, with what

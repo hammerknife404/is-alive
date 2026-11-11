@@ -581,6 +581,8 @@ pub struct Seen {
     pub checked: bool,
     /// Other MACs it answered from during the sweep: a duplicate IP.
     pub also: Vec<Mac>,
+    /// What its own web page calls it (its title or server).
+    pub web: Option<String>,
 }
 
 /// A backup or export open in Config Export: its file's name and the JSON
@@ -1287,6 +1289,100 @@ pub fn ports_worth_checking(vendor: Option<&str>, private: bool) -> bool {
     infra || vendor.is_none() || !has(vendor, CLIENT_NICS)
 }
 
+/// Role from what a device's own web page calls it, for one its maker
+/// doesn't place: (zone, kind, client) as `classify` gives them.
+fn page_role(page: &str) -> Option<(Zone, String, bool)> {
+    let t = page.to_ascii_lowercase();
+    let any = |ws: &[&str]| ws.iter().any(|w| t.contains(w));
+    if any(&[
+        "synology",
+        "diskstation",
+        "qnap",
+        "truenas",
+        "freenas",
+        "unraid",
+        "terramaster",
+        "asustor",
+    ]) {
+        return Some((Zone::Server, "NAS".into(), false));
+    }
+    if any(&[
+        "laserjet",
+        "officejet",
+        "deskjet",
+        "printer",
+        "web jetadmin",
+        "brother",
+        "epson",
+        "ricoh",
+        "kyocera",
+        "xerox",
+        "lexmark",
+        "canon",
+    ]) {
+        return Some((Zone::Device, "PRINTER".into(), true));
+    }
+    if any(&[
+        "hikvision",
+        "dahua",
+        "camera",
+        "nvr",
+        "dvr",
+        "reolink",
+        "amcrest",
+        "blue iris",
+    ]) {
+        return Some((Zone::Device, "CAMERA".into(), true));
+    }
+    if any(&[
+        "idrac",
+        "integrated lights-out",
+        "esxi",
+        "vmware",
+        "proxmox",
+        "ipmi",
+        "xclarity",
+    ]) {
+        return Some((Zone::Server, "SERVER".into(), false));
+    }
+    const PAGES: &[(&str, &str)] = &[
+        ("unifi", "UBIQUITI"),
+        ("edgeos", "UBIQUITI"),
+        ("airos", "UBIQUITI"),
+        ("fortigate", "FORTINET"),
+        ("routeros", "MIKROTIK"),
+        ("omada", "TP-LINK"),
+        ("pfsense", "PFSENSE"),
+        ("opnsense", "OPNSENSE"),
+    ];
+    if let Some(b) = PAGES
+        .iter()
+        .find(|(k, _)| t.contains(k))
+        .map(|p| p.1)
+        .or_else(|| gear_brand(Some(page)))
+    {
+        return Some((Zone::Gear, caps(&format!("{b} DEVICE")), false));
+    }
+    any(&["router", "switch", "access point", "firewall", "gateway"])
+        .then(|| (Zone::Gear, "NETWORK DEVICE".into(), false))
+}
+
+/// `classify`, then what its web page says where that placed it only as a
+/// client or a network device by its ports.
+fn classify_with_page(
+    vendor: Option<&str>,
+    private: bool,
+    open: &[u16],
+    page: Option<&str>,
+) -> (Zone, String, bool) {
+    let r = classify(vendor, private, open);
+    let weak = r.0 == Zone::Client || r.1 == "NETWORK DEVICE";
+    match page.and_then(page_role) {
+        Some(p) if weak => p,
+        _ => r,
+    }
+}
+
 /// Role of a host the sweep found and nothing else describes.
 fn classify(vendor: Option<&str>, private: bool, open: &[u16]) -> (Zone, String, bool) {
     let p = |x| open.contains(&x);
@@ -1380,7 +1476,7 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
     let (zone, kind, client) = if this {
         (Zone::Client, "THIS MACHINE".into(), false)
     } else {
-        classify(vendor, private, &s.open)
+        classify_with_page(vendor, private, &s.open, s.web.as_deref())
     };
     let label = match (&s.name, this) {
         (_, true) => "This machine".into(),
@@ -1611,6 +1707,12 @@ impl B {
             }
         }
         n.ports_checked |= s.checked;
+        if let Some(w) = &s.web {
+            let line = format!("Web page: {w}");
+            if !n.details.contains(&line) {
+                n.detail(at(line));
+            }
+        }
         if !s.open.is_empty() {
             n.detail(at(format!("Open ports: {}", port_names(&s.open))));
             for p in &s.open {
@@ -3013,6 +3115,7 @@ mod tests {
             open: vec![],
             checked: true,
             also: vec![],
+            web: None,
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -3045,6 +3148,71 @@ mod tests {
     }
 
     #[test]
+    fn a_web_page_places_a_device_its_maker_doesnt() {
+        // Its maker or a strong port decides first; a page only places what
+        // ended up a client or a generic network device.
+        let r = |v: Option<&str>, open: &[u16], page: &str| {
+            let (z, k, _) = classify_with_page(v, false, open, Some(page));
+            (z, k)
+        };
+        assert_eq!(
+            r(None, &[443], "UniFi OS"),
+            (Zone::Gear, "UBIQUITI DEVICE".into())
+        );
+        assert_eq!(
+            r(None, &[443], "SonicWall - Authentication"),
+            (Zone::Gear, "SONICWALL DEVICE".into())
+        );
+        assert_eq!(
+            r(None, &[80], "HP LaserJet MFP M428"),
+            (Zone::Device, "PRINTER".into())
+        );
+        assert_eq!(
+            r(None, &[5000], "Synology DiskStation"),
+            (Zone::Server, "NAS".into())
+        );
+        assert_eq!(
+            r(None, &[443], "iDRAC-ABC1234"),
+            (Zone::Server, "SERVER".into())
+        );
+        assert_eq!(
+            r(None, &[8443], "Router Login"),
+            (Zone::Gear, "NETWORK DEVICE".into())
+        );
+        // Strong evidence stays: a known maker, a printer's port.
+        assert_eq!(r(Some("Synology Inc"), &[], "Router").0, Zone::Server);
+        assert_eq!(r(None, &[9100], "Welcome").1, "PRINTER");
+        // A page that says nothing changes nothing.
+        assert_eq!(r(None, &[80], "Welcome").0, Zone::Client);
+        // On the map: its kind and a detail line.
+        let input = Input {
+            sweep: vec![Seen {
+                ip: "192.168.1.9".parse().unwrap(),
+                mac: None,
+                name: None,
+                rtt: Some(1.0),
+                open: vec![443],
+                checked: true,
+                also: vec![],
+                web: Some("UniFi OS".into()),
+            }],
+            ..Default::default()
+        };
+        let m = build(&input);
+        let n = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == input.sweep[0].ip.into())
+            .unwrap();
+        assert_eq!(n.kind, "UBIQUITI DEVICE");
+        assert!(
+            n.details.iter().any(|d| d.contains("Web page: UniFi OS")),
+            "{:?}",
+            n.details
+        );
+    }
+
+    #[test]
     fn an_address_answering_from_two_macs_is_a_finding_on_its_card() {
         let input = Input {
             sweep: vec![Seen {
@@ -3055,6 +3223,7 @@ mod tests {
                 open: vec![],
                 checked: true,
                 also: vec![mac::parse_mac("02:00:00:00:00:02").unwrap()],
+                web: None,
             }],
             gateway: Some("192.168.1.1".parse().unwrap()),
             ..Default::default()
@@ -3089,6 +3258,7 @@ mod tests {
             open: open.to_vec(),
             checked: true,
             also: vec![],
+            web: None,
         };
         let input = Input {
             sweep: vec![
@@ -3190,6 +3360,7 @@ mod tests {
                 open: vec![23],
                 checked: true,
                 also: vec![],
+                web: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -3480,6 +3651,7 @@ mod tests {
                 open: Vec::new(),
                 checked: true,
                 also: vec![],
+                web: None,
             })
             .collect();
         let make = |clients, reveal| {
@@ -3619,6 +3791,7 @@ mod tests {
             open: vec![],
             checked: true,
             also: vec![],
+            web: None,
         };
         let at_office = build(&Input {
             unifi: one(&j),

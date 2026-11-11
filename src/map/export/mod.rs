@@ -550,6 +550,7 @@ pub(crate) mod tests {
                 open: vec![],
                 checked: true,
                 also: vec![],
+                web: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             range: Some("10.0.0.0/24".into()),
