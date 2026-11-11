@@ -566,7 +566,7 @@ Big websites behind CDNs (Google, Microsoft, Cloudflare) legitimately answer dif
 | Control | What it does |
 |---|---|
 | **Domain** | The domain. `example.com`, an email address (`user@example.com`) or a web address (`https://www.example.com/page`) all work; it takes the domain out of them |
-| **Resolver** | The public DNS server to ask, directly (default `1.1.1.1`; any address works). Asking directly means you see what the internet sees, not this office's DNS |
+| **Resolver** | The public DNS server to ask, directly (default `1.1.1.1`; any address works). Asking directly means you see what the internet sees, not this office's DNS. Where `1.1.1.1` doesn't answer (a network that lets DNS out only through its own servers), the run asks this computer's own DNS server instead and says so in amber above the checks and in the saved run: that server may filter or rewrite answers |
 | **DKIM** | Extra DKIM selectors to try, separated by commas or spaces. The common ones (Microsoft 365, Google, Mailchimp, SendGrid and more) are always tried; hover the hint to see them |
 
 Press **Enter** in any of the three fields to start. All fifteen checks run at once and fill in as they finish, usually within a second or two.
