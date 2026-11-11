@@ -180,7 +180,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN and gateway again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
-- **v0.28.11** is the version you're running: worth including when you report a problem.
+- **v0.28.12** is the version you're running: worth including when you report a problem.
 
 ### Full scan
 
