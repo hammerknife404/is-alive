@@ -924,7 +924,7 @@ Each selected card gets a section, newest on top:
 - **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser.
 - **SSH** (when port 22 is open) and **RDP** (when 3389 is open) connect to the device in the computer's own client, which asks for the log-in; is-alive stores no passwords. On Windows, SSH opens `ssh` (built into Windows 10 and 11) in a console window that stays open when it ends, so a refused connection can be read; RDP opens Remote Desktop Connection (`mstsc`). On Linux, SSH opens in the desktop's terminal (Konsole, Ptyxis, GNOME Terminal and others); RDP uses Remmina or FreeRDP. A button is left out when the computer has no client for it. Hover one to see what it runs.
 - **Action items:** the card's own warnings and the findings that name it.
-- **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it.
+- **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it. Each line shows once. A device that answers the sweep on a second address with the same MAC (an alias, a second IP on one network card) stays one card, and that address's lines start with *Also at 10.0.0.252:*.
 - **Open ports**, each with what it's for (`22 ssh`, `443 https`).
 - **Results:** the quick checks above.
 - **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below); **Add note** starts one.

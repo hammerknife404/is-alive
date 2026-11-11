@@ -296,6 +296,13 @@ impl Node {
             self.chips.push(c);
         }
     }
+
+    /// A line for Details, once: the same evidence twice says nothing new.
+    fn detail(&mut self, line: String) {
+        if !self.details.contains(&line) {
+            self.details.push(line);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1514,7 +1521,10 @@ impl B {
         self.findings.push((sev, text, ids));
     }
 
-    /// Fold what the sweep saw into a card.
+    /// Fold what the sweep saw into a card. Another address answering
+    /// with the card's MAC (a second IP on one network card, an alias)
+    /// lands here too: its lines say which address, and a line the card
+    /// already has (the same DNS name) isn't added again.
     fn merge_seen(&mut self, i: usize, s: &Seen) {
         let n = &mut self.nodes[i];
         n.seen("sweep");
@@ -1528,19 +1538,31 @@ impl B {
         if n.sub.is_empty() {
             n.sub = s.ip.to_string();
         }
-        n.details.push(match s.rtt {
+        let own = n.ip == Some(s.ip);
+        let at = |line: String| {
+            if own {
+                line
+            } else {
+                format!("Also at {}: {line}", s.ip)
+            }
+        };
+        n.detail(at(match s.rtt {
             Some(r) => format!("Answered ping in {}", crate::widgets::fmt_ms(r)),
             None => "Answered ARP, not ping (firewalled or ICMP off)".into(),
-        });
-        if s.rtt.is_none() {
+        }));
+        // About the card's own address: another one answering only ARP
+        // doesn't make the card ARP only.
+        if s.rtt.is_none() && own {
             n.chip("ARP only");
         }
         if let Some(name) = &s.name {
-            n.details.push(format!("DNS name {name}"));
+            let line = format!("DNS name {name}");
+            if !n.details.contains(&line) {
+                n.detail(at(line));
+            }
         }
         if !s.open.is_empty() {
-            n.details
-                .push(format!("Open ports: {}", port_names(&s.open)));
+            n.detail(at(format!("Open ports: {}", port_names(&s.open))));
             for p in &s.open {
                 if !n.open.contains(p) {
                     n.open.push(*p);
@@ -2905,6 +2927,48 @@ mod tests {
             assert_eq!(m.path(i)[0], 0, "{}", m.nodes[i].label);
         }
         assert!(m.summary.contains("UniFi HQ (5 devices)"));
+    }
+
+    /// One device answering on two addresses with one MAC (a second IP
+    /// on its network card) is one card: each line once, the second
+    /// address's own lines saying which address they're about.
+    #[test]
+    fn a_device_on_two_addresses_lists_each_detail_once() {
+        let s = |ip: &str, rtt| Seen {
+            ip: ip.parse().unwrap(),
+            mac: mac::parse_mac("02:00:00:00:00:51"),
+            name: Some("NAS".into()),
+            rtt,
+            open: vec![],
+        };
+        let input = Input {
+            sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
+            gateway: Some("192.0.2.1".parse().unwrap()),
+            clients: Clients::All,
+            ..Default::default()
+        };
+        let m = build(&input);
+        let nas: Vec<&Node> = m
+            .nodes
+            .iter()
+            .filter(|n| n.mac == mac::parse_mac("02:00:00:00:00:51"))
+            .collect();
+        assert_eq!(nas.len(), 1, "one card");
+        let d = &nas[0].details;
+        let count = |line: &str| d.iter().filter(|l| l.as_str() == line).count();
+        assert_eq!(count("DNS name NAS"), 1, "{d:?}");
+        assert_eq!(count("Answered ping in 0.36 ms"), 1, "{d:?}");
+        assert_eq!(
+            count("Also at 192.0.2.52: Answered ARP, not ping (firewalled or ICMP off)"),
+            1,
+            "{d:?}"
+        );
+        assert!(
+            !d.iter().any(|l| l.contains("Also at 192.0.2.52: DNS")),
+            "{d:?}"
+        );
+        // The card answered ping at its own address.
+        assert!(!nas[0].chips.iter().any(|c| c == "ARP only"));
     }
 
     #[test]
