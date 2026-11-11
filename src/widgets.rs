@@ -242,49 +242,78 @@ pub fn speed_name(threads: usize, rate: u32) -> &'static str {
         .map_or("Custom", |s| s.0)
 }
 
+/// A row that folds a body away under it: egui's arrow, then `header`
+/// (told whether it's open), which returns the name it drew; a click on
+/// that name folds and unfolds too. egui's own `show_header` stores its
+/// copy of the state after the body, which undid a click on anything but
+/// the arrow.
+pub fn fold(
+    ui: &mut Ui,
+    id: egui::Id,
+    indent: bool,
+    header: impl FnOnce(&mut Ui, bool) -> egui::Response,
+    body: impl FnOnce(&mut Ui),
+) {
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let open = state.is_open();
+    let row = ui.horizontal(|ui| {
+        state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        header(ui, open)
+    });
+    if row
+        .inner
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+    {
+        state.toggle(ui);
+    }
+    if indent {
+        state.show_body_indented(&row.response, ui, body);
+    } else {
+        state.show_body_unindented(ui, body);
+    }
+}
+
 /// A tool's less-used settings, folded under its run bar: "Options" with
-/// what they're set to as small chips; a click unfolds the settings in
-/// place. One row instead of several, and the chips still say how the next
-/// run will go. Remembered per tab while the app runs.
+/// what they're set to as small chips; a click on the word or its arrow
+/// unfolds the settings in place. One row instead of several, and the
+/// chips still say how the next run will go. Remembered per tab while the
+/// app runs.
 pub fn options(ui: &mut Ui, id: &str, summary: &[String], body: impl FnOnce(&mut Ui)) {
     let key = ui.make_persistent_id(("options", id));
-    let mut state =
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), key, false);
-    let open = state.is_open();
-    // The arrow and the word both fold and unfold. One state for both, kept
-    // by the body: egui's own header stores its copy after the body, which
-    // undid a click on the word.
-    ui.horizontal(|ui| {
-        state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
-        let r = ui
-            .add(
-                egui::Label::new(RichText::new("Options").color(crate::theme::accent()))
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(if open {
-                "Fold the settings away"
-            } else {
-                "Show every setting"
-            });
-        if r.clicked() {
-            state.toggle(ui);
-        }
-        if !open {
-            for c in summary {
-                let v = ui.visuals();
-                egui::Frame::new()
-                    .fill(v.widgets.inactive.weak_bg_fill)
-                    .stroke(v.widgets.noninteractive.bg_stroke)
-                    .corner_radius(9)
-                    .inner_margin(egui::Margin::symmetric(7, 1))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(c).small());
-                    });
+    fold(
+        ui,
+        key,
+        false,
+        |ui, open| {
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new("Options").color(crate::theme::accent()))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(if open {
+                    "Fold the settings away"
+                } else {
+                    "Show every setting"
+                });
+            if !open {
+                for c in summary {
+                    let v = ui.visuals();
+                    egui::Frame::new()
+                        .fill(v.widgets.inactive.weak_bg_fill)
+                        .stroke(v.widgets.noninteractive.bg_stroke)
+                        .corner_radius(9)
+                        .inner_margin(egui::Margin::symmetric(7, 1))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(c).small());
+                        });
+                }
             }
-        }
-    });
-    state.show_body_unindented(ui, body);
+            r
+        },
+        body,
+    );
 }
 
 pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
