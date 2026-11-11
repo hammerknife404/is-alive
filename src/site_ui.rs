@@ -433,7 +433,7 @@ impl App {
             self.map.switch_site(true);
             self.site_configs.clear();
             // Results too: written to the new site's folder next frame.
-            self.log_saved = (usize::MAX, usize::MAX, usize::MAX);
+            self.log_saved = u64::MAX;
         } else {
             self.export.clear();
             self.sweep.clear_results();
