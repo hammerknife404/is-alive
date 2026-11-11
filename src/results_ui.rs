@@ -69,6 +69,26 @@ pub fn summarise(e: &log::Entry) -> String {
         "Traceroute" => plural(t.rows.len(), "hop", "hops"),
         "Subnet Sweep" => format!("{} alive", t.rows.len()),
         "Network checks" => crate::tools::netcheck::summary(&t.rows),
+        // "hybrid · corp.example.com", from its first two rows.
+        "Domain join" => {
+            let v = |field: &str| {
+                t.rows
+                    .iter()
+                    .find(|r| {
+                        r.first().is_some_and(|s| s == "join")
+                            && r.get(1).is_some_and(|f| f == field)
+                    })
+                    .and_then(|r| r.get(2))
+                    .filter(|v| !v.is_empty())
+            };
+            // The log's tag, as a person would say it.
+            let kind = v("kind").map(|k| if k == "domain" { "AD" } else { k.as_str() });
+            match (kind, v("domain")) {
+                (Some(k), Some(d)) => format!("{k} · {d}"),
+                (Some(k), None) => k.to_string(),
+                _ => summary(&e.text),
+            }
+        }
         "Lookup" => {
             let notes = count("type", "note");
             plural(t.rows.len() - notes, "record", "records")
@@ -1005,6 +1025,31 @@ mod tests {
             ],
         );
         assert_eq!(summarise(&ports), "2 open of 3 checked");
+        let join = entry(
+            "Domain join",
+            crate::net::join::COLUMNS,
+            &[
+                &["join", "kind", "hybrid"],
+                &["join", "domain", "corp.example.com"],
+                &["Device State", "DomainJoined", "YES"],
+            ],
+        );
+        assert_eq!(summarise(&join), "hybrid · corp.example.com");
+        let workgroup = entry(
+            "Domain join",
+            crate::net::join::COLUMNS,
+            &[&["join", "kind", "workgroup"], &["join", "domain", ""]],
+        );
+        assert_eq!(summarise(&workgroup), "workgroup");
+        let ad = entry(
+            "Domain join",
+            crate::net::join::COLUMNS,
+            &[
+                &["join", "kind", "domain"],
+                &["join", "domain", "corp.example.com"],
+            ],
+        );
+        assert_eq!(summarise(&ad), "AD · corp.example.com");
         let speed = entry(
             "Speed Test",
             crate::tools::speed::COLUMNS,

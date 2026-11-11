@@ -97,7 +97,8 @@ const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, 
 with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). Observed state.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
-check by its newest run.";
+check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
+and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network.";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \

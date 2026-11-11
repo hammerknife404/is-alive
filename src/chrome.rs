@@ -104,6 +104,25 @@ impl App {
                     i.gateway.map_or_else(na, |g| g.to_string())
                 ));
                 ui.separator();
+                // The domain this computer is joined to; a click opens its tab.
+                // A long name gives way (…) so WAN and Refresh stay on a
+                // small window; the hover has it whole.
+                let room = (ui.available_width() - 240.0).max(80.0);
+                let domain = ui
+                    .allocate_ui(egui::vec2(room, ui.available_height()), |ui| {
+                        ui.add(
+                            egui::Label::new(format!("Domain {}", self.join.short()))
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        )
+                    })
+                    .inner
+                    .on_hover_text(self.join.tip())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if domain.clicked() {
+                    self.tab = crate::Tab::Join;
+                }
+                ui.separator();
                 let wan = match (i.wan, self.info_job.is_some(), self.wan_asked) {
                     (Some(w), ..) => w.to_string(),
                     (None, true, _) => "looking up…".into(),
@@ -119,10 +138,11 @@ impl App {
                         self.info_job.is_none(),
                         egui::Button::new("Refresh").small(),
                     )
-                    .on_hover_text("Re-read LAN and gateway, look up the public IP")
+                    .on_hover_text("Re-read LAN, gateway and domain, look up the public IP")
                     .clicked()
                 {
                     self.refresh_info(ui.ctx());
+                    self.join.check(ui.ctx(), false);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.weak(format!("v{VERSION}"));

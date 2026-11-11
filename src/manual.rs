@@ -78,6 +78,7 @@ pub fn chapter_of(tab: Tab) -> usize {
         Tab::Notes => "Notes",
         Tab::Speed => "Speed Test",
         Tab::Calc => "Subnet Calc",
+        Tab::Join => "Domain join",
         Tab::Results => "Results",
     })
 }

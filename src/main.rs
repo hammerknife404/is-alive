@@ -49,7 +49,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the window title, the status bar and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN, and check whether HTTPS is inspected and this computer's clock is right. Results opens to show them. (Speed Test runs from its own tab.)";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN, and check whether HTTPS is inspected, this computer's clock is right and how it's joined to a domain. Results opens to show them. (Speed Test runs from its own tab.)";
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Tab {
@@ -64,6 +64,7 @@ enum Tab {
     Notes,
     Speed,
     Calc,
+    Join,
     Results,
 }
 
@@ -113,6 +114,11 @@ const TABS: &[(Tab, &str, &str)] = &[
         "Subnet calculator: masks, host ranges, splitting a block, range to CIDR",
     ),
     (
+        Tab::Join,
+        "Domain join",
+        "How this computer is joined: Active Directory, Entra ID, hybrid or a workgroup, and to which domain",
+    ),
+    (
         Tab::Results,
         "Results",
         "Every finished run. Filter, copy or export",
@@ -140,6 +146,8 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     /// Full scan's network checks (HTTPS inspection, the clock).
     netcheck: tools::netcheck::NetCheck,
+    /// How this computer is joined, for its tab and the status bar.
+    join: tools::join::DomainJoin,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
     report: tools::report::ReportTool,
@@ -400,6 +408,7 @@ impl App {
         self.dns.poll();
         self.advanced.poll();
         self.netcheck.poll();
+        self.join.poll();
         self.export.poll(ctx);
         // Files the user opened are in: a saved map on show gives way to
         // the live map, which has them.
@@ -659,6 +668,7 @@ impl App {
                     self.tab = Tab::Sweep;
                 }
             }
+            Tab::Join => self.join.ui(ui),
             Tab::Results => self.results_ui(ui),
         }
     }
@@ -855,6 +865,7 @@ impl App {
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
             Tab::Export => self.export.is_running(),
+            Tab::Join => self.join.running_since().is_some(),
             Tab::Map | Tab::Notes | Tab::Calc | Tab::Results => false,
         }
     }
@@ -897,6 +908,7 @@ impl App {
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
         self.netcheck.run(ctx);
+        self.join.check(ctx, true);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
             self.scanning.push(Tab::Sweep);
@@ -923,6 +935,7 @@ impl App {
             ("Lookup", self.dns.take_finished()),
             ("Domain Health", self.advanced.take_finished()),
             ("Network checks", self.netcheck.take_finished()),
+            ("Domain join", self.join.take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -1027,6 +1040,7 @@ impl App {
                 self.netcheck.running_since(),
                 self.netcheck.output(),
             ),
+            ("Domain join", self.join.running_since(), None),
         ]
         .into_iter()
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
@@ -1230,6 +1244,7 @@ fn main() {
                 dns: Default::default(),
                 advanced: Default::default(),
                 netcheck: Default::default(),
+                join: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
                 report: Default::default(),
@@ -1281,6 +1296,8 @@ fn main() {
                 site::touch();
             }
             app.retitle(&cc.egui_ctx);
+            // Local, and quick: the status bar names the domain from the start.
+            app.join.check(&cc.egui_ctx, false);
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
             }

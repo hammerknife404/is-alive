@@ -45,9 +45,9 @@ jobs:
               xvfb-run -a -s "-screen 0 1400x900x24" target/debug/is-alive demo.dc.html
             n=$(ls "shots/$theme" | wc -l)
             echo "$theme: $n screenshots"
-            # 12 tabs, the Map with a card selected, Settings, Help, and
+            # 13 tabs, the Map with a card selected, Settings, Help, and
             # the manual at a tab's chapter and at a table chapter.
-            test "$n" -eq 17
+            test "$n" -eq 18
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

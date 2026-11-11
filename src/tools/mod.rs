@@ -3,6 +3,7 @@ pub mod bundle;
 pub mod calc;
 pub mod dns;
 pub mod export;
+pub mod join;
 pub mod netcheck;
 pub mod notes;
 pub mod ping;
