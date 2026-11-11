@@ -190,7 +190,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 ### Full scan
 
-**Full scan** runs five checks at once and opens the **Results** tab to show them:
+**Full scan** runs six checks at once and opens the **Results** tab to show them:
 
 | Check | What it does |
 |---|---|
@@ -199,7 +199,8 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | Port Check | The gateway's common ports (the **Common** preset) |
 | Traceroute | The route to `1.1.1.1`, to show the way out to the internet |
 | DNS Lookup | `cloudflare.com` through this computer's own DNS settings |
-| Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it) |
+| Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it), then the web page of each device with a web port open, for what it calls itself |
+| Network checks | **HTTPS inspection**: whether a firewall or security software decrypts HTTPS and re-signs it, from the certificates three well-known sites present here (a known inspection product as their issuer, or one issuer on unrelated sites). A warning when it does; a failure when this computer doesn't trust the issuer, since browsers then show certificate errors. **Clock**: how far this computer's clock is off, from a time server (or, where that's blocked, an HTTPS site's date): within 30 seconds is fine, past 5 minutes Active Directory sign-in fails |
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
@@ -469,7 +470,7 @@ Every device the sweep found stays in the list and on the Map whether its ports 
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
@@ -972,7 +973,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 - **Roles** with counts; click one to fade those cards out.
 - **Action items** (the findings), worst first; click one to select the devices it's about.
 
-**Findings** come only from evidence: telnet open, management only over plain HTTP, firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **More › Copy findings** puts them in a ticket.
+**Findings** come only from evidence: telnet open, management only over plain HTTP, an address answering from two MACs (a duplicate IP), firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **More › Copy findings** puts them in a ticket.
 
 ### Example: walking a site with the Acme example
 

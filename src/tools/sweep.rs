@@ -732,6 +732,8 @@ impl SweepTool {
         }
         let checked = self.alive.iter().filter(|h| h.checked).count();
         match self.ran_ports {
+            // Nothing alive: nothing to say about ports.
+            _ if self.alive.is_empty() => {}
             PortCheck::Off => {}
             PortCheck::Smart => {
                 s += &format!(
@@ -1769,6 +1771,14 @@ mod tests {
         assert_eq!(s.seen().len(), 3, "the map gets all three");
         let r = s.report();
         assert!(r.contains("Mgmt ports checked on 2 of 3"), "{r}");
+        let none = SweepTool {
+            ran_ports: PortCheck::Smart,
+            ..Default::default()
+        };
+        assert!(
+            !none.report().contains("Mgmt ports"),
+            "nothing alive, nothing to say"
+        );
         assert!(
             ["10.0.0.1", "10.0.0.30", "10.0.0.40"]
                 .iter()
