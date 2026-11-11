@@ -271,7 +271,9 @@ impl MapView {
             act = act.take().or(self.more_menu(ui, src, empty));
         })
         .response
-        .on_hover_text("Clients, Re-layout, Reload, Compare, Examples, Saved maps, Clear map");
+        .on_hover_text(
+            "Open, Clients, Re-layout, Reload, Compare, Examples, Saved maps, Clear map",
+        );
         act
     }
 
@@ -407,6 +409,17 @@ impl MapView {
             }
             ui.separator();
         }
+        // Backups, exports and maps, from here: the Map stays and redraws.
+        if ui
+            .add_enabled(!src.export.picking(), egui::Button::new("Open…"))
+            .on_hover_text(OPEN_TIP)
+            .on_disabled_hover_text("The file dialog is open")
+            .clicked()
+        {
+            act = Some(Action::Open);
+            ui.close();
+        }
+        ui.separator();
         self.clients_menu(ui, src, empty);
         ui.separator();
         let moved = !self.placed.is_empty() || !self.shifted.is_empty();
@@ -652,6 +665,18 @@ impl MapView {
             });
             self.float_rects.push(r.response.rect);
         }
+        // A file opened (here, in Config Export or dropped) being read:
+        // the map redraws with it once it's in.
+        if let Some(name) = src.export.reading() {
+            let r = float_frame(ui).show(ui, |ui| {
+                ui.set_max_width(360.0);
+                ui.horizontal(|ui| {
+                    widgets::spinner(ui);
+                    ui.add(egui::Label::new(format!("Reading {name}")).truncate());
+                });
+            });
+            self.float_rects.push(r.response.rect);
+        }
         act
     }
 
@@ -755,6 +780,17 @@ mod tests {
         events: Vec<egui::Event>,
         size: Vec2,
     ) -> Vec<(String, Rect)> {
+        frame_act(ctx, v, src, events, size).0
+    }
+
+    /// `frame_at`, and what the tab asked the app for.
+    fn frame_act(
+        ctx: &egui::Context,
+        v: &mut MapView,
+        src: &Sources,
+        events: Vec<egui::Event>,
+        size: Vec2,
+    ) -> (Vec<(String, Rect)>, Option<Action>) {
         fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
             match s {
                 Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
@@ -768,15 +804,93 @@ mod tests {
             time: Some(ctx.input(|i| i.time) + 0.1),
             ..Default::default()
         };
+        let mut act = None;
         let mut out = ctx.run_ui(input, |ui| {
-            v.ui(ui, Sources { ..*src });
+            act = v.ui(ui, Sources { ..*src });
         });
         out.textures_delta.clear();
         let mut found = Vec::new();
         for c in &out.shapes {
             texts(&c.shape, &mut found);
         }
-        found
+        (found, act)
+    }
+
+    /// A click at `at`; what it asked the app for, and what shows a frame
+    /// after.
+    fn click_act(
+        ctx: &egui::Context,
+        v: &mut MapView,
+        src: &Sources,
+        at: Pos2,
+        size: Vec2,
+    ) -> (Vec<(String, Rect)>, Option<Action>) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_at(ctx, v, src, vec![egui::Event::PointerMoved(at)], size);
+        frame_at(ctx, v, src, vec![press(true)], size);
+        let (_, act) = frame_act(ctx, v, src, vec![press(false)], size);
+        (frame_at(ctx, v, src, vec![], size), act)
+    }
+
+    /// The Map's Open…, on a laptop and on the app's own opening size: in
+    /// ⋯ (also on an empty map) and on the empty map, each asking for
+    /// Config Export's dialog, with room for a trackpad.
+    #[test]
+    fn open_is_in_the_maps_menu_and_on_the_empty_map() {
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        for size in [vec2(1280.0, 720.0), vec2(1120.0, 720.0)] {
+            for export in [
+                crate::tools::export::ExportTool::with_example(0),
+                crate::tools::export::ExportTool::default(),
+            ] {
+                let empty = !export.example_open();
+                let src = Sources {
+                    sweep: &sweep,
+                    export: &export,
+                    info: &info,
+                    busy: false,
+                    note: false,
+                    legend: false,
+                    redact: &ov,
+                    animate: false,
+                };
+                let ctx = egui::Context::default();
+                let mut v = MapView::new(None);
+                let mut shown = Vec::new();
+                for _ in 0..4 {
+                    shown = frame_at(&ctx, &mut v, &src, vec![], size);
+                }
+                assert_eq!(v.map.nodes.is_empty(), empty);
+                let (menu, _) = click_act(&ctx, &mut v, &src, at(&shown, "⋯"), size);
+                let open = menu
+                    .iter()
+                    .find(|(s, _)| s == "Open…")
+                    .expect("Open… in ⋯")
+                    .1;
+                // The menu's first item, inside the window.
+                assert!(
+                    Rect::from_min_size(Pos2::ZERO, size).contains_rect(open),
+                    "{size:?}"
+                );
+                let (_, act) = click_act(&ctx, &mut v, &src, open.center(), size);
+                assert!(matches!(act, Some(Action::Open)), "⋯ › Open… at {size:?}");
+                if empty {
+                    for _ in 0..2 {
+                        shown = frame_at(&ctx, &mut v, &src, vec![], size);
+                    }
+                    let b = at(&shown, "Open a backup or map…");
+                    let (_, act) = click_act(&ctx, &mut v, &src, b, size);
+                    assert!(matches!(act, Some(Action::Open)), "empty state at {size:?}");
+                }
+            }
+        }
     }
 
     fn click(ctx: &egui::Context, v: &mut MapView, src: &Sources, at: Pos2) -> Vec<(String, Rect)> {
@@ -845,6 +959,7 @@ mod tests {
         assert!(at(&shown, "Cluster").y < 60.0);
         let menu = click(&ctx, &mut v, &src, at(&shown, "⋯"));
         for label in [
+            "Open…",
             "Re-layout",
             "Reload",
             "Examples",

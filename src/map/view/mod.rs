@@ -38,8 +38,9 @@ pub use tabs::MapTabs;
 pub enum Action {
     /// Sweep this machine's subnet (the map fills in as it runs).
     Sweep,
-    /// Open Config Export to load a backup.
-    Export,
+    /// Open…: Config Export's file dialog (backups, exports, /mapnetwork
+    /// and saved maps). The Map stays on screen and redraws with them.
+    Open,
     Ping(String),
     Ports(String),
     Trace(String),
@@ -1271,7 +1272,7 @@ impl MapView {
             self.track_edits();
             self.sync_notes();
             let full = ui.available_rect_before_wrap();
-            let act = empty_state(ui, src.info);
+            let act = empty_state(ui, &src);
             return act.or(self.controls(ui, full, &src, true));
         }
         let mut focus = Focus {
@@ -1644,10 +1645,16 @@ fn glow_strength(vis: &egui::Visuals) -> f32 {
     }
 }
 
+/// Open…'s tooltip, wherever the Map offers it.
+const OPEN_TIP: &str = "UniFi backups, SonicWall exports or reports, /mapnetwork maps (.dc.html) \
+     or saved maps (.json), several at once: the Map redraws with them. (Or drop them on the \
+     window.) Meraki configs open in Config Export: the Map doesn't draw them";
+
 /// Before anything is mapped: what the map is built from, the first
 /// steps, and the example maps.
-fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
-    let subnet = info
+fn empty_state(ui: &mut Ui, src: &Sources) -> Option<Action> {
+    let subnet = src
+        .info
         .lan
         .map(|(ip, bits)| crate::net::targets::subnet_cidr(ip, bits));
     let scan_tip = match &subnet {
@@ -1658,19 +1665,16 @@ fn empty_state(ui: &mut Ui, info: &HostInfo) -> Option<Action> {
         ui,
         "Nothing to map yet",
         "Built from a Subnet Sweep, a UniFi or SonicWall backup, or a /mapnetwork map. A backup \
-         gives the real uplinks; a sweep alone can only place devices under the gateway.",
+         gives the real uplinks; a sweep alone can only place devices under the gateway. Meraki \
+         configs aren't drawn: they go into the Site Bundle for Claude.",
         &[
             ("Scan this network", &scan_tip, subnet.is_some()),
-            (
-                "Open a backup or map…",
-                "Opens Config Export (or drop the file on the window)",
-                true,
-            ),
+            ("Open a backup or map…", OPEN_TIP, !src.export.picking()),
         ],
     );
     let mut act = match hit {
         Some(0) => Some(Action::Sweep),
-        Some(1) => Some(Action::Export),
+        Some(1) => Some(Action::Open),
         _ => None,
     };
     ui.vertical_centered(|ui| {

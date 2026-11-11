@@ -7,7 +7,6 @@ use super::history::Edits;
 use super::saved::{self, Purpose, Snapshot};
 use super::toolbar::{TabsAsk, TabsMenu};
 use super::*;
-use crate::job::{Job, pump};
 use std::path::{Path, PathBuf};
 
 /// One saved map: its file, and its own view (with its own undo).
@@ -56,8 +55,6 @@ pub struct MapTabs {
     renaming: Option<(usize, String)>,
     /// What the dialog open over the map asks about (Delete, Replace).
     asking: Option<Ask>,
-    /// Open…'s file dialog, then the file read.
-    opening: Option<Job<(PathBuf, Result<Snapshot, String>)>>,
     /// Saved maps' files that couldn't be read, and why.
     skipped: Vec<String>,
     /// The Map tab has shown, so `skipped` was told once.
@@ -88,7 +85,6 @@ impl MapTabs {
             dir,
             renaming: None,
             asking: None,
-            opening: None,
             skipped,
             told: false,
             ov: Default::default(),
@@ -284,11 +280,16 @@ impl MapTabs {
         r
     }
 
-    /// Keep a map read from a file as a new saved map, and show it.
+    /// Keep a map read from a file as a new saved map, and show it. It
+    /// keeps the date it was first saved (a colleague's map from last month
+    /// isn't today's visit in Compare); one without a date is dated now.
     fn add(&mut self, mut s: Snapshot, from: &str) -> Result<(), String> {
-        s.created = saved::now();
+        if chrono::DateTime::parse_from_rfc3339(&s.created).is_err() {
+            s.created = saved::now();
+        }
+        let day = super::since::day(&s.created);
         self.keep_new(s)?;
-        widgets::toast(format!("Opened {from} as a saved map"), true);
+        widgets::toast(format!("Opened {from} as a saved map (saved {day})"), true);
         Ok(())
     }
 
@@ -429,13 +430,14 @@ impl MapTabs {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
-        self.poll_open();
         self.tell_skipped();
         self.redact(src.redact);
+        let mut open = false;
         if self.bar {
-            egui::Panel::bottom("map_saved_bar")
+            open = egui::Panel::bottom("map_saved_bar")
                 .resizable(false)
-                .show(ui, |ui| self.bar_ui(ui, &src));
+                .show(ui, |ui| self.bar_ui(ui, &src))
+                .inner;
         }
         self.confirm_dialog(ui.ctx(), &src);
         let bar = self.bar;
@@ -476,15 +478,14 @@ impl MapTabs {
                 }
             });
         }
+        // The bar's Open… is the toolbar's: one dialog, every kind of file.
+        let act = act.or(open.then_some(Action::Open));
         match act {
-            // Scanning, loading and examples are the live map's.
-            Some(
-                Action::Sweep
-                | Action::Export
-                | Action::Reload
-                | Action::Example(_)
-                | Action::CloseExample,
-            ) if saved => {
+            // Scanning, reloading and examples are the live map's. (Files
+            // opened go to Live once they're read: see `show_live`.)
+            Some(Action::Sweep | Action::Reload | Action::Example(_) | Action::CloseExample)
+                if saved =>
+            {
                 self.shown = None;
                 act
             }
@@ -492,6 +493,12 @@ impl MapTabs {
             Some(Action::Layout(_)) if saved => None,
             act => act,
         }
+    }
+
+    /// Files the user opened are in (Open…, a drop, Open with): a saved map
+    /// on show gives way to the live map, which has them. True if it did.
+    pub fn show_live(&mut self) -> bool {
+        self.shown.take().is_some()
     }
 
     /// What the toolbar shows for the saved maps: the one on show, Compare's
@@ -548,10 +555,12 @@ impl MapTabs {
         self.live.compare_with(s);
     }
 
-    /// Live, a sub-tab for each saved map, + Save current and Open….
-    fn bar_ui(&mut self, ui: &mut Ui, src: &Sources) {
+    /// Live, a sub-tab for each saved map, + Save current and Open…; true
+    /// when Open… was clicked.
+    fn bar_ui(&mut self, ui: &mut Ui, src: &Sources) -> bool {
         let mut ev = None;
         let mut save = false;
+        let mut open = false;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -563,13 +572,14 @@ impl MapTabs {
                 {
                     self.bar = false;
                 }
-                if ui
-                    .button("Open…")
-                    .on_hover_text("Open a saved map's .json file (someone else's too)")
-                    .clicked()
-                {
-                    self.pick_file(ui.ctx());
-                }
+                open = ui
+                    .add_enabled(!src.export.picking(), egui::Button::new("Open…"))
+                    .on_hover_text(
+                        "Open a saved map's .json (someone else's too: it keeps its date), or a \
+                         backup, export or /mapnetwork map for the live map",
+                    )
+                    .on_disabled_hover_text("The file dialog is open")
+                    .clicked();
                 let empty = match self.shown {
                     Some(_) => false,
                     None => self.live.map.nodes.is_empty(),
@@ -647,6 +657,7 @@ impl MapTabs {
             Some(TabEv::Purpose(i, p)) => self.set_purpose(i, p),
             None => {}
         }
+        open
     }
 
     /// Saved maps' files that couldn't be read: how many, and why on
@@ -918,35 +929,6 @@ impl MapTabs {
         self.asking = None;
         widgets::toast(format!("Deleted \"{}\"", t.name), true);
     }
-
-    /// Open…: pick a saved map's file, read it in the background.
-    fn pick_file(&mut self, ctx: &egui::Context) {
-        if self.opening.is_some() {
-            return;
-        }
-        self.opening = Some(Job::spawn(ctx, |tx| {
-            let Some(path) = rfd::FileDialog::new()
-                .set_title("Open a saved map")
-                .add_filter("is-alive map", &["json"])
-                .pick_file()
-            else {
-                return;
-            };
-            let r = saved::read(&path);
-            tx.send((path, r));
-        }));
-    }
-
-    fn poll_open(&mut self) {
-        let mut got = None;
-        pump(&mut self.opening, |r| got = Some(r));
-        if let Some((path, r)) = got {
-            let name = crate::tools::export::file_name(&path);
-            if let Err(e) = r.and_then(|s| self.add(s, &name)) {
-                widgets::toast(format!("Couldn't open {name}: {e}"), false);
-            }
-        }
-    }
 }
 
 /// A saved map's sub-tab, from the map as read or written.
@@ -1091,7 +1073,8 @@ fn tab_menu(
         ui,
         true,
         "Export JSON…",
-        "Save it as a file to share: Open… here (or Config Export) reads it",
+        "Save it as a file to share: Open… (here, in ⋯ or in Config Export) reads it, with \
+         its date",
         TabEv::Export(i),
     );
     ui.separator();
@@ -1330,6 +1313,138 @@ mod tests {
         assert_eq!(corner_top(wide), wide.max.y - 32.0);
         let tiny = Rect::from_min_size(pos2(240.0, 0.0), vec2(60.0, 500.0));
         assert!(toggle_rect(tiny).is_none());
+    }
+
+    /// A saved map opened from a file (a colleague's, last month's) keeps
+    /// the date it was saved, so Compare doesn't take it for today's
+    /// visit. It's still kept with this site's maps, numbered beside one of
+    /// its name; one with no date is dated now.
+    #[test]
+    fn a_saved_map_opened_from_a_file_keeps_its_date() {
+        let dir = temp("keepdate");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        let old = sample("HQ visit", "2026-10-01T09:30:00Z");
+        let text = saved::to_json(&old);
+        t.open_file(Path::new("hq.json"), text.as_bytes()).unwrap();
+        t.open_file(Path::new("hq.json"), text.as_bytes()).unwrap();
+        let got: Vec<(&str, &str)> = t
+            .saved
+            .iter()
+            .map(|s| (s.name.as_str(), s.created.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("HQ visit", "2026-10-01T09:30:00Z"),
+                ("HQ visit (2)", "2026-10-01T09:30:00Z")
+            ]
+        );
+        assert_eq!(
+            saved::read(&t.saved[0].path).unwrap().created,
+            "2026-10-01T09:30:00Z",
+            "in its file too"
+        );
+        assert!(t.saved[0].path.starts_with(&dir));
+        let undated = saved::to_json(&sample("Undated", ""));
+        t.open_file(Path::new("u.json"), undated.as_bytes())
+            .unwrap();
+        let created = &t.saved[2].created;
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(created).is_ok(),
+            "{created}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Files the user opens go to the live map: a saved map on show gives
+    /// way (once), and says so; the saved map stays in the bar.
+    #[test]
+    fn files_opened_bring_back_the_live_map() {
+        let dir = temp("showlive");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        assert!(!t.show_live(), "Live already");
+        t.keep_new(sample("Site", "2026-01-01T00:00:00Z")).unwrap();
+        assert_eq!(t.shown, Some(0));
+        assert!(t.show_live());
+        assert_eq!(t.shown, None);
+        assert_eq!(t.saved.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Saved maps bar's Open… is the Map's Open… (Config Export's
+    /// dialog, every kind of file), and a saved map on show stays until
+    /// something is read.
+    #[test]
+    fn the_bars_open_is_the_maps_open() {
+        let dir = temp("baropen");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        t.keep_new(sample("Site", "2026-01-01T00:00:00Z")).unwrap();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let export = crate::tools::export::ExportTool::default();
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        let ctx = egui::Context::default();
+        let mut frame = |events: Vec<egui::Event>| {
+            fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
+                match s {
+                    Shape::Text(t) => {
+                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()))
+                    }
+                    Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                    _ => {}
+                }
+            }
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1120.0, 720.0))),
+                time: Some(ctx.input(|i| i.time) + 0.1),
+                ..Default::default()
+            };
+            let mut act = None;
+            let mut out = ctx.run_ui(input, |ui| {
+                act = t.ui(
+                    ui,
+                    Sources {
+                        sweep: &sweep,
+                        export: &export,
+                        info: &info,
+                        busy: false,
+                        note: false,
+                        legend: false,
+                        redact: &ov,
+                        animate: false,
+                    },
+                );
+            });
+            out.textures_delta.clear();
+            let mut found = Vec::new();
+            for c in &out.shapes {
+                texts(&c.shape, &mut found);
+            }
+            (found, act)
+        };
+        let mut shown = Vec::new();
+        for _ in 0..4 {
+            shown = frame(vec![]).0;
+        }
+        let at = shown
+            .iter()
+            .find(|(s, _)| s == "Open…")
+            .expect("Open… in the bar")
+            .1
+            .center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(true)]);
+        let (_, act) = frame(vec![press(false)]);
+        assert!(matches!(act, Some(Action::Open)));
+        assert_eq!(t.shown, Some(0), "nothing read yet: the saved map stays");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

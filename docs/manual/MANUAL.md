@@ -46,7 +46,7 @@ is-alive answers the questions you have on a site visit, from one small program:
 - **Does the name work?** Look up any DNS record from any resolver, or compare them all.
 - **Is the email set up safely?** Check MX, SPF, DMARC, DKIM, blacklists and a dozen more in one go.
 - **Is the line good enough for calls?** Measure speed, latency, jitter, loss, bufferbloat and a VoIP quality score.
-- **How is it wired?** Read UniFi, SonicWall and Meraki configs offline and draw the network as a map.
+- **How is it wired?** Read UniFi, SonicWall and Meraki configs offline, and draw the network as a map from the UniFi and SonicWall ones. Meraki configs go into the Site Bundle and JSON for Claude, but aren't drawn on the Map.
 - **What did I find?** Keep notes for the visit, collect every result, and export them for a ticket or report.
 
 It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. There's no installer, it doesn't need administrator rights, and it doesn't send anything anywhere unless you run something (see [Privacy and security](#19-privacy-and-security)).
@@ -98,7 +98,7 @@ It runs on any desktop Linux with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, 
 
 ### Opening files directly
 
-You can open a config or map file in is-alive straight from your file manager (**Open with → is-alive**), by dragging it onto the window, or from a command line (`is-alive.exe backup.unf`). Files opened this way go to [Config Export](#10-config-export).
+You can open a config or map file in is-alive straight from your file manager (**Open with → is-alive**), by dragging it onto the window (see [Dropping files](#dropping-files)), or from a command line (`is-alive.exe backup.unf`). Files opened with **Open with** or from a command line go to [Config Export](#10-config-export). The site that was open last opens as usual, its own configs read again first; the files you opened join them, and the site remembers them too.
 
 ### Updates
 
@@ -220,7 +220,16 @@ At the top of the page, tiles count the devices, the findings by severity and th
 
 ### Dropping files
 
-Drag a UniFi backup, SonicWall export or report, Meraki export or `/mapnetwork` map onto the window from any tab. The window darkens to say where it will go, and dropping it opens it in [Config Export](#10-config-export).
+Drag a UniFi backup, SonicWall export or report, Meraki export, `/mapnetwork` map or saved map onto the window from any tab, or a photo or notes onto Notes. The window darkens and says what it takes and where the files will go on this tab:
+
+| Dropped on | What happens |
+|---|---|
+| **Map** | [Config Export](#10-config-export) reads the files and you stay on the Map, which redraws with them; a saved map opens as a saved map. A file being read shows as *Reading …* under the Map's toolbar, and one that can't be read says why in a message at the bottom of the window. A Meraki config is read too, but the Map doesn't draw it: a message says so |
+| **Notes** | A photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) go into [Notes](#12-notes), as **File ▾ › Open…** takes them. Anything else goes to Config Export; if nothing went into Notes, Config Export comes on screen to show it |
+| **Config Export** | It reads them, as **Open file…** does |
+| **Any other tab** | Config Export comes on screen and reads them |
+
+Files dropped while Config Export is still reading others wait their turn and are read right after; nothing dropped is lost. A saved map, wherever it's dropped, opens on the Map.
 
 ---
 
@@ -622,21 +631,26 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 ## 10. Config Export
 
-**What it's for:** reading a site's network configuration files on this computer, removing every secret, and turning them into clean JSON for Claude's `/unifidump` and `/mapnetwork` skills. What it reads also draws the [Map](#11-map).
+**What it's for:** reading a site's network configuration files on this computer, removing every secret, and turning them into clean JSON for Claude's `/unifidump` and `/mapnetwork` skills. The UniFi backups, SonicWall exports and `/mapnetwork` maps it reads also draw the [Map](#11-map). Meraki configs go into the Site Bundle and **Save JSON…** for Claude, but aren't drawn on the Map.
 
 ### What it opens
 
-| File | From |
-|---|---|
-| `.unf` | UniFi Network: a site export or an autobackup |
-| `.unifi` | A UniFi OS console backup (UDM, UCG, Cloud Key Gen2) |
-| `db.gz`, or a `.zip` holding one of the above | Older or unpacked UniFi backups |
-| `.exp` | SonicWall settings export (Gen 6 or 7), or one already decoded to text |
-| `.wri` | SonicWall tech support report |
-| `.json` | Meraki MX configuration saved from the Dashboard API (see below) |
-| `.dc.html`, or a zip holding one | A map made by Claude's `/mapnetwork` |
+| File | From | On the Map |
+|---|---|---|
+| `.unf` | UniFi Network: a site export or an autobackup | Yes |
+| `.unifi` | A UniFi OS console backup (UDM, UCG, Cloud Key Gen2) | Yes |
+| `db.gz`, or a `.zip` holding one of the above | Older or unpacked UniFi backups | Yes |
+| `.exp` | SonicWall settings export (Gen 6 or 7), or one already decoded to text | Yes |
+| `.wri` | SonicWall tech support report | Yes |
+| `.json` | Meraki MX configuration saved from the Dashboard API (see below) | No: Site Bundle and JSON only |
+| `.dc.html`, or a zip holding one | A map made by Claude's `/mapnetwork` | Yes: it becomes the map |
+| `.json` | A saved map (the Map's **Export JSON…**, yours or a colleague's) | Opens on the Map as a saved map, keeping its date |
 
-Open them with **Open file…** (pick several at once if you like), by dropping them on the window from any tab, or with **Open with → is-alive**. 🔒 Everything happens on this computer: nothing is uploaded.
+Open them with **Open file…** (pick several at once if you like), from the Map (**⋯ › Open…**, the same file dialog), by dropping them on the window (see [Dropping files](#dropping-files)), or with **Open with → is-alive**. Opening from Config Export keeps you here; a saved map opens on the Map. 🔒 Everything happens on this computer: nothing is uploaded.
+
+**While a file is being read** its name shows beside **Open file…** with a spinner. Files opened or dropped meanwhile wait their turn and are read right after, as are example maps picked on the Map.
+
+**A Site Bundle zip** (`<site>.bundle.zip`) is made for Claude, not read back: opened here it says *that's a Site Bundle (made for Claude)*, and to open the backups and exports it was made from, or the map Claude made from it. A bundle you saved Claude's `.dc.html` map into opens as that map.
 
 Open everything the visit has, even several of one kind: a client with two sites, each with its own UniFi backup and SonicWall report, is four files. Each gets its own sub-tab, and the Map and Site Bundle use every one (see *Several sites or firewalls* below).
 
@@ -644,7 +658,7 @@ Open everything the visit has, even several of one kind: a client with two sites
 
 | Control | What it does |
 |---|---|
-| **Open file…** | Pick one or more files |
+| **Open file…** | Pick one or more files. It works while another file is being read: what you pick is read after it |
 | **UniFi clients** | Whether a UniFi backup's client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names, which are often people's names). Your choice is remembered, for every site, and the backups open now are read again with it |
 | **The sub-tabs** | One per file, named *kind · file name*. The file opened last is shown; past six, the oldest fold into an **n more** menu |
 | **Save JSON…** | Save the sanitized JSON: `<name>.unifidump.json`, `.sonicwall.json`, `.meraki.json` or `.mapnetwork.json` |
@@ -674,7 +688,7 @@ A visit can cover more than one controller or firewall. Open them all, together 
 |---|---|---|
 | Several UniFi backups | Every controller's devices and clients on one map. A device or client in two backups (one controller's backups from two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)* and *Default (south)* | A file each: `unifi.unifidump.json`, then `unifi-2.unifidump.json` and so on |
 | Several SonicWall exports or reports | Each firewall is a gateway of its own under the internet, with what it heard. A settings export and a report of the same firewall are one card | `sonicwall.json`, `sonicwall-2.json`, … |
-| Several Meraki exports | Not on the Map | `meraki.json`, `meraki-2.json`, … |
+| Several Meraki exports | Not on the Map (Meraki configs aren't drawn) | `meraki.json`, `meraki-2.json`, … |
 | Several `/mapnetwork` maps | The one opened last is the map | The one opened last |
 
 Opening a file again moves it to the end of the sub-tabs, so it counts as opened last.
@@ -689,9 +703,12 @@ Meraki keeps its config in the cloud, not on the box. The script [`scripts/merak
 
 The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is never written to disk. Open `harbor.meraki.json` in Config Export. The raw export contains secrets, so share the converted JSON, not the export.
 
+**Meraki configs aren't drawn on the Map.** They go into the Site Bundle (and **Save JSON…**) for Claude, whose `/mapnetwork` maps them; its sub-tab says so under the headline. Opened from the Map (or dropped on it), a Meraki config is read here all the same, and a message at the bottom of the window says the Map doesn't draw it.
+
 ### Common problems
 
 - **"not a UniFi backup …, SonicWall settings export … or /mapnetwork map"**: the file isn't one of the supported kinds, or it's damaged. Check you downloaded the backup itself and not an HTML page.
+- **"that's a Site Bundle (made for Claude)"**: the zip is a bundle is-alive saved for Claude. It holds sanitized JSON, not the backups, so it isn't read back. Open the backups and exports it was made from, or the `.dc.html` map Claude made from it.
 - **Files larger than 2 GB** are refused, as are files that unpack to more than 2 GB: a real backup is never that big.
 
 ---
@@ -710,7 +727,20 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
 | **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered, and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized). With several backups open, each joins only when the map shows its devices |
 
-A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps and a blank one.
+A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Site Bundle for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
+
+### Opening files on the Map
+
+**Open a backup or map…** on the empty map, **⋯ › Open…** and the saved maps bar's **Open…** all show the same file dialog as Config Export's **Open file…**, with every kind it reads: UniFi backups, SonicWall exports and reports, Meraki configs, `/mapnetwork` maps (`.dc.html`, or a zip holding one) and saved maps (`.json`). Pick several at once if you like. You stay on the Map:
+
+- **Backups, exports and `/mapnetwork` maps** are read by [Config Export](#10-config-export) (they get its sub-tabs too) and the live map redraws with them. While a file is read, *Reading …* and its name show under the toolbar.
+- **A saved map** opens as a saved map (see *Undo and saved maps*, below).
+- **A Meraki config** is read in Config Export, and a message at the bottom of the window says the Map doesn't draw it.
+- **A file that can't be read** says why in a message at the bottom of the window (Config Export lists it too).
+
+Dropping files on the Map does the same (see [Dropping files](#dropping-files)).
+
+**A saved map on show** gives way when you open a backup, export or `/mapnetwork` map (from the Map, Config Export, a drop or **Open with**): the Map goes back to **Live**, which has the new file, and a message says so. The saved map stays in the saved maps bar. A site's own configs read again (when is-alive starts, on a site switch, or **Reload**) don't move you off a saved map.
 
 **Several backups or exports at once.** Every UniFi backup and SonicWall export open in Config Export goes on the map:
 
@@ -740,6 +770,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 
 | Item | What it does |
 |---|---|
+| **Open…** | Open backups, exports, `/mapnetwork` maps or saved maps; you stay on the Map, which redraws (see *Opening files on the Map*, above). Also on an empty map |
 | **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The inspector of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
@@ -751,7 +782,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 
 On a saved map, a **Saved: *name* ⏷** chip starts the toolbar: its menu has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first.
 
-Under the toolbar the map says what it needs to: that it's a plan or a training map, the accuracy note (below) and how far a running sweep has got.
+Under the toolbar the map says what it needs to: that it's a plan or a training map, the accuracy note (below), how far a running sweep has got, and the file Config Export is reading (*Reading backup.unf*).
 
 **Layouts:**
 
@@ -812,7 +843,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 - **Live** is the map from the sweep and the files loaded now; each saved map has a tab beside it. Click one to open it. A **•** after its name means it has changed since it was saved.
 - **+ Save current** saves the map showing as a new tab, ready to be named.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
-- **Open…** (or Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too.
+- **Open…** (here, in **⋯** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
 - **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
 
 A saved map doesn't change with the files: **Reload** and **Clients** are greyed out on it, while **Scan** goes back to Live and sweeps. Saved maps are kept in the `maps` folder beside the settings, one `.json` file each.
@@ -993,11 +1024,13 @@ Everything is in one row above the notes:
 | **Autosave** | On or off (below) |
 | **Clear** | Empty the notes (click twice) |
 
+**Dropping files on Notes:** a photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) dropped on the Notes tab is taken as **Open…** takes it: the photo goes in at the end, and notes ask **Replace the notes**, **Add at the end** or **Read only** (one file at a time, when several are dropped). Anything else dropped here (a backup, an export, a map) goes to [Config Export](#10-config-export); see [Dropping files](#dropping-files).
+
 **Autosave** (on by default): the notes save themselves, redacted, a moment after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
-**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
+**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**, or dropping it on the Notes tab) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
 
 - In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
 - Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.
@@ -1296,7 +1329,9 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Drag a box's title | Map | Move the box with its cards |
 | Right-click a box's title | Map | Select its cards, put the box back, Links |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
-| Drop a file on the window | Anywhere | Open it in Config Export |
+| Drop a file on the window | Map | Open it there: Config Export reads it and the Map redraws (a saved map opens as one) |
+| Drop a file on the window | Notes | A photo or notes go into Notes; anything else to Config Export |
+| Drop a file on the window | Any other tab | Open it in Config Export |
 
 ---
 
@@ -1350,7 +1385,7 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 1. **On site:** run a Subnet Sweep, open the site's UniFi backups and SonicWall or Meraki exports in Config Export (every controller and firewall the visit covers), take notes.
 2. **Bundle:** open the site menu (top left) and click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
 3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on each UniFi export, then `/mapnetwork` with everything else.
-4. **Back in is-alive:** open the `.dc.html` map Claude makes in Config Export (or drop it on the window). The Map redraws it, and a sweep of the same network marks which devices answer.
+4. **Back in is-alive:** open the `.dc.html` map Claude makes: on the Map with **⋯ › Open…** (or drop it on the Map), or in Config Export. The Map redraws it, and a sweep of the same network marks which devices answer. (The bundle zip itself isn't read back: it says so if you open it.)
 5. **Next visit:** keep that map open when you make the next bundle. Claude updates the existing map, under its original name, instead of starting again.
 
 ---
