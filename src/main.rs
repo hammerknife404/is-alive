@@ -882,14 +882,20 @@ impl App {
         }
     }
 
-    /// The open site's saved runs, as Results (none in Scratch, or with
-    /// Keep with site off).
+    /// The open site's saved runs, as Results (none with Keep with site
+    /// off); Scratch's from the last day only.
     pub(crate) fn load_results(&mut self) {
         self.log = match log::site_file().filter(|_| self.look.results_keep) {
             Some(p) => log::Log::load(&p),
             None => log::Log::default(),
         };
+        // As read: runs that expired make it differ, so the file is written
+        // again without them.
         self.log_saved = self.log.stamp();
+        if site::current().is_none() {
+            self.log
+                .keep_since(chrono::Local::now().naive_local(), log::SCRATCH_HOURS);
+        }
     }
 
     /// Write Results to the open site's folder when they've changed: a run

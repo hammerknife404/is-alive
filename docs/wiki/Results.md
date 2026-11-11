@@ -2,7 +2,7 @@ Every finished run from every tab is listed here, newest first, under the day it
 
 **Compare ▾** (beside Export) lists the other runs of the same tool, those of the same target first; pick one and the **Compare** view shows what's **New**, **Gone** and **Changed** between them, the earlier run as before: a sweep's hosts by IP (MAC, vendor, name, open ports), Port Check's ports, Traceroute's hops, DNS answers, Domain Health's checks, and Speed Test's and Ping's figures side by side with the difference. Reply times aren't counted as changes. **Copy** copies the comparison.
 
-The **Filter** box at the top of the list matches tool names and output text. **All runs ▾** copies, saves or exports every run listed (CSV, JSON, Markdown or HTML: the filter decides which), turns **Keep with site** on or off (a site keeps its Results in its folder from one visit to the next; Scratch keeps them in memory only) and has **Clear all**, which asks for a second click.
+The **Filter** box at the top of the list matches tool names and output text. **All runs ▾** copies, saves or exports every run listed (CSV, JSON, Markdown or HTML: the filter decides which), turns **Keep with site** on or off (a site keeps its Results in its folder from one visit to the next; Scratch keeps them for a day, as **Keep for a day**, so a crash or a flat battery doesn't lose the visit but they don't follow you to the next client) and has **Clear all**, which asks for a second click.
 
 CSV export uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel:
 

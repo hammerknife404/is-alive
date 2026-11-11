@@ -956,7 +956,7 @@ pub struct Settings {
     /// (Ctrl+S) writes them.
     pub notes_autosave: bool,
     /// Each site keeps its Results (in its folder) from one visit to the
-    /// next. Off: Results live in memory only, as in Scratch.
+    /// next, and Scratch for a day. Off: Results live in memory only.
     pub results_keep: bool,
     /// The site open when the app last closed (its folder name); None is
     /// Scratch.

@@ -396,23 +396,31 @@ impl App {
                 });
             });
             ui.separator();
-            // Shown unticked in Scratch, which never keeps them.
-            let at_site = log::site_file().is_some();
-            let mut keep = self.look.results_keep && at_site;
-            if ui
-                .add_enabled(at_site, egui::Checkbox::new(&mut keep, "Keep with site"))
-                .on_hover_text(format!(
-                    "Save Results in {}'s folder, readable by you only, so they're here the next \
-                     time it opens (and for its Site report). Off: in memory only, gone when \
-                     is-alive closes; the site's saved runs are taken off disk.",
-                    self.site_name
-                ))
-                .on_disabled_hover_text(
-                    "Scratch keeps Results in memory only: its runs can be any client's. Open a \
-                     site (top left) to keep them with it.",
+            // One setting: a site keeps its runs, Scratch for a day.
+            let scratch = crate::site::current().is_none();
+            let mut keep = self.look.results_keep;
+            let (label, tip) = if scratch {
+                (
+                    "Keep for a day",
+                    "Save Scratch's Results in your profile folder, readable by you only, for 24 \
+                     hours from each run: they come through a crash, a flat battery or closing by \
+                     mistake, but not into the next client's visit (Scratch's runs can be any \
+                     client's). Open a site (top left) to keep them with it. Off: in memory only, \
+                     gone when is-alive closes. The same setting as Keep with site at a site."
+                        .to_string(),
                 )
-                .changed()
-            {
+            } else {
+                (
+                    "Keep with site",
+                    format!(
+                        "Save Results in {}'s folder, readable by you only, so they're here the \
+                         next time it opens (and for its Site report). Off: in memory only, gone \
+                         when is-alive closes; the site's saved runs are taken off disk.",
+                        self.site_name
+                    ),
+                )
+            };
+            if ui.checkbox(&mut keep, label).on_hover_text(tip).changed() {
                 keep_to = Some(keep);
             }
             ui.separator();
