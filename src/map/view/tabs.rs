@@ -21,6 +21,16 @@ pub enum SaveState {
     Saved,
 }
 
+/// Another site's saved maps (as found), for Compare › Other sites.
+struct OtherSite {
+    name: String,
+    /// Label ("HQ visit · 2026-10-14"), full name and file of each.
+    maps: Vec<(String, String, PathBuf)>,
+}
+
+/// How long a listing of other sites' maps is used before it's read again.
+const OTHERS_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// One saved map: its file, and its own view (with its own undo).
 struct Tab {
     path: PathBuf,
@@ -73,6 +83,8 @@ pub struct MapTabs {
     told: bool,
     /// How card notes are redacted, as every map was last told.
     ov: crate::redact::Overrides,
+    /// Other sites' saved maps to compare with, and when they were listed.
+    others: Option<(std::time::Instant, Vec<OtherSite>)>,
     /// Save was clicked: done at the start of the next frame.
     save_next: bool,
 }
@@ -103,6 +115,7 @@ impl MapTabs {
             told: false,
             ov: Default::default(),
             save_next: false,
+            others: None,
         }
     }
 
@@ -536,6 +549,8 @@ impl MapTabs {
                     self.compare_with(j);
                 }
             }
+            Some(TabsAsk::ListOthers) => self.list_others(),
+            Some(TabsAsk::CompareOther(s, m)) => self.compare_other(s, m),
             Some(TabsAsk::StopCompare) => self.live.since = None,
             Some(TabsAsk::Clear) => return Some(Action::ClearLive),
             None => {}
@@ -596,7 +611,21 @@ impl MapTabs {
                 )
             })
             .collect();
+        let (others, others_stale) = match &self.others {
+            Some((at, list)) => (
+                list.iter()
+                    .map(|o| {
+                        let maps = o.maps.iter().map(|(l, n, _)| (l.clone(), n.clone()));
+                        (o.name.clone(), maps.collect())
+                    })
+                    .collect(),
+                at.elapsed() > OTHERS_FOR,
+            ),
+            None => (Vec::new(), true),
+        };
         TabsMenu {
+            others,
+            others_stale,
             saved: self.shown.map(|i| self.saved[i].name.clone()),
             can_compare: self.shown.is_none() && !live.map.nodes.is_empty() && !example,
             compare,
@@ -615,6 +644,53 @@ impl MapTabs {
             .collect();
         found.sort_by(|&a, &b| self.saved[b].created.cmp(&self.saved[a].created));
         found
+    }
+
+    /// Every other site with saved maps as found, most recently opened
+    /// first, and its maps newest first.
+    fn list_others(&mut self) {
+        let here = crate::site::current();
+        let list = crate::site::list()
+            .into_iter()
+            .filter(|s| s.folder != here && s.maps > 0)
+            .filter_map(|s| {
+                let (found, _) = saved::list(&s.path.join("maps"));
+                let mut maps: Vec<(String, String, PathBuf)> = found
+                    .into_iter()
+                    .filter(|(_, m)| m.purpose == Purpose::AsFound)
+                    .map(|(p, m)| {
+                        let label =
+                            format!("{} · {}", short(&m.name), super::since::day(&m.created));
+                        (label, m.name, p)
+                    })
+                    .collect();
+                maps.reverse();
+                (!maps.is_empty()).then_some(OtherSite { name: s.name, maps })
+            })
+            .collect();
+        self.others = Some((std::time::Instant::now(), list));
+    }
+
+    /// Compare the live map with another site's saved map, read from its
+    /// file now (it may have changed since it was listed).
+    fn compare_other(&mut self, site: usize, map: usize) {
+        let Some((_, list)) = &self.others else {
+            return;
+        };
+        let Some(o) = list.get(site) else { return };
+        let Some((_, _, path)) = o.maps.get(map) else {
+            return;
+        };
+        let site_name = o.name.clone();
+        match saved::read(path) {
+            Ok(s) => {
+                let was_all = s.edits.clients == Clients::All;
+                let name = format!("{} ({site_name})", s.name);
+                let since = super::since::Since::new(name, s.created, s.map, was_all);
+                self.live.compare_with(since);
+            }
+            Err(e) => widgets::toast(format!("Couldn't read that map: {e}"), false),
+        }
     }
 
     /// Compare the live map with saved map `j`.
@@ -1315,6 +1391,47 @@ mod tests {
         let t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
         assert_eq!(t.saved.len(), 1);
         assert_eq!(t.saved[0].name, "Branch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Compare › Other sites: another site's saved map, read from its
+    /// file, is what the live map is compared with, named with its site.
+    #[test]
+    fn another_sites_map_can_be_compared_with() {
+        let dir = temp("othersite");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hq-visit.json");
+        saved::write(&path, &sample("HQ visit", "2026-10-14T10:00:00Z")).unwrap();
+        let mut t = MapTabs::in_dir(MapView::new(None), None);
+        t.others = Some((
+            std::time::Instant::now(),
+            vec![OtherSite {
+                name: "Acme HQ (October)".into(),
+                maps: vec![("HQ visit · Oct 14".into(), "HQ visit".into(), path)],
+            }],
+        ));
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let export = crate::tools::export::ExportTool::default();
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let menu = t.tabs_menu(&src);
+        assert_eq!(menu.others[0].0, "Acme HQ (October)");
+        assert!(!menu.others_stale);
+        t.compare_other(0, 0);
+        let since = t.live.since.as_ref().expect("comparing");
+        assert_eq!(since.name, "HQ visit (Acme HQ (October))");
+        // A stale or missing index does nothing.
+        t.compare_other(3, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
