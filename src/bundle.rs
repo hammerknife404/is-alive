@@ -20,9 +20,41 @@ pub const MAP: &str = "map.dc.html";
 /// The kickoff prompt, so the bundle carries its own instructions.
 pub const PROMPT: &str = "prompt.txt";
 
+/// The bundle's name for the `n`th file of a kind, counting from 1: the
+/// first keeps the kind's name (`unifi.unifidump.json`), the next are
+/// numbered (`unifi-2.unifidump.json`, `sonicwall-2.json`, …). Several
+/// backups or exports from one visit are one controller or firewall each.
+pub fn numbered(base: &str, n: usize) -> String {
+    if n <= 1 {
+        return base.to_string();
+    }
+    match base.split_once('.') {
+        Some((stem, rest)) => format!("{stem}-{n}.{rest}"),
+        None => format!("{base}-{n}"),
+    }
+}
+
+/// Whether `file` is `base` or one numbered after it.
+fn of_kind(file: &str, base: &str) -> bool {
+    if file == base {
+        return true;
+    }
+    let (Some((stem, rest)), Some((b_stem, b_rest))) = (file.split_once('.'), base.split_once('.'))
+    else {
+        return false;
+    };
+    rest == b_rest
+        && stem
+            .strip_prefix(b_stem)
+            .and_then(|s| s.strip_prefix('-'))
+            .and_then(|n| n.parse::<usize>().ok())
+            .is_some_and(|n| n >= 2)
+}
+
 /// One file in the bundle.
 pub struct Part {
-    pub file: &'static str,
+    /// Its name in the zip: one of the names above, or `numbered` from one.
+    pub file: String,
     /// Where it came from: the backup or export's file name, or a range.
     pub source: String,
     pub skill: &'static str,
@@ -49,11 +81,20 @@ impl Bundle {
         self.parts.iter().any(|p| p.file == file)
     }
 
+    /// The files of a kind (`UNIFI`, `SONICWALL`, `MERAKI`), in order.
+    fn all_of(&self, base: &str) -> Vec<&str> {
+        self.parts
+            .iter()
+            .map(|p| p.file.as_str())
+            .filter(|f| of_kind(f, base))
+            .collect()
+    }
+
     /// What the bundle's client table is, for the prompt; None without a
     /// UniFi export, which is the only source of one.
     fn client_table(&self) -> Option<&'static str> {
         use crate::unifi::Clients;
-        self.has(UNIFI).then_some(match self.clients {
+        (!self.all_of(UNIFI).is_empty()).then_some(match self.clients {
             Clients::None => "Client table: not included.",
             Clients::Anonymized => {
                 "Client table: included, anonymized. Device names are client-xxxxxxxx tokens, stable \
@@ -81,10 +122,10 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
                 })
             })
             .collect();
-        // One firewall's file by name, as before; both as a list.
+        // One firewall's file by name, as before; several as a list.
         let fw: Vec<&str> = [SONICWALL, MERAKI]
             .into_iter()
-            .filter(|f| self.has(f))
+            .flat_map(|f| self.all_of(f))
             .collect();
         let firewall = match fw.as_slice() {
             [] => Value::Null,
@@ -143,15 +184,32 @@ both: read skills/<name>/SKILL.md and follow it as that skill (its scripts/, ref
 assets/ paths are relative to that folder).\n\n";
         }
         let mut step = 1;
-        if self.has(UNIFI) {
-            s += &format!("{step}. Run /unifidump on {UNIFI}.\n");
+        let unifi = self.all_of(UNIFI);
+        let firewalls: Vec<&str> = [SONICWALL, MERAKI]
+            .into_iter()
+            .flat_map(|f| self.all_of(f))
+            .collect();
+        match unifi.as_slice() {
+            [] => {}
+            [one] => s += &format!("{step}. Run /unifidump on {one}.\n"),
+            all => {
+                s += &format!(
+                    "{step}. Run /unifidump on each of {}: each is its own UniFi controller.\n",
+                    join(&all.iter().map(|f| f.to_string()).collect::<Vec<_>>())
+                )
+            }
+        }
+        if !unifi.is_empty() {
             step += 1;
         }
         let mut inputs = Vec::new();
-        if self.has(UNIFI) {
-            inputs.push("the unifidump summary".to_string());
+        match unifi.len() {
+            0 => {}
+            1 => inputs.push("the unifidump summary".to_string()),
+            _ => inputs.push("the unifidump summaries".to_string()),
         }
-        for f in [SONICWALL, MERAKI, INVENTORY, RESULTS, NOTES, CARD_NOTES] {
+        inputs.extend(firewalls.iter().map(|f| f.to_string()));
+        for f in [INVENTORY, RESULTS, NOTES, CARD_NOTES] {
             if self.has(f) {
                 inputs.push(f.to_string());
             }
@@ -177,6 +235,32 @@ Don't ask it again.\n",
                 }
             );
         }
+        // Several of a kind: one controller or firewall each.
+        let mut apart = Vec::new();
+        if unifi.len() > 1 {
+            apart.push(format!(
+                "the {} UniFi exports are separate controllers, each with its own sites",
+                unifi.len()
+            ));
+        }
+        let sonicwall = self.all_of(SONICWALL).len();
+        if sonicwall > 1 {
+            apart.push(format!(
+                "the {sonicwall} SonicWall configs are separate firewalls, each a gateway of its own"
+            ));
+        }
+        let meraki = self.all_of(MERAKI).len();
+        if meraki > 1 {
+            apart.push(format!(
+                "the {meraki} Meraki exports are separate, each MX a gateway of its own"
+            ));
+        }
+        if !apart.is_empty() {
+            s += &format!(
+                "\nFrom this one visit, {}. manifest.json gives each file's source.\n",
+                apart.join("; ")
+            );
+        }
         if let Some(t) = self.client_table() {
             s += &format!("\n{t}\n");
         }
@@ -195,7 +279,11 @@ Don't ask it again.\n",
             ("manifest.json", manifest.as_bytes()),
             (PROMPT, prompt.as_bytes()),
         ];
-        files.extend(self.parts.iter().map(|p| (p.file, p.data.as_bytes())));
+        files.extend(
+            self.parts
+                .iter()
+                .map(|p| (p.file.as_str(), p.data.as_bytes())),
+        );
         let skills: Vec<(String, &[u8])> = if self.skills {
             crate::skills::FILES
                 .iter()
@@ -311,7 +399,7 @@ mod tests {
     #[test]
     fn the_bundled_mapnetwork_skill_knows_every_file() {
         let skill = include_str!("../skills/mapnetwork/SKILL.md");
-        for f in [
+        let mut files: Vec<String> = [
             "manifest.json",
             UNIFI,
             SONICWALL,
@@ -321,7 +409,12 @@ mod tests {
             NOTES,
             CARD_NOTES,
             MAP,
-        ] {
+        ]
+        .map(String::from)
+        .to_vec();
+        // The next of a kind is numbered: the skill says what that means.
+        files.extend([UNIFI, SONICWALL, MERAKI].map(|f| numbered(f, 2)));
+        for f in files {
             assert!(
                 skill.contains(&format!("`{f}`")),
                 "skills/mapnetwork/SKILL.md doesn't name the bundle's {f}"
@@ -335,9 +428,9 @@ mod tests {
         }
     }
 
-    fn part(file: &'static str, data: &str) -> Part {
+    fn part(file: &str, data: &str) -> Part {
         Part {
-            file,
+            file: file.into(),
             source: "src".into(),
             skill: "/mapnetwork",
             what: "test",
@@ -492,6 +585,166 @@ sonicwall.json and inventory.json"
             both["mapnetwork_preflight"]["firewall_config"],
             json!([SONICWALL, MERAKI])
         );
+    }
+
+    /// A bundle with one file of each kind reads as it always has: the
+    /// same names, prompt and manifest entries, word for word.
+    #[test]
+    fn one_of_each_is_as_before() {
+        let b = bundle(vec![
+            part(UNIFI, "[]"),
+            part(SONICWALL, "{}"),
+            part(MERAKI, "{}"),
+            part(INVENTORY, "{}"),
+        ]);
+        assert_eq!(
+            b.kickoff("x.zip"),
+            "Attached: x.zip, an is-alive site bundle for McClendon Baptist. Unzip it and read \
+manifest.json first.\n\n\
+1. Run /unifidump on unifi.unifidump.json.\n\
+2. Then /mapnetwork for McClendon Baptist (new map), using the unifidump summary, sonicwall.json, \
+meraki.json and inventory.json. manifest.json's mapnetwork_preflight answers your pre-build question: \
+infrastructure only, clients off the map, no extra inputs coming. Don't ask it again.\n\
+\nClient table: included, anonymized. Device names are client-xxxxxxxx tokens, stable per MAC; MAC, \
+vendor and switch port are real. Use it for client counts and to spot unadopted gear.\n\
+\nKnown problems from the technician: Closet 2 switch flaky\n"
+        );
+        let m = b.manifest();
+        let files: Vec<&str> = m["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["file"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            files,
+            [
+                "unifi.unifidump.json",
+                "sonicwall.json",
+                "meraki.json",
+                "inventory.json"
+            ]
+        );
+        assert_eq!(
+            m["mapnetwork_preflight"]["firewall_config"],
+            json!(["sonicwall.json", "meraki.json"])
+        );
+        let names: Vec<String> = unzip(&b.zip("x.zip").unwrap())
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "manifest.json",
+                "prompt.txt",
+                "unifi.unifidump.json",
+                "sonicwall.json",
+                "meraki.json",
+                "inventory.json"
+            ]
+        );
+        // Alone, the firewall's file is named, not listed.
+        let fw = bundle(vec![part(SONICWALL, "{}")]).manifest();
+        assert_eq!(
+            fw["mapnetwork_preflight"]["firewall_config"],
+            "sonicwall.json"
+        );
+    }
+
+    #[test]
+    fn the_next_of_a_kind_is_numbered() {
+        assert_eq!(numbered(UNIFI, 1), "unifi.unifidump.json");
+        assert_eq!(numbered(UNIFI, 2), "unifi-2.unifidump.json");
+        assert_eq!(numbered(SONICWALL, 3), "sonicwall-3.json");
+        assert_eq!(numbered(MERAKI, 2), "meraki-2.json");
+        assert!(of_kind("unifi-2.unifidump.json", UNIFI));
+        assert!(of_kind(UNIFI, UNIFI));
+        assert!(!of_kind("unifi-1.unifidump.json", UNIFI));
+        assert!(!of_kind("sonicwall-x.json", SONICWALL));
+        assert!(!of_kind("card-notes.json", NOTES));
+        assert!(!of_kind(SONICWALL, MERAKI));
+    }
+
+    /// Two sites' worth from one visit: two UniFi backups and two SonicWall
+    /// reports, each its own file, all named in the prompt.
+    #[test]
+    fn several_backups_and_exports_each_go_in() {
+        let src = |file: &str, from: &str| {
+            let mut p = part(file, from);
+            p.source = from.into();
+            p
+        };
+        let b = bundle(vec![
+            src(&numbered(UNIFI, 1), "site-a.unf"),
+            src(&numbered(UNIFI, 2), "site-b.unf"),
+            src(&numbered(SONICWALL, 1), "fw-a.wri"),
+            src(&numbered(SONICWALL, 2), "fw-b.wri"),
+            src(INVENTORY, "192.0.2.0/24"),
+        ]);
+        let files = unzip(&b.zip("x.zip").unwrap());
+        let names: Vec<&str> = files.iter().map(|f| f.0.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "manifest.json",
+                "prompt.txt",
+                "unifi.unifidump.json",
+                "unifi-2.unifidump.json",
+                "sonicwall.json",
+                "sonicwall-2.json",
+                "inventory.json"
+            ]
+        );
+        assert_eq!(files[3].1, b"site-b.unf", "each file its own data");
+        let m = b.manifest();
+        let listed: Vec<(&str, &str)> = m["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["file"].as_str().unwrap(), f["source"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            &listed[..4],
+            [
+                ("unifi.unifidump.json", "site-a.unf"),
+                ("unifi-2.unifidump.json", "site-b.unf"),
+                ("sonicwall.json", "fw-a.wri"),
+                ("sonicwall-2.json", "fw-b.wri"),
+            ]
+        );
+        assert_eq!(
+            m["mapnetwork_preflight"]["firewall_config"],
+            json!(["sonicwall.json", "sonicwall-2.json"])
+        );
+        let k = b.kickoff("x.zip");
+        assert!(
+            k.contains(
+                "1. Run /unifidump on each of unifi.unifidump.json and unifi-2.unifidump.json: \
+each is its own UniFi controller.\n"
+            ),
+            "{k}"
+        );
+        assert!(
+            k.contains(
+                "2. Then /mapnetwork for McClendon Baptist (new map), using the unifidump \
+summaries, sonicwall.json, sonicwall-2.json and inventory.json."
+            ),
+            "{k}"
+        );
+        assert!(
+            k.contains(
+                "From this one visit, the 2 UniFi exports are separate controllers, each with its \
+own sites; the 2 SonicWall configs are separate firewalls, each a gateway of its own. manifest.json \
+gives each file's source.\n"
+            ),
+            "{k}"
+        );
+        // The client table covers every UniFi export.
+        assert!(k.contains("Client table: included, anonymized."));
+        // A second UniFi export alone still has a client table to describe.
+        let second = bundle(vec![part(&numbered(UNIFI, 2), "")]);
+        assert!(second.kickoff("x.zip").contains("Client table"));
     }
 
     #[test]

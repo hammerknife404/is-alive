@@ -323,10 +323,9 @@ pub(super) struct RevealItem {
 /// Why the Clients control has nothing to show, for its tooltip: what the
 /// loaded files leave out, and what would add hosts.
 pub(super) fn no_clients_why(src: &Sources) -> &'static str {
-    let unifi_none = src
-        .export
-        .unifi()
-        .is_some_and(|u| u.1.clients == crate::unifi::Clients::None);
+    let mut backups = src.export.unifis().peekable();
+    let unifi_none =
+        backups.peek().is_some() && backups.all(|u| u.1.clients == crate::unifi::Clients::None);
     if unifi_none {
         "This map has no client data: the UniFi backup was read without its client table \
          (Config Export, UniFi clients: none). Pick anonymized or full there and open it \

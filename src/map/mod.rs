@@ -569,6 +569,22 @@ pub struct Seen {
     pub open: Vec<u16>,
 }
 
+/// A backup or export open in Config Export: its file's name and the JSON
+/// it was converted to.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Loaded<'a> {
+    /// The file's name, which tells two controllers' sites of one name
+    /// (or two firewalls of one name) apart.
+    pub name: &'a str,
+    pub json: &'a str,
+}
+
+/// One backup or export, for tests here and elsewhere.
+#[cfg(test)]
+pub(crate) fn one(json: &str) -> Vec<Loaded<'_>> {
+    vec![Loaded { name: "", json }]
+}
+
 #[derive(Default)]
 pub struct Input<'a> {
     pub sweep: Vec<Seen>,
@@ -578,8 +594,14 @@ pub struct Input<'a> {
     pub gateway: Option<Ipv4Addr>,
     pub this: Option<Ipv4Addr>,
     pub wan: Option<Ipv4Addr>,
-    pub unifi: Option<&'a str>,
-    pub sonicwall: Option<&'a str>,
+    /// Every UniFi backup open, in the order opened. Where two know the
+    /// same device or client (one controller's backups from two days),
+    /// the one opened later wins.
+    pub unifi: Vec<Loaded<'a>>,
+    /// Every SonicWall export or report open, in the order opened. Each
+    /// firewall is its own gateway; the one opened last takes whatever
+    /// can't be placed under another.
+    pub sonicwall: Vec<Loaded<'a>>,
     /// A /mapnetwork map: when loaded, it is the map.
     pub mapnetwork: Option<&'a crate::mapnetwork::Doc>,
     pub clients: Clients,
@@ -591,8 +613,8 @@ pub struct Input<'a> {
 impl Input<'_> {
     pub fn is_empty(&self) -> bool {
         self.sweep.is_empty()
-            && self.unifi.is_none()
-            && self.sonicwall.is_none()
+            && self.unifi.is_empty()
+            && self.sonicwall.is_empty()
             && self.mapnetwork.is_none()
     }
 }
@@ -614,6 +636,8 @@ struct UDevice {
     up: Option<(Mac, Option<i64>, bool)>,
     /// The controller site it belongs to (the site's `_id`).
     site_id: Option<String>,
+    /// The backup it came from: its place in `Input::unifi`.
+    file: usize,
 }
 
 struct UClient {
@@ -626,17 +650,225 @@ struct UClient {
     blocked: bool,
     up: Option<(Mac, Option<i64>)>,
     last_seen: i64,
+    site_id: Option<String>,
+}
+
+/// A UniFi network.
+struct UNet {
+    /// "VLAN 10 Voice (10.0.10.1/24)", for the gateway's details.
+    line: String,
+    site_id: Option<String>,
+    /// Its gateway address and prefix, from "10.0.10.1/24".
+    gw: Option<(Ipv4Addr, u8)>,
 }
 
 #[derive(Default)]
 struct Unifi {
     devices: Vec<UDevice>,
     clients: Vec<UClient>,
-    /// "VLAN 10 Voice" lines.
-    networks: Vec<String>,
+    networks: Vec<UNet>,
     sites: Vec<String>,
     /// (site `_id`, name), to name each device's site.
     site_ids: Vec<(String, String)>,
+}
+
+/// "10.0.0.1/24" as its address and prefix.
+fn cidr(s: &str) -> Option<(Ipv4Addr, u8)> {
+    let (ip, bits) = s.trim().split_once('/')?;
+    let bits: u8 = bits.parse().ok().filter(|b| *b <= 32)?;
+    Some((ip.parse().ok()?, bits))
+}
+
+/// A mask as a prefix: "255.255.255.0" or "/24" (or "24").
+fn prefix(mask: &str) -> Option<u8> {
+    let m = mask.trim().trim_start_matches('/');
+    if let Ok(bits) = m.parse::<u8>() {
+        return (bits <= 32).then_some(bits);
+    }
+    let m = u32::from(m.parse::<Ipv4Addr>().ok()?);
+    // Contiguous ones only.
+    (m.leading_ones() + m.trailing_zeros() == 32).then_some(m.leading_ones() as u8)
+}
+
+/// Whether `ip` is on the network `net`/`bits`.
+fn on_net(ip: Ipv4Addr, (net, bits): (Ipv4Addr, u8)) -> bool {
+    let mask = u32::MAX.checked_shl(32 - u32::from(bits)).unwrap_or(0);
+    u32::from(ip) & mask == u32::from(net) & mask
+}
+
+/// A file's name without its last extension, to tell two sites (or
+/// firewalls) of one name apart; `n` (counting from 1) when it has none.
+fn file_tag(name: &str, n: usize) -> String {
+    std::path::Path::new(name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| n.to_string())
+}
+
+/// What sets each of `tags` apart: the words (split at `_`, `-`, `.` and
+/// spaces) they all start or end with left off, so "acme-north_backup_
+/// 2026-11-10" and "acme-south_backup_2026-11-10" are "north" and "south".
+/// A part with no letters keeps the word before it ("14-05", not "05").
+/// A tag no different from the others stays whole.
+fn differing(tags: &[&str]) -> Vec<String> {
+    let words: Vec<Vec<&str>> = tags
+        .iter()
+        .map(|t| t.split_inclusive(['_', '-', '.', ' ']).collect())
+        .collect();
+    let shortest = words.iter().map(Vec::len).min().unwrap_or(0);
+    let mut lead = 0;
+    while lead < shortest && words.iter().all(|w| w[lead] == words[0][lead]) {
+        lead += 1;
+    }
+    let from_end = |w: &Vec<&str>, k: usize| w[w.len() - 1 - k].to_string();
+    let mut tail = 0;
+    while tail < shortest - lead
+        && words
+            .iter()
+            .all(|w| from_end(w, tail) == from_end(&words[0], tail))
+    {
+        tail += 1;
+    }
+    let trim = |s: &str| s.trim_matches(['_', '-', '.', ' ']).to_string();
+    words
+        .iter()
+        .zip(tags)
+        .map(|(w, tag)| {
+            let mut from = lead;
+            let to = w.len() - tail;
+            if from > 0 && !w[from..to].concat().chars().any(char::is_alphabetic) {
+                from -= 1;
+            }
+            match trim(&w[from..to].concat()) {
+                s if s.is_empty() => tag.to_string(),
+                s => s,
+            }
+        })
+        .collect()
+}
+
+/// Every name in `names` once: one used more than once gets what sets its
+/// source's tag apart ("Default (north)"), and a number if that's not
+/// enough.
+fn tell_apart(names: &[(String, String)]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (n, tag) in names {
+        let group: Vec<&str> = names
+            .iter()
+            .filter(|(m, _)| m == n)
+            .map(|(_, t)| t.as_str())
+            .collect();
+        let mut name = if group.len() > 1 {
+            let at = group.iter().position(|t| t == tag).unwrap_or(0);
+            format!("{n} ({})", differing(&group)[at])
+        } else {
+            n.clone()
+        };
+        let base = name.clone();
+        let mut k = 2;
+        while out.contains(&name) {
+            name = format!("{base} {k}");
+            k += 1;
+        }
+        out.push(name);
+    }
+    out
+}
+
+/// Drop from each list what a later list holds again (by `key`), so the
+/// one opened later wins; within one list, nothing is dropped.
+fn later_wins<T, K: std::hash::Hash + Eq>(lists: Vec<Vec<T>>, key: impl Fn(&T) -> K) -> Vec<T> {
+    let mut later: HashSet<K> = HashSet::new();
+    let mut kept: Vec<Vec<T>> = Vec::new();
+    for list in lists.into_iter().rev() {
+        let mine: Vec<K> = list.iter().map(&key).collect();
+        kept.push(
+            list.into_iter()
+                .filter(|x| !later.contains(&key(x)))
+                .collect(),
+        );
+        later.extend(mine);
+    }
+    kept.into_iter().rev().flatten().collect()
+}
+
+/// Every UniFi backup open, as one.
+fn read_unifi(files: &[Loaded]) -> Option<Unifi> {
+    let all = files.iter().map(|f| parse_unifi(f.json)).collect();
+    let names: Vec<&str> = files.iter().map(|f| f.name).collect();
+    merge_unifi(all, &names)
+}
+
+/// Several backups as one. Devices and clients go by MAC and networks by
+/// site and line, the later backup winning (one controller's backups from
+/// two days). Sites go by `_id`, which two backups of one controller
+/// share; a site name two controllers both use ("Default") gets its
+/// backup's file name, so their devices don't share a box. `names`: each
+/// backup's file name. One backup is read as it is.
+fn merge_unifi(mut all: Vec<Unifi>, names: &[&str]) -> Option<Unifi> {
+    if all.len() <= 1 {
+        return all.pop();
+    }
+    // Each site once: (key, newest name, its backup).
+    let mut sites: Vec<(String, String, usize)> = Vec::new();
+    for (k, u) in all.iter_mut().enumerate() {
+        let mut own = u.site_ids.clone();
+        for s in &u.sites {
+            if !u.site_ids.iter().any(|(_, n)| n == s) {
+                own.push((format!("{k}/{s}"), s.clone()));
+            }
+        }
+        // At a backup of one site, what names no site of its own is there.
+        if let [(only, _)] = own.as_slice() {
+            let known = |id: &Option<String>| id.as_ref().is_some_and(|id| id == only);
+            for d in u.devices.iter_mut().filter(|d| !known(&d.site_id)) {
+                d.site_id = Some(only.clone());
+            }
+            for c in u.clients.iter_mut().filter(|c| !known(&c.site_id)) {
+                c.site_id = Some(only.clone());
+            }
+            for n in u.networks.iter_mut().filter(|n| !known(&n.site_id)) {
+                n.site_id = Some(only.clone());
+            }
+        }
+        for d in &mut u.devices {
+            d.file = k;
+        }
+        for (id, name) in own {
+            match sites.iter_mut().find(|s| s.0 == id) {
+                Some(s) => (s.1, s.2) = (name, k),
+                None => sites.push((id, name, k)),
+            }
+        }
+    }
+    let tagged: Vec<(String, String)> = sites
+        .iter()
+        .map(|(_, name, k)| {
+            let tag = file_tag(names.get(*k).copied().unwrap_or_default(), k + 1);
+            (name.clone(), tag)
+        })
+        .collect();
+    let shown = tell_apart(&tagged);
+    let mut devices = Vec::new();
+    let mut clients = Vec::new();
+    let mut networks = Vec::new();
+    for u in all {
+        devices.push(u.devices);
+        clients.push(u.clients);
+        networks.push(u.networks);
+    }
+    Some(Unifi {
+        devices: later_wins(devices, |d| d.mac),
+        clients: later_wins(clients, |c| c.mac),
+        networks: later_wins(networks, |n| (n.site_id.clone(), n.line.clone())),
+        site_ids: sites
+            .iter()
+            .zip(&shown)
+            .map(|(s, name)| (s.0.clone(), name.clone()))
+            .collect(),
+        sites: shown,
+    })
 }
 
 fn text(v: &Value, k: &str) -> Option<String> {
@@ -704,6 +936,7 @@ fn parse_unifi(json: &str) -> Unifi {
                         .map_or(0, Vec::len),
                     up,
                     site_id: text(d, "site_id"),
+                    file: 0,
                 });
             }
             "user" => {
@@ -723,17 +956,23 @@ fn parse_unifi(json: &str) -> Unifi {
                     blocked: d.get("blocked").and_then(Value::as_bool) == Some(true),
                     up,
                     last_seen: d.get("last_seen").and_then(Value::as_i64).unwrap_or(0),
+                    site_id: text(d, "site_id"),
                 });
             }
             "networkconf" => {
                 let name = text(d, "name").unwrap_or_default();
-                let line = match (d.get("vlan").and_then(Value::as_i64), text(d, "ip_subnet")) {
+                let subnet = text(d, "ip_subnet");
+                let line = match (d.get("vlan").and_then(Value::as_i64), &subnet) {
                     (Some(v), Some(s)) => format!("VLAN {v} {name} ({s})"),
                     (Some(v), None) => format!("VLAN {v} {name}"),
                     (None, Some(s)) => format!("{name} ({s}, untagged)"),
                     (None, None) => continue,
                 };
-                u.networks.push(line);
+                u.networks.push(UNet {
+                    line,
+                    site_id: text(d, "site_id"),
+                    gw: subnet.as_deref().and_then(cidr),
+                });
             }
             _ => {}
         }
@@ -832,6 +1071,75 @@ fn parse_sonicwall(json: &str) -> Option<Sonic> {
         });
     }
     Some(s)
+}
+
+/// A firewall from one or more of the exports open.
+struct Firewall<'a> {
+    s: Sonic,
+    /// The file it was read from last.
+    file: &'a str,
+    /// That file's place in `Input::sonicwall`.
+    last: usize,
+}
+
+impl Sonic {
+    /// The same box: one serial, or an interface MAC in common.
+    fn same_box(&self, o: &Sonic) -> bool {
+        if let (Some(a), Some(b)) = (&self.serial, &o.serial) {
+            return a == b;
+        }
+        self.ifaces
+            .iter()
+            .filter_map(|f| f.mac)
+            .any(|m| o.ifaces.iter().any(|g| g.mac == Some(m)))
+    }
+
+    /// Its LAN-side networks: every interface with an address and mask
+    /// that isn't on a WAN.
+    fn lans(&self) -> Vec<(Ipv4Addr, u8)> {
+        self.ifaces
+            .iter()
+            .filter(|f| !f.zone.to_ascii_lowercase().contains("wan"))
+            .filter_map(|f| Some((f.ip?, prefix(f.mask.as_deref()?)?)))
+            .collect()
+    }
+}
+
+/// Every SonicWall export open, one per firewall, in the order first
+/// opened. A settings export and a tech support report of one box are one
+/// firewall: the later file's config, with what either heard.
+fn read_sonicwall<'a>(files: &[Loaded<'a>]) -> Vec<Firewall<'a>> {
+    let mut out: Vec<Firewall> = Vec::new();
+    for (k, f) in files.iter().enumerate() {
+        let Some(mut s) = parse_sonicwall(f.json) else {
+            continue;
+        };
+        match out.iter_mut().find(|o| o.s.same_box(&s)) {
+            Some(o) => {
+                let old = std::mem::take(&mut o.s.heard);
+                for h in old {
+                    if !s
+                        .heard
+                        .iter()
+                        .any(|n| (n.mac, n.ip, &n.iface) == (h.mac, h.ip, &h.iface))
+                    {
+                        s.heard.push(h);
+                    }
+                }
+                *o = Firewall {
+                    s,
+                    file: f.name,
+                    last: k,
+                };
+            }
+            None => out.push(Firewall {
+                s,
+                file: f.name,
+                last: k,
+            }),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------- classification
@@ -1106,6 +1414,15 @@ fn unifi_client_card(c: &UClient) -> Node {
 
 // ------------------------------------------------------------------- build
 
+/// A gateway card: a firewall, or a controller's UniFi gateway.
+struct Gw {
+    i: usize,
+    /// The networks behind it.
+    lans: Vec<(Ipv4Addr, u8)>,
+    /// The controller site a UniFi gateway is at.
+    site: Option<String>,
+}
+
 #[derive(Default)]
 struct B {
     nodes: Vec<Node>,
@@ -1113,9 +1430,67 @@ struct B {
     by_ip: HashMap<Ipv4Addr, usize>,
     /// (severity, text, node ids): resolved to indices once the set is final.
     findings: Vec<(Sev, String, Vec<String>)>,
+    /// Every gateway card from the data (not the stand-in for none).
+    gws: Vec<Gw>,
+    /// Each controller site's gateway addresses: its networks' and its
+    /// UniFi gateways'.
+    site_addrs: HashMap<String, Vec<Ipv4Addr>>,
+    /// The gateway each controller site's devices plug straight into, when
+    /// they all agree.
+    site_gw: HashMap<String, Option<usize>>,
+    /// Several backups or exports: findings say so.
+    many: bool,
 }
 
 impl B {
+    fn is_gw(&self, i: usize, gw: usize) -> bool {
+        i == gw || self.gws.iter().any(|g| g.i == i)
+    }
+
+    /// Where something with no uplink of its own hangs: with one gateway,
+    /// under it (`gw`). With several, under the one whose LAN holds its
+    /// address, else the one its controller site's devices plug into or
+    /// whose LAN holds the site's gateway address, else its site's UniFi
+    /// gateway, else `gw` (the firewall opened last).
+    fn home(&self, ip: Option<Ipv4Addr>, site: Option<&str>, gw: usize) -> usize {
+        if self.gws.len() < 2 {
+            return gw;
+        }
+        // Only one may claim it: two sites can both use 192.168.1.x.
+        let serving = |ip: Ipv4Addr| {
+            let mut on = self
+                .gws
+                .iter()
+                .filter(|g| g.lans.iter().any(|&n| on_net(ip, n)));
+            match (on.next(), on.next()) {
+                (Some(g), None) => Some(g.i),
+                _ => None,
+            }
+        };
+        if let Some(g) = ip.and_then(serving) {
+            return g;
+        }
+        let Some(site) = site else { return gw };
+        if let Some(&Some(g)) = self.site_gw.get(site) {
+            return g;
+        }
+        let addrs = self.site_addrs.get(site).map_or(&[][..], Vec::as_slice);
+        if let Some(g) = addrs.iter().find_map(|&a| serving(a)) {
+            return g;
+        }
+        self.gws
+            .iter()
+            .find(|g| g.site.as_deref() == Some(site))
+            .map_or(gw, |g| g.i)
+    }
+
+    /// The gateway card at `ip` (this machine's default route), else `gw`.
+    fn gw_at(&self, ip: Option<Ipv4Addr>, gw: usize) -> usize {
+        ip.and_then(|ip| self.by_ip.get(&ip).copied())
+            .filter(|&i| self.gws.iter().any(|g| g.i == i))
+            .unwrap_or(gw)
+    }
+
     fn add(&mut self, n: Node) -> usize {
         let i = self.nodes.len();
         if let Some(m) = n.mac {
@@ -1174,9 +1549,10 @@ impl B {
         }
     }
 
-    /// The firewall as the gateway card, from its own config, with a finding
-    /// for any WAN interface that allows management.
-    fn sonic_gateway(&mut self, s: &Sonic, input: &Input, internet: usize) -> usize {
+    /// The firewall as a gateway card, from its own config, with a finding
+    /// for any WAN interface that allows management. `first`: the first
+    /// firewall opened, whose card is "gateway" as when it's the only one.
+    fn sonic_gateway(&mut self, s: &Sonic, input: &Input, internet: usize, first: bool) -> usize {
         let lan = s
             .ifaces
             .iter()
@@ -1186,8 +1562,13 @@ impl B {
                     .iter()
                     .find(|f| f.ip.is_some() && f.zone.eq_ignore_ascii_case("lan"))
             });
+        let id = match (first, lan.and_then(|f| f.mac)) {
+            (true, _) => "gateway".to_string(),
+            (false, Some(m)) => format!("gateway:{}", mac::fmt(&m)),
+            (false, None) => format!("gateway:{}", self.gws.len() + 1),
+        };
         let mut n = Node {
-            id: "gateway".into(),
+            id,
             zone: Zone::Gateway,
             kind: caps(&format!("SONICWALL {}", s.model.as_deref().unwrap_or(""))),
             label: s
@@ -1228,6 +1609,11 @@ impl B {
             n.details.push(l);
         }
         let i = self.add(n);
+        self.gws.push(Gw {
+            i,
+            lans: s.lans(),
+            site: None,
+        });
         for f in &s.ifaces {
             if let Some(m) = f.mac {
                 self.by_mac.entry(m).or_insert(i);
@@ -1264,9 +1650,21 @@ impl B {
         i
     }
 
-    /// UniFi devices. A UniFi gateway takes the gateway role if the firewall
-    /// didn't.
+    /// UniFi devices. With no firewall, each backup's first UniFi gateway
+    /// takes the gateway role, and the newest backup's is `gw`.
     fn unifi_devices(&mut self, u: &Unifi, internet: usize, gw: &mut Option<usize>) -> Vec<usize> {
+        let firewall = gw.is_some();
+        let mut promoted: HashSet<usize> = HashSet::new();
+        for d in u.devices.iter().filter(|d| is_unifi_gateway(&d.kind)) {
+            if let (Some(site), Some(ip)) = (&d.site_id, d.ip) {
+                self.site_addrs.entry(site.clone()).or_default().push(ip);
+            }
+        }
+        for n in &u.networks {
+            if let (Some(site), Some((ip, _))) = (&n.site_id, n.gw) {
+                self.site_addrs.entry(site.clone()).or_default().push(ip);
+            }
+        }
         let mut device_idx: Vec<usize> = Vec::new();
         for d in &u.devices {
             let (zone, kind) = unifi_role(&d.kind, &d.model);
@@ -1313,22 +1711,49 @@ impl B {
             }
             let gateway_type = is_unifi_gateway(&d.kind);
             let i = self.add(n);
-            if gateway_type && gw.is_none() {
+            if gateway_type && !firewall && promoted.insert(d.file) {
                 self.nodes[i].up = Some((internet, Link::Backbone, None));
-                self.nodes[i].id = "gateway".into();
+                if gw.is_none() {
+                    self.nodes[i].id = "gateway".into();
+                }
                 *gw = Some(i);
+                let lans = u
+                    .networks
+                    .iter()
+                    .filter(|n| d.site_id.is_some() && n.site_id == d.site_id)
+                    .filter_map(|n| n.gw)
+                    .collect();
+                self.gws.push(Gw {
+                    i,
+                    lans,
+                    site: d.site_id.clone(),
+                });
             }
             device_idx.push(i);
         }
-        if !u.networks.is_empty()
-            && let Some(g) = *gw
-        {
+        device_idx
+    }
+
+    /// The UniFi networks, in the details of the gateway they're behind
+    /// (with one gateway from the data, all of them there).
+    fn unifi_networks(&mut self, u: &Unifi, gw: usize) {
+        if u.networks.is_empty() || self.gws.is_empty() {
+            return;
+        }
+        let mut at: Vec<(usize, Vec<&str>)> = Vec::new();
+        for n in &u.networks {
+            let g = self.home(n.gw.map(|g| g.0), n.site_id.as_deref(), gw);
+            match at.iter_mut().find(|a| a.0 == g) {
+                Some(a) => a.1.push(&n.line),
+                None => at.push((g, vec![&n.line])),
+            }
+        }
+        for (g, lines) in at {
             self.nodes[g].details.push("Networks (UniFi):".into());
             self.nodes[g]
                 .details
-                .extend(u.networks.iter().map(|n| format!("  {n}")));
+                .extend(lines.iter().map(|n| format!("  {n}")));
         }
-        device_idx
     }
 
     /// Still none: this machine's default route, or a placeholder holding
@@ -1367,9 +1792,10 @@ impl B {
             .gateway
             .and_then(|g| input.sweep.iter().find(|s| s.ip == g).and_then(|s| s.mac))
         {
-            self.by_mac.entry(m).or_insert(gw);
-            if self.nodes[gw].mac.is_none() {
-                self.nodes[gw].mac = Some(m);
+            let at = self.gw_at(input.gateway, gw);
+            self.by_mac.entry(m).or_insert(at);
+            if self.nodes[at].mac.is_none() {
+                self.nodes[at].mac = Some(m);
             }
         }
         gw
@@ -1413,10 +1839,23 @@ impl B {
                 );
             }
         }
+        // Which gateway each controller site plugs into, where its devices
+        // that plug straight into one all agree.
+        for (a, d) in u.devices.iter().enumerate() {
+            if let (Some(site), Some(p)) = (&d.site_id, resolved[a])
+                && p != device_idx[a]
+                && self.gws.iter().any(|g| g.i == p)
+            {
+                let e = self.site_gw.entry(site.clone()).or_insert(Some(p));
+                if *e != Some(p) {
+                    *e = None;
+                }
+            }
+        }
         let mut unresolved: BTreeMap<Mac, Vec<usize>> = BTreeMap::new();
         for (a, d) in u.devices.iter().enumerate() {
             let i = device_idx[a];
-            if i == gw || cut.contains(&i) {
+            if self.is_gw(i, gw) || cut.contains(&i) {
                 continue;
             }
             let Some((um, port, wireless)) = d.up else {
@@ -1436,6 +1875,13 @@ impl B {
                 }
             }
         }
+        // Where a device with no uplink of its own goes.
+        let homes: HashMap<usize, usize> = u
+            .devices
+            .iter()
+            .zip(device_idx)
+            .map(|(d, &i)| (i, self.home(d.ip, d.site_id.as_deref(), gw)))
+            .collect();
         // An uplink MAC nothing here manages: a real device we can't name.
         for (um, kids) in unresolved {
             let s = seen_mac.get(&um);
@@ -1452,7 +1898,7 @@ impl B {
                 sub: s.map_or_else(|| mac::fmt(&um), |s| s.ip.to_string()),
                 ip: s.map(|s| s.ip),
                 mac: Some(um),
-                up: Some((gw, Link::Assumed, None)),
+                up: Some((homes[&kids[0]], Link::Assumed, None)),
                 ..Default::default()
             };
             n.chip("not managed");
@@ -1472,11 +1918,16 @@ impl B {
             self.finding(
                 Sev::Med,
                 format!(
-                    "{} uplink{} to {}{}, which neither the UniFi backup nor the firewall export describes: identify it on site.",
+                    "{} uplink{} to {}{}, which {} describes: identify it on site.",
                     names.join(", "),
                     if kids.len() == 1 { "s" } else { "" },
                     mac::fmt(&um),
-                    vendor.map(|v| format!(" ({v})")).unwrap_or_default()
+                    vendor.map(|v| format!(" ({v})")).unwrap_or_default(),
+                    if self.many {
+                        "none of the UniFi backups or firewall exports"
+                    } else {
+                        "neither the UniFi backup nor the firewall export"
+                    }
                 ),
                 &[d],
             );
@@ -1484,7 +1935,7 @@ impl B {
         // No uplink recorded, or cut from a pair: under the gateway.
         for &i in device_idx {
             if self.nodes[i].up.is_none() {
-                self.nodes[i].up = Some((gw, Link::Assumed, None));
+                self.nodes[i].up = Some((homes[&i], Link::Assumed, None));
                 if !cut.contains(&i) {
                     self.finding(
                         Sev::Low,
@@ -1628,6 +2079,62 @@ impl B {
         }
     }
 
+    /// With several gateways, each heads a site: one with no site named on
+    /// it or below it takes the UniFi site below it (a one-site backup's),
+    /// else its own name, with its file's name when two would share one.
+    /// `fw`: each firewall's card.
+    fn gateway_sites(&mut self, sonic: &[Firewall], fw: &[usize], unifi: Option<&Unifi>) {
+        if self.gws.len() < 2 {
+            return;
+        }
+        let n = self.nodes.len();
+        let mut kids = vec![Vec::new(); n];
+        for (i, node) in self.nodes.iter().enumerate() {
+            if let Some(p) = node.parent().filter(|&p| p < n) {
+                kids[p].push(i);
+            }
+        }
+        let one_site = unifi.and_then(|u| match u.sites.as_slice() {
+            [s] => Some(s.clone()),
+            _ => None,
+        });
+        // Each card, and the UniFi site it takes (None: its own name).
+        let mut unnamed: Vec<(usize, Option<String>)> = Vec::new();
+        let mut labels: Vec<(String, String)> = Vec::new();
+        for g in &self.gws {
+            let mut seen = vec![false; n];
+            let mut stack = vec![g.i];
+            let (mut named, mut by_unifi) = (false, false);
+            while let Some(k) = stack.pop() {
+                if std::mem::replace(&mut seen[k], true) {
+                    continue;
+                }
+                let c = &self.nodes[k];
+                named |= c.site.is_some();
+                by_unifi |= k != g.i && c.seen_by.contains(&"UniFi");
+                stack.extend(&kids[k]);
+            }
+            if named {
+                continue;
+            }
+            match (&one_site, by_unifi) {
+                (Some(s), true) => unnamed.push((g.i, Some(s.clone()))),
+                _ => {
+                    let tag = match fw.iter().position(|&i| i == g.i) {
+                        Some(k) => file_tag(sonic[k].file, k + 1),
+                        None => self.nodes[g.i].sub.clone(),
+                    };
+                    unnamed.push((g.i, None));
+                    labels.push((self.nodes[g.i].label.clone(), tag));
+                }
+            }
+        }
+        let mut shown = tell_apart(&labels).into_iter();
+        for (i, site) in unnamed {
+            self.nodes[i].site = site.or_else(|| shown.next());
+        }
+    }
+
     /// Sweep hosts. A client UniFi also knows is returned instead, to become
     /// its UniFi card under its AP or switch.
     fn sweep_hosts<'i>(
@@ -1644,7 +2151,7 @@ impl B {
         for s in &input.sweep {
             let is_gw = Some(s.ip) == input.gateway;
             let at = if is_gw {
-                Some(gw)
+                Some(self.gw_at(Some(s.ip), gw))
             } else {
                 self.find(s.mac, Some(s.ip))
             };
@@ -1659,7 +2166,7 @@ impl B {
                 deferred.push(s);
                 continue;
             }
-            n.up = Some((gw, Link::Assumed, None));
+            n.up = Some((self.home(Some(s.ip), None, gw), Link::Assumed, None));
             let i = self.add(n);
             self.merge_seen(i, s);
         }
@@ -1667,6 +2174,7 @@ impl B {
             && !self.by_ip.contains_key(&t)
             && !input.is_empty()
         {
+            let up = self.home(Some(t), None, gw);
             self.add(Node {
                 id: format!("ip:{t}"),
                 zone: Zone::Client,
@@ -1674,7 +2182,7 @@ impl B {
                 label: "This machine".into(),
                 sub: t.to_string(),
                 ip: Some(t),
-                up: Some((gw, Link::Assumed, None)),
+                up: Some((up, Link::Assumed, None)),
                 details: vec!["Where the sweep ran from".into()],
                 ..Default::default()
             });
@@ -1702,10 +2210,14 @@ impl B {
     fn unifi_clients(&mut self, u: &Unifi, gw: usize, deferred: &[&Seen]) {
         for c in &u.clients {
             let (parent, link, port) = self.unifi_uplink(c);
-            let up = Some((parent.unwrap_or(gw), link, port));
+            let up = Some((
+                parent.unwrap_or_else(|| self.home(c.ip, c.site_id.as_deref(), gw)),
+                link,
+                port,
+            ));
             if let Some(i) = self.find(Some(c.mac), None) {
                 // Already a card (the sweep's): now we know where it plugs in.
-                if i != gw && self.nodes[i].link() == Some(Link::Assumed) {
+                if !self.is_gw(i, gw) && self.nodes[i].link() == Some(Link::Assumed) {
                     self.nodes[i].up = up;
                 }
                 self.nodes[i].seen("UniFi");
@@ -1817,13 +2329,18 @@ impl B {
             if !stray.is_empty() {
                 let list: Vec<_> = stray.iter().map(|&i| describe(&self.nodes[i])).collect();
                 self.finding(
-                Sev::Low,
-                format!(
-                    "Ubiquiti hardware not in this backup: {}. Unadopted, or managed by another controller.",
-                    list.join(", ")
-                ),
-                &stray,
-            );
+                    Sev::Low,
+                    format!(
+                        "Ubiquiti hardware {}: {}. Unadopted, or managed by another controller.",
+                        if input.unifi.len() > 1 {
+                            "in none of the UniFi backups"
+                        } else {
+                            "not in this backup"
+                        },
+                        list.join(", ")
+                    ),
+                    &stray,
+                );
             }
         }
     }
@@ -1833,22 +2350,24 @@ pub fn build(input: &Input) -> Map {
     if let Some(doc) = input.mapnetwork {
         return import::build(doc, input);
     }
-    let mut b = B::default();
-    let unifi = input.unifi.map(parse_unifi);
-    let sonic = input.sonicwall.and_then(parse_sonicwall);
+    let mut b = B {
+        many: input.unifi.len() > 1 || input.sonicwall.len() > 1,
+        ..Default::default()
+    };
+    let unifi = read_unifi(&input.unifi);
+    let sonic = read_sonicwall(&input.sonicwall);
     // A backup is often read far from its site. What this machine sees only
-    // joins the map when the sweep found hardware the backup or export
-    // knows by MAC: the same network, not a look-alike 192.168.1.x.
-    let local =
-        (unifi.is_none() && sonic.is_none()) || same_site(input, unifi.as_ref(), sonic.as_ref());
+    // joins the map when the sweep found hardware a backup or export knows
+    // by MAC: the same network, not a look-alike 192.168.1.x.
+    let local = (unifi.is_none() && sonic.is_empty()) || same_site(input, unifi.as_ref(), &sonic);
     let had_sweep = !input.sweep.is_empty();
     let away;
     let input = if local {
         input
     } else {
         away = Input {
-            unifi: input.unifi,
-            sonicwall: input.sonicwall,
+            unifi: input.unifi.clone(),
+            sonicwall: input.sonicwall.clone(),
             clients: input.clients,
             reveal: input.reveal,
             ..Default::default()
@@ -1876,8 +2395,18 @@ pub fn build(input: &Input) -> Map {
     });
 
     // The gateway: the firewall's own config beats a UniFi gateway, which
-    // beats the default route of this machine.
-    let mut gw = sonic.as_ref().map(|s| b.sonic_gateway(s, input, internet));
+    // beats the default route of this machine. Each firewall is a gateway
+    // of its own; the one opened last takes what none other claims.
+    let fw: Vec<usize> = sonic
+        .iter()
+        .enumerate()
+        .map(|(k, f)| b.sonic_gateway(&f.s, input, internet, k == 0))
+        .collect();
+    let mut gw = sonic
+        .iter()
+        .zip(&fw)
+        .max_by_key(|(f, _)| f.last)
+        .map(|(_, &i)| i);
     let device_idx = match &unifi {
         Some(u) => b.unifi_devices(u, internet, &mut gw),
         None => Vec::new(),
@@ -1885,18 +2414,20 @@ pub fn build(input: &Input) -> Map {
     let gw = b.fallback_gateway(input, unifi.is_some(), gw, internet);
     if let Some(u) = &unifi {
         b.unifi_uplinks(u, &device_idx, gw, &seen_mac);
+        b.unifi_networks(u, gw);
         b.unifi_firmware(u, &device_idx);
     }
-    if let Some(s) = &sonic {
-        b.firewall_heard(s, gw, internet);
+    for (f, &i) in sonic.iter().zip(&fw) {
+        b.firewall_heard(&f.s, i, internet);
     }
     let deferred = b.sweep_hosts(input, unifi.as_ref(), gw, internet);
     if let Some(u) = &unifi {
         b.unifi_clients(u, gw, &deferred);
     }
     b.sweep_findings(input, unifi.is_some(), &device_idx);
+    b.gateway_sites(&sonic, &fw, unifi.as_ref());
 
-    let mut summary = summary(input, unifi.as_ref(), sonic.as_ref());
+    let mut summary = summary(input, unifi.as_ref(), &sonic);
     if !local && had_sweep {
         summary += " · sweep not merged: it found no device the data knows (another network?)";
     } else if !local {
@@ -1910,7 +2441,7 @@ pub fn build(input: &Input) -> Map {
     let site = unifi
         .as_ref()
         .and_then(|u| u.sites.first().cloned())
-        .or_else(|| sonic.as_ref().and_then(|s| s.name.clone()))
+        .or_else(|| sonic.first().and_then(|f| f.s.name.clone()))
         .unwrap_or_else(|| "This network".into());
     map.fill_sites(&site);
     map.summary += &map.hidden_note();
@@ -1937,14 +2468,15 @@ impl FirstUpper for String {
     }
 }
 
-fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> bool {
+/// Whether the sweep found hardware any backup or export knows by MAC.
+fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: &[Firewall]) -> bool {
     let mut macs: HashSet<Mac> = HashSet::new();
     if let Some(u) = unifi {
         macs.extend(u.devices.iter().map(|d| d.mac));
         macs.extend(u.devices.iter().filter_map(|d| d.up.map(|u| u.0)));
         macs.extend(u.clients.iter().map(|c| c.mac));
     }
-    if let Some(s) = sonic {
+    for s in sonic.iter().map(|f| &f.s) {
         macs.extend(s.ifaces.iter().filter_map(|f| f.mac));
         macs.extend(s.heard.iter().filter_map(|h| h.mac));
     }
@@ -1954,17 +2486,44 @@ fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> boo
         .any(|h| h.mac.is_some_and(|m| macs.contains(&m)))
 }
 
-fn summary(input: &Input, unifi: Option<&Unifi>, sonic: Option<&Sonic>) -> String {
+fn summary(input: &Input, unifi: Option<&Unifi>, sonic: &[Firewall]) -> String {
     let mut parts = Vec::new();
-    if let Some(u) = unifi {
-        let site = u.sites.first().map(|s| format!(" {s}")).unwrap_or_default();
-        parts.push(format!("UniFi{site} ({} devices)", u.devices.len()));
+    match unifi {
+        Some(u) if input.unifi.len() > 1 => {
+            let sites = match u.sites.len() {
+                n if n > 3 => format!("{n} sites"),
+                _ => u.sites.join(", "),
+            };
+            parts.push(format!(
+                "UniFi {sites} ({} devices from {} backups)",
+                u.devices.len(),
+                input.unifi.len()
+            ));
+        }
+        Some(u) => {
+            let site = u.sites.first().map(|s| format!(" {s}")).unwrap_or_default();
+            parts.push(format!("UniFi{site} ({} devices)", u.devices.len()));
+        }
+        None => {}
     }
-    if let Some(s) = sonic {
-        parts.push(format!(
+    match sonic {
+        [] => {}
+        [f] => parts.push(format!(
             "SonicWall {}",
-            s.model.as_deref().unwrap_or("export")
-        ));
+            f.s.model.as_deref().unwrap_or("export")
+        )),
+        all => {
+            let names: Vec<&str> = all
+                .iter()
+                .map(|f| {
+                    f.s.name
+                        .as_deref()
+                        .or(f.s.model.as_deref())
+                        .unwrap_or("export")
+                })
+                .collect();
+            parts.push(format!("{} SonicWalls ({})", all.len(), names.join(", ")));
+        }
     }
     match &input.range {
         Some(r) => parts.push(format!("sweep of {r} ({} hosts)", input.sweep.len())),
@@ -2315,7 +2874,7 @@ mod tests {
             &[],
         );
         let m = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
         });
@@ -2512,7 +3071,7 @@ mod tests {
         ])
         .to_string();
         let m = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             ..Default::default()
         });
         assert_eq!(by_label(&m, "HQ-SW").site.as_deref(), Some("Head Office"));
@@ -2540,7 +3099,7 @@ mod tests {
             &users,
         );
         let m = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             clients: Clients::Some,
             ..Default::default()
         });
@@ -2563,7 +3122,7 @@ mod tests {
                 .count()
         };
         let all = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             clients: Clients::All,
             ..Default::default()
         });
@@ -2574,7 +3133,7 @@ mod tests {
         let core = m.nodes[more.parent().unwrap()].id.clone();
         let open: HashMap<String, usize> = [(core, usize::MAX)].into();
         let opened = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             clients: Clients::Some,
             reveal: Some(&open),
             ..Default::default()
@@ -2583,7 +3142,7 @@ mod tests {
         assert!(m.folded.contains(&by_label(&all, "pc0").id));
 
         let off = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             ..Default::default()
         });
         assert!(
@@ -2687,7 +3246,7 @@ mod tests {
         let j = switch_with(&users);
         let build_with = |clients, reveal: &HashMap<String, usize>| {
             build(&Input {
-                unifi: Some(&j),
+                unifi: one(&j),
                 clients,
                 reveal: Some(reveal),
                 ..Default::default()
@@ -2797,8 +3356,8 @@ mod tests {
             &[],
         );
         let m = build(&Input {
-            unifi: Some(&j),
-            sonicwall: Some(&sw),
+            unifi: one(&j),
+            sonicwall: one(&sw),
             clients: Clients::Some,
             ..Default::default()
         });
@@ -2850,8 +3409,8 @@ mod tests {
             &[],
         );
         let m = build(&Input {
-            unifi: Some(&j),
-            sonicwall: Some(&sw),
+            unifi: one(&j),
+            sonicwall: one(&sw),
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
         });
@@ -2882,7 +3441,7 @@ mod tests {
             open: vec![],
         };
         let at_office = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             sweep: vec![host("aa:00:00:00:00:07")],
             gateway: Some("192.168.1.1".parse().unwrap()),
             range: Some("192.168.1.0/24".into()),
@@ -2898,7 +3457,7 @@ mod tests {
                 .all(|n| n.ip != Some("192.168.1.7".parse().unwrap()))
         );
         let on_site = build(&Input {
-            unifi: Some(&j),
+            unifi: one(&j),
             sweep: vec![host("00:00:00:00:00:01")],
             gateway: Some("192.168.1.1".parse().unwrap()),
             ..Default::default()
@@ -2906,6 +3465,364 @@ mod tests {
         assert_eq!(gw(&on_site).sub, "192.168.1.1");
         assert!(by_label(&on_site, "Core").seen_by.contains(&"sweep"));
         assert!(!on_site.sweep_apart);
+    }
+
+    /// A backup of one controller: its sites (`_id`, name), then devices
+    /// (each with its site's `_id`) and clients.
+    fn controller(sites: &[(&str, &str)], devices: &[Value], users: &[Value]) -> String {
+        let mut v = vec![json!({"__cmd": "select", "collection": "site"})];
+        v.extend(
+            sites
+                .iter()
+                .map(|(id, name)| json!({"_id": id, "desc": name})),
+        );
+        v.push(json!({"__cmd": "select", "collection": "device"}));
+        v.extend(devices.iter().cloned());
+        v.push(json!({"__cmd": "select", "collection": "user"}));
+        v.extend(users.iter().cloned());
+        Value::Array(v).to_string()
+    }
+
+    fn at(mut d: Value, site: &str) -> Value {
+        d["site_id"] = json!(site);
+        d
+    }
+
+    fn file<'a>(name: &'a str, json: &'a str) -> Loaded<'a> {
+        Loaded { name, json }
+    }
+
+    #[test]
+    fn two_unifi_backups_are_two_controllers() {
+        let a = controller(
+            &[("5f0000000000000000000a01", "Default")],
+            &[
+                at(
+                    dev("North Core", "usw", "00:00:00:00:0a:01", "192.0.2.2", None),
+                    "5f0000000000000000000a01",
+                ),
+                at(
+                    dev(
+                        "North AP",
+                        "uap",
+                        "00:00:00:00:0a:02",
+                        "192.0.2.3",
+                        Some(("00:00:00:00:0a:01", 4)),
+                    ),
+                    "5f0000000000000000000a01",
+                ),
+                // Moved to the other controller since this backup.
+                at(
+                    dev("Loaner (old name)", "usw", "00:00:00:00:0c:01", "", None),
+                    "5f0000000000000000000a01",
+                ),
+            ],
+            &[json!({"mac": "00:11:22:33:44:01", "hostname": "laptop-old",
+                "last_uplink_mac": "00:00:00:00:0a:01", "is_wired": true})],
+        );
+        let b = controller(
+            &[("5f0000000000000000000b01", "Default")],
+            &[
+                at(
+                    dev(
+                        "South Core",
+                        "usw",
+                        "00:00:00:00:0b:01",
+                        "198.51.100.2",
+                        None,
+                    ),
+                    "5f0000000000000000000b01",
+                ),
+                at(
+                    dev(
+                        "Loaner",
+                        "usw",
+                        "00:00:00:00:0c:01",
+                        "198.51.100.9",
+                        Some(("00:00:00:00:0b:01", 9)),
+                    ),
+                    "5f0000000000000000000b01",
+                ),
+            ],
+            &[json!({"mac": "00:11:22:33:44:01", "hostname": "laptop-new",
+                "last_uplink_mac": "00:00:00:00:0b:01", "is_wired": true})],
+        );
+        let m = build(&Input {
+            unifi: vec![file("north.unf", &a), file("south.unf", &b)],
+            clients: Clients::All,
+            ..Default::default()
+        });
+        // Both controllers' devices, each at its own site: two sites both
+        // called Default are told apart by their backup.
+        let site = |l: &str| by_label(&m, l).site.clone().unwrap_or_default();
+        assert_eq!(site("North Core"), "Default (north)");
+        assert_eq!(site("North AP"), "Default (north)");
+        assert_eq!(site("South Core"), "Default (south)");
+        assert_eq!(m.sites().len(), 2, "{:?}", m.sites());
+        assert_eq!(parent(&m, "North AP"), "North Core");
+        // In both: one card, as the backup opened later has it.
+        let loaner: Vec<&Node> = m
+            .nodes
+            .iter()
+            .filter(|n| n.id == "mac:00:00:00:00:0c:01")
+            .collect();
+        assert_eq!(loaner.len(), 1);
+        assert_eq!(loaner[0].label, "Loaner");
+        assert_eq!(parent(&m, "Loaner"), "South Core");
+        assert_eq!(site("Loaner"), "Default (south)");
+        assert!(m.nodes.iter().all(|n| n.label != "laptop-old"));
+        assert_eq!(parent(&m, "laptop-new"), "South Core");
+        assert!(
+            m.summary
+                .starts_with("UniFi Default (north), Default (south) (4 devices from 2 backups)"),
+            "{}",
+            m.summary
+        );
+
+        // One controller's backups from two days: one site, the newer
+        // backup's names.
+        let monday = controller(
+            &[("5f0000000000000000000a01", "HQ")],
+            &[at(
+                dev("Core (old)", "usw", "00:00:00:00:0a:01", "192.0.2.2", None),
+                "5f0000000000000000000a01",
+            )],
+            &[],
+        );
+        let tuesday = controller(
+            &[("5f0000000000000000000a01", "HQ")],
+            &[
+                at(
+                    dev("Core", "usw", "00:00:00:00:0a:01", "192.0.2.2", None),
+                    "5f0000000000000000000a01",
+                ),
+                at(
+                    dev("New AP", "uap", "00:00:00:00:0a:05", "192.0.2.5", None),
+                    "5f0000000000000000000a01",
+                ),
+            ],
+            &[],
+        );
+        let m = build(&Input {
+            unifi: vec![file("hq-mon.unf", &monday), file("hq-tue.unf", &tuesday)],
+            ..Default::default()
+        });
+        assert_eq!(m.sites(), ["HQ"]);
+        assert!(m.nodes.iter().all(|n| n.label != "Core (old)"));
+        assert_eq!(by_label(&m, "Core").site.as_deref(), Some("HQ"));
+        assert!(by_label(&m, "New AP").chips.iter().all(|c| c != "HQ"));
+    }
+
+    /// A firewall's export: its name, LAN and its MAC there, and what it
+    /// heard.
+    fn firewall(name: &str, lan: &str, mac: &str, heard: &[Value]) -> String {
+        json!({
+            "system": {"model": "TZ 270", "firewallName": name},
+            "interfaces": [
+                {"name": "X0", "zone": "LAN", "ip": lan, "mask": "255.255.255.0", "mac": mac},
+                {"name": "X1", "zone": "WAN", "ip": "203.0.113.10", "mask": "255.255.255.248"}
+            ],
+            "neighbors": heard,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn two_sonicwalls_are_two_gateways() {
+        let fw_a = firewall("fw-north", "192.0.2.1", "18:b1:69:00:0a:01", &[]);
+        let fw_b = firewall(
+            "fw-south",
+            "198.51.100.1",
+            "18:b1:69:00:0b:01",
+            &[
+                json!({"interface": "X0", "protocol": "LLDP", "mac": "f0:9f:c2:00:0b:09",
+                "ip": "198.51.100.9", "name": "South Closet", "port": "Port 1",
+                "capabilities": "Bridge"}),
+            ],
+        );
+        let j = unifi(
+            &[
+                dev(
+                    "North Core",
+                    "usw",
+                    "00:00:00:00:0a:01",
+                    "192.0.2.2",
+                    Some(("18:b1:69:00:0a:01", 1)),
+                ),
+                dev(
+                    "South Core",
+                    "usw",
+                    "00:00:00:00:0b:01",
+                    "198.51.100.2",
+                    Some(("18:b1:69:00:0b:01", 2)),
+                ),
+                // No uplink: placed by the LAN its address is on.
+                dev(
+                    "South Spare",
+                    "usw",
+                    "00:00:00:00:0b:02",
+                    "198.51.100.3",
+                    None,
+                ),
+                // Nothing to go by: under the firewall opened last.
+                dev("Stray", "usw", "00:00:00:00:0c:01", "", None),
+            ],
+            &[],
+        );
+        let input = |fws: Vec<Loaded>| {
+            build(&Input {
+                unifi: vec![file("hq.unf", &j)],
+                sonicwall: fws,
+                ..Default::default()
+            })
+        };
+        let (a, b) = (fw_a.as_str(), fw_b.as_str());
+        let m = input(vec![file("fw-north.wri", a), file("fw-south.wri", b)]);
+        let gws: Vec<&Node> = m.nodes.iter().filter(|n| n.zone == Zone::Gateway).collect();
+        assert_eq!(gws.len(), 2);
+        for g in &gws {
+            assert_eq!(g.parent(), Some(0), "{} hangs off the internet", g.label);
+            assert_eq!(g.link(), Some(Link::Backbone));
+        }
+        assert_eq!(by_label(&m, "fw-north").id, "gateway", "the first opened");
+        assert_eq!(by_label(&m, "fw-south").id, "gateway:18:b1:69:00:0b:01");
+        assert_eq!(parent(&m, "North Core"), "fw-north");
+        assert_eq!(
+            parent(&m, "South Core"),
+            "fw-south",
+            "its uplink is B's MAC"
+        );
+        assert_eq!(parent(&m, "South Spare"), "fw-south", "on B's LAN");
+        assert_eq!(parent(&m, "Stray"), "fw-south", "the one opened last");
+        assert_eq!(parent(&m, "South Closet"), "fw-south", "what B heard");
+        assert!(
+            m.summary.contains("2 SonicWalls (fw-north, fw-south)"),
+            "{}",
+            m.summary
+        );
+        // Opened the other way round, the stray goes under the other one.
+        let m = input(vec![file("fw-south.wri", b), file("fw-north.wri", a)]);
+        assert_eq!(parent(&m, "Stray"), "fw-north");
+        assert_eq!(parent(&m, "South Core"), "fw-south");
+        assert_eq!(by_label(&m, "fw-south").id, "gateway");
+
+        // A settings export and a report of one firewall: one card, with
+        // what the report heard.
+        let exp = firewall("fw-south", "198.51.100.1", "18:b1:69:00:0b:01", &[]);
+        let m = input(vec![file("fw-south.wri", b), file("fw-south.exp", &exp)]);
+        assert_eq!(
+            m.nodes.iter().filter(|n| n.zone == Zone::Gateway).count(),
+            1
+        );
+        assert_eq!(parent(&m, "South Closet"), "fw-south");
+        assert!(m.summary.contains("SonicWall TZ 270"), "{}", m.summary);
+    }
+
+    /// Two sites of one client, each with its UniFi backup and its firewall's
+    /// report, both on 192.0.2.0/24: each site's devices under its own
+    /// firewall, in its own box.
+    #[test]
+    fn two_sites_each_with_a_backup_and_a_firewall() {
+        let north = controller(
+            &[("5f0000000000000000000a01", "Default")],
+            &[
+                at(
+                    dev(
+                        "North Core",
+                        "usw",
+                        "00:00:00:00:0a:01",
+                        "192.0.2.2",
+                        Some(("18:b1:69:00:0a:01", 1)),
+                    ),
+                    "5f0000000000000000000a01",
+                ),
+                at(
+                    dev("North Spare", "usw", "00:00:00:00:0a:02", "192.0.2.3", None),
+                    "5f0000000000000000000a01",
+                ),
+            ],
+            &[],
+        );
+        let south = controller(
+            &[("5f0000000000000000000b01", "Default")],
+            &[
+                at(
+                    dev(
+                        "South Core",
+                        "usw",
+                        "00:00:00:00:0b:01",
+                        "192.0.2.2",
+                        Some(("18:b1:69:00:0b:01", 1)),
+                    ),
+                    "5f0000000000000000000b01",
+                ),
+                at(
+                    dev("South Spare", "usw", "00:00:00:00:0b:02", "192.0.2.3", None),
+                    "5f0000000000000000000b01",
+                ),
+            ],
+            &[],
+        );
+        let fw_n = firewall("fw-north", "192.0.2.1", "18:b1:69:00:0a:01", &[]);
+        let fw_s = firewall("fw-south", "192.0.2.1", "18:b1:69:00:0b:01", &[]);
+        let m = build(&Input {
+            unifi: vec![file("north.unf", &north), file("south.unf", &south)],
+            sonicwall: vec![file("fw-north.wri", &fw_n), file("fw-south.wri", &fw_s)],
+            ..Default::default()
+        });
+        assert_eq!(parent(&m, "North Core"), "fw-north");
+        assert_eq!(parent(&m, "South Core"), "fw-south");
+        // The subnet can't say (both sites use it): their site's firewall.
+        assert_eq!(parent(&m, "North Spare"), "fw-north");
+        assert_eq!(parent(&m, "South Spare"), "fw-south");
+        let site = |l: &str| by_label(&m, l).site.clone().unwrap_or_default();
+        assert_eq!(site("fw-north"), "Default (north)");
+        assert_eq!(site("fw-south"), "Default (south)");
+        assert_eq!(m.sites().len(), 2);
+        for i in 0..m.nodes.len() {
+            assert_eq!(m.path(i)[0], 0, "{}", m.nodes[i].label);
+        }
+
+        // Two firewalls and nothing else: a site each, by name.
+        let m = build(&Input {
+            sonicwall: vec![file("fw-north.wri", &fw_n), file("fw-south.wri", &fw_s)],
+            ..Default::default()
+        });
+        assert_eq!(m.sites(), ["fw-north", "fw-south"]);
+    }
+
+    #[test]
+    fn two_sites_of_one_name_are_told_apart_by_their_files() {
+        let names = |v: &[(&str, &str)]| {
+            tell_apart(
+                &v.iter()
+                    .map(|(n, t)| (n.to_string(), t.to_string()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            names(&[
+                ("Default", "northwind-north_backup_2026-11-10_v9.0.114"),
+                ("Default", "northwind-south_backup_2026-11-10_v9.0.114"),
+                ("Warehouse", "northwind-south_backup_2026-11-10_v9.0.114"),
+            ]),
+            ["Default (north)", "Default (south)", "Warehouse"]
+        );
+        // A part with no letters keeps the word before it.
+        assert_eq!(
+            names(&[
+                ("Default", "network_backup_10.11.2026_14-05_v9.0.114"),
+                ("Default", "network_backup_10.11.2026_14-20_v9.0.114"),
+            ]),
+            ["Default (14-05)", "Default (14-20)"]
+        );
+        // Files of one name: a number.
+        assert_eq!(
+            names(&[("HQ", "backup"), ("HQ", "backup")]),
+            ["HQ (backup)", "HQ (backup) 2"]
+        );
+        assert_eq!(file_tag("/x/site.unf", 1), "site");
+        assert_eq!(file_tag("", 2), "2");
     }
 
     #[test]

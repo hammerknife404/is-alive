@@ -4,11 +4,12 @@
 //! link is listed in its details), and its findings become the band. A
 //! sweep of the same network marks which of its devices answer, and what
 //! the map left out (/mapnetwork maps clients only on request) joins it as
-//! clients: the sweep's other hosts, and a loaded UniFi backup's client
-//! table, each under the card it most likely plugs into.
+//! clients: the sweep's other hosts, and the client tables of the loaded
+//! UniFi backups of that site, each under the card it most likely plugs
+//! into.
 
 use super::{
-    B, Input, Link, Map, Node, Sev, Unifi, Zone, caps, limit, parse_unifi, sweep_card,
+    B, Input, Link, Map, Node, Sev, Unifi, Zone, caps, limit, merge_unifi, parse_unifi, sweep_card,
     unifi_client_card,
 };
 use crate::mapnetwork::Doc;
@@ -404,12 +405,22 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     }
     let cards = b.nodes.len();
     // A UniFi backup of the same site knows clients the map left out, and
-    // the switch or AP each was last seen on.
+    // the switch or AP each was last seen on. Each backup joins on its own:
+    // one of another site stays out.
     let mut unifi_at = Vec::new();
-    let unifi = input.unifi.map(parse_unifi).filter(|u| {
-        unifi_at = join_unifi(&mut b, u, cards);
-        !unifi_at.is_empty()
-    });
+    let mut joined = Vec::new();
+    let mut joined_names = Vec::new();
+    for f in &input.unifi {
+        let u = parse_unifi(f.json);
+        let at = join_unifi(&mut b, &u, cards);
+        if !at.is_empty() {
+            unifi_at.extend(at);
+            joined.push(u);
+            joined_names.push(f.name);
+        }
+    }
+    let backups = (joined.len(), input.unifi.len());
+    let unifi = merge_unifi(joined, &joined_names);
     // A sweep joins only when it found hardware the map knows by MAC: the
     // same network, not a look-alike 192.168.1.x.
     let sweep_at: Vec<usize> = input
@@ -485,11 +496,19 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     } else if !input.sweep.is_empty() {
         summary += " · sweep not merged (no device on the map shares a MAC with it)";
     }
-    if unifi.is_some() {
-        summary += &format!(" · UniFi backup merged, {unifi_added} client(s) added");
-    } else if input.unifi.is_some() {
-        summary += " · UniFi backup not merged (none of its devices is on the map)";
-    }
+    summary += &match backups {
+        (0, 0) => String::new(),
+        (1, 1) => format!(" · UniFi backup merged, {unifi_added} client(s) added"),
+        (0, 1) => " · UniFi backup not merged (none of its devices is on the map)".into(),
+        (0, _) => " · UniFi backups not merged (none of their devices is on the map)".into(),
+        (j, n) if j == n => {
+            format!(" · {n} UniFi backups merged, {unifi_added} client(s) added")
+        }
+        (j, n) => format!(
+            " · {j} of {n} UniFi backups merged, {unifi_added} client(s) added (the others' \
+             devices aren't on the map)"
+        ),
+    };
     if unplaced > 0 {
         summary += &format!(" · {unplaced} not placed");
     }
@@ -997,7 +1016,7 @@ mod tests {
         .to_string();
         let input = Input {
             sweep,
-            unifi: Some(&unifi),
+            unifi: crate::map::one(&unifi),
             clients: Clients::All,
             ..Default::default()
         };
@@ -1179,13 +1198,72 @@ mod tests {
         let m = build(
             &doc,
             &Input {
-                unifi: Some(&unifi),
+                unifi: crate::map::one(&unifi),
                 clients: Clients::All,
                 ..Default::default()
             },
         );
         assert!(m.nodes.iter().all(|n| n.label != "02:00:00:00:00:42"));
         assert!(m.summary.contains("UniFi backup not merged"));
+    }
+
+    /// Two backups open: the one of this map's site joins, the other's
+    /// clients stay out.
+    #[test]
+    fn of_two_backups_only_this_sites_joins() {
+        let doc = crate::mapnetwork::parse(PAGE.as_bytes()).unwrap();
+        let here = serde_json::json!([
+            {"__cmd": "select", "collection": "device"},
+            {"name": "USW-24", "type": "usw", "mac": "00:00:00:00:00:02", "ip": "10.0.0.2"},
+            {"__cmd": "select", "collection": "user"},
+            {"mac": "02:00:00:00:00:99", "hostname": "front-desk",
+             "last_uplink_mac": "00:00:00:00:00:02", "is_wired": true},
+        ])
+        .to_string();
+        let elsewhere = serde_json::json!([
+            {"__cmd": "select", "collection": "device"},
+            {"name": "Elsewhere", "type": "usw", "mac": "00:00:00:00:00:77", "ip": "192.0.2.2"},
+            {"__cmd": "select", "collection": "user"},
+            {"mac": "02:00:00:00:00:42", "hostname": "other-desk",
+             "last_uplink_mac": "00:00:00:00:00:77"},
+        ])
+        .to_string();
+        let files = |a: &str, b: &str| {
+            build(
+                &doc,
+                &Input {
+                    unifi: vec![
+                        crate::map::Loaded {
+                            name: "here.unf",
+                            json: a,
+                        },
+                        crate::map::Loaded {
+                            name: "elsewhere.unf",
+                            json: b,
+                        },
+                    ],
+                    clients: Clients::All,
+                    ..Default::default()
+                },
+            )
+        };
+        let m = files(&here, &elsewhere);
+        assert!(m.nodes.iter().any(|n| n.label == "front-desk"));
+        assert!(m.nodes.iter().all(|n| n.label != "other-desk"));
+        assert!(
+            m.summary.contains(
+                "1 of 2 UniFi backups merged, 1 client(s) added (the others' devices aren't on \
+                 the map)"
+            ),
+            "{}",
+            m.summary
+        );
+        let m = files(&elsewhere, &elsewhere);
+        assert!(
+            m.summary.contains("UniFi backups not merged"),
+            "{}",
+            m.summary
+        );
     }
 
     #[test]

@@ -638,6 +638,8 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 Open them with **Open file…** (pick several at once if you like), by dropping them on the window from any tab, or with **Open with → is-alive**. 🔒 Everything happens on this computer: nothing is uploaded.
 
+Open everything the visit has, even several of one kind: a client with two sites, each with its own UniFi backup and SonicWall report, is four files. Each gets its own sub-tab, and the Map and Site Bundle use every one (see *Several sites or firewalls* below).
+
 ### Controls
 
 | Control | What it does |
@@ -663,6 +665,19 @@ Open them with **Open file…** (pick several at once if you like), by dropping 
 2. Drop it on the is-alive window. Config Export opens with a *UniFi · …* sub-tab.
 3. Read the summary: it should list `site`, `device`, `networkconf`, `portconf`, `wlanconf` as kept, and fields like `x_passphrase` as removed.
 4. Click **Save JSON…**: it suggests `<name>.unifidump.json`. That file, not the backup, is what you give to `/unifidump`. Or simply use [Site Bundle…](#18-site-bundle-and-claude), which includes it for you.
+
+### Several sites or firewalls
+
+A visit can cover more than one controller or firewall. Open them all, together or one after another; each kind is used like this:
+
+| Open | On the [Map](#11-map) | In the [Site Bundle](#18-site-bundle-and-claude) |
+|---|---|---|
+| Several UniFi backups | Every controller's devices and clients on one map. A device or client in two backups (one controller's backups from two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)* and *Default (south)* | A file each: `unifi.unifidump.json`, then `unifi-2.unifidump.json` and so on |
+| Several SonicWall exports or reports | Each firewall is a gateway of its own under the internet, with what it heard. A settings export and a report of the same firewall are one card | `sonicwall.json`, `sonicwall-2.json`, … |
+| Several Meraki exports | Not on the Map | `meraki.json`, `meraki-2.json`, … |
+| Several `/mapnetwork` maps | The one opened last is the map | The one opened last |
+
+Opening a file again moves it to the end of the sub-tabs, so it counts as opened last.
 
 ### Meraki
 
@@ -691,10 +706,19 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 |---|---|
 | **A UniFi backup** (in Config Export) | The real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless |
 | **+ a SonicWall export** | The firewall as the gateway, matched by its MAC addresses; a tech support report adds the switches and APs it heard on each port |
+| **Several backups or exports** (two sites, say) | All of them on one map. Each controller's sites get their own box, and each firewall is a gateway of its own under the internet (see below) |
 | **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
-| **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered, and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized) |
+| **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered, and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized). With several backups open, each joins only when the map shows its devices |
 
 A map with nothing to show offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…** (opens Config Export), and links to the two example maps and a blank one.
+
+**Several backups or exports at once.** Every UniFi backup and SonicWall export open in Config Export goes on the map:
+
+- **UniFi backups:** each controller's devices and clients. One in two backups (the same controller backed up on two days) is drawn once, as the backup opened later has it. Each controller's sites are boxes of their own in the **Sites** layout; two sites of one name (both *Default*) take the part of their backup's file name that differs, as in *Default (north)* and *Default (south)*.
+- **SonicWall exports:** each firewall is a gateway card of its own under the internet, with the devices it heard on its ports. A settings export and a tech support report of the same firewall are one card.
+- **Which firewall a device hangs under:** the one whose interface MAC the device reports as its uplink; else the one whose LAN holds its address; else the one the other devices of its UniFi site plug into; else the firewall opened last. Two sites that both use 192.168.1.x are told apart by their UniFi sites, not by the address.
+- **Without a firewall**, each backup's UniFi gateway (UDM, UCG, USG) is the gateway for that controller.
+- With two or more firewalls and no UniFi sites to name the boxes, each firewall's part of the map is a site named after the firewall.
 
 ### The toolbar
 
@@ -1290,15 +1314,15 @@ is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi exp
 | **Known problems** | Anything you already know is wrong ("Closet 2 switch flaky"). It goes straight into the map's findings. **Redact** works here as in Notes |
 | **UniFi clients** | How UniFi clients are included: **anonymized** by default here (MAC, vendor and switch port kept, names replaced with tokens), or **none** or **full** |
 | **Clients on the map** | Whether `/mapnetwork` draws end devices (off: infrastructure only) |
-| **Includes** | Tick what goes in; each row says what it is, or what to do to have one |
+| **Includes** | Tick what goes in; each row says what it is, or what to do to have one. Every backup and export open in Config Export has a row of its own, named after its file, which ends with the name it goes in the zip as (*→ unifi-2.unifidump.json*). With many rows the list scrolls |
 
 **What can be included:**
 
 | Item | From | Default |
 |---|---|---|
-| UniFi backup | The UniFi backup open in Config Export, converted again with the bundle's client setting | on when loaded |
-| SonicWall export | The SonicWall export or report open in Config Export | on when loaded |
-| Meraki export | The Meraki export open in Config Export | on when loaded |
+| UniFi backups | Every UniFi backup open in Config Export, each converted again with the bundle's client setting | on when loaded |
+| SonicWall exports | Every SonicWall export or report open in Config Export | on when loaded |
+| Meraki exports | Every Meraki export open in Config Export | on when loaded |
 | Current map | The `/mapnetwork` map open in Config Export, from an earlier visit: Claude updates it rather than starting over | on when loaded |
 | Sweep inventory | The last finished Subnet Sweep | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
@@ -1308,13 +1332,24 @@ is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi exp
 
 The bundle also holds `manifest.json` (what each file is, this computer's LAN, gateway and WAN, and the answers to `/mapnetwork`'s questions) and `prompt.txt`, the kickoff prompt.
 
+**Several of a kind** (two sites' UniFi backups and firewall reports, say) each go in as a file of their own, in the order opened: the first under the usual name, the next numbered.
+
+| Open in Config Export | In the zip |
+|---|---|
+| One UniFi backup | `unifi.unifidump.json` |
+| A second, third… | `unifi-2.unifidump.json`, `unifi-3.unifidump.json` |
+| SonicWall exports | `sonicwall.json`, `sonicwall-2.json`, … |
+| Meraki exports | `meraki.json`, `meraki-2.json`, … |
+
+`manifest.json` names the file each came from, and the prompt tells Claude to run `/unifidump` on each UniFi export and that each is a separate controller or firewall. Untick a row to leave that file out; the numbers close up, so the first one left in keeps the usual name.
+
 **Save bundle…** saves the zip and copies the kickoff prompt to the clipboard; **Copy kickoff prompt** copies it again. Only sanitized data goes in: raw backups and secrets never do.
 
 ### The round trip
 
-1. **On site:** run a Subnet Sweep, open the site's UniFi backup and SonicWall or Meraki export in Config Export, take notes.
+1. **On site:** run a Subnet Sweep, open the site's UniFi backups and SonicWall or Meraki exports in Config Export (every controller and firewall the visit covers), take notes.
 2. **Bundle:** open the site menu (top left) and click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
-3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on the UniFi export, then `/mapnetwork` with everything else.
+3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on each UniFi export, then `/mapnetwork` with everything else.
 4. **Back in is-alive:** open the `.dc.html` map Claude makes in Config Export (or drop it on the window). The Map redraws it, and a sweep of the same network marks which devices answer.
 5. **Next visit:** keep that map open when you make the next bundle. Claude updates the existing map, under its original name, instead of starting again.
 

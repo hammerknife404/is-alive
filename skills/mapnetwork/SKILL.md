@@ -140,6 +140,21 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   keeps its runs from one visit to the next, so they can span visits: judge
   each check by its **newest** run (`started`); an older failure that a later
   run of the same check doesn't repeat is history, not a finding.
+- **Several of a kind** (one visit, more than one controller or firewall):
+  the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
+  `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`
+  gives each one's `source` (the file it came from), and `firewall_config` is
+  then a list. Each `unifi-N.unifidump.json` is **its own UniFi controller**:
+  run /unifidump on each and keep each controller's sites its own. Two
+  controllers can both have a site called "Default": they are different
+  sites, so tell them apart by the source file's name. (Two backups of one
+  controller from different days share their sites' ids and their devices'
+  MACs: draw each device once, as the newer file has it.) Each `sonicwall-N.json`
+  (or `meraki-N.json`) is **its own firewall**: a gateway of its own under the
+  internet, with what plugs into it below it. A device goes under the firewall
+  whose interface MAC is its uplink MAC, else the one whose LAN subnet holds
+  its IP; two sites often share a subnet like 192.168.1.0/24, so where the
+  subnet doesn't decide it, go by the controller site the device is at.
 - **`inventory.json` hosts:** `found_by: "arp"` means it answered ARP but drops
   ping (a firewall default, not a fault). `open_ports` is role evidence for the
   infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera).

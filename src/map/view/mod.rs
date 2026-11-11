@@ -549,8 +549,16 @@ impl MapView {
             gateway: src.info.gateway,
             this: src.info.lan.map(|l| l.0),
             wan: src.info.wan,
-            unifi: src.export.unifi().map(|u| u.1.json.as_str()),
-            sonicwall: src.export.sonicwall().map(|s| s.1.json.as_str()),
+            unifi: src
+                .export
+                .unifis()
+                .map(|(p, r)| loaded(p, &r.json))
+                .collect(),
+            sonicwall: src
+                .export
+                .sonicwalls()
+                .map(|(p, r)| loaded(p, &r.json))
+                .collect(),
             mapnetwork: src.export.mapnetwork().map(|m| m.1),
             clients: self.clients,
             reveal: Some(&self.reveal),
@@ -570,10 +578,10 @@ impl MapView {
         let mut reveal: Vec<_> = self.reveal.iter().collect();
         reveal.sort();
         reveal.hash(&mut h);
-        if let Some((p, r)) = src.export.unifi() {
+        for (p, r) in src.export.unifis() {
             (p, r.json.len()).hash(&mut h);
         }
-        if let Some((p, r)) = src.export.sonicwall() {
+        for (p, r) in src.export.sonicwalls() {
             (p, r.json.len()).hash(&mut h);
         }
         if let Some((p, d)) = src.export.mapnetwork() {
@@ -1513,6 +1521,17 @@ impl MapView {
 }
 
 /// Every card below `i` in the child table `kids`, nearest first.
+/// A file open in Config Export, as the map reads it.
+fn loaded<'a>(path: &'a std::path::Path, json: &'a str) -> super::Loaded<'a> {
+    super::Loaded {
+        name: path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+        json,
+    }
+}
+
 fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
     let mut out = Vec::new();
     let mut next = vec![i];
