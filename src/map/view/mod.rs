@@ -310,6 +310,13 @@ pub struct MapView {
     animate: bool,
     /// The lit links as last drawn, kept while they don't change.
     lit_drawn: std::cell::RefCell<crate::map::colours::Lit>,
+    /// Cards' warnings by card id: when their ring began to pulse, and how
+    /// many findings the card had (see `warn_ring`). Cleared when the Map is
+    /// shown again, so they pulse afresh.
+    warned: std::cell::RefCell<HashMap<String, (f64, usize)>>,
+    /// egui's pass when the Map was last drawn: a gap means another tab
+    /// showed in between.
+    shown_pass: u64,
     /// The saved map the live map is compared with (More › Compare), if any.
     since: Option<since::Since>,
 }
@@ -1251,6 +1258,11 @@ impl MapView {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         let ctx = ui.ctx().clone();
         self.animate = src.animate;
+        let pass = ctx.cumulative_pass_nr();
+        if pass > self.shown_pass + 1 {
+            self.warned.get_mut().clear();
+        }
+        self.shown_pass = pass;
         if self.legend_seen != Some(src.legend) {
             self.legend_seen = Some(src.legend);
             self.legend = src.legend;

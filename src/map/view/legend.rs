@@ -456,7 +456,7 @@ fn swatch(
             );
             chip_pill(p, chip, c, a);
         }
-        Swatch::Warn => warn_badge(p, s.center(), 0.75, a, now),
+        Swatch::Warn => warn_badge(p, s.center(), 0.75, a, None),
         Swatch::Pin => pin(p, vis, s.center(), 0.75, a),
         Swatch::Note => note_glyph(
             p,

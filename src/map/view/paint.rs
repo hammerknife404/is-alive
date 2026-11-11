@@ -4,6 +4,15 @@ use super::*;
 use crate::map::colours;
 use std::cell::RefCell;
 
+/// Zoom from which a card's warning is a badge (with its ring); below, a dot.
+const FULL_BADGE_Z: f32 = 0.6;
+/// Pulses a warning's ring makes out of its badge, and how many a second:
+/// three when the Map is shown or the card gains a finding, then it holds
+/// still. It pulsed for as long as the tab was open, redrawing the window
+/// 20 times a second for a ring a few pixels wide.
+const WARN_PULSES: f64 = 3.0;
+const WARN_HZ: f64 = 0.8;
+
 impl MapView {
     /// Every line on the map as drawn now (see `layout::lines`).
     /// Card `i`'s link is routed on its own, round the cards in its way:
@@ -369,7 +378,8 @@ impl MapView {
             if !r.intersects(rect) {
                 continue;
             }
-            pulse |= !self.map.nodes[i].flags.is_empty();
+            let ring = self.warn_ring(i, now);
+            pulse |= ring.is_some();
             // A dimmed card dropped on others hides them, rather than
             // letting their text show through its own.
             if fade(i) < 1.0 && raised.contains(self.map.nodes[i].id.as_str()) {
@@ -383,18 +393,38 @@ impl MapView {
                 fade(i),
                 picked.contains(&i),
                 hover == Some(i) || menu.contains(&i),
-                now,
+                ring,
             );
         }
         if focused && (flows || pulse) {
             // Flowing links at the display's rate; the warning pulse is slow
-            // enough for 20 fps, and it's on screen as long as the tab is.
+            // enough for 20 fps, and it's over in a few seconds.
             if flows {
                 ui.ctx().request_repaint_after(crate::backdrop::SMOOTH);
             } else {
                 crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
             }
         }
+    }
+
+    /// How far card `i`'s warning ring is through its pulse (0–1), while it
+    /// pulses: from the first frame the Map shows the warning, or the card
+    /// gains a finding, for `WARN_PULSES` pulses, with Animate on and the
+    /// badge big enough to have a ring. None: the badge holds still.
+    fn warn_ring(&self, i: usize, now: f64) -> Option<f32> {
+        let n = &self.map.nodes[i];
+        if n.flags.is_empty() {
+            return None;
+        }
+        let mut warned = self.warned.borrow_mut();
+        let (since, had) = warned.entry(n.id.clone()).or_insert((now, n.flags.len()));
+        if n.flags.len() > *had {
+            *since = now;
+        }
+        *had = n.flags.len();
+        let t = now - *since;
+        (self.animate && self.zoom >= FULL_BADGE_Z && t < WARN_PULSES / WARN_HZ)
+            .then(|| (t * WARN_HZ).fract() as f32)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -407,7 +437,7 @@ impl MapView {
         a: f32,
         selected: bool,
         hovered: bool,
-        now: f64,
+        ring: Option<f32>,
     ) {
         let n = &self.map.nodes[i];
         let z = self.zoom;
@@ -474,7 +504,7 @@ impl MapView {
             }
             return;
         }
-        let full_badge = z >= 0.6;
+        let full_badge = z >= FULL_BADGE_Z;
         let badge = if !full_badge || n.flags.is_empty() {
             0.0
         } else {
@@ -564,7 +594,7 @@ impl MapView {
             return;
         }
         if !n.flags.is_empty() {
-            warn_badge(p, pos2(r.max.x - 12.0 * z, r.min.y + 12.0 * z), z, a, now);
+            warn_badge(p, pos2(r.max.x - 12.0 * z, r.min.y + 12.0 * z), z, a, ring);
         }
     }
 }
@@ -858,15 +888,16 @@ pub(super) fn pin(p: &Painter, vis: &egui::Visuals, at: Pos2, z: f32, a: f32) {
 }
 
 /// A card's warning badge centred at `c`: "!" on amber, with a ring
-/// pulsing out of it.
-pub(super) fn warn_badge(p: &Painter, c: Pos2, z: f32, a: f32, now: f64) {
+/// `ring` of the way (0–1) through a pulse out of it; None, no ring.
+pub(super) fn warn_badge(p: &Painter, c: Pos2, z: f32, a: f32, ring: Option<f32>) {
     let warn = widgets::warn();
-    let t = ((now * 0.8).fract()) as f32;
-    p.circle_stroke(
-        c,
-        (7.0 + 7.0 * t) * z,
-        Stroke::new(1.5, warn.gamma_multiply((1.0 - t) * 0.6 * a)),
-    );
+    if let Some(t) = ring {
+        p.circle_stroke(
+            c,
+            (7.0 + 7.0 * t) * z,
+            Stroke::new(1.5, warn.gamma_multiply((1.0 - t) * 0.6 * a)),
+        );
+    }
     p.circle_filled(c, 7.0 * z, warn.gamma_multiply(a));
     p.text(
         c,
