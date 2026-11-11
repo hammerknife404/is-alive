@@ -25,10 +25,26 @@ const K: i32 = 2;
 pub const FPS: f64 = 10.0;
 const LOOP_FRAMES: i64 = 40;
 const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
-/// Smooth animation (the Map's flowing links) asks for the next frame at
-/// once and lets the display's refresh (vsync) pace it. The short floor only
-/// matters where vsync is off: it stops a runaway loop at 250 frames a second.
-pub const SMOOTH: Duration = Duration::from_millis(4);
+/// Frames a second for smooth motion (the Map's flowing links, its tab's
+/// glow after a Full scan). Not the display's rate: on a 120 Hz laptop
+/// that was 120 redraws of the whole window a second, on battery.
+pub const SMOOTH_FPS: f64 = 30.0;
+/// Frames a second for busy indicators (the Stop spinner, the nav's running
+/// dots). They share the tick, so together they cost 10 frames a second.
+pub const BUSY_FPS: f64 = 10.0;
+
+/// Time for a busy indicator, snapped to `BUSY_FPS` ticks, asking for the
+/// next tick while the window is focused. Unfocused, it holds still: a
+/// continuous ping can run for hours behind another window, and only its
+/// replies redraw the window then.
+pub fn busy_time(ctx: &egui::Context) -> f32 {
+    let (time, focused) = ctx.input(|i| (i.time, i.viewport().focused != Some(false)));
+    let (t, wait) = tick(time, BUSY_FPS);
+    if focused {
+        repaint_in(ctx, wait);
+    }
+    t as f32
+}
 
 /// Repaint in `wait`, really. egui takes its predicted frame time off every
 /// delayed repaint, so a request a few ms short of that became "now": an

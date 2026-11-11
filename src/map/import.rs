@@ -1344,6 +1344,9 @@ mod examples {
                     );
                     assert_eq!(m.nodes[1].site.as_deref(), Some("Site"));
                     assert!(m.findings.is_empty() && m.hidden == 0);
+                } else if f == crate::skills::HOME {
+                    // A house: small, every card under the Internet.
+                    assert!((8..=15).contains(&m.nodes.len()), "{name}");
                 } else {
                     assert!(m.nodes.len() > 30, "{name}");
                 }
@@ -1358,6 +1361,54 @@ mod examples {
                 }
             }
         }
+    }
+
+    /// The home example: a router behind the ISP's, a mesh node, a switch
+    /// nothing can scan (so its links are assumed), and the issues of a
+    /// house, worst first.
+    #[test]
+    fn the_home_example_has_assumed_links_and_the_usual_issues() {
+        let doc =
+            crate::mapnetwork::parse(crate::skills::example_file(crate::skills::HOME).unwrap())
+                .unwrap();
+        let m = build(
+            &doc,
+            &Input {
+                clients: Clients::All,
+                ..Default::default()
+            },
+        );
+        let at = |id: &str| m.nodes.iter().find(|n| n.id == id).expect(id);
+        let link = |id: &str| at(id).up.as_ref().map(|u| u.1);
+        for (id, zone) in [
+            ("internet", Zone::Internet),
+            ("isp", Zone::Gateway),
+            ("router", Zone::Gateway),
+            ("mesh", Zone::Wireless),
+            ("switch", Zone::Switch),
+            ("nas", Zone::Server),
+            ("printer", Zone::Device),
+            ("doorbell", Zone::Device),
+            ("tv", Zone::Client),
+            ("laptop", Zone::Client),
+            ("unknown", Zone::Unknown),
+        ] {
+            assert_eq!(at(id).zone, zone, "{id}");
+        }
+        assert_eq!(link("isp"), Some(Link::Backbone));
+        assert_eq!(link("router"), Some(Link::Wired));
+        // The unmanaged switch and what's behind it: assumed, not seen.
+        for id in ["switch", "tv", "console"] {
+            assert_eq!(link(id), Some(Link::Assumed), "{id}");
+        }
+        for id in ["mesh", "printer", "doorbell", "family"] {
+            assert_eq!(link(id), Some(Link::Wireless), "{id}");
+        }
+        // Eleven findings, worst first, each on the cards it's about.
+        assert_eq!(m.findings.len(), 11);
+        assert!(m.findings[0].text.contains("port 5000"));
+        assert!(!at("router").flags.is_empty() && !at("nas").flags.is_empty());
+        assert!(at("thermostat").flags.is_empty());
     }
 
     /// The blank map with a sweep: it lists no MACs, so no sweep shares

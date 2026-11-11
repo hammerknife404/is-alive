@@ -63,7 +63,7 @@ impl App {
                 });
             });
         });
-        theme::top_rule(ui.ctx(), bar.response.rect.bottom(), self.look.animate);
+        theme::top_rule(ui.ctx(), bar.response.rect.bottom(), self.look.moves());
     }
 
     /// How the Map tab calls for attention this frame, asking for the
@@ -71,13 +71,14 @@ impl App {
     /// waits, so it plays when the user comes back.
     pub(crate) fn map_call(&mut self, ui: &egui::Ui) -> Call {
         let (now, focused) = ui.input(|i| (i.time, i.viewport().focused != Some(false)));
-        let animate = self.look.animate;
+        let animate = self.look.moves();
         let call = self.map_call.frame(now, focused, animate);
         if let Call::Glow { left, .. } = call
             && focused
         {
             if animate {
-                ui.ctx().request_repaint();
+                let (_, wait) = crate::backdrop::tick(now, crate::backdrop::SMOOTH_FPS);
+                crate::backdrop::repaint_in(ui.ctx(), wait);
             } else {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_secs_f64(left));

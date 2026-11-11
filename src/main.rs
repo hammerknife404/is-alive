@@ -20,6 +20,7 @@ mod meraki;
 mod nav;
 mod net;
 mod photos;
+mod power;
 mod redact;
 mod report;
 mod results_ui;
@@ -229,7 +230,7 @@ impl eframe::App for App {
             self.backdrop.paint(
                 ui.ctx(),
                 &self.look.backdrop,
-                self.look.animate,
+                self.look.moves(),
                 self.look.glow,
                 self.look.vhs,
             );
@@ -404,7 +405,7 @@ impl App {
                     note: self.look.map_note,
                     legend: self.look.map_legend,
                     redact: self.notes.overrides(),
-                    animate: self.look.animate,
+                    animate: self.look.moves(),
                 })
             {
                 self.map_call.start(now, self.tab == Tab::Map);
@@ -551,7 +552,7 @@ impl App {
                     note: self.look.map_note,
                     legend: self.look.map_legend,
                     redact: self.notes.overrides(),
-                    animate: self.look.animate,
+                    animate: self.look.moves(),
                 },
                 log: &self.log,
                 info: &self.info,
@@ -594,7 +595,7 @@ impl App {
                         note: self.look.map_note,
                         legend: self.look.map_legend,
                         redact: self.notes.overrides(),
-                        animate: self.look.animate,
+                        animate: self.look.moves(),
                     },
                 );
                 self.map_action(ui.ctx(), act);

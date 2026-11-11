@@ -160,7 +160,7 @@ All the testing tabs work the same way:
 4. **The results** below. Before the first run, a short explanation says what to do.
 5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep), a card on the [Map](#selecting-cards)): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
 
-**Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. Copies and saves confirm themselves with a short message at the bottom of the window.
+**Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. It holds still while the window is behind another one, so a ping left running for hours doesn't keep redrawing the window. Copies and saves confirm themselves with a short message at the bottom of the window.
 
 Every text box has a right-click menu with **Cut**, **Copy**, **Paste** and **Select all**.
 
@@ -201,7 +201,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
-When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. With **Animate** off (Settings) it lights up briefly instead of pulsing.
+When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. While **Animate** (Settings) holds things still, it lights up briefly instead of pulsing.
 
 ### Site report
 
@@ -779,7 +779,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site, or of another site (**Other sites ›**; see *Compare with the last visit*, below) |
-| **Examples** ▸ | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
+| **Examples** ▸ | Open one of two fictional sites; **Home**, a fictional house (ISP modem, Wi-Fi router, a mesh node, a switch behind the TV) with dashed links that are assumed, and the issues a home usually has (double NAT, a port forwarded to the NAS, a default password, IoT on the family network); or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
 | **Saved maps** | Show or hide the saved maps bar (below), to open a saved map or go back to Live |
 | **Copy findings** | The findings as text, worst first, for a ticket |
 | **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
@@ -879,8 +879,8 @@ Back at a site, **More › Compare** (on the live map) lists this site's saved m
 
 ### Selecting cards
 
-- **Click a card** to select it. Its [inspector](#the-inspector-right) opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes.
-- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing up it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. With **Animate** off (in [Settings](#theme)) there are no dots, and the colours alone show the way.
+- **Click a card** to select it. Its [inspector](#the-inspector-right) opens on the right, and its whole path up to the internet lights up, with dots flowing along each link toward the uplink: the route its traffic takes. Leave the map alone for 30 seconds (no mouse, keys or scrolling) and the dots stop where they are; they go on as soon as you move the mouse.
+- A lit link takes the colour of the card it leads to. Where the links to several cards share a line (a column, or the line above a row), it keeps their colour while they share one; where their colours differ, it's in the colour of the card they hang from, and the dots flowing up it take turns in each card's colour (a grey card's dots are hollow rings). Each card's own end of the line is always in its colour. While **Animate** (in [Settings](#theme)) holds things still there are no dots, and the colours alone show the way.
 - **Ctrl+click** or **Shift+click** (⌘ on a Mac) adds a card to the selection or takes it out. With several cards selected, only the links that join them light up: two access points on one switch light their two links and that switch; nothing beyond the topmost selected card lights.
 - **Esc** clears the selection (pinned cards stay).
 - **Trace to WAN**, at the top of the inspector, lights every selected card's whole path to the internet instead.
@@ -1267,13 +1267,19 @@ The dots beside each name are that theme's Map colours for each role.
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
-**Animate** (on by default, in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front. Off, the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. Turn it off on battery or if motion bothers you.
+**Animate** (in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, a card's amber **!** pulses three times when the Map shows it, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front.
+
+| Animate | Moves |
+|---|---|
+| **On** | Always, on battery too |
+| **When plugged in** (the default) | While the laptop is on its charger. On battery everything holds still, so it lasts longer on site. It checks every half minute; a desktop always counts as plugged in. *On battery now* shows under the choices when that's why nothing moves |
+| **Off** | Never: the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. For when motion bothers you |
 
 ### Miami backdrop
 
 With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
 
-- With **Animate** on (above), the scene moves at 10 frames a second, paused when the window isn't in front.
+- While **Animate** (above) lets things move, the scene moves at 10 frames a second, paused when the window isn't in front.
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 

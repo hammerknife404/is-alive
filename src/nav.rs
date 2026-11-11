@@ -330,10 +330,11 @@ fn running_dots(ui: &egui::Ui, rows: &[(Rect, bool)]) {
     if rows.is_empty() {
         return;
     }
-    // Slow pulse at 10 fps, held still while the window isn't focused: a
-    // continuous ping can run for hours, and each frame redraws the window.
+    // Slow pulse on the spinner's 10 fps tick, held still while the window
+    // isn't focused: a continuous ping can run for hours, and each frame
+    // redraws the window.
     let focused = ui.input(|i| i.viewport().focused != Some(false));
-    let t = ui.input(|i| i.time) as f32;
+    let t = crate::backdrop::busy_time(ui.ctx());
     let a = if focused {
         0.35 + 0.65 * (0.5 + 0.5 * (t * 3.0).sin())
     } else {
@@ -347,10 +348,6 @@ fn running_dots(ui: &egui::Ui, rows: &[(Rect, bool)]) {
         };
         ui.painter()
             .circle_filled(at, 3.0, widgets::ok().gamma_multiply(a));
-    }
-    if focused {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 

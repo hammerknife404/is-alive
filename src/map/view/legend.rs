@@ -294,7 +294,7 @@ impl MapView {
         {
             self.legend = false;
         }
-        let now = ui.input(|i| i.time);
+        let flow = crate::backdrop::tick(self.flow, crate::backdrop::SMOOTH_FPS).0;
         let z = self.zoom.clamp(0.6, 1.2);
         let mut flip = None;
         let mut body = ui.new_child(
@@ -345,7 +345,7 @@ impl MapView {
                                 s,
                                 off,
                                 z,
-                                now,
+                                flow,
                                 self.animate,
                             );
                             let tx = s.max.x + GAP;
@@ -438,7 +438,7 @@ fn swatch(
     s: Rect,
     off: bool,
     z: f32,
-    now: f64,
+    flow: f64,
     animate: bool,
 ) {
     let c = ink(vis, e.ink);
@@ -456,7 +456,7 @@ fn swatch(
             );
             chip_pill(p, chip, c, a);
         }
-        Swatch::Warn => warn_badge(p, s.center(), 0.75, a, now),
+        Swatch::Warn => warn_badge(p, s.center(), 0.75, a, None),
         Swatch::Pin => pin(p, vis, s.center(), 0.75, a),
         Swatch::Note => note_glyph(
             p,
@@ -526,7 +526,7 @@ fn swatch(
             draw_lit(p, &mid, 0.0, lc, mixed, Link::Wired, w, a, z, glow);
             if animate {
                 let gap = packet_gap(z);
-                let phase = packet_travel(now, z).rem_euclid(gap);
+                let phase = packet_travel(flow, z).rem_euclid(gap);
                 for at in along_from(&mid, 0.0, phase, gap, Rect::EVERYTHING) {
                     draw_packet(p, at, lc, grey, packet_radius(w), a, behind);
                 }

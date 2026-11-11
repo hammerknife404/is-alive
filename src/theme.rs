@@ -877,13 +877,67 @@ fn scanner_rule(ctx: &egui::Context, y: f32, animate: bool) {
     }
 }
 
+/// Settings › Animate: when moving effects play.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Animate {
+    On,
+    /// Only while the machine isn't running on its battery: on site, a
+    /// laptop on battery holds still and lasts longer.
+    #[default]
+    Plugged,
+    Off,
+}
+
+impl Animate {
+    pub const ALL: [Animate; 3] = [Animate::On, Animate::Plugged, Animate::Off];
+
+    fn key(self) -> &'static str {
+        match self {
+            Animate::On => "on",
+            Animate::Plugged => "plugged",
+            Animate::Off => "0",
+        }
+    }
+
+    /// What the settings file says. Before 0.28.18 Animate was on or off and
+    /// every file said which (animate=1 whether chosen or not): on reads as
+    /// the new default.
+    fn from_key(v: &str) -> Self {
+        match v.trim() {
+            "0" => Animate::Off,
+            "on" => Animate::On,
+            _ => Animate::Plugged,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Animate::On => "On",
+            Animate::Plugged => "When plugged in",
+            Animate::Off => "Off",
+        }
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            Animate::On => "Always, on battery too.",
+            Animate::Plugged => {
+                "While the laptop is plugged in. On battery everything holds still \
+                 (checked every half minute); a desktop always counts as plugged in."
+            }
+            Animate::Off => "Everything holds still.",
+        }
+    }
+}
+
 /// Everything remembered between launches.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Settings {
     pub theme: Theme,
-    /// Miami backdrop and sunset rule move (other themes have neither),
-    /// and the Map tab pulses after a full scan rather than lighting up still.
-    pub animate: bool,
+    /// When moving effects play: the Miami backdrop and sunset rule, the
+    /// Map tab's pulse after a full scan, the map's packets and warnings.
+    /// See `moves` for this moment.
+    pub animate: Animate,
     /// A soft glow on the bright parts of the Miami backdrop.
     pub glow: bool,
     /// The Miami scene as if off a worn VHS tape (on the GPU).
@@ -953,7 +1007,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::Dark,
-            animate: true,
+            animate: Animate::default(),
             glow: true,
             vhs: true,
             size: None,
@@ -982,6 +1036,16 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Moving effects play now: Animate is on, or plugged in and the
+    /// machine isn't on its battery.
+    pub fn moves(&self) -> bool {
+        match self.animate {
+            Animate::On => true,
+            Animate::Plugged => !crate::power::on_battery(),
+            Animate::Off => false,
+        }
+    }
+
     fn parse(text: &str) -> Self {
         let mut s = Self::default();
         for line in text.lines() {
@@ -990,7 +1054,7 @@ impl Settings {
             };
             match k.trim() {
                 "theme" => s.theme = Theme::from_key(v).unwrap_or_default(),
-                "animate" => s.animate = v.trim() != "0",
+                "animate" => s.animate = Animate::from_key(v),
                 "glow" => s.glow = v.trim() != "0",
                 "vhs" => s.vhs = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
@@ -1085,11 +1149,13 @@ impl Settings {
             Source::Image(p) => format!("image:{}", p.display()),
         };
         let mut s = format!(
-            "theme={}\nanimate={}\nglow={}\nbackdrop={backdrop}\n",
+            "theme={}\nglow={}\nbackdrop={backdrop}\n",
             self.theme.key(),
-            self.animate as u8,
             self.glow as u8
         );
+        if self.animate != Animate::default() {
+            s += &format!("animate={}\n", self.animate.key());
+        }
         if let Some((w, h)) = self.size {
             s += &format!("size={w}x{h}\n");
         }
@@ -1241,21 +1307,32 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
         // In every theme: the Map tab's glow and the map's packets too.
         let tip = if gpu {
             "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
-             Scanner's light sweeps (10 to 15 frames a second on the GPU, paused while the window isn't focused). Off, \
-             everything holds still; turn it off on battery."
+             lit links until it's left alone for half a minute, a finding's warning pulses \
+             three times, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
+             Scanner's light sweeps (10 to 30 frames a second on the GPU, paused while the \
+             window isn't focused)."
         } else {
             "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
-             Scanner's light sweeps (10 to 15 frames a second, no usable GPU, paused while the window isn't focused). Off, \
-             everything holds still; turn it off on battery."
+             lit links until it's left alone for half a minute, a finding's warning pulses \
+             three times, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
+             Scanner's light sweeps (10 to 30 frames a second, no usable GPU, paused while the \
+             window isn't focused)."
         };
-        if ui
-            .checkbox(&mut s.animate, "Animate")
-            .on_hover_text(tip)
-            .changed()
-        {
-            act = Some(MenuAction::Changed);
+        ui.label(egui::RichText::new("Animate").strong())
+            .on_hover_text(tip);
+        for a in Animate::ALL {
+            if ui
+                .radio(s.animate == a, a.name())
+                .on_hover_text(a.tip())
+                .clicked()
+                && s.animate != a
+            {
+                s.animate = a;
+                act = Some(MenuAction::Changed);
+            }
+        }
+        if s.animate == Animate::Plugged && crate::power::on_battery() {
+            ui.weak("On battery now: everything holds still.");
         }
         ui.separator();
         ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
@@ -1493,7 +1570,7 @@ mod tests {
     fn settings_round_trip() {
         let s = Settings {
             theme: Theme::Miami,
-            animate: false,
+            animate: Animate::Off,
             glow: false,
             vhs: false,
             size: Some((1280, 800)),
@@ -1559,8 +1636,28 @@ mod tests {
         let old = Settings::parse("theme=miami\n");
         assert_eq!(
             (old.theme, old.animate, old.backdrop),
-            (Theme::Miami, true, Source::Scene)
+            (Theme::Miami, Animate::Plugged, Source::Scene)
         );
+        // Animate: only when plugged in, unless set. Before 0.28.18 every file
+        // said animate=1, chosen or not: that's the new default too.
+        assert_eq!(Settings::default().animate, Animate::Plugged);
+        assert!(!Settings::default().text().contains("animate"));
+        assert_eq!(Settings::parse("animate=1\n").animate, Animate::Plugged);
+        assert_eq!(Settings::parse("animate=0\n").animate, Animate::Off);
+        for a in Animate::ALL {
+            let s = Settings {
+                animate: a,
+                ..Settings::default()
+            };
+            assert_eq!(Settings::parse(&s.text()).animate, a);
+        }
+        // Always on, or off, moves (or not) whatever the power.
+        let on = Settings {
+            animate: Animate::On,
+            ..Settings::default()
+        };
+        assert!(on.moves());
+        assert!(!s.moves());
     }
 
     #[test]
