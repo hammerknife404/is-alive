@@ -638,6 +638,23 @@ pub fn save_text(file_name: String, text: String) {
     save_file(file_name, "Text", vec!["txt", "log"], text);
 }
 
+/// The shortest a click target is (CLAUDE.md: a trackpad on a tailgate).
+pub const TARGET_H: f32 = 28.0;
+
+/// A menu behind a button that says what's in it ("All runs ▾"), at
+/// least `TARGET_H` tall: not a bare ⋯, which is small and hides the
+/// actions behind it.
+pub fn named_menu<R>(
+    ui: &mut Ui,
+    label: &str,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let button = egui::Button::new(format!("{label} ▾")).min_size(egui::vec2(0.0, TARGET_H));
+    let (response, inner) =
+        egui::containers::menu::MenuButton::from_button(button).ui(ui, add_contents);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
+
 /// Export menu: each format opens a save dialog with `entries` rendered in it.
 pub fn export_menu<'a>(
     ui: &mut Ui,
@@ -1151,6 +1168,28 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A named menu's button is a comfortable click target and says what
+    /// it holds.
+    #[test]
+    fn a_named_menu_is_tall_enough_to_hit() {
+        let ctx = egui::Context::default();
+        let mut button = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            button = named_menu(ui, "All runs", |ui| ui.label("Copy all"))
+                .response
+                .rect;
+        });
+        out.textures_delta.clear();
+        assert!(button.height() >= TARGET_H, "{button:?}");
+        let mut label = false;
+        for c in &out.shapes {
+            if let egui::Shape::Text(t) = &c.shape {
+                label |= t.galley.text() == "All runs ▾";
+            }
+        }
+        assert!(label, "it says what's in it");
+    }
 
     /// Clicking the word Options unfolds the settings, as the arrow does,
     /// and clicking it again folds them.

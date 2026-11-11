@@ -21,4 +21,4 @@
 
 `prompt.txt` (also on the clipboard after saving) is written for exactly what's in the zip. It tells Claude to read `manifest.json` first, to run `/unifidump` on each UniFi export if there is one, then `/mapnetwork` with everything else, and, when an earlier map is included, to update that map under its original name rather than start a new one. The manifest's `mapnetwork_preflight` answers `/mapnetwork`'s pre-build question (site name, scan, firewall config, known problems, existing map, clients on the map or not), so Claude doesn't ask it again.
 
-Then open the `.dc.html` Claude makes on the Map (**⋯ › Open…**, or drop it there) or in Config Export; the bundle zip itself isn't read back (it says so if opened). See [Map → the /mapnetwork round trip](https://github.com/hammerknife404/is-alive/blob/main/Map#the-mapnetwork-round-trip).
+Then open the `.dc.html` Claude makes on the Map (**More › Open…**, or drop it there) or in Config Export; the bundle zip itself isn't read back (it says so if opened). See [Map → the /mapnetwork round trip](https://github.com/hammerknife404/is-alive/blob/main/Map#the-mapnetwork-round-trip).

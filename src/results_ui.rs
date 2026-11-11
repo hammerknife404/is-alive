@@ -295,7 +295,9 @@ impl App {
                 w,
                 "Filter: tool or text (FAIL, 443…)",
             )
-            .on_hover_text("Show runs containing this. Copy, Save and Export in ⋯ follow it");
+            .on_hover_text(
+                "Show runs containing this. Copy, Save and Export in All runs follow it",
+            );
             if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
                 self.filter.clear();
             }
@@ -340,12 +342,12 @@ impl App {
         clicked
     }
 
-    /// ⋯ at the top of the list: every run listed (the filter's), and
-    /// keeping them with the site.
+    /// All runs ▾ at the top of the list: every run listed (the filter's),
+    /// and keeping them with the site.
     fn runs_menu(&mut self, ui: &mut Ui, shown: &[usize]) {
         let mut clear = false;
         let mut keep_to = None;
-        ui.menu_button("⋯", |ui| {
+        widgets::named_menu(ui, "All runs", |ui| {
             ui.set_min_width(220.0);
             let filtered = !self.filter.trim().is_empty();
             let what = if filtered {

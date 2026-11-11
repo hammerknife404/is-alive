@@ -1,5 +1,5 @@
 //! The controls floating over the Map: the toolbar at the canvas's top left
-//! (find, the layout, Scan, undo and redo, the findings, ⋯ for the rest),
+//! (find, the layout, Scan, undo and redo, the findings, More for the rest),
 //! Layers, Legend and Export at its top right, and what the map needs to
 //! say (a plan, the accuracy note, a sweep's progress) under the toolbar.
 //! The canvas keeps the whole window; nothing sits in rows above it.
@@ -9,7 +9,7 @@ use super::*;
 /// Narrower than this, the layouts fold into one drop-down.
 const COMPACT: f32 = 980.0;
 /// Narrower than this beside a floating inspector (the smallest windows),
-/// Layers and Legend go into ⋯ too: there's room for the toolbar only.
+/// Layers and Legend go into More too: there's room for the toolbar only.
 const TIGHT: f32 = 460.0;
 /// Room around the controls, from the canvas's edges.
 const EDGE: f32 = 10.0;
@@ -117,7 +117,7 @@ impl MapView {
         act
     }
 
-    /// The toolbar folds the layouts into a drop-down and Export into ⋯:
+    /// The toolbar folds the layouts into a drop-down and Export into More:
     /// when the canvas `rect` is narrow with the inspector open, so picking a
     /// card (which opens it) doesn't change the toolbar; or with Layers open.
     fn compact(&self, rect: Rect, empty: bool) -> bool {
@@ -138,7 +138,7 @@ impl MapView {
         } else {
             220.0
         };
-        // Beside a floating inspector, not under it; in ⋯ when that leaves
+        // Beside a floating inspector, not under it; in More when that leaves
         // too little room.
         let beside = self.beside_panel(rect);
         let edge = beside.max.x;
@@ -177,7 +177,7 @@ impl MapView {
                         self.legend = !self.legend;
                     }
                 });
-                // On a narrow canvas Export is in ⋯ instead.
+                // On a narrow canvas Export is in More instead.
                 if !compact {
                     self.export_button(ui, empty);
                 }
@@ -267,7 +267,7 @@ impl MapView {
                 self.side = !self.side;
             }
         }
-        ui.menu_button("⋯", |ui| {
+        widgets::named_menu(ui, "More", |ui| {
             act = act.take().or(self.more_menu(ui, src, empty));
         })
         .response
@@ -385,7 +385,7 @@ impl MapView {
         .clicked()
     }
 
-    /// ⋯: everything the map does less often.
+    /// More: everything the map does less often.
     fn more_menu(&mut self, ui: &mut Ui, src: &Sources, empty: bool) -> Option<Action> {
         ui.set_min_width(220.0);
         let mut act = None;
@@ -682,7 +682,7 @@ impl MapView {
         act
     }
 
-    /// "Clear the map?", asked from ⋯ › Clear map….
+    /// "Clear the map?", asked from More › Clear map….
     fn clear_dialog(&mut self, ctx: &egui::Context) {
         if !self.ask_clear {
             return;
@@ -840,7 +840,7 @@ mod tests {
     }
 
     /// The Map's Open…, on a laptop and on the app's own opening size: in
-    /// ⋯ (also on an empty map) and on the empty map, each asking for
+    /// More (also on an empty map) and on the empty map, each asking for
     /// Config Export's dialog, with room for a trackpad.
     #[test]
     fn open_is_in_the_maps_menu_and_on_the_empty_map() {
@@ -870,11 +870,11 @@ mod tests {
                     shown = frame_at(&ctx, &mut v, &src, vec![], size);
                 }
                 assert_eq!(v.map.nodes.is_empty(), empty);
-                let (menu, _) = click_act(&ctx, &mut v, &src, at(&shown, "⋯"), size);
+                let (menu, _) = click_act(&ctx, &mut v, &src, at(&shown, "More ▾"), size);
                 let open = menu
                     .iter()
                     .find(|(s, _)| s == "Open…")
-                    .expect("Open… in ⋯")
+                    .expect("Open… in More")
                     .1;
                 // The menu's first item, inside the window.
                 assert!(
@@ -882,7 +882,10 @@ mod tests {
                     "{size:?}"
                 );
                 let (_, act) = click_act(&ctx, &mut v, &src, open.center(), size);
-                assert!(matches!(act, Some(Action::Open)), "⋯ › Open… at {size:?}");
+                assert!(
+                    matches!(act, Some(Action::Open)),
+                    "More › Open… at {size:?}"
+                );
                 if empty {
                     for _ in 0..2 {
                         shown = frame_at(&ctx, &mut v, &src, vec![], size);
@@ -923,7 +926,7 @@ mod tests {
     }
 
     /// Everything that left the rows above the map is still there: in
-    /// the toolbar, under ⋯, or behind Layers, on a laptop-sized window.
+    /// the toolbar, under More, or behind Layers, on a laptop-sized window.
     #[test]
     fn what_left_the_rows_above_the_map_is_one_click_away() {
         let ctx = egui::Context::default();
@@ -950,7 +953,7 @@ mod tests {
         assert!(!v.side && !v.legend);
         // On a laptop the layouts are one drop-down (it shows the one in
         // use), so the toolbar has room beside a card's inspector.
-        for label in ["Cluster", "Layers", "Legend", "⋯"] {
+        for label in ["Cluster", "Layers", "Legend", "More ▾"] {
             at(&shown, label);
         }
         assert!(
@@ -959,7 +962,7 @@ mod tests {
         );
         // The toolbar sits on the canvas's top edge: nothing is above the map.
         assert!(at(&shown, "Cluster").y < 60.0);
-        let menu = click(&ctx, &mut v, &src, at(&shown, "⋯"));
+        let menu = click(&ctx, &mut v, &src, at(&shown, "More ▾"));
         for label in [
             "Open…",
             "Re-layout",
