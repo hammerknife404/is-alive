@@ -49,7 +49,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN. Results opens to show them. (Speed Test runs from its own tab.)";
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Tab {
     Ping,
     Ports,
@@ -92,7 +92,7 @@ const TABS: &[(Tab, &str, &str)] = &[
     (
         Tab::Export,
         "Configs",
-        "Convert UniFi and SonicWall configs to JSON for the skills; open /mapnetwork maps",
+        "Convert UniFi, SonicWall and Meraki configs to JSON for the skills; open /mapnetwork and saved maps",
     ),
     (
         Tab::Map,
@@ -341,7 +341,24 @@ impl App {
         self.was_sweeping = sweeping;
         self.dns.poll();
         self.advanced.poll();
-        self.export.poll();
+        self.export.poll(ctx);
+        // Files the user opened are in: a saved map on show gives way to
+        // the live map, which has them.
+        if self.export.take_opened() && self.map.show_live() {
+            widgets::toast(
+                "The Map is back on Live to show what you opened (saved maps stay in Saved maps)",
+                true,
+            );
+        }
+        // Read from another tab (the Map's Open…, a drop on it, a site's
+        // configs): what Config Export would say, said here. Reload says
+        // its own.
+        let notices = self.export.take_notices();
+        if self.tab != Tab::Export && !self.reloading {
+            for (text, good) in notice_toasts(notices) {
+                widgets::toast(text, good);
+            }
+        }
         // A saved map opened in Config Export or dropped: the Map shows it.
         for (path, data) in self.export.take_saved_maps() {
             match self.map.open_file(&path, &data) {
@@ -587,12 +604,17 @@ impl App {
         }
     }
 
-    /// Files dropped anywhere on the window go to Config Export; while they
-    /// hover, say so.
+    /// Files dropped on the window go where they make sense on this tab
+    /// (`route_drop`); while they hover, say where.
     fn dropped_files(&mut self, ctx: &egui::Context) {
-        let (hovering, dropped) = ctx.input(|i| {
+        let (hovering, hovered, dropped) = ctx.input(|i| {
             (
                 !i.raw.hovered_files.is_empty(),
+                i.raw
+                    .hovered_files
+                    .iter()
+                    .filter_map(|f| f.path.clone())
+                    .collect::<Vec<_>>(),
                 i.raw
                     .dropped_files
                     .iter()
@@ -600,9 +622,22 @@ impl App {
                     .collect::<Vec<_>>(),
             )
         });
-        if !dropped.is_empty() && !self.export.is_running() {
-            self.tab = Tab::Export;
-            self.export.open(ctx, dropped);
+        if !dropped.is_empty() {
+            let (notes, export, show) = route_drop(self.tab, dropped);
+            if !notes.is_empty() && !export.is_empty() {
+                widgets::toast(
+                    format!(
+                        "Photos and notes go into Notes; {} other file{} to Config Export",
+                        export.len(),
+                        if export.len() == 1 { "" } else { "s" }
+                    ),
+                    true,
+                );
+            }
+            self.notes.open_files(ctx, notes);
+            // Read now, or right after the read under way.
+            self.export.open(ctx, export);
+            self.tab = show;
         }
         let fade = ctx.animate_bool(egui::Id::new("drop_fade"), hovering);
         if fade > 0.0 {
@@ -616,13 +651,29 @@ impl App {
                 0.0,
                 egui::Color32::from_black_alpha((180.0 * fade) as u8),
             );
-            p.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Drop a UniFi backup, SonicWall export or report, /mapnetwork map, or saved map",
-                egui::FontId::proportional(18.0),
-                egui::Color32::WHITE.gamma_multiply(fade),
-            );
+            let (what, to) = drop_hint(self.tab, &hovered);
+            let white = egui::Color32::WHITE.gamma_multiply(fade);
+            let wrap = (rect.width() - 64.0).max(200.0);
+            let line = |text: &str, size: f32, colour: egui::Color32| {
+                let mut job = egui::text::LayoutJob::simple(
+                    text.to_string(),
+                    egui::FontId::proportional(size),
+                    colour,
+                    wrap,
+                );
+                job.halign = egui::Align::Center;
+                p.layout_job(job)
+            };
+            let what = line(what, 18.0, white);
+            let to = line(to, 15.0, white.gamma_multiply(0.8));
+            let h = what.rect.height() + 8.0 + to.rect.height();
+            let mut y = rect.center().y - h / 2.0;
+            for g in [what, to] {
+                let x = rect.center().x - g.rect.center().x;
+                let next = y + g.rect.height() + 8.0;
+                p.galley(egui::pos2(x, y), g, white);
+                y = next;
+            }
         }
     }
 
@@ -660,7 +711,8 @@ impl App {
                     self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
                 }
             }
-            Some(Action::Export) => self.tab = Tab::Export,
+            // Config Export's dialog; the Map stays on screen and redraws.
+            Some(Action::Open) => self.export.open_dialog(ctx),
             Some(Action::Ping(ip)) => {
                 self.ping.run(ctx, &ip, 4);
                 self.tab = Tab::Ping;
@@ -714,7 +766,7 @@ impl App {
                         false,
                     );
                 } else {
-                    self.export.open(ctx, files);
+                    self.export.reopen(ctx, files);
                     self.reloading = true;
                 }
             }
@@ -921,6 +973,92 @@ fn tab_key(n: usize) -> Option<usize> {
     }
 }
 
+/// Where a file dropped on the window goes.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Target {
+    /// Into Notes, as its own Open… takes it: a photo, or notes.
+    Notes,
+    /// Config Export reads it while the Map stays on screen and redraws
+    /// (a saved map opens on the Map).
+    Map,
+    /// Config Export reads it, and comes on screen to show it.
+    Export,
+}
+
+/// Where `path`, dropped on `tab`, goes: on Notes a photo or notes stay
+/// there; on the Map configs and maps open and the Map stays; anything
+/// else is Config Export's, which shows it.
+fn drop_target(tab: Tab, path: &std::path::Path) -> Target {
+    match tab {
+        Tab::Notes if tools::notes::takes_drop(path) => Target::Notes,
+        Tab::Map => Target::Map,
+        _ => Target::Export,
+    }
+}
+
+/// Files dropped on `tab`, split by where they go: (Notes', Config
+/// Export's, the tab to show then). Config Export comes on screen to show
+/// what it reads, unless the Map redraws with it, or Notes took some of the
+/// files.
+fn route_drop(
+    tab: Tab,
+    paths: Vec<std::path::PathBuf>,
+) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>, Tab) {
+    let (notes, export): (Vec<_>, Vec<_>) = paths
+        .into_iter()
+        .partition(|p| drop_target(tab, p) == Target::Notes);
+    let shows = !export.is_empty()
+        && notes.is_empty()
+        && export.iter().all(|p| drop_target(tab, p) == Target::Export);
+    (notes, export, if shows { Tab::Export } else { tab })
+}
+
+/// What the drop overlay says on `tab`: what can be dropped, and where it
+/// goes (by the files hovering, when the system names them before the drop).
+fn drop_hint(tab: Tab, hovered: &[std::path::PathBuf]) -> (&'static str, &'static str) {
+    const KINDS: &str = "Drop a UniFi backup, SonicWall export or report, Meraki export, \
+                         /mapnetwork map or saved map";
+    let notes = hovered.iter().any(|p| drop_target(tab, p) == Target::Notes);
+    let other = hovered.iter().any(|p| drop_target(tab, p) != Target::Notes);
+    match tab {
+        Tab::Notes if notes && !other => (
+            "Drop a photo or notes",
+            "Into Notes, as File › Open… adds it",
+        ),
+        Tab::Notes if other && !notes => (KINDS, "Config Export opens to read it"),
+        Tab::Notes => (
+            "Drop a photo or notes (.md, .txt), or a config or map",
+            "Photos and notes go into Notes; configs and maps to Config Export",
+        ),
+        Tab::Map => (
+            KINDS,
+            "The Map stays on screen and redraws with it (Meraki configs open in Config \
+             Export: the Map doesn't draw them)",
+        ),
+        Tab::Export => (KINDS, "Config Export reads it"),
+        _ => (KINDS, "Config Export opens to read it"),
+    }
+}
+
+/// Config Export's notices as toasts: good news as it is, and of the files
+/// that couldn't be read the first two, then how many more.
+fn notice_toasts(notices: Vec<(String, bool)>) -> Vec<(String, bool)> {
+    let (good, bad): (Vec<_>, Vec<_>) = notices.into_iter().partition(|n| n.1);
+    let more = bad.len().saturating_sub(2);
+    let mut out = good;
+    out.extend(bad.into_iter().take(2));
+    if more > 0 {
+        out.push((
+            format!(
+                "…and {more} more file{} couldn't be opened: Config Export says why",
+                if more == 1 { "" } else { "s" }
+            ),
+            false,
+        ));
+    }
+    out
+}
+
 /// Window and taskbar icon; the same artwork is in the .exe and the AppImage.
 fn icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png"))
@@ -1053,8 +1191,9 @@ fn main() {
             app.export.set_clients(app.look.unifi_clients);
             widgets::set_save_dir(app.look.save_dir.clone(), app.look.save_by_site);
             app.load_results();
-            // The site opens as it was left: its configs read again.
-            if app.shots.is_none() && files.is_empty() {
+            // The site opens as it was left: its configs read again (and
+            // then any files it was opened with, below, which join them).
+            if app.shots.is_none() {
                 app.reopen_site_configs(&cc.egui_ctx);
                 site::touch();
             }
@@ -1065,7 +1204,8 @@ fn main() {
             if app.look.updates_on_start && app.shots.is_none() {
                 app.check_updates(&cc.egui_ctx, false);
             }
-            // Files named on the command line ("Open with") go to Config Export.
+            // Files named on the command line ("Open with") go to Config
+            // Export, read after the site's own: the site's list grows.
             if !files.is_empty() {
                 app.tab = Tab::Export;
                 app.export.open(&cc.egui_ctx, files);
@@ -1084,6 +1224,111 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::{Tab, Target, drop_hint, drop_target, notice_toasts, route_drop};
+    use std::path::{Path, PathBuf};
+
+    /// Where a dropped file goes, by the tab it's dropped on.
+    #[test]
+    fn a_drop_goes_where_it_makes_sense_on_its_tab() {
+        let to = |tab, f: &str| drop_target(tab, Path::new(f));
+        // Notes takes photos and notes, as its Open… would; the rest is
+        // Config Export's.
+        for f in ["rack.jpg", "label.PNG", "x.webp", "visit.md", "visit.txt"] {
+            assert_eq!(to(Tab::Notes, f), Target::Notes, "{f}");
+        }
+        for f in [
+            "backup.unf",
+            "fw.exp",
+            "acme.dc.html",
+            "saved.json",
+            "bundle.zip",
+        ] {
+            assert_eq!(to(Tab::Notes, f), Target::Export, "{f}");
+        }
+        // On the Map, configs and maps open there (a .dc.html too); a photo
+        // isn't Notes' from the Map.
+        for f in [
+            "backup.unf",
+            "fw.wri",
+            "acme.dc.html",
+            "saved.json",
+            "rack.jpg",
+        ] {
+            assert_eq!(to(Tab::Map, f), Target::Map, "{f}");
+        }
+        for tab in [Tab::Export, Tab::Ping, Tab::Sweep, Tab::Results] {
+            assert_eq!(to(tab, "rack.jpg"), Target::Export, "{tab:?}");
+            assert_eq!(to(tab, "backup.unf"), Target::Export, "{tab:?}");
+        }
+    }
+
+    /// Which tab shows after a drop: the Map stays, Notes stays when it
+    /// took a file, and elsewhere Config Export comes on screen.
+    #[test]
+    fn a_drop_shows_where_it_went() {
+        let p = |v: &[&str]| v.iter().map(PathBuf::from).collect::<Vec<_>>();
+        let (n, e, show) = route_drop(Tab::Map, p(&["a.unf", "b.dc.html"]));
+        assert!(n.is_empty());
+        assert_eq!(e, p(&["a.unf", "b.dc.html"]));
+        assert_eq!(show, Tab::Map);
+        let (n, e, show) = route_drop(Tab::Notes, p(&["rack.jpg", "a.unf", "visit.md"]));
+        assert_eq!(n, p(&["rack.jpg", "visit.md"]));
+        assert_eq!(e, p(&["a.unf"]));
+        assert_eq!(show, Tab::Notes, "Notes took some: it stays");
+        let (n, e, show) = route_drop(Tab::Notes, p(&["a.unf"]));
+        assert!(n.is_empty() && e.len() == 1);
+        assert_eq!(show, Tab::Export);
+        let (_, _, show) = route_drop(Tab::Ping, p(&["rack.jpg"]));
+        assert_eq!(show, Tab::Export, "as before: Config Export says why");
+        let (_, _, show) = route_drop(Tab::Export, p(&["a.unf"]));
+        assert_eq!(show, Tab::Export);
+    }
+
+    /// The overlay names Meraki, and says where the drop goes on this tab.
+    #[test]
+    fn the_drop_overlay_says_where_it_goes() {
+        let none: &[PathBuf] = &[];
+        for tab in [Tab::Ping, Tab::Export, Tab::Map] {
+            let (what, _) = drop_hint(tab, none);
+            for kind in ["UniFi", "SonicWall", "Meraki", "/mapnetwork", "saved map"] {
+                assert!(what.contains(kind), "{kind} missing on {tab:?}: {what}");
+            }
+        }
+        assert!(
+            drop_hint(Tab::Map, none)
+                .1
+                .starts_with("The Map stays on screen")
+        );
+        assert!(drop_hint(Tab::Ping, none).1.contains("Config Export opens"));
+        let photo = [PathBuf::from("rack.jpg")];
+        assert_eq!(
+            drop_hint(Tab::Notes, &photo).1,
+            "Into Notes, as File › Open… adds it"
+        );
+        let backup = [PathBuf::from("a.unf")];
+        assert!(drop_hint(Tab::Notes, &backup).1.contains("Config Export"));
+    }
+
+    /// Many files that couldn't be read are two toasts and a count, not one
+    /// each.
+    #[test]
+    fn many_failures_are_told_in_short() {
+        let n = |s: &str, ok| (s.to_string(), ok);
+        let out = notice_toasts(vec![
+            n("Couldn't open a", false),
+            n("x.json is open in Config Export", true),
+            n("Couldn't open b", false),
+            n("Couldn't open c", false),
+            n("Couldn't open d", false),
+        ]);
+        assert_eq!(out.len(), 4);
+        assert!(out[0].1);
+        assert_eq!(
+            out[3].0,
+            "…and 2 more files couldn't be opened: Config Export says why"
+        );
+    }
+
     #[test]
     fn icon_decodes() {
         let i = super::icon();

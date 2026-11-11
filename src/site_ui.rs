@@ -460,6 +460,9 @@ impl App {
             Some("Stop the running tools first.")
         } else if self.export.is_running() {
             Some("Wait for Config Export to finish reading.")
+        } else if self.export.picking() {
+            // What's picked would open in the next site.
+            Some("Pick the files to open, or cancel, first.")
         } else if self.bundle.is_running() {
             Some("Wait for the Site Bundle to be saved.")
         } else {
@@ -473,9 +476,7 @@ impl App {
         let Some(m) = site::meta() else { return };
         let (here, gone): (Vec<PathBuf>, Vec<PathBuf>) =
             m.configs.into_iter().partition(|p| p.is_file());
-        if !here.is_empty() {
-            self.export.open(ctx, here);
-        }
+        self.export.reopen(ctx, here);
         if !gone.is_empty() {
             let names: Vec<String> = gone
                 .iter()

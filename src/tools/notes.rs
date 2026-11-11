@@ -84,8 +84,10 @@ pub struct NotesTool {
     find: Option<FindBar>,
     /// Scroll the editor to this character on the next frame.
     scroll_to: Option<usize>,
-    /// A Markdown or text file opened: asking where it goes.
-    asking: Option<Viewed>,
+    /// Markdown or text files opened: asking where each goes, first first.
+    asking: Vec<Viewed>,
+    /// Files dropped here waiting for the one being read.
+    queued: Vec<PathBuf>,
 }
 
 /// Find and Replace over the notes.
@@ -285,6 +287,35 @@ fn read_text(path: &std::path::Path) -> Result<Viewed, String> {
     })
 }
 
+/// `p`'s extension is one of `exts` (any case).
+fn has_ext(p: &std::path::Path, exts: &[&str]) -> bool {
+    p.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| exts.contains(&s.to_ascii_lowercase().as_str()))
+}
+
+const PHOTO_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp"];
+const NOTES_EXTS: &[&str] = &["md", "markdown", "txt"];
+
+/// A file dropped on the Notes tab that Notes takes, as its Open… would:
+/// a photo, or notes (Markdown or text). Anything else goes to Config
+/// Export.
+pub fn takes_drop(p: &std::path::Path) -> bool {
+    has_ext(p, PHOTO_EXTS) || has_ext(p, NOTES_EXTS)
+}
+
+/// Read a file Open… picked (or one dropped here): a photo goes into the
+/// notes, notes ask where they go, anything else opens to read.
+fn read_opened(p: &std::path::Path) -> Result<Opened, String> {
+    if has_ext(p, PHOTO_EXTS) {
+        crate::photos::import(p).map(Opened::Photo)
+    } else if has_ext(p, NOTES_EXTS) {
+        read_text(p).map(Opened::Notes)
+    } else {
+        read_text(p).map(Opened::Text)
+    }
+}
+
 fn path() -> Option<PathBuf> {
     Some(crate::site::dir()?.join("notes.md"))
 }
@@ -349,7 +380,8 @@ impl Default for NotesTool {
             save_asked: false,
             find: None,
             scroll_to: None,
-            asking: None,
+            asking: Vec::new(),
+            queued: Vec::new(),
         };
         if unclean {
             notes.write();
@@ -834,7 +866,7 @@ impl NotesTool {
     /// A Markdown or text file opened: replace the notes with it, add it at
     /// the end, or just read it.
     fn ask_where(&mut self, ctx: &egui::Context, now: f64) {
-        let Some(v) = &self.asking else { return };
+        let Some(v) = self.asking.first() else { return };
         let name = crate::tools::export::file_name(&v.path);
         let mut choice = None;
         let r = egui::Modal::new(egui::Id::new("notes_open_where")).show(ctx, |ui| {
@@ -871,11 +903,11 @@ impl NotesTool {
         });
         match choice {
             Some(2) => {
-                self.file = self.asking.take();
+                self.file = Some(self.asking.remove(0));
                 self.on_file = true;
             }
             Some(how) => {
-                let v = self.asking.take().expect("asked");
+                let v = self.asking.remove(0);
                 let incoming = crate::input::Field::Notes.clean(&self.photos.compact(&v.text));
                 let joined = if how == 0 || self.text.trim().is_empty() {
                     incoming
@@ -898,7 +930,9 @@ impl NotesTool {
                     widgets::toast(format!("{name} is in Notes"), true);
                 }
             }
-            None if r.should_close() => self.asking = None,
+            None if r.should_close() => {
+                self.asking.remove(0);
+            }
             None => {}
         }
     }
@@ -1110,31 +1144,34 @@ impl NotesTool {
         }
         self.known_hits = hits.len();
 
-        let mut opened = None;
-        crate::job::pump(&mut self.opening, |r| opened = Some(r));
-        match opened {
-            Some(Ok(Opened::Text(v))) => {
-                self.file = Some(v);
-                self.on_file = true;
-            }
-            Some(Ok(Opened::Notes(v))) => self.asking = Some(v),
-            Some(Ok(Opened::Photo(markdown))) => {
-                if self.photos.expand(&self.text).chars().count() + markdown.len()
-                    > crate::input::Field::Notes.max()
-                {
-                    self.err = Some(
-                        "This photo exceeds the notes capacity. Choose a smaller image.".into(),
-                    );
-                } else {
-                    self.text.push_str(&self.photos.compact(&markdown));
-                    self.changed(now);
-                    self.on_file = false;
-                    self.view = View::Preview;
+        let mut opened = Vec::new();
+        crate::job::pump(&mut self.opening, |r| opened.push(r));
+        for r in opened {
+            match r {
+                Ok(Opened::Text(v)) => {
+                    self.file = Some(v);
+                    self.on_file = true;
                 }
+                Ok(Opened::Notes(v)) => self.asking.push(v),
+                Ok(Opened::Photo(markdown)) => {
+                    if self.photos.expand(&self.text).chars().count() + markdown.len()
+                        > crate::input::Field::Notes.max()
+                    {
+                        self.err = Some(
+                            "This photo exceeds the notes capacity. Choose a smaller image.".into(),
+                        );
+                    } else {
+                        self.text.push_str(&self.photos.compact(&markdown));
+                        self.changed(now);
+                        self.on_file = false;
+                        self.view = View::Preview;
+                    }
+                }
+                Err(e) => self.err = Some(e),
             }
-            Some(Err(e)) => self.err = Some(e),
-            None => {}
         }
+        // Files dropped while one was being read: their turn now.
+        self.read_queued(&ctx);
         // The outline down the left, top to bottom: open on a wide window
         // until closed, shut on a laptop until opened.
         let wide = ui.ctx().content_rect().width() >= 1440.0;
@@ -1881,19 +1918,28 @@ impl NotesTool {
                 .add_filter("All files", &["*"])
                 .pick_file();
             if let Some(p) = picked {
-                let photo = p.extension().and_then(|s| s.to_str()).is_some_and(|s| {
-                    ["png", "jpg", "jpeg", "webp"].contains(&s.to_ascii_lowercase().as_str())
-                });
-                let notes = p.extension().and_then(|s| s.to_str()).is_some_and(|s| {
-                    ["md", "markdown", "txt"].contains(&s.to_ascii_lowercase().as_str())
-                });
-                tx.send(if photo {
-                    crate::photos::import(&p).map(Opened::Photo)
-                } else if notes {
-                    read_text(&p).map(Opened::Notes)
-                } else {
-                    read_text(&p).map(Opened::Text)
-                });
+                tx.send(read_opened(&p));
+            }
+        }));
+    }
+
+    /// Photos and notes dropped on the Notes tab (see `takes_drop`): each
+    /// read as Open… reads one, after any file being read now.
+    pub fn open_files(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        self.queued.extend(paths);
+        self.read_queued(ctx);
+    }
+
+    /// Start reading the files waiting, unless a file is being read.
+    fn read_queued(&mut self, ctx: &egui::Context) {
+        if self.opening.is_some() || self.queued.is_empty() {
+            return;
+        }
+        let paths = std::mem::take(&mut self.queued);
+        self.err = None;
+        self.opening = Some(Job::spawn(ctx, move |tx| {
+            for p in paths {
+                tx.send(read_opened(&p));
             }
         }));
     }
@@ -2495,8 +2541,64 @@ mod tests {
             save_asked: false,
             find: None,
             scroll_to: None,
-            asking: None,
+            asking: Vec::new(),
+            queued: Vec::new(),
         }
+    }
+
+    /// Dropped on Notes, a photo or notes go into Notes as Open… takes
+    /// them; anything else is Config Export's.
+    #[test]
+    fn notes_takes_photos_and_notes_dropped_on_it() {
+        use std::path::Path;
+        for f in [
+            "rack.JPG",
+            "label.jpeg",
+            "panel.png",
+            "x.webp",
+            "visit.md",
+            "log.txt",
+        ] {
+            assert!(takes_drop(Path::new(f)), "{f}");
+        }
+        for f in [
+            "backup.unf",
+            "fw.exp",
+            "acme.dc.html",
+            "map.json",
+            "bundle.zip",
+            "noext",
+        ] {
+            assert!(!takes_drop(Path::new(f)), "{f}");
+        }
+    }
+
+    /// Notes dropped together are each asked about in turn, and a file
+    /// dropped while another is read waits for it.
+    #[test]
+    fn notes_dropped_together_are_asked_about_in_turn() {
+        let dir = std::env::temp_dir().join(format!("is-alive-notes-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.md"), dir.join("b.txt"));
+        std::fs::write(&a, "# A\n").unwrap();
+        std::fs::write(&b, "b\n").unwrap();
+        let ctx = egui::Context::default();
+        let mut n = notes("");
+        n.open_files(&ctx, vec![a.clone()]);
+        n.open_files(&ctx, vec![b.clone()]);
+        assert_eq!(n.queued, std::slice::from_ref(&b), "waits for a.md");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while n.asking.len() < 2 {
+            assert!(std::time::Instant::now() < end, "still reading");
+            let mut look = crate::theme::Settings::default();
+            let info = HostInfo::default();
+            let mut out = ctx.run_ui(Default::default(), |ui| n.ui(ui, &info, &mut look));
+            out.textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let names: Vec<&PathBuf> = n.asking.iter().map(|v| &v.path).collect();
+        assert_eq!(names, [&a, &b]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

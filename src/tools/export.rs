@@ -145,6 +145,13 @@ impl Slot {
     }
 }
 
+/// Files to read, waiting for the read under way. `user`: opened by the
+/// user (a pick, a drop, Open with), not a site's own configs read again.
+struct Batch {
+    paths: Vec<PathBuf>,
+    user: bool,
+}
+
 enum Ev {
     Picked(PathBuf),
     Done(PathBuf, Box<Result<Export, String>>),
@@ -180,7 +187,26 @@ pub struct ExportTool {
     unread: Vec<PathBuf>,
     /// Saved maps opened here or dropped, for the Map tab to take.
     saved_maps: Vec<(PathBuf, Vec<u8>)>,
+    /// Open…'s file dialog while it's open. The files picked are read as
+    /// a drop is: at once, or after the read under way.
+    picking: Option<Job<Vec<PathBuf>>>,
+    /// Reads waiting for the one under way to finish, in the order asked.
+    queued: Vec<Batch>,
+    /// The read under way is the user's (see `Batch`).
+    user: bool,
+    /// A file the user opened that the Map draws has been read, since
+    /// `take_opened` last asked.
+    opened: bool,
+    /// What to tell a user who isn't looking at this tab, since
+    /// `take_notices` last asked: each file that couldn't be read, and a
+    /// Meraki config opened (the Map doesn't draw it). (text, good news).
+    notices: Vec<(String, bool)>,
 }
+
+/// What a Site Bundle opened here (one with no /mapnetwork map in it yet)
+/// is, and what to open instead.
+pub const BUNDLE: &str = "that's a Site Bundle (made for Claude). Open the backups and exports it \
+was made from, or the map Claude made from it (a .dc.html)";
 
 /// Largest SonicWall, Meraki or map file read; only a UniFi backup (whose
 /// database can run to hundreds of MB) may be bigger.
@@ -233,11 +259,7 @@ file this reads",
         .flatten()
         .is_some_and(|(_, m)| String::from_utf8_lossy(&m).contains("is-alive site bundle"))
     {
-        return Err(
-            "this site bundle has no /mapnetwork map in it yet: open the .dc.html \
-Claude made from it, or a zip you saved it into"
-                .into(),
-        );
+        return Err(BUNDLE.into());
     }
     if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
@@ -394,39 +416,97 @@ impl ExportTool {
         })
     }
 
-    pub fn poll(&mut self) -> bool {
+    /// Once a frame: the files the dialog gave, what the read under way
+    /// found, and the next read waiting. True while one is under way.
+    pub fn poll(&mut self, ctx: &egui::Context) -> bool {
+        let mut picked = None;
+        pump(&mut self.picking, |p| picked = Some(p));
+        if let Some(paths) = picked {
+            self.open(ctx, paths);
+        }
         let mut loaded = false;
+        let user = self.user;
         let running = pump(&mut self.job, |ev| match ev {
             Ev::Picked(p) => self.pending = Some(p),
             Ev::Done(path, r) => match *r {
                 Ok(export) => {
                     note_unread(&mut self.unread, &path, true);
+                    if user {
+                        if let Export::Meraki(_) = export {
+                            self.notices.push((
+                                format!(
+                                    "{} is open in Config Export. Meraki configs go into the \
+                                     Site Bundle and JSON for Claude; the Map doesn't draw them",
+                                    file_name(&path)
+                                ),
+                                true,
+                            ));
+                        } else {
+                            self.opened = true;
+                        }
+                    }
                     self.shown = land(&mut self.slots, path, export);
                     loaded = true;
                 }
                 Err(e) => {
                     self.failed.push(file_name(&path));
                     note_unread(&mut self.unread, &path, false);
-                    add_err(&mut self.err, format!("{}: {e}", file_name(&path)));
+                    let e = format!("{}: {e}", file_name(&path));
+                    self.notices.push((format!("Couldn't open {e}"), false));
+                    add_err(&mut self.err, e);
                 }
             },
-            Ev::Failed(e) => add_err(&mut self.err, e),
+            Ev::Failed(e) => {
+                self.notices.push((e.clone(), false));
+                add_err(&mut self.err, e);
+            }
             Ev::SavedMap(path, data) => self.saved_maps.push((path, data)),
         });
         if loaded {
             self.gather_secrets();
             self.generation += 1;
         }
-        if !running {
-            self.pending = None;
+        if running {
+            return true;
         }
-        running
+        self.pending = None;
+        // The next read waiting: its errors join this one's.
+        if !self.queued.is_empty() {
+            let b = self.queued.remove(0);
+            self.start(ctx, b.paths, b.user);
+            return true;
+        }
+        false
     }
 
     /// A saved map the Map couldn't open: said here with the other files
-    /// that couldn't be read.
+    /// that couldn't be read (the Map says so itself).
     pub fn refused(&mut self, path: &Path, e: &str) {
         add_err(&mut self.err, format!("{}: {e}", file_name(path)));
+    }
+
+    /// True once after a file the user opened (not a site's own configs
+    /// read again) has been read, if the Map draws it: a saved map on show
+    /// gives way to the live map, which has it.
+    pub fn take_opened(&mut self) -> bool {
+        std::mem::take(&mut self.opened)
+    }
+
+    /// What to tell the user if they aren't looking at Config Export: each
+    /// file that couldn't be read and why, and Meraki configs opened. Taken
+    /// every frame, so nothing old is told later.
+    pub fn take_notices(&mut self) -> Vec<(String, bool)> {
+        std::mem::take(&mut self.notices)
+    }
+
+    /// Open…'s file dialog is open.
+    pub fn picking(&self) -> bool {
+        self.picking.is_some()
+    }
+
+    /// The name of the file being read now, if one is.
+    pub fn reading(&self) -> Option<String> {
+        self.pending.as_deref().map(file_name)
     }
 
     /// Saved maps opened or dropped since last asked, for the Map tab.
@@ -477,6 +557,7 @@ impl ExportTool {
     /// secrets it was told of.
     pub fn clear(&mut self) {
         self.job = None;
+        self.queued.clear();
         self.pending = None;
         self.slots.clear();
         self.unread.clear();
@@ -526,34 +607,62 @@ impl ExportTool {
         self.open(ctx, vec![crate::skills::example_path(i)]);
     }
 
-    /// Convert files dropped on the window or picked elsewhere.
+    /// Convert files the user opened: dropped on the window, picked, or
+    /// named on the command line. While another read is under way they
+    /// wait their turn, and are read right after it.
     pub fn open(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
-        if !self.is_running() && !paths.is_empty() {
-            self.start(ctx, Some(paths));
-        }
+        self.read(ctx, paths, true);
     }
 
-    /// Convert `paths` one after another, or ask for files first when None.
-    /// Each lands in a slot of its own, so every backup and export picked
-    /// together shows, and the Map and Site Bundle take them all.
-    fn start(&mut self, ctx: &egui::Context, paths: Option<Vec<PathBuf>>) {
+    /// Read a site's own configs again (on start, a site switch, Reload):
+    /// as `open`, but no saved map on show gives way for them.
+    pub fn reopen(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        self.read(ctx, paths, false);
+    }
+
+    fn read(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, user: bool) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.is_running() {
+            self.queued.push(Batch { paths, user });
+            return;
+        }
         self.err = None;
         self.failed.clear();
+        self.start(ctx, paths, user);
+    }
+
+    /// Open…: the file dialog, with every kind this reads (from here, or
+    /// from the Map). What's picked is read as a drop is.
+    pub fn open_dialog(&mut self, ctx: &egui::Context) {
+        if self.picking.is_some() {
+            return;
+        }
+        self.picking = Some(Job::spawn(ctx, |tx| {
+            let picked = rfd::FileDialog::new()
+                .set_title("Open a backup, export or map")
+                .add_filter(
+                    "UniFi or SonicWall backup, Meraki config, /mapnetwork map or saved map",
+                    &[
+                        "unf", "unifi", "exp", "wri", "json", "html", "htm", "zip", "gz", "txt",
+                    ],
+                )
+                .add_filter("All files", &["*"])
+                .pick_files();
+            if let Some(paths) = picked {
+                tx.send(paths);
+            }
+        }));
+    }
+
+    /// Convert `paths` one after another. Each lands in a slot of its own,
+    /// so every backup and export picked together shows, and the Map and
+    /// Site Bundle take them all.
+    fn start(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>, user: bool) {
+        self.user = user;
         let clients = self.clients;
         self.job = Some(Job::spawn(ctx, move |tx| {
-            let Some(paths) = paths.or_else(|| {
-                rfd::FileDialog::new()
-                    .set_title("Open config export")
-                    .add_filter(
-                        "UniFi backup, SonicWall or Meraki config, or /mapnetwork map",
-                        &[
-                            "unf", "unifi", "exp", "wri", "json", "html", "htm", "zip", "gz", "txt",
-                        ],
-                    )
-                    .pick_files()
-            }) else {
-                return;
-            };
             let more = paths.len().saturating_sub(OPEN_MAX);
             for path in paths.into_iter().take(OPEN_MAX) {
                 tx.send(Ev::Picked(path.clone()));
@@ -576,17 +685,18 @@ impl ExportTool {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) {
-        let running = self.poll();
+        let running = self.poll(ui.ctx());
 
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!running, egui::Button::new("Open file…"))
+                .add_enabled(!self.picking(), egui::Button::new("Open file…"))
                 .on_hover_text(
-                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, Meraki API .json (or a zip of them), or a /mapnetwork .dc.html. Several at once, or drop them on the window",
+                    "UniFi .unf / .unifi / db.gz, SonicWall .exp / .wri, Meraki API .json (or a zip of them), a /mapnetwork .dc.html, or a saved map's .json. Several at once, or drop them on the window",
                 )
+                .on_disabled_hover_text("The file dialog is open")
                 .clicked()
             {
-                self.start(ui.ctx(), None);
+                self.open_dialog(ui.ctx());
             }
             let toggled = ui
                 .add_enabled_ui(!running, |ui| {
@@ -596,9 +706,7 @@ impl ExportTool {
             if toggled {
                 // Every UniFi backup open is read again with the new setting.
                 let backups: Vec<PathBuf> = self.unifis().map(|(p, _)| p.clone()).collect();
-                if !backups.is_empty() {
-                    self.start(ui.ctx(), Some(backups));
-                }
+                self.reopen(ui.ctx(), backups);
             }
             if let Some(p) = &self.pending {
                 widgets::spinner(ui);
@@ -616,13 +724,15 @@ impl ExportTool {
                 && widgets::empty_state(
                     ui,
                     "Convert a config",
-                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, or a /mapnetwork map. \
-                     The result is sanitized JSON for the skills, and it feeds the Map.",
-                    &[("Open file…", "Pick one or more files", true)],
+                    "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, a /mapnetwork \
+                     map or a saved map. The result is sanitized JSON for the skills. UniFi, SonicWall \
+                     and /mapnetwork files draw the Map too; Meraki configs go into the Site Bundle \
+                     and JSON for Claude, but aren't drawn on the Map.",
+                    &[("Open file…", "Pick one or more files", !self.picking())],
                 )
                 .is_some()
             {
-                self.start(ui.ctx(), None);
+                self.open_dialog(ui.ctx());
             }
             return;
         }
@@ -681,6 +791,12 @@ impl ExportTool {
         let mut clear = None;
         if let Some(Slot { path, export: r }) = self.slots.get(self.shown) {
             ui.label(egui::RichText::new(r.headline()).strong());
+            if let Export::Meraki(_) = r {
+                ui.weak(
+                    "Not drawn on the Map: Meraki configs go into the Site Bundle and Save JSON, \
+                     for Claude",
+                );
+            }
             ui.horizontal(|ui| {
                 if ui.button("Save JSON…").on_hover_text(r.hint()).clicked() {
                     let stem = path
@@ -771,11 +887,92 @@ mod tests {
         assert_eq!(kind(&convert(z, unifi::Clients::None)), "/mapnetwork map");
     }
 
+    /// A Site Bundle is made for Claude, not read back: opened, it says
+    /// what it is and what to open instead. One holding the map Claude made
+    /// opens that map (above).
     #[test]
     fn a_site_bundle_without_a_map_says_what_to_open() {
-        let z = zip(&[("manifest.json", br#"{"kind":"is-alive site bundle"}"#)]);
+        let z = zip(&[
+            ("manifest.json", br#"{"kind":"is-alive site bundle"}"#),
+            ("unifi.unifidump.json", b"[]"),
+        ]);
         let e = convert(z, unifi::Clients::None).err().unwrap();
-        assert!(e.contains("no /mapnetwork map in it yet"), "{e}");
+        assert!(
+            e.starts_with("that's a Site Bundle (made for Claude)"),
+            "{e}"
+        );
+        for what in [
+            "backups and exports it was made from",
+            "the map Claude made",
+        ] {
+            assert!(e.contains(what), "{what} missing from: {e}");
+        }
+    }
+
+    /// Two MAP files on disk, `<tag>-a.dc.html` and `<tag>-b.dc.html`.
+    fn two_maps(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("is-alive-export-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.dc.html"), dir.join("b.dc.html"));
+        std::fs::write(&a, MAP).unwrap();
+        std::fs::write(&b, MAP).unwrap();
+        (dir, a, b)
+    }
+
+    /// Poll until every read, queued ones too, has finished.
+    fn settle(ctx: &egui::Context, t: &mut ExportTool) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while t.poll(ctx) {
+            assert!(std::time::Instant::now() < end, "still reading");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// A drop (or an example picked) while a read is under way isn't thrown
+    /// away: it waits its turn and is read right after, its errors added to
+    /// the first read's.
+    #[test]
+    fn a_drop_during_a_read_is_read_after_it() {
+        let (dir, a, b) = two_maps("queue");
+        let bad = dir.join("photo.jpg");
+        std::fs::write(&bad, b"\xff\xd8\xff not a config").unwrap();
+        let ctx = egui::Context::default();
+        let mut t = ExportTool::default();
+        t.open(&ctx, vec![a.clone(), bad.clone()]);
+        assert!(t.is_running());
+        t.open(&ctx, vec![b.clone()]);
+        t.open_example(&ctx, 0);
+        assert_eq!(t.queued.len(), 2, "both wait their turn");
+        settle(&ctx, &mut t);
+        let open: Vec<&PathBuf> = t.slots.iter().map(|s| &s.path).collect();
+        assert_eq!(open, [&a, &b, &crate::skills::example_path(0)]);
+        assert_eq!(t.failed(), ["photo.jpg"], "the first read's error is kept");
+        assert!(t.take_opened(), "the Map draws what was opened");
+        let notices = t.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0]
+                .0
+                .starts_with("Couldn't open photo.jpg: not a UniFi backup")
+        );
+        assert!(!notices[0].1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A site's own configs read again aren't the user's: a saved map on
+    /// show stays.
+    #[test]
+    fn a_sites_configs_read_again_arent_news() {
+        let (dir, a, _) = two_maps("reopen");
+        let ctx = egui::Context::default();
+        let mut t = ExportTool::default();
+        t.reopen(&ctx, vec![a]);
+        settle(&ctx, &mut t);
+        assert_eq!(t.slots.len(), 1);
+        assert!(!t.take_opened());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
