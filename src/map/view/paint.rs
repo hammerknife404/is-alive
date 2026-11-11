@@ -213,7 +213,8 @@ impl MapView {
             draw_packet(&p, at, lc, grey, r, alpha, behind);
         };
         let gap = packet_gap(z);
-        let travel = packet_travel(now, z);
+        let (flow, flow_wait) = crate::backdrop::tick(self.flow, crate::backdrop::SMOOTH_FPS);
+        let travel = packet_travel(flow, z);
         let clip = rect.expand(12.0);
         let width = |link: Link, on: bool| link_width(link, z, on);
         let colour = |n: &Node, link: Link| link_colour(vis, link, self.accent(n));
@@ -396,11 +397,13 @@ impl MapView {
                 ring,
             );
         }
+        // Flowing links at 30 fps until the user leaves the map alone for a
+        // while; the warning pulse is slow enough for 20 fps, and it's over
+        // in a few seconds.
+        let flows = flows && self.flowing;
         if focused && (flows || pulse) {
-            // Flowing links at the display's rate; the warning pulse is slow
-            // enough for 20 fps, and it's over in a few seconds.
             if flows {
-                ui.ctx().request_repaint_after(crate::backdrop::SMOOTH);
+                crate::backdrop::repaint_in(ui.ctx(), flow_wait);
             } else {
                 crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
             }
@@ -744,9 +747,10 @@ pub(super) fn packet_gap(z: f32) -> f32 {
     36.0 * z.max(0.6)
 }
 
-/// How far the packets have travelled by `now`, at zoom `z`.
-pub(super) fn packet_travel(now: f64, z: f32) -> f32 {
-    now as f32 * 60.0 * z.max(0.6)
+/// How far the packets have travelled by `flow` (the view's packet clock),
+/// at zoom `z`.
+pub(super) fn packet_travel(flow: f64, z: f32) -> f32 {
+    flow as f32 * 60.0 * z.max(0.6)
 }
 
 fn uplink_phase(travel: f32, period: f32) -> f32 {

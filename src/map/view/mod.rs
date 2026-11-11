@@ -118,6 +118,8 @@ pub struct Sources<'a> {
 /// cards are colour tiles by then.
 const MIN_ZOOM: f32 = 0.07;
 const MAX_ZOOM: f32 = 2.5;
+/// Seconds without input after which the flowing packets hold still.
+const FLOW_IDLE_SECS: f64 = 30.0;
 
 #[derive(Default)]
 pub struct MapView {
@@ -317,6 +319,18 @@ pub struct MapView {
     /// egui's pass when the Map was last drawn: a gap means another tab
     /// showed in between.
     shown_pass: u64,
+    /// The flowing packets' clock (seconds): it runs only while they flow,
+    /// so they stop where they are and go on from there.
+    flow: f64,
+    /// When `flow` was last brought up to date.
+    flow_at: f64,
+    /// When the user last did anything in the window (moved the pointer,
+    /// clicked, typed, scrolled).
+    input_at: f64,
+    /// The packets flow: there was input in the last `FLOW_IDLE_SECS`. A map
+    /// left open holds still rather than redraw the window 30 times a
+    /// second for no one.
+    flowing: bool,
     /// The saved map the live map is compared with (More › Compare), if any.
     since: Option<since::Since>,
 }
@@ -1263,6 +1277,17 @@ impl MapView {
             self.warned.get_mut().clear();
         }
         self.shown_pass = pass;
+        let (now, input) = ctx.input(|i| (i.time, !i.events.is_empty()));
+        if input || self.flow_at == 0.0 {
+            self.input_at = now;
+        }
+        self.flowing = now - self.input_at < FLOW_IDLE_SECS;
+        if self.flowing {
+            // A step of at most 0.1 s: back from holding still, the packets
+            // go on from where they stopped.
+            self.flow += (now - self.flow_at).clamp(0.0, 0.1);
+        }
+        self.flow_at = now;
         if self.legend_seen != Some(src.legend) {
             self.legend_seen = Some(src.legend);
             self.legend = src.legend;

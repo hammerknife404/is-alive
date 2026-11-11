@@ -29,9 +29,6 @@ const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
 /// glow after a Full scan). Not the display's rate: on a 120 Hz laptop
 /// that was 120 redraws of the whole window a second, on battery.
 pub const SMOOTH_FPS: f64 = 30.0;
-/// The Map's flowing links ask for the next frame at once (until they move
-/// on `SMOOTH_FPS` too).
-pub const SMOOTH: Duration = Duration::from_millis(4);
 /// Frames a second for busy indicators (the Stop spinner, the nav's running
 /// dots). They share the tick, so together they cost 10 frames a second.
 pub const BUSY_FPS: f64 = 10.0;
