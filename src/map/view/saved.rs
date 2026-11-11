@@ -937,6 +937,11 @@ impl MapView {
     }
 }
 
+/// The live map's Clients level until one is picked: Some, so a small
+/// flat office (a router and its devices) doesn't map to one card with a
+/// +30 chip.
+pub(super) const LIVE_CLIENTS: Clients = Clients::Some;
+
 /// The live map preference is separate from each saved snapshot's view.
 pub(super) fn live_clients(dir: &Path) -> Clients {
     crate::input::read_capped(&dir.join("map-clients.txt"), 32)
@@ -945,7 +950,7 @@ pub(super) fn live_clients(dir: &Path) -> Clients {
                 .into_iter()
                 .find(|c| c.name().eq_ignore_ascii_case(s.trim()))
         })
-        .unwrap_or(Clients::Off)
+        .unwrap_or(LIVE_CLIENTS)
 }
 pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -1032,6 +1037,8 @@ mod tests {
     #[test]
     fn live_and_saved_client_visibility_survive_reload() {
         let dir = std::env::temp_dir().join(format!("is-alive-clients-{}", std::process::id()));
+        // Nothing picked yet: Some, so a small office's devices show.
+        assert_eq!(live_clients(&dir.join("never-written")), Clients::Some);
         for clients in Clients::ALL {
             save_live_clients(&dir, clients).unwrap();
             assert_eq!(live_clients(&dir), clients);
