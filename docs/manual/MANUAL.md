@@ -1282,7 +1282,7 @@ Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site repo
 
 | Setting | What it does |
 |---|---|
-| **Save to** | The folder that dialog starts in. **Choose folder…** picks it; **Reset** lets the system pick again. A folder that isn't there (an unplugged drive) is shown in amber, and saves start where the system says until it's back |
+| **Save to** | The folder that dialog starts in. Until one is chosen, the first **Save…** of a session asks for it (*Choose the folder is-alive saves to*) before its Save dialog, and keeps it; cancel, and that save goes ahead where the system says and the next session asks again. **Choose folder…** picks it here; **Reset** forgets it, so the next Save… asks again. A folder that isn't there (an unplugged drive) is shown in amber, and saves start where the system says until it's back |
 | **A folder for each site** | Inside it, a folder named after the open site, made on the first save, so each client's files stay together. Scratch saves straight into the folder |
 
 ### Where settings and notes are kept

@@ -443,7 +443,7 @@ impl App {
             self.look.backdrop = backdrop::Source::Image(p);
             theme::save(&self.look);
         }
-        let mut folder = None;
+        let mut folder = widgets::take_picked_save_dir();
         pump(&mut self.pick_save_dir, |p| folder = p);
         if let Some(d) = folder {
             self.look.save_dir = Some(d);
