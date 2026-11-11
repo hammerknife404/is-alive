@@ -162,6 +162,15 @@ fn tab_of(tool: &str) -> Option<Tab> {
     })
 }
 
+/// A change to the log asked for while it was being drawn. Made at the
+/// start of the next frame, before any index into it is taken: the list and
+/// the open run hold indices for the whole frame, so emptying the log under
+/// them is an out-of-bounds read.
+pub(crate) enum Edit {
+    Clear,
+    Remove { tool: &'static str, started: String },
+}
+
 /// Where a run's list row sends a click.
 enum Row {
     Done(usize),
@@ -170,6 +179,27 @@ enum Row {
 
 impl App {
     pub(crate) fn results_ui(&mut self, ui: &mut Ui) {
+        match self.results_edit.take() {
+            Some(Edit::Clear) => {
+                self.log.clear();
+                self.result_pick = None;
+                self.result_compare = None;
+                self.result_view = RunView::Output;
+                widgets::toast("Results cleared", true);
+            }
+            Some(Edit::Remove { tool, started }) => {
+                if self.log.remove(tool, &started) {
+                    widgets::toast("Run removed", true);
+                }
+                if self.result_compare.as_deref() == Some(started.as_str()) {
+                    self.result_compare = None;
+                    self.result_view = RunView::Output;
+                }
+                // The next newest opens in its place.
+                self.result_pick = None;
+            }
+            None => {}
+        }
         let jump = std::mem::take(&mut self.jump_to_new);
         let running = self.running();
         let needle = self.filter.trim().to_lowercase();
@@ -356,7 +386,9 @@ impl App {
     fn runs_menu(&mut self, ui: &mut Ui, shown: &[usize]) {
         let mut clear = false;
         let mut keep_to = None;
-        widgets::named_menu(ui, "All runs", |ui| {
+        // Stays open on a click inside, so Clear all can ask twice; the
+        // rest close it themselves.
+        widgets::named_menu_stay(ui, "All runs", |ui| {
             ui.set_min_width(220.0);
             let filtered = !self.filter.trim().is_empty();
             let what = if filtered {
@@ -429,12 +461,15 @@ impl App {
                 clear =
                     widgets::confirm_button(ui, "log_clear", true, "Clear all", "Clear the log");
             });
+            if clear {
+                ui.close();
+            }
         })
         .response
         .on_hover_text("Copy, save or export the runs; Keep with site; Clear");
         if clear {
-            self.log.clear();
-            self.result_pick = None;
+            self.results_edit = Some(Edit::Clear);
+            ui.ctx().request_repaint();
         }
         if let Some(on) = keep_to {
             self.set_results_keep(on);
@@ -579,6 +614,26 @@ impl App {
                 let e = &self.log.entries[i];
                 widgets::export_menu(ui, "result", || vec![e]);
                 self.compare_menu(ui, i);
+                let remove = ui
+                    .scope(|ui| {
+                        ui.spacing_mut().interact_size.y = widgets::TARGET_H;
+                        widgets::confirm_button(
+                            ui,
+                            "result_remove",
+                            true,
+                            "Remove",
+                            "Take this run out of Results (and the site's saved runs)",
+                        )
+                    })
+                    .inner;
+                if remove {
+                    let e = &self.log.entries[i];
+                    self.results_edit = Some(Edit::Remove {
+                        tool: e.tool,
+                        started: e.started.clone(),
+                    });
+                    ui.ctx().request_repaint();
+                }
             }
         });
         let has_table = done.is_some_and(|i| {

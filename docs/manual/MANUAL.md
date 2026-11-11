@@ -1215,6 +1215,7 @@ Every finished run from every tab is logged here (Full scan runs too).
 | **Copy / Save…** | This run as text |
 | **Export ⏷** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
 | **Compare ▾** | The other runs of the same tool, those of the same target first; pick one to see what changed between them (below) |
+| **Remove** | Take this run out of Results (click twice; it reads **Remove: sure?** after the first). With **Keep with site** on, it goes from the saved copy too. The next newest run opens in its place |
 | **Output / Table / Compare** | The output as the tool printed it, the run's data as a table (the columns its CSV has), or the comparison |
 
 **Compare** sets the earlier run as *before* and the later as *after*, and lists what's **New** (green), **Gone** (red) and **Changed** (amber), with **Stop comparing** to go back. Rows are matched by what they're about, and timing noise isn't counted as a change:
@@ -1239,7 +1240,7 @@ At the top of the list:
 | **All runs ▾ › Copy all / Save all…** | Every run listed, as text |
 | **All runs ▾ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
 | **All runs ▾ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). In Scratch it reads **Keep for a day**: the same setting, keeping Scratch's runs for 24 hours |
-| **All runs ▾ › Clear all** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
+| **All runs ▾ › Clear all** | Empty the log (click twice: the menu stays open and the button reads **Clear all: sure?** for three seconds); with **Keep with site** on, the saved copy too. Runs still going stay under **Running** and are logged when they finish |
 
 Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 

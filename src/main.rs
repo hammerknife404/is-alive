@@ -147,7 +147,7 @@ struct App {
     notes: tools::notes::NotesTool,
     log: log::Log,
     /// The log as last written to the open site's folder (its stamp).
-    log_saved: (usize, usize, usize),
+    log_saved: u64,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
     /// The public address has been asked for: on start (unless Settings
@@ -169,11 +169,13 @@ struct App {
     filter: String,
     /// ((filter, log stamp), matching entries) for the last frame.
     #[allow(clippy::type_complexity)]
-    filter_cache: Option<((String, (usize, usize, usize)), Vec<usize>)>,
+    filter_cache: Option<((String, u64), Vec<usize>)>,
     /// Open the full scan's first run in Results on the next frame.
     jump_to_new: bool,
     /// The run open in Results (None: the newest), and how it's shown.
     result_pick: Option<results_ui::RunKey>,
+    /// Clear or Remove in Results, made at the start of its next frame.
+    results_edit: Option<results_ui::Edit>,
     result_view: results_ui::RunView,
     /// The run the open one is compared with (Results › Compare): its start.
     result_compare: Option<String>,
@@ -982,7 +984,7 @@ impl App {
             for e in now.entries {
                 self.log.push(e);
             }
-            self.log.dropped += now.dropped;
+            self.log.add_dropped(now.dropped);
         } else if let Some(p) = log::site_file()
             && let Err(e) = log::Log::default().save(&p)
         {
@@ -1234,7 +1236,7 @@ fn main() {
                 map: map::view::MapTabs::new(look.map_layout),
                 notes: Default::default(),
                 log: Default::default(),
-                log_saved: (0, 0, 0),
+                log_saved: 0,
                 info: HostInfo::local(),
                 info_job: None,
                 wan_asked: false,
@@ -1248,6 +1250,7 @@ fn main() {
                 filter_cache: None,
                 jump_to_new: false,
                 result_pick: None,
+                results_edit: None,
                 result_view: results_ui::RunView::Output,
                 result_compare: None,
                 look,

@@ -81,23 +81,52 @@ pub struct Log {
     pub entries: VecDeque<Entry>,
     bytes: usize,
     pub dropped: usize,
+    /// Changed by every edit, from one counter for every log: a stamp
+    /// taken before an edit (or of another site's log) never matches one
+    /// taken after, so indices cached against it are never read stale.
+    generation: u64,
 }
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Log {
     /// Drop the runs that started more than `hours` before `now` (and any
     /// whose start can't be read).
     pub fn keep_since(&mut self, now: chrono::NaiveDateTime, hours: i64) {
         let from = now - chrono::Duration::hours(hours);
+        let before = self.entries.len();
         self.entries.retain(|e| {
             chrono::NaiveDateTime::parse_from_str(&e.started, "%Y-%m-%d %H:%M:%S")
                 .is_ok_and(|t| t >= from)
         });
-        self.bytes = self.entries.iter().map(|e| e.text.len()).sum();
+        if self.entries.len() != before {
+            self.edited();
+        }
     }
 
-    /// Changes whenever the entries do (pushes, drops, clears).
-    pub fn stamp(&self) -> (usize, usize, usize) {
-        (self.entries.len(), self.dropped, self.bytes)
+    /// Changes whenever the entries do (pushes, drops, removals, clears),
+    /// and never comes back to an earlier value.
+    pub fn stamp(&self) -> u64 {
+        self.generation
+    }
+
+    fn edited(&mut self) {
+        self.bytes = self.entries.iter().map(|e| e.text.len()).sum();
+        self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Take out the run of `tool` that started at `started`. True if it was there.
+    pub fn remove(&mut self, tool: &str, started: &str) -> bool {
+        let Some(i) = self
+            .entries
+            .iter()
+            .position(|e| e.tool == tool && e.started == started)
+        else {
+            return false;
+        };
+        self.entries.remove(i);
+        self.edited();
+        true
     }
 
     pub fn push(&mut self, e: Entry) {
@@ -110,10 +139,20 @@ impl Log {
                 self.dropped += 1;
             }
         }
+        self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn clear(&mut self) {
         *self = Self::default();
+        self.edited();
+    }
+
+    /// Count `n` more runs as dropped (from a log merged into this one).
+    pub fn add_dropped(&mut self, n: usize) {
+        if n > 0 {
+            self.dropped += n;
+            self.edited();
+        }
     }
 
     pub fn render(&self) -> String {
@@ -485,6 +524,39 @@ fn longest_run(s: &str, c: char) -> usize {
 mod tests {
     use super::*;
 
+    /// Results caches indices into the log against its stamp. Clearing it,
+    /// taking a run out, or loading another site's log of the same size
+    /// must each give a stamp it hasn't seen, or a cached index points past
+    /// the end (the "out of bounds access" crash on Clear all).
+    #[test]
+    fn every_edit_gives_a_stamp_never_seen_before() {
+        let mut seen = std::collections::HashSet::new();
+        let mut log = Log::default();
+        for n in 0..3 {
+            log.push(Entry {
+                started: format!("2026-11-11 10:00:0{n}"),
+                ..entry(n)
+            });
+            assert!(seen.insert(log.stamp()));
+        }
+        let (tool, started) = (log.entries[1].tool, log.entries[1].started.clone());
+        assert!(log.remove(tool, &started));
+        assert_eq!(log.entries.len(), 2);
+        assert!(seen.insert(log.stamp()));
+        assert!(!log.remove(tool, &started), "already gone");
+        log.clear();
+        assert!(log.entries.is_empty());
+        assert!(seen.insert(log.stamp()), "cleared: a new stamp");
+        let mut other = Log::default();
+        for n in 0..2 {
+            other.push(entry(n));
+        }
+        assert!(seen.insert(other.stamp()), "another log of the same size");
+        other.add_dropped(4);
+        assert_eq!(other.dropped, 4);
+        assert!(seen.insert(other.stamp()));
+    }
+
     fn entry(n: usize) -> Entry {
         Entry {
             tool: "Ping",
@@ -515,7 +587,7 @@ mod tests {
         log.keep_since(now, SCRATCH_HOURS);
         let kept: Vec<usize> = log.entries.iter().map(|e| e.text.len()).collect();
         assert_eq!(kept, [30, 40]);
-        assert_eq!(log.stamp(), (2, 0, 70));
+        assert_eq!((log.entries.len(), log.dropped, log.bytes), (2, 0, 70));
         assert_ne!(log.stamp(), before, "an expiry has to be written back");
     }
 

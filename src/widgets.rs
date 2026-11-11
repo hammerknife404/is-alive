@@ -654,6 +654,24 @@ pub fn named_menu<R>(
     egui::InnerResponse::new(inner.map(|i| i.inner), response)
 }
 
+/// A [`named_menu`] that stays open on a click inside, for one holding a
+/// [`confirm_button`]: a menu closes on any click, so the first click would
+/// arm the button and shut the menu, and the second would need the menu
+/// opened again inside three seconds. Its items call `ui.close()` themselves.
+pub fn named_menu_stay<R>(
+    ui: &mut Ui,
+    label: &str,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let button = egui::Button::new(format!("{label} ▾")).min_size(egui::vec2(0.0, TARGET_H));
+    let stay = egui::containers::menu::MenuConfig::new()
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, inner) = egui::containers::menu::MenuButton::from_button(button)
+        .config(stay)
+        .ui(ui, add_contents);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
+
 /// Export menu: each format opens a save dialog with `entries` rendered in it.
 pub fn export_menu<'a>(
     ui: &mut Ui,
