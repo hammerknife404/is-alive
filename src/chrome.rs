@@ -77,7 +77,8 @@ impl App {
             && focused
         {
             if animate {
-                ui.ctx().request_repaint();
+                let (_, wait) = crate::backdrop::tick(now, crate::backdrop::SMOOTH_FPS);
+                crate::backdrop::repaint_in(ui.ctx(), wait);
             } else {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_secs_f64(left));

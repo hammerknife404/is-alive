@@ -39,7 +39,7 @@ impl Whois {
                 }
             }
             if running {
-                ui.spinner();
+                widgets::spinner(ui);
             }
         });
         widgets::toolbar_note(

@@ -209,15 +209,16 @@ pub fn tall_popups<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// Busy indicator. egui's own spinner asks for a redraw every frame, which
 /// means 60 full window redraws a second (unbounded without vsync) for as
-/// long as a tool runs; this one turns at 20 frames a second.
+/// long as a tool runs; this one turns at 10 frames a second, on the nav
+/// dots' tick, and holds still while the window isn't focused.
 pub fn spinner(ui: &mut Ui) {
     let size = ui.spacing().interact_size.y;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     if !ui.is_rect_visible(rect) {
         return;
     }
-    let t = ui.input(|i| i.time) as f32;
-    let start = t * 5.0;
+    let t = crate::backdrop::busy_time(ui.ctx());
+    let start = t * 4.0;
     let r = rect.height() / 2.0 - 2.0;
     let pts: Vec<egui::Pos2> = (0..=16)
         .map(|i| {
@@ -229,8 +230,6 @@ pub fn spinner(ui: &mut Ui) {
         pts,
         egui::Stroke::new(2.0, ui.visuals().strong_text_color()),
     ));
-    ui.ctx()
-        .request_repaint_after(std::time::Duration::from_millis(50));
 }
 
 /// Speed preset picker plus the raw threads / rate values it sets.
