@@ -779,7 +779,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site, or of another site (**Other sites ›**; see *Compare with the last visit*, below) |
-| **Examples** ▸ | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
+| **Examples** ▸ | Open one of two fictional sites; **Home**, a fictional house (ISP modem, Wi-Fi router, a mesh node, a switch behind the TV) with dashed links that are assumed, and the issues a home usually has (double NAT, a port forwarded to the NAS, a default password, IoT on the family network); or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
 | **Saved maps** | Show or hide the saved maps bar (below), to open a saved map or go back to Live |
 | **Copy findings** | The findings as text, worst first, for a ticket |
 | **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
