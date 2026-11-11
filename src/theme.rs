@@ -921,6 +921,8 @@ pub struct Settings {
     pub map_layout: Option<crate::map::layout::Mode>,
     /// Show the legend on the map.
     pub map_legend: bool,
+    /// The manual in a window of its own (Pop out), not over the app.
+    pub manual_window: bool,
     /// The nav pinned open (true) or folded (false); None follows the
     /// window's width (see `nav::open`).
     pub nav: Option<bool>,
@@ -969,6 +971,7 @@ impl Default for Settings {
             backdrop: Source::Scene,
             map_layout: None,
             map_legend: false,
+            manual_window: false,
             nav: None,
             unifi_clients: crate::unifi::Clients::None,
             save_dir: None,
@@ -1007,6 +1010,7 @@ impl Settings {
                 }
                 "map_layout" => s.map_layout = crate::map::layout::Mode::from_key(v),
                 "map_legend" => s.map_legend = v.trim() == "1",
+                "manual_window" => s.manual_window = v.trim() == "1",
                 "save_dir" => {
                     let v = v.trim();
                     // A path, as the backdrop's: no control characters.
@@ -1130,6 +1134,9 @@ impl Settings {
         }
         if self.map_legend {
             s += "map_legend=1\n";
+        }
+        if self.manual_window {
+            s += "manual_window=1\n";
         }
         if let Some(open) = self.nav {
             s += if open { "nav=open\n" } else { "nav=rail\n" };
@@ -1504,6 +1511,7 @@ mod tests {
             notes_emoji: EmojiStyle::Neon,
             map_layout: Some(crate::map::layout::Mode::Zones),
             map_legend: false,
+            manual_window: true,
             nav: Some(false),
             unifi_clients: crate::unifi::Clients::Anonymized,
             save_dir: Some("/home/me/Clients".into()),
@@ -1518,6 +1526,9 @@ mod tests {
         assert!(!s.text().contains("map_legend"));
         assert!(Settings::parse("map_legend=1\n").map_legend);
         assert!(!Settings::parse("map_legend=0\n").map_legend);
+        // The manual: over the app unless popped out, and only that is written.
+        assert!(!Settings::default().text().contains("manual_window"));
+        assert!(Settings::parse("manual_window=1\n").manual_window);
         // The nav: follows the window unless pinned, and only a pin is written.
         assert_eq!(Settings::default().nav, None);
         assert!(!Settings::default().text().contains("nav="));

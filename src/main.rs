@@ -238,7 +238,10 @@ impl eframe::App for App {
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
         self.report_window(ui.ctx());
-        self.manual.window(ui.ctx());
+        if self.manual.window(ui.ctx()) {
+            self.look.manual_window = self.manual.own_window;
+            theme::save(&self.look);
+        }
         self.close_dialog(ui.ctx());
         self.site_dialog(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
@@ -1136,6 +1139,7 @@ fn main() {
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
+            let look_manual_window = look.manual_window;
             let mut app = App {
                 tab: Tab::Ping,
                 shown_tab: Tab::Ping,
@@ -1175,7 +1179,7 @@ fn main() {
                 pick_image: None,
                 pick_save_dir: None,
                 reloading: false,
-                manual: Default::default(),
+                manual: manual::Manual::new(look_manual_window),
                 shots: shots::Shots::from_env(),
                 shots_settings: false,
                 shots_help: false,

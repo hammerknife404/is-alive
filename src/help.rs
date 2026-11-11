@@ -5,7 +5,7 @@
 use crate::{Tab, VERSION};
 use eframe::egui;
 
-const REPO: &str = "https://github.com/hammerknife404/is-alive";
+pub(crate) const REPO: &str = "https://github.com/hammerknife404/is-alive";
 /// The wiki's front page.
 pub const WIKI: &str = "https://github.com/hammerknife404/is-alive/wiki";
 
