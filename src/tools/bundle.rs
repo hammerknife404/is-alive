@@ -6,10 +6,11 @@ use crate::tools::export::{self, ExportTool};
 use crate::tools::notes::NotesTool;
 use crate::tools::sweep::SweepTool;
 use crate::unifi::{self, Clients};
-use crate::widgets;
+use crate::{meraki, sonicwall, widgets};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// What the bundle can draw on, borrowed from the other tabs each frame.
 pub struct Sources<'a> {
@@ -34,9 +35,9 @@ pub struct BundleTool {
     clients: Clients,
     /// Answer to /mapnetwork's "include clients?"; off means infrastructure only.
     map_clients: bool,
-    use_unifi: bool,
-    use_sonicwall: bool,
-    use_meraki: bool,
+    /// Backups and exports open in Config Export that were unticked: each
+    /// goes in unless it's here.
+    left_out: HashSet<PathBuf>,
     use_inventory: bool,
     use_results: bool,
     use_notes: bool,
@@ -60,9 +61,7 @@ impl Default for BundleTool {
             notes: String::new(),
             clients: Clients::Anonymized,
             map_clients: false,
-            use_unifi: true,
-            use_sonicwall: true,
-            use_meraki: true,
+            left_out: HashSet::new(),
             use_inventory: true,
             use_results: false,
             use_notes: false,
@@ -84,6 +83,16 @@ address and service objects, access and NAT rules. Enforced config, not observat
 const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs, \
 appliance ports, firewall, port forwarding and NAT rules, static routes, VPN and uplinks. Enforced config, \
 not observation.";
+// The second and later of a kind (`unifi-2.unifidump.json`, …).
+const UNIFI_MORE_WHAT: &str = "Another UniFi controller's export from this visit, in the same form \
+as unifi.unifidump.json: its own sites, devices, networks, switch port profiles and WLANs (plus clients \
+as the manifest says), secrets removed. Run /unifidump on it too; its sites are its own.";
+const SONICWALL_MORE_WHAT: &str = "Another SonicWall's config from this visit, in the same form as \
+sonicwall.json: a separate firewall, a gateway of its own, with its own interfaces, zones, objects and \
+rules. Enforced config, not observation.";
+const MERAKI_MORE_WHAT: &str = "Another Meraki export from this visit, in the same form as \
+meraki.json: its own networks and MX appliances, each a gateway of its own. Enforced config, not \
+observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
 with where it came from: mac_from, name_from), TTL and open management ports. Observed state.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
@@ -130,6 +139,7 @@ impl BundleTool {
             .unwrap_or_default();
         self.notes.clear();
         self.ov = Default::default();
+        self.left_out.clear();
         self.saved = None;
         self.err = None;
     }
@@ -260,123 +270,31 @@ impl BundleTool {
         });
         ui.separator();
 
-        let unifi = src.export.unifi();
-        let sonicwall = src.export.sonicwall();
-        let meraki = src.export.meraki();
+        let configs = configs(src.export);
         let map = src.export.mapnetwork();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
         let targets = log_targets(src.log);
         ui.label(RichText::new("Includes").strong());
-        egui::Grid::new("bundle_parts")
-            .num_columns(2)
-            .spacing([12.0, 4.0])
+        // Every backup and export open is a row: the list scrolls before the
+        // window outgrows a laptop's (at 720 high, about eleven rows show).
+        let room = (ui.ctx().content_rect().height() - 370.0).max(180.0);
+        egui::ScrollArea::vertical()
+            .id_salt("bundle_parts_scroll")
+            .max_height(room)
             .show(ui, |ui| {
-                part_row(
-                    ui,
-                    &mut self.use_unifi,
-                    "UniFi backup",
-                    unifi.map(|(p, r)| {
-                        format!("{} device(s) · {}", r.count("device"), export::file_name(p))
-                    }),
-                    "Open a UniFi backup in Config Export",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_sonicwall,
-                    "SonicWall export",
-                    sonicwall.map(|(p, r)| {
-                        format!(
-                            "{} interface(s) · {}",
-                            r.count("interfaces"),
-                            export::file_name(p)
-                        )
-                    }),
-                    "Open a SonicWall .exp or .wri in Config Export",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_meraki,
-                    "Meraki export",
-                    meraki.map(|(p, r)| {
-                        format!(
-                            "{} network(s) · {} VLAN(s) · {}",
-                            r.count("networks"),
-                            r.count("VLANs"),
-                            export::file_name(p)
-                        )
-                    }),
-                    "Open a Meraki API export (.json) in Config Export",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_map,
-                    "Current map",
-                    map.map(|(p, d)| {
-                        format!(
-                            "{} device(s) · {} · updated, not rebuilt",
-                            d.nodes.len(),
-                            export::file_name(p)
-                        )
-                    }),
-                    "Open the site's /mapnetwork .dc.html in Config Export to have it updated",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_inventory,
-                    "Sweep inventory",
-                    sweep
-                        .as_ref()
-                        .map(|(range, n)| format!("{n} live host(s) · {range}")),
-                    "Run a Subnet Sweep",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_results,
-                    "Results log",
-                    (runs > 0).then(|| match targets.is_empty() {
-                        true => format!("{runs} run(s)"),
-                        false => format!("{runs} run(s): {}", targets.join(", ")),
-                    }),
-                    "Nothing in Results yet",
-                );
-                let (_, hits) = src.notes.sanitized();
-                part_row(
-                    ui,
-                    &mut self.use_notes,
-                    "Tech notes",
-                    (!src.notes.is_empty()).then(|| match hits.len() {
-                        0 => "notes.md · nothing redacted".to_string(),
-                        _ => format!("notes.md · {}", crate::redact::summary(&hits)),
-                    }),
-                    "Nothing in Notes yet",
-                );
-                let card_notes = src.map.bundle_notes(src.notes.overrides());
-                part_row(
-                    ui,
-                    &mut self.use_card_notes,
-                    "Card notes",
-                    card_notes
-                        .as_ref()
-                        .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
-                    "No notes on the live map's cards",
-                );
-                part_row(
-                    ui,
-                    &mut self.use_skills,
-                    "Claude Skills",
-                    Some(format!(
-                        "/unifidump and /mapnetwork · {} KB, for a Claude without them installed",
-                        crate::skills::bytes() / 1024
-                    )),
-                    "",
-                );
+                // Rows a trackpad can hit.
+                ui.spacing_mut().interact_size.y = ROW_H;
+                egui::Grid::new("bundle_parts")
+                    .num_columns(2)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| self.rows(ui, src, &configs, &targets));
             });
         // The map alone is enough: Claude reviews and updates it.
         let chosen = (self.use_map && map.is_some())
-            || (self.use_unifi && unifi.is_some())
-            || (self.use_sonicwall && sonicwall.is_some())
-            || (self.use_meraki && meraki.is_some())
+            || configs
+                .iter()
+                .any(|c| c.files.iter().any(|f| !self.left_out.contains(f.path)))
             || (self.use_inventory && sweep.is_some())
             || (self.use_results && runs > 0)
             || (self.use_notes && !src.notes.is_empty())
@@ -420,59 +338,124 @@ impl BundleTool {
         ui.weak("Attach the zip in a Claude chat and paste the prompt.");
     }
 
-    /// Gather the parts and save off the UI thread. The UniFi backup is
+    /// The Includes list: a row for each backup and export open (or, with
+    /// none of a kind, what to open), then the rest.
+    fn rows(&mut self, ui: &mut Ui, src: &Sources, configs: &[Configs], targets: &[String]) {
+        for c in configs {
+            if c.files.is_empty() {
+                part_row(ui, &mut false, c.name, None, c.missing);
+            }
+            let mut n = 0;
+            for f in &c.files {
+                let on = !self.left_out.contains(f.path);
+                let file = on.then(|| {
+                    n += 1;
+                    bundle::numbered(c.file, n)
+                });
+                if file_row(ui, on, f.path, c.name, &f.detail, file.as_deref()) {
+                    if on {
+                        self.left_out.insert(f.path.clone());
+                    } else {
+                        self.left_out.remove(f.path);
+                    }
+                }
+            }
+        }
+        let map = src.export.mapnetwork();
+        let sweep = src.sweep.finished();
+        let runs = src.log.entries.len();
+        part_row(
+            ui,
+            &mut self.use_map,
+            "Current map",
+            map.map(|(p, d)| {
+                format!(
+                    "{} device(s) · {} · updated, not rebuilt",
+                    d.nodes.len(),
+                    export::file_name(p)
+                )
+            }),
+            "Open the site's /mapnetwork .dc.html in Config Export to have it updated",
+        );
+        part_row(
+            ui,
+            &mut self.use_inventory,
+            "Sweep inventory",
+            sweep
+                .as_ref()
+                .map(|(range, n)| format!("{n} live host(s) · {range}")),
+            "Run a Subnet Sweep",
+        );
+        part_row(
+            ui,
+            &mut self.use_results,
+            "Results log",
+            (runs > 0).then(|| match targets.is_empty() {
+                true => format!("{runs} run(s)"),
+                false => format!("{runs} run(s): {}", targets.join(", ")),
+            }),
+            "Nothing in Results yet",
+        );
+        let (_, hits) = src.notes.sanitized();
+        part_row(
+            ui,
+            &mut self.use_notes,
+            "Tech notes",
+            (!src.notes.is_empty()).then(|| match hits.len() {
+                0 => "notes.md · nothing redacted".to_string(),
+                _ => format!("notes.md · {}", crate::redact::summary(&hits)),
+            }),
+            "Nothing in Notes yet",
+        );
+        let card_notes = src.map.bundle_notes(src.notes.overrides());
+        part_row(
+            ui,
+            &mut self.use_card_notes,
+            "Card notes",
+            card_notes
+                .as_ref()
+                .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
+            "No notes on the live map's cards",
+        );
+        part_row(
+            ui,
+            &mut self.use_skills,
+            "Claude Skills",
+            Some(format!(
+                "/unifidump and /mapnetwork · {} KB, for a Claude without them installed",
+                crate::skills::bytes() / 1024
+            )),
+            "",
+        );
+    }
+
+    /// Gather the parts and save off the UI thread. The UniFi backups are
     /// converted again so the bundle's client setting applies.
     fn save(&mut self, ctx: &egui::Context, src: &Sources) {
         self.err = None;
         self.saved = None;
-        let unifi = self
-            .use_unifi
-            .then(|| src.export.unifi().map(|(p, _)| p.clone()))
-            .flatten();
+        let included = |path: &&PathBuf| !self.left_out.contains(*path);
+        let unifi: Vec<PathBuf> = src
+            .export
+            .unifis()
+            .map(|(p, _)| p)
+            .filter(included)
+            .cloned()
+            .collect();
         let mut parts = Vec::new();
-        if self.use_sonicwall
-            && let Some((p, r)) = src.export.sonicwall()
-        {
-            parts.push(Part {
-                file: bundle::SONICWALL,
-                source: export::file_name(p),
-                skill: "/mapnetwork",
-                what: SONICWALL_WHAT,
-                summary: json!({
-                    "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
-                        .collect::<serde_json::Map<_, _>>(),
-                    "interfaces": r.count("interfaces"),
-                    "address_objects": r.count("address objects"),
-                    "access_rules": r.count("access rules"),
-                    "nat_rules": r.count("NAT rules"),
-                }),
-                data: r.json.clone(),
-            });
+        let sonicwalls = src.export.sonicwalls().filter(|(p, _)| included(p));
+        for (n, (p, r)) in sonicwalls.enumerate() {
+            parts.push(sonicwall_part(n + 1, p, r));
         }
-        if self.use_meraki
-            && let Some((p, r)) = src.export.meraki()
-        {
-            parts.push(Part {
-                file: bundle::MERAKI,
-                source: export::file_name(p),
-                skill: "/mapnetwork",
-                what: MERAKI_WHAT,
-                summary: json!({
-                    "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
-                        .collect::<serde_json::Map<_, _>>(),
-                    "networks": r.count("networks"),
-                    "vlans": r.count("VLANs"),
-                    "firewall_rules": r.count("firewall rules"),
-                    "port_forwards": r.count("port forwards"),
-                }),
-                data: r.json.clone(),
-            });
+        let merakis = src.export.merakis().filter(|(p, _)| included(p));
+        for (n, (p, r)) in merakis.enumerate() {
+            parts.push(meraki_part(n + 1, p, r));
         }
         if self.use_map
             && let Some((p, d)) = src.export.mapnetwork()
         {
             parts.push(Part {
-                file: bundle::MAP,
+                file: bundle::MAP.into(),
                 source: export::file_name(p),
                 skill: "/mapnetwork",
                 what: MAP_WHAT,
@@ -489,7 +472,7 @@ impl BundleTool {
             && let Some((range, n)) = src.sweep.finished()
         {
             parts.push(Part {
-                file: bundle::INVENTORY,
+                file: bundle::INVENTORY.into(),
                 source: range.clone(),
                 skill: "/mapnetwork",
                 what: INVENTORY_WHAT,
@@ -506,7 +489,7 @@ impl BundleTool {
             let mut tools: Vec<&str> = entries.iter().map(|e| e.tool).collect();
             tools.dedup();
             parts.push(Part {
-                file: bundle::RESULTS,
+                file: bundle::RESULTS.into(),
                 source: "Results tab".into(),
                 skill: "/mapnetwork",
                 what: RESULTS_WHAT,
@@ -517,7 +500,7 @@ impl BundleTool {
         if self.use_notes && !src.notes.is_empty() {
             let (clean, hits) = src.notes.sanitized();
             parts.push(Part {
-                file: bundle::NOTES,
+                file: bundle::NOTES.into(),
                 source: "Notes tab".into(),
                 skill: "/mapnetwork",
                 what: NOTES_WHAT,
@@ -530,7 +513,7 @@ impl BundleTool {
             && let Some((n, data)) = src.map.bundle_notes(src.notes.overrides())
         {
             parts.push(Part {
-                file: bundle::CARD_NOTES,
+                file: bundle::CARD_NOTES.into(),
                 source: "Map tab".into(),
                 skill: "/mapnetwork",
                 what: CARD_NOTES_WHAT,
@@ -558,32 +541,13 @@ impl BundleTool {
     }
 }
 
-/// Add the UniFi part (converted with the bundle's client setting), then
-/// ask where to save and write the zip.
-fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, String> {
-    let clients = b.clients;
-    if let Some(path) = unifi {
-        let data = export::read_input(&path)?;
-        let r = unifi::convert(data, clients)?;
-        b.parts.insert(
-            0,
-            Part {
-                file: bundle::UNIFI,
-                source: export::file_name(&path),
-                skill: "/unifidump",
-                what: UNIFI_WHAT,
-                summary: json!({
-                    "unifi_network": r.version,
-                    "sites": r.sites,
-                    "devices": r.count("device"),
-                    "networks": r.count("networkconf"),
-                    "wlans": r.count("wlanconf"),
-                    "clients": r.count(unifi::CLIENTS),
-                    "client_mode": clients.label(),
-                }),
-                data: r.json,
-            },
-        );
+/// Add the UniFi parts (each converted with the bundle's client setting, in
+/// the order opened), then ask where to save and write the zip.
+fn build_and_save(unifi: Vec<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, String> {
+    for (n, path) in unifi.iter().enumerate() {
+        let data = export::read_input(path)?;
+        let r = unifi::convert(data, b.clients)?;
+        b.parts.insert(n, unifi_part(n + 1, path, r));
     }
     // Ask first: the prompt inside the zip names the file as saved.
     let Some(path) = widgets::save_dialog()
@@ -600,6 +564,183 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
     let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
+}
+
+/// The `n`th UniFi backup's part (counting from 1), `r` its conversion
+/// with the bundle's client setting.
+fn unifi_part(n: usize, path: &Path, r: unifi::Report) -> Part {
+    Part {
+        file: bundle::numbered(bundle::UNIFI, n),
+        source: export::file_name(path),
+        skill: "/unifidump",
+        what: if n == 1 { UNIFI_WHAT } else { UNIFI_MORE_WHAT },
+        summary: json!({
+            "unifi_network": r.version,
+            "sites": r.sites,
+            "devices": r.count("device"),
+            "networks": r.count("networkconf"),
+            "wlans": r.count("wlanconf"),
+            "clients": r.count(unifi::CLIENTS),
+            "client_mode": r.clients.label(),
+        }),
+        data: r.json,
+    }
+}
+
+/// The `n`th SonicWall export's part, counting from 1.
+fn sonicwall_part(n: usize, path: &Path, r: &sonicwall::Report) -> Part {
+    Part {
+        file: bundle::numbered(bundle::SONICWALL, n),
+        source: export::file_name(path),
+        skill: "/mapnetwork",
+        what: if n == 1 {
+            SONICWALL_WHAT
+        } else {
+            SONICWALL_MORE_WHAT
+        },
+        summary: json!({
+            "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
+                .collect::<serde_json::Map<_, _>>(),
+            "interfaces": r.count("interfaces"),
+            "address_objects": r.count("address objects"),
+            "access_rules": r.count("access rules"),
+            "nat_rules": r.count("NAT rules"),
+        }),
+        data: r.json.clone(),
+    }
+}
+
+/// The `n`th Meraki export's part, counting from 1.
+fn meraki_part(n: usize, path: &Path, r: &meraki::Report) -> Part {
+    Part {
+        file: bundle::numbered(bundle::MERAKI, n),
+        source: export::file_name(path),
+        skill: "/mapnetwork",
+        what: if n == 1 {
+            MERAKI_WHAT
+        } else {
+            MERAKI_MORE_WHAT
+        },
+        summary: json!({
+            "system": r.system.iter().map(|(k, v)| (k.clone(), json!(v)))
+                .collect::<serde_json::Map<_, _>>(),
+            "networks": r.count("networks"),
+            "vlans": r.count("VLANs"),
+            "firewall_rules": r.count("firewall rules"),
+            "port_forwards": r.count("port forwards"),
+        }),
+        data: r.json.clone(),
+    }
+}
+
+/// A backup or export open in Config Export, as the bundle lists it.
+struct Config<'a> {
+    path: &'a PathBuf,
+    /// What it holds: "12 device(s)".
+    detail: String,
+}
+
+/// One kind of backup or export, and every one of it open.
+struct Configs<'a> {
+    /// The row's name: "UniFi backup".
+    name: &'static str,
+    /// The first one's name in the zip; the next are numbered from it.
+    file: &'static str,
+    /// What to do to have one.
+    missing: &'static str,
+    files: Vec<Config<'a>>,
+}
+
+/// The UniFi backups, SonicWall exports and Meraki exports open, each kind
+/// in the order opened.
+fn configs(e: &ExportTool) -> [Configs<'_>; 3] {
+    [
+        Configs {
+            name: "UniFi backup",
+            file: bundle::UNIFI,
+            missing: "Open a UniFi backup in Config Export",
+            files: e
+                .unifis()
+                .map(|(path, r)| Config {
+                    path,
+                    detail: format!("{} device(s)", r.count("device")),
+                })
+                .collect(),
+        },
+        Configs {
+            name: "SonicWall export",
+            file: bundle::SONICWALL,
+            missing: "Open a SonicWall .exp or .wri in Config Export",
+            files: e
+                .sonicwalls()
+                .map(|(path, r)| Config {
+                    path,
+                    detail: format!("{} interface(s)", r.count("interfaces")),
+                })
+                .collect(),
+        },
+        Configs {
+            name: "Meraki export",
+            file: bundle::MERAKI,
+            missing: "Open a Meraki API export (.json) in Config Export",
+            files: e
+                .merakis()
+                .map(|(path, r)| Config {
+                    path,
+                    detail: format!(
+                        "{} network(s) · {} VLAN(s)",
+                        r.count("networks"),
+                        r.count("VLANs")
+                    ),
+                })
+                .collect(),
+        },
+    ]
+}
+
+/// The Includes list's row height: a click target a trackpad can hit.
+const ROW_H: f32 = 28.0;
+
+/// Longest file name a row shows whole; past it, the middle goes.
+const NAME_MAX: usize = 30;
+
+/// `name` cut to `NAME_MAX` characters in the middle, so its start and its
+/// extension both show.
+fn short_name(name: &str) -> String {
+    let n = name.chars().count();
+    if n <= NAME_MAX {
+        return name.to_string();
+    }
+    let tail = 12;
+    let head: String = name.chars().take(NAME_MAX - tail - 1).collect();
+    let end: String = name.chars().skip(n - tail).collect();
+    format!("{head}…{end}")
+}
+
+/// A backup or export's row: a checkbox named after its file, then what it
+/// is and the name it goes in the zip as (`file`; None while it's left
+/// out). True when clicked.
+fn file_row(
+    ui: &mut Ui,
+    mut on: bool,
+    path: &Path,
+    kind: &str,
+    detail: &str,
+    file: Option<&str>,
+) -> bool {
+    let name = export::file_name(path);
+    let clicked = ui
+        .checkbox(&mut on, short_name(&name))
+        .on_hover_text(path.display().to_string())
+        .clicked();
+    let detail = match file {
+        Some(f) => format!("{kind} · {detail} → {f}"),
+        None => format!("{kind} · {detail} · left out"),
+    };
+    ui.add(egui::Label::new(RichText::new(&detail).weak()).truncate())
+        .on_hover_text(detail);
+    ui.end_row();
+    clicked
 }
 
 /// Distinct targets in the Results log, in run order, so it's plain whether
@@ -657,6 +798,98 @@ mod tests {
                 rows: vec![vec![target.into(), "x".into()]],
             }),
         }
+    }
+
+    fn unifi_report(site: &str) -> unifi::Report {
+        unifi::Report {
+            layers: vec!["unf".into()],
+            version: Some("9.0.114".into()),
+            sites: vec![site.into()],
+            kept: vec![("device".into(), 3)],
+            dropped: Default::default(),
+            redacted: Default::default(),
+            clients: Clients::Anonymized,
+            anonymized: 0,
+            json: format!("[{{\"site\":\"{site}\"}}]"),
+            secrets: Vec::new(),
+        }
+    }
+
+    fn sonicwall_report(name: &str) -> sonicwall::Report {
+        let exp = format!(
+            "{}shortProdName=TZ%20270&firewallName={name}",
+            (0..12)
+                .map(|i| format!("iface_name_{i}=X{i}&interface_Zone_{i}=LAN&"))
+                .collect::<String>()
+        );
+        sonicwall::convert(exp.as_bytes()).expect("a settings export")
+    }
+
+    /// Two sites' backups and firewall reports go in as four parts, in the
+    /// order opened, the first of each kind under its usual name.
+    #[test]
+    fn every_backup_and_export_is_a_part_of_its_own() {
+        let p = |s: &str| PathBuf::from(format!("/visit/{s}"));
+        let (fw_a, fw_b) = (sonicwall_report("fw-north"), sonicwall_report("fw-south"));
+        let mut parts = vec![
+            sonicwall_part(1, &p("fw-north.wri"), &fw_a),
+            sonicwall_part(2, &p("fw-south.wri"), &fw_b),
+        ];
+        // As build_and_save adds them: first, in the order opened.
+        for (n, (file, site)) in [("north.unf", "North"), ("south.unf", "South")]
+            .into_iter()
+            .enumerate()
+        {
+            parts.insert(n, unifi_part(n + 1, &p(file), unifi_report(site)));
+        }
+        let got: Vec<(&str, &str, &str)> = parts
+            .iter()
+            .map(|x| (x.file.as_str(), x.source.as_str(), x.skill))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("unifi.unifidump.json", "north.unf", "/unifidump"),
+                ("unifi-2.unifidump.json", "south.unf", "/unifidump"),
+                ("sonicwall.json", "fw-north.wri", "/mapnetwork"),
+                ("sonicwall-2.json", "fw-south.wri", "/mapnetwork"),
+            ]
+        );
+        assert!(parts[1].data.contains("South") && parts[3].data.contains("fw-south"));
+        // The first of a kind reads as it always has; the next says it's
+        // another controller or firewall.
+        assert_eq!(parts[0].what, UNIFI_WHAT);
+        assert_eq!(parts[2].what, SONICWALL_WHAT);
+        assert!(parts[1].what.starts_with("Another UniFi controller"));
+        assert!(parts[3].what.starts_with("Another SonicWall"));
+        assert_eq!(parts[1].summary["sites"], json!(["South"]));
+        let b = Bundle {
+            site: "Northwind".into(),
+            notes: String::new(),
+            clients: Clients::Anonymized,
+            map_clients: false,
+            scanner: HostInfo::default(),
+            parts,
+            skills: false,
+        };
+        let k = b.kickoff("northwind.bundle.zip");
+        for f in [
+            "unifi.unifidump.json",
+            "unifi-2.unifidump.json",
+            "sonicwall.json",
+            "sonicwall-2.json",
+        ] {
+            assert!(k.contains(f), "{f} missing from: {k}");
+        }
+    }
+
+    #[test]
+    fn long_file_names_keep_their_start_and_end() {
+        assert_eq!(short_name("fw-north.wri"), "fw-north.wri");
+        let long = "network_backup_10.11.2026_14-05_v9.0.114.unf";
+        let short = short_name(long);
+        assert_eq!(short.chars().count(), NAME_MAX);
+        assert_eq!(short, "network_backup_10…v9.0.114.unf");
     }
 
     #[test]

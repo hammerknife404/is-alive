@@ -2,6 +2,7 @@ Every release, newest first. Each GitHub release has the Windows `.exe`, the Lin
 
 | Release | Date | Highlights |
 |---|---|---|
+| [v0.28.12](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.12) | 2026-11-11 | several UniFi backups and SonicWall exports at once (a client with two sites): every one goes on the Map, each firewall its own gateway, and into the Site Bundle as numbered files |
 | [v0.28.11](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.11) | 2026-11-10 | Settings: choose the folder saves start in, optionally with a folder for each site |
 | [v0.28.10](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.10) | 2026-11-10 | Sites: switching keeps how you look at things (the Map's Clients level, Links, Trace to WAN, faded roles; Notes' view and outline; UniFi clients, now remembered); the last site's redactions no longer carry over; a config that won't read is remembered |
 | [v0.28.9](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.9) | 2026-11-10 | the manual is text only: its 21 screenshots, out of date since the redesign, are gone (3.6 MB off the download), with a table of the window's parts instead |

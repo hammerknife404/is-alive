@@ -21,7 +21,13 @@ The summary lists the layers peeled, the collections kept and left behind with c
 
 ## SonicWall
 
-Pick several files at once, or drag them onto the window from any tab, at once or one after another. Each file gets its own sub-tab (*kind · name*) with **Save JSON…**, **Copy** and **Clear**; the file opened last is shown, and opening the same file again replaces its tab. Past six tabs the oldest fold into a **n more** menu. The Map, Site Bundle and Notes use the file of each kind opened last; Notes redacts the secrets of every open file.
+Pick several files at once, or drag them onto the window from any tab, at once or one after another. Each file gets its own sub-tab (*kind · name*) with **Save JSON…**, **Copy** and **Clear**; the file opened last is shown, and opening the same file again replaces its tab. Past six tabs the oldest fold into a **n more** menu. The Map and Site Bundle use every UniFi backup and SonicWall export open (the Site Bundle every Meraki export too), and the `/mapnetwork` map opened last; Notes redacts the secrets of every open file. Changing **UniFi clients** reads every open UniFi backup again.
+
+**Several sites or firewalls:** open all of a visit's files, even several of one kind (a client with two sites, each with its own UniFi backup and SonicWall report, is four files):
+
+- **UniFi backups** all go on the [[Map]]. A device or client in two backups (one controller backed up on two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)*, *Default (south)*.
+- **SonicWall exports**: each firewall is a gateway of its own on the Map. A settings export and a tech support report of the same firewall are one card.
+- In the [[Site Bundle|Site-Bundle-and-Claude]] each file goes in on its own: `unifi.unifidump.json`, `unifi-2.unifidump.json`, `sonicwall.json`, `sonicwall-2.json`, `meraki-2.json` and so on.
 
 The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7) or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 

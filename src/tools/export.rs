@@ -186,7 +186,7 @@ pub struct ExportTool {
 /// database can run to hundreds of MB) may be bigger.
 const TEXT_MAX: usize = 256 << 20;
 
-/// Most files converted from one pick or drop: one of each kind is shown.
+/// Most files converted from one pick or drop.
 const OPEN_MAX: usize = 16;
 
 /// Add a line to the errors shown.
@@ -321,8 +321,29 @@ impl ExportTool {
 
     /// The UniFi backup opened last, and its conversion.
     pub fn unifi(&self) -> Option<(&PathBuf, &unifi::Report)> {
-        self.slots.iter().rev().find_map(|s| match &s.export {
+        self.unifis().last()
+    }
+
+    /// Every UniFi backup open, in the order opened, with its conversion.
+    pub fn unifis(&self) -> impl Iterator<Item = (&PathBuf, &unifi::Report)> {
+        self.slots.iter().filter_map(|s| match &s.export {
             Export::Unifi(r) => Some((&s.path, r)),
+            _ => None,
+        })
+    }
+
+    /// Every SonicWall export or report open, in the order opened.
+    pub fn sonicwalls(&self) -> impl Iterator<Item = (&PathBuf, &sonicwall::Report)> {
+        self.slots.iter().filter_map(|s| match &s.export {
+            Export::SonicWall(r) => Some((&s.path, r)),
+            _ => None,
+        })
+    }
+
+    /// Every Meraki export open, in the order opened.
+    pub fn merakis(&self) -> impl Iterator<Item = (&PathBuf, &meraki::Report)> {
+        self.slots.iter().filter_map(|s| match &s.export {
+            Export::Meraki(r) => Some((&s.path, r)),
             _ => None,
         })
     }
@@ -352,42 +373,23 @@ impl ExportTool {
         self.generation
     }
 
-    /// The files the Map is drawn from: the UniFi backup, SonicWall export
-    /// and /mapnetwork map opened last of each.
+    /// The files the Map is drawn from, in the order opened: every UniFi
+    /// backup and SonicWall export, and the /mapnetwork map opened last.
     pub fn map_sources(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = [
-            self.unifi().map(|u| u.0),
-            self.sonicwall().map(|s| s.0),
-            self.mapnetwork().map(|m| m.0),
-        ]
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect();
-        v.dedup();
-        v
+        let map = self.mapnetwork().map(|m| m.0);
+        self.slots
+            .iter()
+            .filter(|s| {
+                matches!(s.export, Export::Unifi(_) | Export::SonicWall(_)) || Some(&s.path) == map
+            })
+            .map(|s| s.path.clone())
+            .collect()
     }
 
     /// The /mapnetwork map opened last.
     pub fn mapnetwork(&self) -> Option<(&PathBuf, &mapnetwork::Doc)> {
         self.slots.iter().rev().find_map(|s| match &s.export {
             Export::Map(d) => Some((&s.path, &**d)),
-            _ => None,
-        })
-    }
-
-    /// The Meraki export opened last, and its conversion.
-    pub fn meraki(&self) -> Option<(&PathBuf, &meraki::Report)> {
-        self.slots.iter().rev().find_map(|s| match &s.export {
-            Export::Meraki(r) => Some((&s.path, r)),
-            _ => None,
-        })
-    }
-
-    /// The SonicWall export opened last, and its conversion.
-    pub fn sonicwall(&self) -> Option<(&PathBuf, &sonicwall::Report)> {
-        self.slots.iter().rev().find_map(|s| match &s.export {
-            Export::SonicWall(r) => Some((&s.path, r)),
             _ => None,
         })
     }
@@ -532,8 +534,8 @@ impl ExportTool {
     }
 
     /// Convert `paths` one after another, or ask for files first when None.
-    /// Each lands in its kind's slot, so a UniFi backup and a SonicWall
-    /// export picked together both show.
+    /// Each lands in a slot of its own, so every backup and export picked
+    /// together shows, and the Map and Site Bundle take them all.
     fn start(&mut self, ctx: &egui::Context, paths: Option<Vec<PathBuf>>) {
         self.err = None;
         self.failed.clear();
@@ -591,8 +593,12 @@ impl ExportTool {
                     clients_choice(ui, "export_clients", &mut self.clients)
                 })
                 .inner;
-            if toggled && let Some((p, _)) = self.unifi() {
-                self.start(ui.ctx(), Some(vec![p.clone()]));
+            if toggled {
+                // Every UniFi backup open is read again with the new setting.
+                let backups: Vec<PathBuf> = self.unifis().map(|(p, _)| p.clone()).collect();
+                if !backups.is_empty() {
+                    self.start(ui.ctx(), Some(backups));
+                }
             }
             if let Some(p) = &self.pending {
                 widgets::spinner(ui);
@@ -818,6 +824,43 @@ mod tests {
         assert_eq!(t.mapnetwork().unwrap().0, &PathBuf::from("/x/a.dc.html"));
         assert_eq!(t.slots.len(), 2);
         assert_eq!(t.shown, 1);
+    }
+
+    /// Two firewalls' exports open: both feed the Map and the bundle, in the
+    /// order opened, and Reload reads both again.
+    #[test]
+    fn every_export_open_is_a_map_source() {
+        let exp = |name: &str| {
+            let text = (0..12)
+                .map(|i| format!("iface_name_{i}=X{i}&interface_Zone_{i}=LAN&"))
+                .collect::<String>()
+                + &format!("shortProdName=TZ%20270&firewallName={name}");
+            convert(text.into_bytes(), unifi::Clients::None).unwrap()
+        };
+        let mut t = ExportTool::default();
+        let map = || convert(MAP.as_bytes().to_vec(), unifi::Clients::None).unwrap();
+        t.shown = land(
+            &mut t.slots,
+            PathBuf::from("/x/fw-north.exp"),
+            exp("fw-north"),
+        );
+        t.shown = land(&mut t.slots, PathBuf::from("/x/old.dc.html"), map());
+        t.shown = land(
+            &mut t.slots,
+            PathBuf::from("/x/fw-south.wri"),
+            exp("fw-south"),
+        );
+        t.shown = land(&mut t.slots, PathBuf::from("/x/new.dc.html"), map());
+        let names: Vec<String> = t.sonicwalls().map(|(p, _)| file_name(p)).collect();
+        assert_eq!(names, ["fw-north.exp", "fw-south.wri"]);
+        assert_eq!(
+            t.map_sources(),
+            [
+                PathBuf::from("/x/fw-north.exp"),
+                PathBuf::from("/x/fw-south.wri"),
+                PathBuf::from("/x/new.dc.html"),
+            ]
+        );
     }
 
     #[test]
