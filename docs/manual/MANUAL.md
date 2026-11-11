@@ -118,6 +118,8 @@ Five parts, the same on every tab:
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
 | **Bottom**: the status bar | This computer's LAN address, gateway and public (WAN) address, **Refresh**; what's running and the version on the right |
 
+The first time it opens, is-alive takes 1120 × 720, or the whole screen on a small one (a 1080p laptop at 150%, or 1366 × 768), so the status bar isn't left under the taskbar. After that it opens at the size you left it, maximised if it was.
+
 ### The title bar (top)
 
 - **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#18-site-bundle-and-claude).

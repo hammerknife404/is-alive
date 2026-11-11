@@ -124,8 +124,12 @@ struct App {
     /// The tab on screen and when it appeared, for the fade-in.
     shown_tab: Tab,
     tab_since: f64,
-    /// Window size last frame, remembered for the next launch.
+    /// Window size last frame as a normal window, remembered for the next
+    /// launch, and whether it's maximised.
     size: Option<egui::Vec2>,
+    maximized: bool,
+    /// The first window has been fitted to the screen (see `fit_first`).
+    fitted: bool,
     ping: tools::ping::PingTool,
     ports: tools::ports::PortTool,
     trace: tools::trace::TraceTool,
@@ -223,7 +227,7 @@ impl eframe::App for App {
         if self.tab == Tab::Map {
             self.map_call.seen();
         }
-        self.size = ui.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+        self.fit_first(ui.ctx());
         self.poll_all(ui.ctx(), now);
         // Under every panel; Miami's panels are translucent over it.
         if self.look.theme == theme::Theme::Miami {
@@ -261,15 +265,58 @@ impl eframe::App for App {
         let size = self
             .size
             .map(|s| (s.x.round() as u32, s.y.round() as u32))
-            .filter(|&(w, h)| (620..=8000).contains(&w) && (400..=8000).contains(&h));
-        if size.is_some() && size != self.look.size {
+            .filter(|&(w, h)| (620..=8000).contains(&w) && (400..=8000).contains(&h))
+            .or(self.look.size);
+        if size != self.look.size || self.maximized != self.look.maximized {
             self.look.size = size;
+            self.look.maximized = self.maximized;
             theme::save(&self.look);
         }
     }
 }
 
+/// A screen the first window (1120 × 720 points and a title bar) doesn't
+/// fit on with a taskbar: a 1080p laptop at 150% (1280 × 720 points), or
+/// 1366 × 768. The window opens maximised there.
+fn small_screen(monitor: egui::Vec2) -> bool {
+    monitor.y < 800.0 || monitor.x < 1200.0
+}
+
 impl App {
+    /// Note the window's size (as a normal window) and whether it's
+    /// maximised. The first time is-alive opens (no size saved), once the
+    /// screen's size is known, a small screen gets the window maximised:
+    /// the system only shrinks a window to the screen, not to what the
+    /// taskbar leaves, so the status bar went under it.
+    fn fit_first(&mut self, ctx: &egui::Context) {
+        let (inner, maximized, monitor) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.inner_rect.map(|r| r.size()), v.maximized, v.monitor_size)
+        });
+        if let Some(m) = maximized {
+            self.maximized = m;
+        }
+        if maximized == Some(false) {
+            self.size = inner;
+        }
+        if self.fitted || self.shots.is_some() {
+            return;
+        }
+        // Maximised last time: asked again on the first frame, since some
+        // window managers ignore it on a window that isn't shown yet.
+        if self.look.maximized {
+            self.fitted = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        } else if self.look.size.is_some() {
+            self.fitted = true;
+        } else if let Some(m) = monitor {
+            self.fitted = true;
+            if small_screen(m) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        }
+    }
+
     /// Ctrl+1 … Ctrl+9 for the first nine tabs, Ctrl+0 for Results; F1
     /// opens the manual at this tab's chapter.
     fn tab_keys(&mut self, ui: &mut egui::Ui) {
@@ -1130,6 +1177,7 @@ fn main() {
             .with_app_id("is-alive")
             .with_inner_size(size)
             .with_min_inner_size([620.0, 400.0])
+            .with_maximized(look.maximized)
             .with_drag_and_drop(true)
             .with_icon(icon()),
         renderer: plan.renderer,
@@ -1158,6 +1206,8 @@ fn main() {
                 shown_tab: Tab::Ping,
                 tab_since: f64::NEG_INFINITY,
                 size: None,
+                maximized: look.maximized,
+                fitted: false,
                 ping: Default::default(),
                 ports: Default::default(),
                 trace: Default::default(),
@@ -1242,8 +1292,23 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Tab, Target, drop_hint, drop_target, notice_toasts, route_drop};
+    use super::{
+        Tab, Target, drop_hint, drop_target, egui, notice_toasts, route_drop, small_screen,
+    };
     use std::path::{Path, PathBuf};
+
+    /// The screens the first window opens maximised on: a 1080p laptop at
+    /// 150% and 1366 × 768; not 1280 × 800 (it fits) or bigger.
+    #[test]
+    fn small_screens_get_a_maximised_first_window() {
+        let at = |w: f32, h: f32| small_screen(egui::vec2(w, h));
+        assert!(at(1280.0, 720.0));
+        assert!(at(1366.0, 768.0));
+        assert!(at(1097.0, 617.0)); // 1080p at 175%
+        assert!(!at(1280.0, 800.0));
+        assert!(!at(1920.0, 1080.0));
+        assert!(!at(1440.0, 900.0));
+    }
 
     /// Where a dropped file goes, by the tab it's dropped on.
     #[test]
