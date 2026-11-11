@@ -118,6 +118,8 @@ Five parts, the same on every tab:
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
 | **Bottom**: the status bar | This computer's LAN address, gateway and public (WAN) address, **Refresh**; what's running and the version on the right |
 
+The first time it opens, is-alive takes 1120 × 720, or the whole screen on a small one (a 1080p laptop at 150%, or 1366 × 768), so the status bar isn't left under the taskbar. After that it opens at the size you left it, maximised if it was.
+
 ### The title bar (top)
 
 - **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#18-site-bundle-and-claude).
@@ -148,7 +150,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
 
-**Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch never keeps Results: they're in memory only, and gone when you switch or close, because its runs can be any client's.
+**Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch keeps its Results for a day (**Keep for a day**, the same setting): a crash, a flat battery or closing by mistake doesn't lose the visit, but runs older than 24 hours are gone the next time it opens, so one client's runs don't follow you to the next.
 
 ### How every tab is laid out
 
@@ -197,7 +199,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | Port Check | The gateway's common ports (the **Common** preset) |
 | Traceroute | The route to `1.1.1.1`, to show the way out to the internet |
 | DNS Lookup | `cloudflare.com` through this computer's own DNS settings |
-| Subnet Sweep | Every address on this computer's subnet |
+| Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it) |
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
@@ -442,7 +444,7 @@ How to read it:
 | **Timeout** | How long to wait for each address (default 750 ms) |
 | **Speed** | As in [Port Check](#5-port-check) |
 | **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
-| **Check mgmt ports** | After the sweep, check each live device's management ports (off by default; see below) |
+| **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
 | **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run) |
 
 ### How it finds devices
@@ -455,11 +457,19 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
-**Check mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 on each live device: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients. It's a port scan, so it's off unless you tick it.
+**Mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
+
+| Mgmt ports | Checks |
+|---|---|
+| **Off** | Nothing: only what answers ping and ARP |
+| **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. Fewer probes for intrusion detection to notice |
+| **All hosts** | Every live device, phones and laptops too |
+
+Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open. Full scan uses the same choice: set **Off** where you mustn't port-scan.
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, after **Check mgmt ports**, its open ports with what each is for. Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
@@ -470,7 +480,7 @@ Click the row again, or the inspector's **×**, to close it. In a window 1100 po
 ### Example: what's on the office network?
 
 1. Open **Subnet Sweep**. **Range** already says this computer's subnet, say `192.168.1.0/24`.
-2. Open **Options** and tick **Check mgmt ports** (if you're allowed to port-scan this network), then press **Enter**.
+2. Leave **Mgmt ports** (under **Options**) on **Smart** if you're allowed to port-scan this network, or set **Off** if not, then press **Enter**.
 3. After a few seconds:
 
    ```
@@ -566,7 +576,7 @@ Big websites behind CDNs (Google, Microsoft, Cloudflare) legitimately answer dif
 | Control | What it does |
 |---|---|
 | **Domain** | The domain. `example.com`, an email address (`user@example.com`) or a web address (`https://www.example.com/page`) all work; it takes the domain out of them |
-| **Resolver** | The public DNS server to ask, directly (default `1.1.1.1`; any address works). Asking directly means you see what the internet sees, not this office's DNS |
+| **Resolver** | The public DNS server to ask, directly (default `1.1.1.1`; any address works). Asking directly means you see what the internet sees, not this office's DNS. Where `1.1.1.1` doesn't answer (a network that lets DNS out only through its own servers), the run asks this computer's own DNS server instead and says so in amber above the checks and in the saved run: that server may filter or rewrite answers |
 | **DKIM** | Extra DKIM selectors to try, separated by commas or spaces. The common ones (Microsoft 365, Google, Mailchimp, SendGrid and more) are always tried; hover the hint to see them |
 
 Press **Enter** in any of the three fields to start. All fifteen checks run at once and fill in as they finish, usually within a second or two.
@@ -775,7 +785,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | Item | What it does |
 |---|---|
 | **Open…** | Open backups, exports, `/mapnetwork` maps or saved maps; you stay on the Map, which redraws (see *Opening files on the Map*, above). Also on an empty map |
-| **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The inspector of a switch or AP (or of its **+N more** card) has them as buttons |
+| **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some** (the live map's level until you pick another): up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The inspector of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site, or of another site (**Other sites ›**; see *Compare with the last visit*, below) |
@@ -871,11 +881,11 @@ Back at a site, **More › Compare** (on the live map) lists this site's saved m
 
 **What isn't compared, and why:**
 
-- **Open ports**, unless both maps had ports checked (a sweep with **Check mgmt ports**, or a backup or map that lists them). Otherwise every port would read as *no longer open*.
+- **Open ports**, for a device whose ports were checked on both maps (a sweep with **Mgmt ports** on **Smart** or **All hosts**). A device **Smart** skipped on either isn't compared, so its ports don't read as *no longer open*.
 - **New clients** (phones, laptops), unless the saved map was saved with **Clients: All**: a map holds only the clients it shows, so one saved with **Some** can't say whether a client is new. Clients gone or changed are still listed, since the live map is compared with every client, whatever **Clients** shows now. To compare clients next time, set **Clients: All** before **+ Save current**.
 - Only maps marked **As found** are offered (not a plan or a training map), and not on an example. Opening another site stops the comparison.
 
-**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **More › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
+**Example: what changed at the office since October?** Sweep (with **Mgmt ports** on), then **More › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
 
 ### Selecting cards
 
@@ -1227,14 +1237,14 @@ At the top of the list:
 | **Filter** | Show only runs whose tool name or output contains this text (`FAIL`, `443`, `timeout`, a hostname). × clears it |
 | **All runs ▾ › Copy all / Save all…** | Every run listed, as text |
 | **All runs ▾ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
-| **All runs ▾ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). Greyed out in Scratch, which never keeps them |
+| **All runs ▾ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). In Scratch it reads **Keep for a day**: the same setting, keeping Scratch's runs for 24 hours |
 | **All runs ▾ › Clear all** | Empty the log (click twice); with **Keep with site** on, the saved copy too |
 
 Copy, Save and Export always follow the filter, so filter to one customer's hosts and export just those. For the whole visit on one page (map, findings, devices and notes, with these runs if you choose), use the [Site report](#site-report).
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
-**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, or with it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the list says how many.
+**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, in `results.json` in your profile folder, for 24 hours from each run. With it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the list says how many.
 
 ### Example: a report for the ticket
 
@@ -1431,12 +1441,12 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results are never written: they're cleared when you switch sites and gone when the app closes.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results go in `results.json` in the profile folder, readable only by your user account, and each run is dropped 24 hours after it started.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
 
-⚠️ **Scanning is visible.** Port Check, Subnet Sweep, Check mgmt ports and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
+⚠️ **Scanning is visible.** Port Check, Subnet Sweep (with its **Mgmt ports**, **Smart** by default) and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
 
 ---
 

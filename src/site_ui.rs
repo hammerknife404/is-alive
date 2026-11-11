@@ -223,8 +223,12 @@ impl App {
                         c[0].strong(format!("{here} keeps"));
                         c[0].label("• Its notes");
                         c[0].label("• Its saved maps and card notes");
-                        if !scratch && keep {
-                            c[0].label("• Its Results");
+                        if keep {
+                            c[0].label(if scratch {
+                                "• Its Results, for a day"
+                            } else {
+                                "• Its Results"
+                            });
                         }
                         if !scratch {
                             c[0].label(match remembered {

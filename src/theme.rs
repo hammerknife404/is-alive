@@ -942,8 +942,11 @@ pub struct Settings {
     pub glow: bool,
     /// The Miami scene as if off a worn VHS tape (on the GPU).
     pub vhs: bool,
-    /// Window size (points) at the last exit.
+    /// Window size (points) at the last exit, as a normal window (not
+    /// maximised).
     pub size: Option<(u32, u32)>,
+    /// The window was maximised at the last exit: it opens maximised.
+    pub maximized: bool,
     /// Show the Map tab's accuracy note (until it's closed).
     pub map_note: bool,
     /// Look up the public IP when the app starts (one DNS query to
@@ -956,7 +959,7 @@ pub struct Settings {
     /// (Ctrl+S) writes them.
     pub notes_autosave: bool,
     /// Each site keeps its Results (in its folder) from one visit to the
-    /// next. Off: Results live in memory only, as in Scratch.
+    /// next, and Scratch for a day. Off: Results live in memory only.
     pub results_keep: bool,
     /// The site open when the app last closed (its folder name); None is
     /// Scratch.
@@ -1011,6 +1014,7 @@ impl Default for Settings {
             glow: true,
             vhs: true,
             size: None,
+            maximized: false,
             map_note: true,
             wan_on_start: WAN_ON_START,
             updates_on_start: UPDATES_ON_START,
@@ -1058,6 +1062,7 @@ impl Settings {
                 "glow" => s.glow = v.trim() != "0",
                 "vhs" => s.vhs = v.trim() != "0",
                 "map_note" => s.map_note = v.trim() != "0",
+                "maximized" => s.maximized = v.trim() == "1",
                 "wan_on_start" => s.wan_on_start = v.trim() != "0",
                 "updates_on_start" => s.updates_on_start = v.trim() != "0",
                 "notes_autosave" => s.notes_autosave = v.trim() != "0",
@@ -1158,6 +1163,9 @@ impl Settings {
         }
         if let Some((w, h)) = self.size {
             s += &format!("size={w}x{h}\n");
+        }
+        if self.maximized {
+            s += "maximized=1\n";
         }
         if !self.map_note {
             s += "map_note=0\n";
@@ -1574,6 +1582,7 @@ mod tests {
             glow: false,
             vhs: false,
             size: Some((1280, 800)),
+            maximized: true,
             map_note: false,
             wan_on_start: !WAN_ON_START,
             updates_on_start: !UPDATES_ON_START,
@@ -1608,6 +1617,10 @@ mod tests {
         assert!(Settings::default().manual_window);
         assert!(!Settings::default().text().contains("manual_window"));
         assert!(!Settings::parse("manual_window=0\n").manual_window);
+        // Maximised: only written when it was.
+        assert!(!Settings::default().text().contains("maximized"));
+        assert!(Settings::parse("maximized=1\n").maximized);
+        assert!(!Settings::parse("maximized=yes\n").maximized);
         // The nav: follows the window unless pinned, and only a pin is written.
         assert_eq!(Settings::default().nav, None);
         assert!(!Settings::default().text().contains("nav="));

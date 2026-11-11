@@ -252,6 +252,9 @@ pub struct Node {
     pub client: bool,
     pub seen_by: Vec<&'static str>,
     pub open: Vec<u16>,
+    /// Its management ports were checked (a sweep's port pass reached it),
+    /// so an empty `open` means none answered, not "not looked".
+    pub ports_checked: bool,
     /// Parent, link and a label for the link (the parent's port). None only
     /// for the internet.
     pub up: Option<(usize, Link, Option<String>)>,
@@ -574,6 +577,8 @@ pub struct Seen {
     /// None: answered ARP, not ping.
     pub rtt: Option<f64>,
     pub open: Vec<u16>,
+    /// Its management ports were checked (`open` then says what answered).
+    pub checked: bool,
 }
 
 /// A backup or export open in Config Export: its file's name and the JSON
@@ -1238,6 +1243,48 @@ fn caps(s: &str) -> String {
     }
 }
 
+/// Makers of the network cards in laptops, desktops and phones: a host
+/// with one is someone's computer or phone, not gear. (Quanta Computer
+/// only: Quanta Network Systems makes switches.)
+const CLIENT_NICS: &[&str] = &[
+    "apple",
+    "samsung electronics",
+    "intel corporate",
+    "realtek",
+    "liteon",
+    "azurewave",
+    "hon hai",
+    "chicony",
+    "murata",
+    "microsoft",
+    "lcfc",
+    "wistron",
+    "quanta computer",
+    "compal",
+    "pegatron",
+    "huawei device",
+    "motorola mobility",
+    "oneplus",
+    "xiaomi communications",
+    "lenovo",
+];
+
+/// Whether a swept host's management ports are worth a look (the sweep's
+/// Smart check), from its MAC: yes for gear, NAS, printers and cameras
+/// (their admin pages, a telnet left open) and for a maker this list
+/// doesn't know or no MAC at all (ports are what tell its role then); no
+/// for a private MAC or a laptop or phone network card's maker.
+pub fn ports_worth_checking(vendor: Option<&str>, private: bool) -> bool {
+    if private {
+        return false;
+    }
+    let infra = gear_brand(vendor).is_some()
+        || has(vendor, NAS)
+        || has(vendor, PRINTERS)
+        || has(vendor, CAMERAS);
+    infra || vendor.is_none() || !has(vendor, CLIENT_NICS)
+}
+
 /// Role of a host the sweep found and nothing else describes.
 fn classify(vendor: Option<&str>, private: bool, open: &[u16]) -> (Zone, String, bool) {
     let p = |x| open.contains(&x);
@@ -1561,6 +1608,7 @@ impl B {
                 n.detail(at(line));
             }
         }
+        n.ports_checked |= s.checked;
         if !s.open.is_empty() {
             n.detail(at(format!("Open ports: {}", port_names(&s.open))));
             for p in &s.open {
@@ -2940,6 +2988,7 @@ mod tests {
             name: Some("NAS".into()),
             rtt,
             open: vec![],
+            checked: true,
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -2979,6 +3028,7 @@ mod tests {
             name: None,
             rtt: Some(1.0),
             open: open.to_vec(),
+            checked: true,
         };
         let input = Input {
             sweep: vec![
@@ -3078,6 +3128,7 @@ mod tests {
                 name: None,
                 rtt: Some(1.0),
                 open: vec![23],
+                checked: true,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -3366,6 +3417,7 @@ mod tests {
                 name: (i % 3 == 0).then(|| format!("host{i}")),
                 rtt: Some(1.0),
                 open: Vec::new(),
+                checked: true,
             })
             .collect();
         let make = |clients, reveal| {
@@ -3503,6 +3555,7 @@ mod tests {
             name: None,
             rtt: Some(1.0),
             open: vec![],
+            checked: true,
         };
         let at_office = build(&Input {
             unifi: one(&j),

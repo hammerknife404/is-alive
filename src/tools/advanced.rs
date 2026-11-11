@@ -5,6 +5,7 @@ use crate::net::dnsq::{self, Client};
 use crate::net::domain::{self, CORE, Check, NAMES, Status};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, Color32, RichText, Ui};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 /// Results (CSV export, the saved log): one row per result, these columns.
@@ -22,6 +23,8 @@ pub const COLUMNS: &[&str] = &[
 const DEFAULT_RESOLVER: &str = "1.1.1.1";
 
 enum Ev {
+    /// The resolver asked (its IP), and why it isn't the one in the box.
+    Resolver(String, Option<String>),
     Check(usize, Check),
     Done(f64),
 }
@@ -34,6 +37,8 @@ pub struct AdvancedTool {
     run_started: Option<String>,
     /// Domain and resolver of the last run, for the report header.
     ran: (String, String),
+    /// Why the last run asked another resolver than the box's.
+    note: Option<String>,
     checks: Vec<Option<Check>>,
     took: Option<f64>,
     err: Option<String>,
@@ -48,6 +53,7 @@ impl Default for AdvancedTool {
             job: None,
             run_started: None,
             ran: Default::default(),
+            note: None,
             checks: Vec::new(),
             took: None,
             err: None,
@@ -78,6 +84,10 @@ impl AdvancedTool {
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
         pump(&mut self.job, |ev| match ev {
+            Ev::Resolver(ip, note) => {
+                self.ran.1 = ip;
+                self.note = note;
+            }
             Ev::Check(i, c) => self.checks[i] = Some(c),
             Ev::Done(ms) => self.took = Some(ms),
         })
@@ -147,6 +157,9 @@ impl AdvancedTool {
             self.start(ui.ctx());
         }
         widgets::error(ui, &self.err);
+        if let Some(n) = &self.note {
+            ui.label(RichText::new(format!("⚠ {n}")).color(widgets::warn()));
+        }
         ui.separator();
 
         let done: Vec<Status> = self.checks.iter().flatten().map(Check::status).collect();
@@ -227,6 +240,9 @@ impl AdvancedTool {
 
     fn report(&self) -> String {
         let mut s = format!("Domain health of {} via {}\n", self.ran.0, self.ran.1);
+        if let Some(n) = &self.note {
+            s += &format!("Note: {n}\n");
+        }
         for (i, name) in NAMES.iter().enumerate() {
             if i == 0 || i == CORE {
                 s += if i == 0 {
@@ -328,10 +344,19 @@ impl AdvancedTool {
         };
         self.domain = shown;
         self.ran = (d.clone(), server.ip().to_string());
+        self.note = None;
+        // Left at 1.1.1.1: where it doesn't answer, this machine's own DNS.
+        let fallback = res == DEFAULT_RESOLVER;
         self.checks = vec![None; NAMES.len()];
         self.run_started = Some(log::now());
         self.job = Some(Job::spawn(ctx, move |tx| {
             let t0 = Instant::now();
+            let (server, note) = if fallback {
+                pick_resolver(server, &dnsq::system_servers(), answers)
+            } else {
+                (server, None)
+            };
+            tx.send(Ev::Resolver(server.ip().to_string(), note));
             let c = Client::new(server);
             domain::run(&c, &d, &selectors, tx.cancel_flag(), |i, check| {
                 tx.send(Ev::Check(i, check))
@@ -339,6 +364,59 @@ impl AdvancedTool {
             tx.send(Ev::Done(t0.elapsed().as_secs_f64() * 1000.0));
         }));
     }
+}
+
+/// The resolver to ask: `default`, or where it doesn't answer (a network
+/// that lets DNS out only through its own servers), the first of the
+/// machine's own `system` servers that does, with a note saying so.
+fn pick_resolver(
+    default: SocketAddr,
+    system: &[IpAddr],
+    answers: impl Fn(SocketAddr) -> bool,
+) -> (SocketAddr, Option<String>) {
+    if answers(default) {
+        return (default, None);
+    }
+    let theirs: Vec<SocketAddr> = system
+        .iter()
+        .map(|&ip| SocketAddr::new(ip, 53))
+        .filter(|s| *s != default)
+        .collect();
+    let d = default.ip();
+    match theirs.iter().find(|&&s| answers(s)) {
+        Some(&s) => (
+            s,
+            Some(format!(
+                "{d} didn't answer (this network may let DNS out only through its own servers), \
+                 so this machine's DNS server {} was asked instead: it may filter or rewrite \
+                 answers.",
+                s.ip()
+            )),
+        ),
+        None if theirs.is_empty() => (default, Some(format!("{d} didn't answer."))),
+        None => (
+            default,
+            Some(format!(
+                "{d} didn't answer, nor did this machine's DNS servers ({}): DNS may be blocked \
+                 here.",
+                theirs
+                    .iter()
+                    .map(|s| s.ip().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        ),
+    }
+}
+
+/// A resolver answers a question for the root's nameservers within a
+/// second (or a second try).
+fn answers(server: SocketAddr) -> bool {
+    let c = Client {
+        timeout: std::time::Duration::from_secs(1),
+        ..Client::new(server)
+    };
+    c.ask(".", dnsq::NS).is_ok()
 }
 
 fn check_ui(ui: &mut Ui, name: &str, check: Option<&Check>, running: bool) {
@@ -393,4 +471,38 @@ fn check_ui(ui: &mut Ui, name: &str, check: Option<&Check>, running: bool) {
                 );
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(s: &str) -> SocketAddr {
+        SocketAddr::new(s.parse().unwrap(), 53)
+    }
+
+    #[test]
+    fn a_resolver_that_doesnt_answer_falls_back_to_the_machines_own() {
+        let default = at(DEFAULT_RESOLVER);
+        let system: Vec<IpAddr> = ["1.1.1.1", "192.168.1.1", "192.168.1.2"]
+            .iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
+        // 1.1.1.1 answers: asked, no note.
+        assert_eq!(pick_resolver(default, &system, |_| true), (default, None));
+        // Blocked: the first of the machine's own that answers (1.1.1.1 in
+        // its list isn't asked twice), and the note says which and why.
+        let (s, note) = pick_resolver(default, &system, |s| s == at("192.168.1.2"));
+        assert_eq!(s, at("192.168.1.2"));
+        let note = note.unwrap();
+        assert!(note.contains("1.1.1.1 didn't answer") && note.contains("192.168.1.2"));
+        // Nothing answers: 1.1.1.1 stays, and the note names what was tried.
+        let (s, note) = pick_resolver(default, &system, |_| false);
+        assert_eq!(s, default);
+        assert!(note.unwrap().contains("192.168.1.1, 192.168.1.2"));
+        assert_eq!(
+            pick_resolver(default, &[], |_| false),
+            (default, Some("1.1.1.1 didn't answer.".into()))
+        );
+    }
 }

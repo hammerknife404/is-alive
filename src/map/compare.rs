@@ -12,9 +12,9 @@
 //! new.
 //!
 //! What can't be told isn't claimed:
-//! - Ports are compared only when both maps had their ports checked
-//!   (a sweep's Check mgmt ports, or a source that lists them); otherwise
-//!   "closed" would only mean "not looked at".
+//! - A card's ports are compared only when they were checked on both maps
+//!   (a sweep's Mgmt ports reached it; a Smart sweep skips phones and
+//!   laptops); otherwise "closed" would only mean "not looked at".
 //! - Clients come and go, and a saved map holds only the ones it showed.
 //!   One saved with every client (Clients: All) has its new clients
 //!   flagged; otherwise only new infrastructure is, and a client is still
@@ -279,7 +279,9 @@ pub fn diff(was: &Map, now: &Map, was_all: bool) -> Diff {
         }
     }
 
-    let checked = |m: &[&Node]| m.iter().any(|n| !n.open.is_empty());
+    // Per card: a sweep's Smart check leaves phones and laptops out, and
+    // "closed" on one of those would only mean "not looked".
+    let checked = |m: &[&Node]| m.iter().any(|n| n.ports_checked);
     let ports = checked(&old) && checked(&cur);
     let mut d = Diff {
         ports,
@@ -300,7 +302,7 @@ pub fn diff(was: &Map, now: &Map, was_all: bool) -> Diff {
         {
             cs.push(Change::Ip { was: a, now: b });
         }
-        if ports {
+        if ports && o.ports_checked && n.ports_checked {
             let then: HashSet<u16> = o.open.iter().copied().collect();
             let now: HashSet<u16> = n.open.iter().copied().collect();
             let mut opened: Vec<u16> = now.difference(&then).copied().collect();
@@ -367,6 +369,9 @@ mod tests {
             ip: ip.map(|s| s.parse().unwrap()),
             mac,
             open: open.to_vec(),
+            // A card with open ports was checked; others weren't, unless
+            // a test says so.
+            ports_checked: !open.is_empty(),
             ..Node::default()
         }
     }
@@ -481,6 +486,19 @@ mod tests {
         let d = diff(&was, &bare, true);
         assert!(!d.ports && d.is_empty());
         assert!(d.report("x", "y").contains("open ports weren't compared"));
+        // A Smart sweep skipped the server this time: its ports weren't
+        // looked at, so nothing "closed"; the switch, checked with nothing
+        // open now, did close 80.
+        let mut switch = node("b", "Switch", Some("10.0.0.2"), Some(B), &[]);
+        switch.ports_checked = true;
+        let smart = map(vec![
+            node("a", "Server", Some("10.0.0.5"), Some(A), &[]),
+            switch,
+        ]);
+        let d = diff(&was, &smart, true);
+        assert!(d.ports);
+        assert!(d.changes("a").is_none(), "not checked isn't closed");
+        assert_eq!(d.changes("b").unwrap(), [Change::Closed(vec![80])]);
     }
 
     #[test]

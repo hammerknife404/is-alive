@@ -548,6 +548,7 @@ pub(crate) mod tests {
                 name: Some("host\u{FFFE}x\u{FFFF}".into()),
                 rtt: Some(1.0),
                 open: vec![],
+                checked: true,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             range: Some("10.0.0.0/24".into()),

@@ -1,7 +1,9 @@
 //! Results log: every finished run, timestamped, with a cap. A site keeps
 //! its own in `results.json` in its folder, so a visit's runs are there when
-//! it opens again; Scratch (no site) keeps them in memory only, since its log
-//! can mix any client's hosts.
+//! it opens again. Scratch (no site) keeps its own in the profile folder for
+//! a day (`SCRATCH_HOURS`): through a crash, a flat battery or a close by
+//! mistake, but not into the next client's visit, since its log can mix any
+//! client's hosts.
 
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -82,6 +84,17 @@ pub struct Log {
 }
 
 impl Log {
+    /// Drop the runs that started more than `hours` before `now` (and any
+    /// whose start can't be read).
+    pub fn keep_since(&mut self, now: chrono::NaiveDateTime, hours: i64) {
+        let from = now - chrono::Duration::hours(hours);
+        self.entries.retain(|e| {
+            chrono::NaiveDateTime::parse_from_str(&e.started, "%Y-%m-%d %H:%M:%S")
+                .is_ok_and(|t| t >= from)
+        });
+        self.bytes = self.entries.iter().map(|e| e.text.len()).sum();
+    }
+
     /// Changes whenever the entries do (pushes, drops, clears).
     pub fn stamp(&self) -> (usize, usize, usize) {
         (self.entries.len(), self.dropped, self.bytes)
@@ -137,11 +150,18 @@ const TOOLS: &[(&str, &[&str])] = &[
     ("Domain Health", crate::tools::advanced::COLUMNS),
 ];
 
-/// Where the open site keeps its runs; None in Scratch.
+/// Where the open site keeps its runs: its folder, or the profile folder
+/// for Scratch.
 pub fn site_file() -> Option<PathBuf> {
-    crate::site::current()?;
     Some(crate::site::dir()?.join(FILE))
 }
+
+/// A table cell for a value that wasn't looked at (a host a Smart sweep
+/// didn't port-check): Compare doesn't count it as a change.
+pub const NOT_CHECKED: &str = "not checked";
+
+/// Hours Scratch's runs are kept for, from when each started.
+pub const SCRATCH_HOURS: i64 = 24;
 
 impl Log {
     fn to_json(&self) -> String {
@@ -472,6 +492,30 @@ mod tests {
             text: "x".repeat(n),
             table: None,
         }
+    }
+
+    /// Scratch keeps a day of runs: older ones, and any whose start can't
+    /// be read, go, and the size follows.
+    #[test]
+    fn scratch_keeps_a_day_of_runs() {
+        let at = |started: &str, n: usize| Entry {
+            started: started.into(),
+            ..entry(n)
+        };
+        let mut log = Log::default();
+        log.push(at("2026-11-09 08:00:00", 10)); // two days back
+        log.push(at("2026-11-10 09:59:59", 20)); // a second too old
+        log.push(at("2026-11-10 10:00:00", 30)); // just a day
+        log.push(at("2026-11-11 09:30:00", 40));
+        log.push(at("yesterday-ish", 50));
+        let now = chrono::NaiveDateTime::parse_from_str("2026-11-11 10:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap();
+        let before = log.stamp();
+        log.keep_since(now, SCRATCH_HOURS);
+        let kept: Vec<usize> = log.entries.iter().map(|e| e.text.len()).collect();
+        assert_eq!(kept, [30, 40]);
+        assert_eq!(log.stamp(), (2, 0, 70));
+        assert_ne!(log.stamp(), before, "an expiry has to be written back");
     }
 
     fn temp(name: &str) -> PathBuf {

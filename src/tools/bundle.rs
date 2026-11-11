@@ -94,7 +94,7 @@ const MERAKI_MORE_WHAT: &str = "Another Meraki export from this visit, in the sa
 meraki.json: its own networks and MX appliances, each a gateway of its own. Enforced config, not \
 observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL and open management ports. Observed state.";
+with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). Observed state.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run.";

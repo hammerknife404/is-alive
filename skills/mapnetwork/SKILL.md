@@ -157,7 +157,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   subnet doesn't decide it, go by the controller site the device is at.
 - **`inventory.json` hosts:** `found_by: "arp"` means it answered ARP but drops
   ping (a firewall default, not a fault). `open_ports` is role evidence for the
-  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera).
+  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera). It is
+  `null` where that host wasn't checked (the default Smart check skips phones
+  and laptops: a private MAC, or a laptop or phone network card's maker) and
+  `[]` where it was and nothing answered: null is no evidence either way.
   `private_mac: true` is a phone, laptop or VM, never infrastructure.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;

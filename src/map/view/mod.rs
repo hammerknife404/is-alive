@@ -386,7 +386,7 @@ impl MapView {
                 } else {
                     crate::theme::data_dir()
                         .map(|dir| saved::live_clients(&dir))
-                        .unwrap_or(Clients::Off)
+                        .unwrap_or(saved::LIVE_CLIENTS)
                 }
             }
         };

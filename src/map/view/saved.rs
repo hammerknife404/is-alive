@@ -349,6 +349,7 @@ fn node_json(n: &Node, note: Option<&String>) -> Value {
         "client": n.client,
         "seen_by": n.seen_by,
         "open": n.open,
+        "ports_checked": n.ports_checked,
         "up": n.up.as_ref().map(|(p, l, port)| {
             let mut up = json!({
                 "parent": p,
@@ -452,7 +453,16 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             nodes.len()
         ));
     }
+    let says_checked = nodes.iter().any(|v| v.get("ports_checked").is_some());
     let mut nodes: Vec<Node> = nodes.iter().map(node_of).collect::<Result<_, String>>()?;
+    // Saved before cards said whether their ports were checked: a map that
+    // lists any open port had them checked, on every card.
+    if !says_checked {
+        let any = nodes.iter().any(|n| !n.open.is_empty());
+        for n in &mut nodes {
+            n.ports_checked = any;
+        }
+    }
     check_tree(&nodes)?;
     // Notes go with the user's other changes (the map puts them back on
     // the cards, redacted).
@@ -710,6 +720,10 @@ fn node_of(v: &Value) -> Result<Node, String> {
                     .collect()
             })
             .unwrap_or_default(),
+        ports_checked: v
+            .get("ports_checked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         up,
         site: v
             .get("site")
@@ -937,6 +951,11 @@ impl MapView {
     }
 }
 
+/// The live map's Clients level until one is picked: Some, so a small
+/// flat office (a router and its devices) doesn't map to one card with a
+/// +30 chip.
+pub(super) const LIVE_CLIENTS: Clients = Clients::Some;
+
 /// The live map preference is separate from each saved snapshot's view.
 pub(super) fn live_clients(dir: &Path) -> Clients {
     crate::input::read_capped(&dir.join("map-clients.txt"), 32)
@@ -945,7 +964,7 @@ pub(super) fn live_clients(dir: &Path) -> Clients {
                 .into_iter()
                 .find(|c| c.name().eq_ignore_ascii_case(s.trim()))
         })
-        .unwrap_or(Clients::Off)
+        .unwrap_or(LIVE_CLIENTS)
 }
 pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -1032,6 +1051,8 @@ mod tests {
     #[test]
     fn live_and_saved_client_visibility_survive_reload() {
         let dir = std::env::temp_dir().join(format!("is-alive-clients-{}", std::process::id()));
+        // Nothing picked yet: Some, so a small office's devices show.
+        assert_eq!(live_clients(&dir.join("never-written")), Clients::Some);
         for clients in Clients::ALL {
             save_live_clients(&dir, clients).unwrap();
             assert_eq!(live_clients(&dir), clients);
@@ -1069,6 +1090,22 @@ mod tests {
         assert_eq!(r.map.findings[0].sev, Sev::High);
         // Written again, the same text.
         assert_eq!(to_json(&r), text);
+
+        // Whether each card's ports were checked rides along per card.
+        let mut s = sample();
+        s.map.nodes[2].ports_checked = true;
+        let r = from_json(&to_json(&s)).unwrap();
+        let checked: Vec<bool> = r.map.nodes.iter().map(|n| n.ports_checked).collect();
+        assert_eq!(checked, [false, false, true, false, false]);
+        // A map saved before cards said so: one that lists open ports had
+        // them checked on every card, as Compare took it then.
+        let old: String = to_json(&sample())
+            .lines()
+            .filter(|l| !l.contains("\"ports_checked\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let r = from_json(&old).unwrap();
+        assert!(r.map.nodes.iter().all(|n| n.ports_checked));
     }
 
     #[test]
