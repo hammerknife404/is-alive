@@ -586,7 +586,7 @@ fn build_and_save(unifi: Option<PathBuf>, mut b: Bundle) -> Result<Option<Saved>
         );
     }
     // Ask first: the prompt inside the zip names the file as saved.
-    let Some(path) = rfd::FileDialog::new()
+    let Some(path) = widgets::save_dialog()
         .set_title("Save site bundle")
         .set_file_name(format!("{}.bundle.zip", bundle::slug(&b.site)))
         .add_filter("Zip", &["zip"])

@@ -657,6 +657,54 @@ pub fn safe_path(path: std::path::PathBuf, exts: &[&str]) -> std::path::PathBuf 
     }
 }
 
+/// Where Save… dialogs start (Settings › Files): the folder, and whether
+/// to go into a folder named after the open site inside it.
+static SAVE_DIR: std::sync::Mutex<(Option<std::path::PathBuf>, bool)> =
+    std::sync::Mutex::new((None, false));
+
+/// Settings › Files changed (or the app started): where saves start.
+pub fn set_save_dir(dir: Option<std::path::PathBuf>, by_site: bool) {
+    *SAVE_DIR.lock().unwrap_or_else(|e| e.into_inner()) = (dir, by_site);
+}
+
+/// The folder Save… dialogs start in: the one picked in Settings, or the
+/// open site's folder inside it (made the first time); None when none was
+/// picked, or it's gone (an unplugged drive): then the system decides.
+pub fn save_start() -> Option<std::path::PathBuf> {
+    let (dir, by_site) = SAVE_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let dir = dir.filter(|d| d.is_dir())?;
+    if by_site && crate::site::current().is_some() {
+        let own = dir.join(folder_name(&crate::site::name()));
+        if own.is_dir() || std::fs::create_dir_all(&own).is_ok() {
+            return Some(own);
+        }
+    }
+    Some(dir)
+}
+
+/// A site's name as a folder name on any system: the characters Windows
+/// refuses become `-`, and no trailing dots or spaces.
+pub fn folder_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect();
+    let s = s.trim().trim_end_matches(['.', ' ']).to_string();
+    if s.is_empty() { "Site".into() } else { s }
+}
+
+/// A Save dialog, starting where Settings › Files says.
+pub fn save_dialog() -> rfd::FileDialog {
+    match save_start() {
+        Some(dir) => rfd::FileDialog::new().set_directory(dir),
+        None => rfd::FileDialog::new(),
+    }
+}
+
 pub fn save_file(file_name: String, filter: &'static str, exts: Vec<&'static str>, text: String) {
     save_made(file_name, filter, exts, move || Ok(text.into_bytes()));
 }
@@ -673,7 +721,7 @@ pub fn save_made(
         // Scripted runs (IS_ALIVE_SAVE_DIR=<dir>) save there, no dialog.
         let picked = match std::env::var_os("IS_ALIVE_SAVE_DIR") {
             Some(dir) => Some(std::path::PathBuf::from(dir).join(&file_name)),
-            None => rfd::FileDialog::new()
+            None => save_dialog()
                 .set_file_name(&file_name)
                 .add_filter(filter, &exts)
                 .save_file(),
@@ -1076,6 +1124,36 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A site's name as a folder: readable, and legal on Windows too.
+    #[test]
+    fn a_sites_folder_name_is_safe_everywhere() {
+        assert_eq!(folder_name("Harbor Dental"), "Harbor Dental");
+        assert_eq!(folder_name("Acme: HQ/2nd floor?"), "Acme- HQ-2nd floor-");
+        assert_eq!(folder_name("Contoso Ltd. "), "Contoso Ltd");
+        assert_eq!(folder_name("  "), "Site");
+    }
+
+    /// Saves start in the folder picked, in the open site's own folder when
+    /// asked (made on the first save), and where the system says when the
+    /// folder isn't there.
+    #[test]
+    fn saves_start_where_settings_say() {
+        let dir = std::env::temp_dir().join(format!("is-alive-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        set_save_dir(Some(dir.clone()), false);
+        assert_eq!(save_start(), None, "not there: the system decides");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(save_start(), Some(dir.clone()));
+        // Scratch (no site open): straight into the folder, by site or not.
+        set_save_dir(Some(dir.clone()), true);
+        if crate::site::current().is_none() {
+            assert_eq!(save_start(), Some(dir.clone()));
+        }
+        set_save_dir(None, false);
+        assert_eq!(save_start(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn speed_presets_are_named_and_anything_else_is_custom() {

@@ -171,6 +171,8 @@ struct App {
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
     pick_image: Option<Job<Option<std::path::PathBuf>>>,
+    /// Settings › Files › Choose folder…, while its dialog is open.
+    pick_save_dir: Option<Job<Option<std::path::PathBuf>>>,
     /// The map's files are being read again (Reload): say how it went.
     reloading: bool,
     /// The user manual, built in: Help and F1 open it.
@@ -420,6 +422,12 @@ impl App {
         if let Some(p) = picked {
             self.look.backdrop = backdrop::Source::Image(p);
             theme::save(&self.look);
+        }
+        let mut folder = None;
+        pump(&mut self.pick_save_dir, |p| folder = p);
+        if let Some(d) = folder {
+            self.look.save_dir = Some(d);
+            self.save_dir_changed();
         }
     }
 
@@ -1027,6 +1035,7 @@ fn main() {
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
+                pick_save_dir: None,
                 reloading: false,
                 manual: Default::default(),
                 shots: shots::Shots::from_env(),
@@ -1042,6 +1051,7 @@ fn main() {
             };
             app.notes.set_autosave(app.look.notes_autosave);
             app.export.set_clients(app.look.unifi_clients);
+            widgets::set_save_dir(app.look.save_dir.clone(), app.look.save_by_site);
             app.load_results();
             // The site opens as it was left: its configs read again.
             if app.shots.is_none() && files.is_empty() {

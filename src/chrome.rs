@@ -271,6 +271,8 @@ impl App {
             theme::save(&self.look);
         }
         ui.separator();
+        self.files_settings(ui);
+        ui.separator();
         if let Some(dir) = theme::data_dir() {
             ui.weak("Settings and autosaved notes are kept in");
             ui.label(
@@ -279,6 +281,100 @@ impl App {
                     .small(),
             );
         }
+    }
+}
+
+impl crate::App {
+    /// Settings › Files: where Save… dialogs start, and a folder for each
+    /// site in it.
+    fn files_settings(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new("Files").strong());
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Save to");
+            match &self.look.save_dir {
+                Some(d) => {
+                    let gone = !d.is_dir();
+                    let text = egui::RichText::new(d.display().to_string())
+                        .monospace()
+                        .small();
+                    let r = ui.add(egui::Label::new(if gone {
+                        text.color(widgets::warn())
+                    } else {
+                        text
+                    }));
+                    if gone {
+                        r.on_hover_text(
+                            "Not there now (an unplugged drive?): saves start where the system's \
+                             dialog does until it's back",
+                        );
+                    }
+                }
+                None => {
+                    ui.weak("wherever the system's Save dialog starts");
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            let picking = self.pick_save_dir.is_some();
+            if ui
+                .add_enabled(
+                    !picking,
+                    framed(
+                        ui,
+                        egui::Button::new("Choose folder…").min_size(egui::vec2(0.0, 28.0)),
+                    ),
+                )
+                .on_hover_text("The folder every Save… and Export starts in")
+                .clicked()
+            {
+                let start = self.look.save_dir.clone();
+                self.pick_save_dir = Some(Job::spawn(ui.ctx(), move |tx| {
+                    let d = rfd::FileDialog::new().set_title("Save files to");
+                    let d = match start.filter(|s| s.is_dir()) {
+                        Some(s) => d.set_directory(s),
+                        None => d,
+                    };
+                    tx.send(d.pick_folder())
+                }));
+            }
+            if self.look.save_dir.is_some()
+                && ui
+                    .add(framed(
+                        ui,
+                        egui::Button::new("Reset").min_size(egui::vec2(0.0, 28.0)),
+                    ))
+                    .on_hover_text("Let the system's Save dialog pick the folder again")
+                    .clicked()
+            {
+                self.look.save_dir = None;
+                self.save_dir_changed();
+            }
+        });
+        let mut by_site = self.look.save_by_site;
+        if ui
+            .add_enabled(
+                self.look.save_dir.is_some(),
+                egui::Checkbox::new(&mut by_site, "A folder for each site"),
+            )
+            .on_hover_text(
+                "Inside it, a folder named after the open site (made on the first save), so \
+                 each client's files stay together. Scratch saves straight into the folder",
+            )
+            .changed()
+        {
+            self.look.save_by_site = by_site;
+            self.save_dir_changed();
+        }
+        ui.weak(
+            "Save…, Export, Save as, the Site report and the Site Bundle start there; you can \
+             still pick another folder each time.",
+        );
+    }
+
+    /// The save folder changed: kept, and used from the next save.
+    pub(crate) fn save_dir_changed(&mut self) {
+        widgets::set_save_dir(self.look.save_dir.clone(), self.look.save_by_site);
+        theme::save(&self.look);
     }
 }
 
