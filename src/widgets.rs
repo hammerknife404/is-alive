@@ -707,8 +707,53 @@ static SAVE_DIR: std::sync::Mutex<(Option<std::path::PathBuf>, bool)> =
     std::sync::Mutex::new((None, false));
 
 /// Settings › Files changed (or the app started): where saves start.
+/// With none (Reset), the next Save… asks again.
 pub fn set_save_dir(dir: Option<std::path::PathBuf>, by_site: bool) {
+    if dir.is_none() {
+        ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     *SAVE_DIR.lock().unwrap_or_else(|e| e.into_inner()) = (dir, by_site);
+}
+
+/// Asked this session where saves go (no folder chosen yet): once.
+static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The folder picked when asked, for the app to keep in its settings.
+static PICKED: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// With no folder chosen in Settings › Files, the first Save… of a
+/// session asks for one before its Save dialog; picked, it's where saves
+/// start from then on. Cancelled, this save goes ahead and the next
+/// session asks again. Runs on the save's own thread, as its dialog does.
+fn ask_where_to_save() {
+    if SAVE_DIR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .0
+        .is_some()
+        || ASKED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
+    let Some(dir) = rfd::FileDialog::new()
+        .set_title("Choose the folder is-alive saves to (Settings › Files changes it)")
+        .pick_folder()
+    else {
+        return;
+    };
+    SAVE_DIR.lock().unwrap_or_else(|e| e.into_inner()).0 = Some(dir.clone());
+    toast(
+        format!("Saving to {} (Settings › Files)", dir.display()),
+        true,
+    );
+    *PICKED.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+    if let Some(ctx) = CTX.get() {
+        ctx.request_repaint();
+    }
+}
+
+/// The folder picked when a Save… asked, once, for the settings.
+pub fn take_picked_save_dir() -> Option<std::path::PathBuf> {
+    PICKED.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
 /// The folder Save… dialogs start in: the one picked in Settings, or the
@@ -741,8 +786,10 @@ pub fn folder_name(name: &str) -> String {
     if s.is_empty() { "Site".into() } else { s }
 }
 
-/// A Save dialog, starting where Settings › Files says.
+/// A Save dialog, starting where Settings › Files says (asking for that
+/// folder first when none is chosen).
 pub fn save_dialog() -> rfd::FileDialog {
+    ask_where_to_save();
     match save_start() {
         Some(dir) => rfd::FileDialog::new().set_directory(dir),
         None => rfd::FileDialog::new(),
@@ -1286,8 +1333,11 @@ mod tests {
         if crate::site::current().is_none() {
             assert_eq!(save_start(), Some(dir.clone()));
         }
+        // Reset: the next Save… asks where again.
+        ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
         set_save_dir(None, false);
         assert_eq!(save_start(), None);
+        assert!(!ASKED.load(std::sync::atomic::Ordering::Relaxed));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

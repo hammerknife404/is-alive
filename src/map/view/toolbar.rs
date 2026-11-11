@@ -23,6 +23,11 @@ pub(super) struct TabsMenu {
     pub can_compare: bool,
     /// Saved maps of this site to compare with: label, full name, picked.
     pub compare: Vec<(String, String, bool)>,
+    /// Other sites' saved maps (as found): each site's name, and its maps'
+    /// labels and full names. Listed when Compare opens.
+    pub others: Vec<(String, Vec<(String, String)>)>,
+    /// `others` wants listing again (none yet, or a while ago).
+    pub others_stale: bool,
     /// The live map is compared with one now.
     pub comparing: bool,
     /// Clear map has something to clear.
@@ -36,6 +41,10 @@ pub(super) enum TabsAsk {
     DeleteSaved,
     /// Compare with `TabsMenu::compare[n]`.
     Compare(usize),
+    /// List other sites' saved maps (Compare › Other sites opened).
+    ListOthers,
+    /// Compare with `TabsMenu::others[site].1[map]`.
+    CompareOther(usize, usize),
     StopCompare,
     Clear,
 }
@@ -587,6 +596,31 @@ impl MapView {
                     .wrap(),
                 );
             }
+            ui.separator();
+            ui.menu_button("Other sites", |ui| {
+                ui.set_min_width(260.0);
+                if self.tabs_menu.others_stale && self.tabs_ask.is_none() {
+                    self.tabs_ask = Some(TabsAsk::ListOthers);
+                }
+                if self.tabs_menu.others.is_empty() {
+                    ui.weak("No other site has a saved map");
+                }
+                for (s, (site, maps)) in self.tabs_menu.others.iter().enumerate() {
+                    ui.menu_button(site.as_str(), |ui| {
+                        for (m, (label, name)) in maps.iter().enumerate() {
+                            if ui.button(label.as_str()).on_hover_text(name).clicked() {
+                                self.tabs_ask = Some(TabsAsk::CompareOther(s, m));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            })
+            .response
+            .on_hover_text(
+                "A saved map from another site: the same network kept as another site, \
+                 or a sister office to set beside this one",
+            );
             if self.tabs_menu.comparing {
                 ui.separator();
                 if ui.button("Stop comparing").clicked() {

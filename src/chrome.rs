@@ -305,7 +305,7 @@ impl crate::App {
                     }
                 }
                 None => {
-                    ui.weak("wherever the system's Save dialog starts");
+                    ui.weak("not chosen yet: the first Save… asks");
                 }
             }
         });
@@ -338,7 +338,7 @@ impl crate::App {
                         ui,
                         egui::Button::new("Reset").min_size(egui::vec2(0.0, 28.0)),
                     ))
-                    .on_hover_text("Let the system's Save dialog pick the folder again")
+                    .on_hover_text("Forget this folder: the next Save… asks where again")
                     .clicked()
             {
                 self.look.save_dir = None;

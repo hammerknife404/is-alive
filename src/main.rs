@@ -23,6 +23,7 @@ mod photos;
 mod redact;
 mod report;
 mod results_ui;
+mod runs_compare;
 mod shots;
 mod site;
 mod site_ui;
@@ -167,6 +168,8 @@ struct App {
     /// The run open in Results (None: the newest), and how it's shown.
     result_pick: Option<results_ui::RunKey>,
     result_view: results_ui::RunView,
+    /// The run the open one is compared with (Results › Compare): its start.
+    result_compare: Option<String>,
     look: theme::Settings,
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
@@ -238,8 +241,8 @@ impl eframe::App for App {
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
         self.report_window(ui.ctx());
-        if self.manual.window(ui.ctx()) {
-            self.look.manual_window = self.manual.own_window;
+        if let Some(own) = self.manual.window(ui.ctx()) {
+            self.look.manual_window = own;
             theme::save(&self.look);
         }
         self.close_dialog(ui.ctx());
@@ -443,7 +446,7 @@ impl App {
             self.look.backdrop = backdrop::Source::Image(p);
             theme::save(&self.look);
         }
-        let mut folder = None;
+        let mut folder = widgets::take_picked_save_dir();
         pump(&mut self.pick_save_dir, |p| folder = p);
         if let Some(d) = folder {
             self.look.save_dir = Some(d);
@@ -1139,7 +1142,10 @@ fn main() {
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
-            let look_manual_window = look.manual_window;
+            // The screenshot tour only sees the app's window: the manual
+            // stays over it there.
+            let look_manual_window =
+                look.manual_window && std::env::var_os("IS_ALIVE_SHOTS").is_none();
             let mut app = App {
                 tab: Tab::Ping,
                 shown_tab: Tab::Ping,
@@ -1174,6 +1180,7 @@ fn main() {
                 jump_to_new: false,
                 result_pick: None,
                 result_view: results_ui::RunView::Output,
+                result_compare: None,
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,
