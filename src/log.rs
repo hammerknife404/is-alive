@@ -156,6 +156,10 @@ pub fn site_file() -> Option<PathBuf> {
     Some(crate::site::dir()?.join(FILE))
 }
 
+/// A table cell for a value that wasn't looked at (a host a Smart sweep
+/// didn't port-check): Compare doesn't count it as a change.
+pub const NOT_CHECKED: &str = "not checked";
+
 /// Hours Scratch's runs are kept for, from when each started.
 pub const SCRATCH_HOURS: i64 = 24;
 

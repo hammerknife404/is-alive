@@ -5,7 +5,7 @@
 //! are set side by side with the difference. Noise (a reply time in a
 //! sweep) isn't counted as a change.
 
-use crate::log::{Entry, Table};
+use crate::log::{self, Entry, Table};
 use std::collections::BTreeMap;
 
 /// One difference between the runs.
@@ -185,16 +185,25 @@ fn rows(spec: &Spec, a: &Table, b: &Table) -> Vec<Change> {
             out.push(Change::Gone(with(k, says(spec, f))));
         }
     }
+    // A cell one run didn't look at (a host a Smart sweep didn't
+    // port-check) is no change.
+    let same = |o: &String, n: &String| o == n || o == log::NOT_CHECKED || n == log::NOT_CHECKED;
+    let alike = |a: &[Vec<String>], b: &[Vec<String>]| {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(x, y)| x.len() == y.len() && x.iter().zip(y).all(|(o, n)| same(o, n)))
+    };
     for (k, old) in &was {
         let Some(new) = now.get(k) else { continue };
-        if old == new {
+        if alike(old, new) {
             continue;
         }
         let how = if let ([o], [n]) = (old.as_slice(), new.as_slice()) {
             spec.fields
                 .iter()
                 .zip(o.iter().zip(n))
-                .filter(|(_, (o, n))| o != n)
+                .filter(|(_, (o, n))| !same(o, n))
                 .map(|(f, (o, n))| format!("{} {}", label(f), moved(o, n)))
                 .collect::<Vec<_>>()
                 .join("; ")
@@ -374,6 +383,24 @@ mod tests {
             ]
         );
         assert_eq!(compare(&a, &a), Diff::default(), "a run against itself");
+        // A Smart sweep that didn't port-check the NAS this time: its ports
+        // weren't looked at, so they didn't change; its name still did.
+        let c = entry(
+            "Subnet Sweep",
+            SWEEP,
+            &[
+                &row("192.0.2.1", "0.4", "gw", "443"),
+                &row("192.0.2.30", "1.1", "printer", ""),
+                &row("192.0.2.51", "0.3", "TRUENAS", log::NOT_CHECKED),
+            ],
+        );
+        assert_eq!(
+            compare(&a, &c).changes,
+            vec![Change::Changed(
+                "192.0.2.51".into(),
+                "name NAS → TRUENAS".into()
+            )]
+        );
     }
 
     /// Numbers that changed say by how much.

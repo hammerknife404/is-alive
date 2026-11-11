@@ -199,7 +199,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | Port Check | The gateway's common ports (the **Common** preset) |
 | Traceroute | The route to `1.1.1.1`, to show the way out to the internet |
 | DNS Lookup | `cloudflare.com` through this computer's own DNS settings |
-| Subnet Sweep | Every address on this computer's subnet |
+| Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it) |
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
@@ -444,7 +444,7 @@ How to read it:
 | **Timeout** | How long to wait for each address (default 750 ms) |
 | **Speed** | As in [Port Check](#5-port-check) |
 | **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
-| **Check mgmt ports** | After the sweep, check each live device's management ports (off by default; see below) |
+| **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
 | **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run) |
 
 ### How it finds devices
@@ -457,11 +457,19 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
-**Check mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 on each live device: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients. It's a port scan, so it's off unless you tick it.
+**Mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
+
+| Mgmt ports | Checks |
+|---|---|
+| **Off** | Nothing: only what answers ping and ARP |
+| **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. Fewer probes for intrusion detection to notice |
+| **All hosts** | Every live device, phones and laptops too |
+
+Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open. Full scan uses the same choice: set **Off** where you mustn't port-scan.
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, after **Check mgmt ports**, its open ports with what each is for. Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
@@ -472,7 +480,7 @@ Click the row again, or the inspector's **×**, to close it. In a window 1100 po
 ### Example: what's on the office network?
 
 1. Open **Subnet Sweep**. **Range** already says this computer's subnet, say `192.168.1.0/24`.
-2. Open **Options** and tick **Check mgmt ports** (if you're allowed to port-scan this network), then press **Enter**.
+2. Leave **Mgmt ports** (under **Options**) on **Smart** if you're allowed to port-scan this network, or set **Off** if not, then press **Enter**.
 3. After a few seconds:
 
    ```
@@ -873,11 +881,11 @@ Back at a site, **More › Compare** (on the live map) lists this site's saved m
 
 **What isn't compared, and why:**
 
-- **Open ports**, unless both maps had ports checked (a sweep with **Check mgmt ports**, or a backup or map that lists them). Otherwise every port would read as *no longer open*.
+- **Open ports**, for a device whose ports were checked on both maps (a sweep with **Mgmt ports** on **Smart** or **All hosts**). A device **Smart** skipped on either isn't compared, so its ports don't read as *no longer open*.
 - **New clients** (phones, laptops), unless the saved map was saved with **Clients: All**: a map holds only the clients it shows, so one saved with **Some** can't say whether a client is new. Clients gone or changed are still listed, since the live map is compared with every client, whatever **Clients** shows now. To compare clients next time, set **Clients: All** before **+ Save current**.
 - Only maps marked **As found** are offered (not a plan or a training map), and not on an example. Opening another site stops the comparison.
 
-**Example: what changed at the office since October?** Sweep (with **Check mgmt ports**), then **More › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
+**Example: what changed at the office since October?** Sweep (with **Mgmt ports** on), then **More › Compare › HQ visit, October**. *New: DESKTOP-7Q2 · 10.0.0.50* is a PC nobody mentioned; *Changed: File server: Newly open: 3389 (rdp)* is Remote Desktop turned on since; *Gone: Office printer · 10.0.0.30* is a printer that's off or replaced. **Copy** for the visit report, then **+ Save current** to keep today's map for next time.
 
 ### Selecting cards
 
@@ -1438,7 +1446,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
 
-⚠️ **Scanning is visible.** Port Check, Subnet Sweep, Check mgmt ports and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
+⚠️ **Scanning is visible.** Port Check, Subnet Sweep (with its **Mgmt ports**, **Smart** by default) and Full scan send probes that intrusion detection and endpoint protection may flag. Agree it with the site first; where it's sanctioned, the security team can exclude the tool or your computer.
 
 ---
 

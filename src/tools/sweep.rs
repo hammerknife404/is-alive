@@ -42,14 +42,84 @@ struct Host {
     mac_from: Option<&'static str>,
     /// Open ports from `ports::INFRA`, ascending.
     open: Vec<u16>,
+    /// Its management ports were tried. Smart skips phones and laptops; a
+    /// host left out keeps everything the sweep found, with no ports.
+    checked: bool,
+}
+
+/// Settings › Mgmt ports: which live hosts get their management ports
+/// tried, after the sweep has found them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PortCheck {
+    Off,
+    /// The gateway, gear, NAS, printers, cameras and unknown makers; not
+    /// phones and laptops (see `map::ports_worth_checking`).
+    #[default]
+    Smart,
+    All,
+}
+
+impl PortCheck {
+    const ALL: [PortCheck; 3] = [PortCheck::Off, PortCheck::Smart, PortCheck::All];
+
+    fn name(self) -> &'static str {
+        match self {
+            PortCheck::Off => "Off",
+            PortCheck::Smart => "Smart",
+            PortCheck::All => "All hosts",
+        }
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            PortCheck::Off => "No port checks: only what answers ping and ARP.",
+            PortCheck::Smart => {
+                "After the sweep, check the gateway, network gear, NAS, printers, cameras and \
+                 devices from makers it doesn't know; skip what's clearly someone's phone or \
+                 laptop (a private MAC, or a laptop or phone network card's maker such as Intel, \
+                 Realtek, Apple or Samsung). Fewer probes for IDS/EDR to notice."
+            }
+            PortCheck::All => "After the sweep, check every live host, phones and laptops too.",
+        }
+    }
+}
+
+/// Of the live hosts (with the MAC each was found with), the ones whose
+/// ports `mode` checks, in address order. Smart always checks the
+/// gateway and never this machine.
+fn port_targets(
+    mode: PortCheck,
+    hosts: &[(Ipv4Addr, Option<Mac>)],
+    gateway: Option<Ipv4Addr>,
+    me: Option<Ipv4Addr>,
+) -> Vec<Ipv4Addr> {
+    let mut v: Vec<Ipv4Addr> = hosts
+        .iter()
+        .filter(|(ip, m)| match mode {
+            PortCheck::Off => false,
+            PortCheck::All => true,
+            PortCheck::Smart => {
+                Some(*ip) == gateway
+                    || (Some(*ip) != me
+                        && crate::map::ports_worth_checking(
+                            m.as_ref().and_then(mac::vendor),
+                            m.as_ref().is_some_and(mac::local_admin),
+                        ))
+            }
+        })
+        .map(|h| h.0)
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
 }
 
 enum Ev {
     Probed,
     Alive(Host),
     Mac(Ipv4Addr, Mac),
-    /// Port phase starting: this many more probes.
-    PortProbes(usize),
+    /// Port phase starting on these hosts.
+    PortTargets(Vec<Ipv4Addr>),
     Open(Ipv4Addr, u16),
 }
 
@@ -65,7 +135,7 @@ pub struct SweepTool {
     threads: usize,
     rate: u32,
     resolve_names: bool,
-    check_ports: bool,
+    ports: PortCheck,
     job: Option<Job<Ev>>,
     run_started: Option<String>,
     started_at: Instant,
@@ -74,8 +144,8 @@ pub struct SweepTool {
     alive: Vec<Host>,
     /// This machine and its gateway when the run started, to mark them.
     local: HostInfo,
-    /// Whether the last run checked management ports.
-    checked_ports: bool,
+    /// How the last run checked management ports.
+    ran_ports: PortCheck,
     err: Option<String>,
     /// Bumped whenever the host list changes, so the map knows to rebuild.
     revision: u64,
@@ -95,7 +165,7 @@ impl Default for SweepTool {
             threads: widgets::SPEEDS[widgets::DEFAULT_SPEED].1,
             rate: widgets::SPEEDS[widgets::DEFAULT_SPEED].2,
             resolve_names: true,
-            check_ports: false,
+            ports: PortCheck::default(),
             job: None,
             run_started: None,
             started_at: Instant::now(),
@@ -103,7 +173,7 @@ impl Default for SweepTool {
             probed: 0,
             alive: Vec::new(),
             local: HostInfo::default(),
-            checked_ports: false,
+            ran_ports: PortCheck::Off,
             err: None,
             revision: 0,
             runs: 0,
@@ -126,10 +196,11 @@ lines:\n\n  10.10.10.0/24   a subnet (or 10.10.10.0 255.255.255.0, or 10.10.10.*
 172.20.5.12   one address\n  10.0.0.0/28   a small block\n\nOverlaps are swept once; up to \
 65,536 addresses in all. Past a router only ping answers (no ARP, no MACs).";
 
-const PORTS_TIP: &str = "After the sweep, try a TCP connect to each live host's management ports \
+const PORTS_TIP: &str = "After the sweep, try a TCP connect to live hosts' management ports \
 (SSH, telnet, web, UniFi 8080/8443, FortiGate 541, SonicWall 4433, MikroTik 8291) and a few that \
 mark a role (SMB, RDP, printers 9100, cameras 554). Evidence for telling switches, APs and \
-firewalls from clients. Same speed limit as the sweep, but it is a port scan: expect IDS/EDR alerts.";
+firewalls from clients. Same speed limit as the sweep, but it is a port scan: IDS/EDR may notice. \
+Every host the sweep found stays listed, checked or not.";
 
 impl SweepTool {
     /// Drain worker messages. Called every frame so results stay current
@@ -163,7 +234,13 @@ impl SweepTool {
                         changed = true;
                     }
                 }
-                Ev::PortProbes(n) => self.total += n,
+                Ev::PortTargets(ips) => {
+                    self.total += ips.len() * ports::INFRA.len();
+                    for h in self.alive.iter_mut().filter(|h| ips.contains(&h.ip)) {
+                        h.checked = true;
+                    }
+                    changed = true;
+                }
                 Ev::Open(ip, port) => {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                         h.open.push(port);
@@ -231,8 +308,10 @@ impl SweepTool {
             }
             .to_string(),
         ];
-        if self.check_ports {
-            summary.push("checks mgmt ports".into());
+        match self.ports {
+            PortCheck::Off => {}
+            PortCheck::Smart => summary.push("mgmt ports: smart".into()),
+            PortCheck::All => summary.push("mgmt ports: all hosts".into()),
         }
         widgets::options(ui, "sweep", &summary, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -244,8 +323,11 @@ impl SweepTool {
                      (Windows, NAS, many printers) or multicast DNS (Apple devices, printers, \
                      Linux). One small UDP question to each live device; off is quicker",
                     );
-                ui.checkbox(&mut self.check_ports, "Check mgmt ports")
-                    .on_hover_text(PORTS_TIP);
+                ui.label("Mgmt ports").on_hover_text(PORTS_TIP);
+                for p in PortCheck::ALL {
+                    ui.radio_value(&mut self.ports, p, p.name())
+                        .on_hover_text(p.tip());
+                }
             });
         });
         widgets::error(ui, &self.err);
@@ -326,7 +408,7 @@ impl SweepTool {
     /// table gets too narrow: both are in the inspector.
     fn hosts_table(&mut self, ui: &mut Ui) {
         let width = ui.available_width();
-        let cols = columns(width, self.checked_ports);
+        let cols = columns(width, self.ran_ports != PortCheck::Off);
         let row_h = 24.0;
         let font = FontId::proportional(14.0);
         let mono = FontId::monospace(13.0);
@@ -382,6 +464,7 @@ impl SweepTool {
                             ),
                             Col::Vendor => (self.vendor(h), &font, text),
                             Col::Name => (h.name.clone().unwrap_or_default(), &font, text),
+                            Col::Ports if !h.checked => ("not checked".into(), &font, weak),
                             Col::Ports => (port_list(&h.open), &mono, text),
                         };
                         cell(ui.painter(), r, &s, f, colour);
@@ -423,7 +506,7 @@ impl SweepTool {
         let (name_from, mac_from) = (h.name_from, h.mac_from);
         let (rtt, ttl, ports_open) = (h.rtt, h.ttl, h.open.clone());
         let web = insp::web_url(ip, &ports_open);
-        let checked = self.checked_ports;
+        let (checked, ran) = (h.checked, self.ran_ports);
         let mut open = true;
         let mut ask = None;
         let address = ip.to_string();
@@ -502,10 +585,17 @@ impl SweepTool {
                 insp::row(ui, "TTL", &t.to_string(), true);
             }
             insp::section(ui, "Open ports");
-            if !checked {
+            if !checked && ran == PortCheck::Smart {
                 insp::note(
                     ui,
-                    "Not checked: tick Check mgmt ports before the sweep to see them, or use Ports.",
+                    "Not checked: Smart skips phones and laptops (a private MAC, or a laptop or \
+                     phone network card's maker). Use Ports, or sweep with Mgmt ports: All hosts.",
+                );
+            } else if !checked {
+                insp::note(
+                    ui,
+                    "Not checked: set Mgmt ports (Options) to Smart or All hosts before the \
+                     sweep, or use Ports.",
                 );
             } else if ports_open.is_empty() {
                 insp::note(ui, "None of the management ports answered.");
@@ -566,6 +656,17 @@ impl SweepTool {
             0 => s += "\n",
             n => s += &format!(" ({n} found by ARP only, no ping reply)\n"),
         }
+        let checked = self.alive.iter().filter(|h| h.checked).count();
+        match self.ran_ports {
+            PortCheck::Off => {}
+            PortCheck::Smart => {
+                s += &format!(
+                    "Mgmt ports checked on {checked} of {} (Smart: phones and laptops skipped)\n",
+                    self.alive.len()
+                )
+            }
+            PortCheck::All => s += &format!("Mgmt ports checked on all {checked}\n"),
+        }
         for h in &self.alive {
             let rtt = match h.rtt {
                 Some(r) => format!("{r:.1} ms"),
@@ -602,7 +703,11 @@ impl SweepTool {
                     h.mac.as_ref().map(mac::fmt).unwrap_or_default(),
                     self.vendor(h),
                     h.name.clone().unwrap_or_default(),
-                    port_list(&h.open),
+                    if h.checked || self.ran_ports == PortCheck::Off {
+                        port_list(&h.open)
+                    } else {
+                        log::NOT_CHECKED.into()
+                    },
                     found_by(h).into(),
                 ]
             })
@@ -632,7 +737,7 @@ impl SweepTool {
                     "found_by": found_by(h),
                     "rtt_ms": h.rtt.map(|r| (r * 100.0).round() / 100.0),
                     "ttl": h.ttl,
-                    "open_ports": self.checked_ports.then(|| h.open.iter().map(|&p| json!({
+                    "open_ports": h.checked.then(|| h.open.iter().map(|&p| json!({
                         "port": p,
                         "service": ports::service_name(p),
                     })).collect::<Vec<_>>()),
@@ -652,14 +757,14 @@ impl SweepTool {
                 "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
                 "wan": info.wan.map(|w| w.to_string()),
             },
-            "ports_checked": if self.checked_ports { ports::INFRA } else { &[] },
+            "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
-                "open_ports is null when ports were not checked.",
+                "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung). Null is not \"none open\"; an empty list is.",
             ],
             "hosts": hosts,
         });
@@ -733,7 +838,7 @@ impl SweepTool {
 
     /// Whether the last run checked management ports.
     pub fn checked_ports(&self) -> bool {
-        self.checked_ports
+        self.ran_ports != PortCheck::Off
     }
 
     /// Hosts found so far, for the map.
@@ -746,6 +851,7 @@ impl SweepTool {
                 name: h.name.clone(),
                 rtt: h.rtt,
                 open: h.open.clone(),
+                checked: h.checked,
             })
             .collect()
     }
@@ -764,7 +870,7 @@ impl SweepTool {
         self.probed = 0;
         self.alive.clear();
         self.local = HostInfo::default();
-        self.checked_ports = false;
+        self.ran_ports = PortCheck::Off;
         self.err = None;
         self.revision += 1;
         self.picked = None;
@@ -787,14 +893,15 @@ impl SweepTool {
         };
         self.total = ips.len();
         self.local = HostInfo::local();
-        self.checked_ports = self.check_ports;
+        self.ran_ports = self.ports;
         let (timeout, threads, rate, names, check_ports) = (
             self.timeout_ms,
             self.threads,
             self.rate,
             self.resolve_names,
-            self.check_ports,
+            self.ports,
         );
+        let gateway = self.local.gateway;
 
         self.run_started = Some(log::now());
         self.started_at = Instant::now();
@@ -803,6 +910,8 @@ impl SweepTool {
         let ask = Duration::from_millis(timeout.min(400) as u64);
         self.job = Some(Job::spawn(ctx, move |tx| {
             let alive = Mutex::new(Vec::new());
+            // Each live host's MAC as found, for Smart's choice of hosts.
+            let macs: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
             // Each probe makes the OS ARP for the address, so hosts that drop
             // ping still land in the neighbor table as confirmed entries.
             let arp: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
@@ -824,6 +933,9 @@ impl SweepTool {
                         (None, None) => None,
                     };
                     alive.lock().unwrap().push((ip, mac.is_some()));
+                    if let Some(m) = mac.or(own_mac) {
+                        macs.lock().unwrap().insert(ip, m);
+                    }
                     tx.send(Ev::Alive(Host {
                         ip,
                         rtt: Some(r.rtt_ms),
@@ -833,6 +945,7 @@ impl SweepTool {
                         mac: mac.or(own_mac),
                         mac_from,
                         open: Vec::new(),
+                        checked: false,
                     }));
                 }
                 tx.send(Ev::Probed);
@@ -854,6 +967,7 @@ impl SweepTool {
             for &(ip, _) in alive.iter().filter(|(_, had)| !had) {
                 if let Some(m) = table.get(&ip) {
                     tx.send(Ev::Mac(ip, *m));
+                    macs.lock().unwrap().insert(ip, *m);
                 }
             }
 
@@ -883,18 +997,28 @@ impl SweepTool {
                     mac: Some(m),
                     mac_from: Some("arp"),
                     open: Vec::new(),
+                    checked: false,
                 }));
             });
             seen.extend(silent.iter().map(|s| s.0));
 
-            if !check_ports || tx.cancelled() {
+            if check_ports == PortCheck::Off || tx.cancelled() {
                 return;
             }
+            // Only now, with every host and its MAC known, pick the ones to
+            // check. Hosts left out stay as the sweep found them.
+            let mut macs = macs.into_inner().unwrap();
+            macs.extend(silent.iter().copied());
+            let hosts: Vec<(Ipv4Addr, Option<Mac>)> = seen
+                .iter()
+                .map(|&ip| (ip, macs.get(&ip).copied()))
+                .collect();
+            let targets = port_targets(check_ports, &hosts, gateway, me);
             let mut probes: Vec<(Ipv4Addr, u16)> = Vec::new();
-            for ip in seen {
+            for &ip in &targets {
                 probes.extend(ports::INFRA.iter().map(|&p| (ip, p)));
             }
-            tx.send(Ev::PortProbes(probes.len()));
+            tx.send(Ev::PortTargets(targets));
             let wait = Duration::from_millis(timeout as u64);
             net::par_for(&probes, threads, rate, tx.cancel_flag(), |&(ip, port)| {
                 let addr = SocketAddr::new(IpAddr::V4(ip), port);
@@ -1068,6 +1192,7 @@ mod tests {
             mac: None,
             mac_from: None,
             open: Vec::new(),
+            checked: false,
         }
     }
 
@@ -1222,14 +1347,15 @@ mod tests {
             Ev::Mac(Ipv4Addr::new(10, 0, 0, 20), mac(1)),
             Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 443),
             Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 22),
-            Ev::PortProbes(5),
+            Ev::PortTargets(vec![Ipv4Addr::new(10, 0, 0, 20)]),
         ]);
         assert!(changed);
         let ips: Vec<String> = s.alive.iter().map(|h| h.ip.to_string()).collect();
         assert_eq!(ips, ["10.0.0.3", "10.0.0.20"]);
         assert_eq!(s.alive[1].mac, Some(mac(1)));
         assert_eq!(s.alive[1].open, [22, 443]);
-        assert_eq!((s.probed, s.total), (1, 5));
+        assert_eq!((s.alive[0].checked, s.alive[1].checked), (false, true));
+        assert_eq!((s.probed, s.total), (1, ports::INFRA.len()));
     }
 
     #[test]
@@ -1340,9 +1466,132 @@ mod tests {
             0
         ));
 
-        s.checked_ports = true;
+        // A Smart check: the gateway checked (443 open), the scanner not
+        // (null: not checked), a routed host checked with nothing open ([]).
+        s.ran_ports = PortCheck::Smart;
+        s.alive[0].checked = true;
+        s.alive[2].checked = true;
         let v: serde_json::Value =
             serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
         assert_eq!(v["hosts"][0]["open_ports"][0]["port"], 443);
+        assert!(v["hosts"][1]["open_ports"].is_null());
+        assert_eq!(v["hosts"][2]["open_ports"], json!([]));
+        assert_eq!(
+            v["ports_checked"].as_array().unwrap().len(),
+            ports::INFRA.len()
+        );
+    }
+
+    /// Smart checks the gateway, gear, NAS, printers, cameras and makers it
+    /// doesn't know; not a private MAC, a laptop or phone network card's
+    /// maker, or this machine. Off checks nothing, All everything.
+    #[test]
+    fn smart_checks_likely_gear_and_unknowns_not_phones_and_laptops() {
+        use crate::map::ports_worth_checking as worth;
+        for v in [
+            "Ubiquiti Inc",
+            "Synology Incorporated",
+            "Brother industries",
+            "Hikvision",
+        ] {
+            assert!(worth(Some(v), false), "{v}");
+        }
+        for v in [
+            "Intel Corporate",
+            "Apple",
+            "Samsung Electronics",
+            "REALTEK SEMICONDUCTOR",
+        ] {
+            assert!(!worth(Some(v), false), "{v}");
+        }
+        assert!(
+            worth(Some("Shenzhen Something Tech"), false),
+            "an unknown maker"
+        );
+        assert!(worth(None, false), "no vendor: ports are the only clue");
+        assert!(!worth(None, true), "a private MAC is a phone or laptop");
+        assert!(
+            worth(Some("Quanta Network Systems"), false),
+            "switches, not laptops"
+        );
+
+        let at = |last: u8| Ipv4Addr::new(10, 0, 0, last);
+        let m = |oui: [u8; 3]| Some([oui[0], oui[1], oui[2], 0x00, 0x00, 0x01]);
+        let hosts = [
+            (at(1), m([0x00, 0x12, 0xF0])),  // the gateway, though Intel's
+            (at(2), m([0x00, 0x15, 0x6D])),  // Ubiquiti
+            (at(3), m([0x00, 0x12, 0xF0])),  // Intel: a laptop
+            (at(4), m([0x00, 0x03, 0x93])),  // Apple
+            (at(5), m([0x02, 0x11, 0x22])),  // private MAC
+            (at(6), None),                   // routed: no MAC
+            (at(7), m([0x00, 0x11, 0x32])),  // Synology
+            (at(50), m([0x00, 0x15, 0x6D])), // this machine
+        ];
+        let smart = port_targets(PortCheck::Smart, &hosts, Some(at(1)), Some(at(50)));
+        assert_eq!(smart, [at(1), at(2), at(6), at(7)]);
+        assert!(port_targets(PortCheck::Off, &hosts, Some(at(1)), Some(at(50))).is_empty());
+        assert_eq!(
+            port_targets(PortCheck::All, &hosts, Some(at(1)), Some(at(50))).len(),
+            hosts.len()
+        );
+        assert_eq!(SweepTool::default().ports, PortCheck::Smart);
+    }
+
+    /// The port pass only adds: every host the sweep found stays, with what
+    /// it found, whether it was checked or not, and when the run stops.
+    #[test]
+    fn every_host_the_sweep_found_survives_the_port_pass() {
+        let named = |last: u8, name: &str| {
+            let mut h = host([10, 0, 0, last], Some(1.0));
+            (h.name, h.name_from) = (Some(name.into()), Some("dns"));
+            (h.mac, h.mac_from) = (Some(mac(last)), Some("arp"));
+            h
+        };
+        let mut s = SweepTool {
+            ran_ports: PortCheck::Smart,
+            ..Default::default()
+        };
+        s.apply(vec![
+            Ev::Alive(named(1, "gw")),
+            Ev::Alive(named(30, "laptop")),
+            Ev::Alive(named(40, "nas")),
+        ]);
+        s.apply(vec![
+            Ev::PortTargets(vec![
+                Ipv4Addr::new(10, 0, 0, 1),
+                Ipv4Addr::new(10, 0, 0, 40),
+            ]),
+            Ev::Open(Ipv4Addr::new(10, 0, 0, 1), 443),
+        ]);
+        s.job = None; // stopped mid-pass
+        let got: Vec<(String, Option<&str>, bool, Vec<u16>)> = s
+            .alive
+            .iter()
+            .map(|h| {
+                (
+                    h.ip.to_string(),
+                    h.name.as_deref(),
+                    h.checked,
+                    h.open.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("10.0.0.1".to_string(), Some("gw"), true, vec![443]),
+                ("10.0.0.30".to_string(), Some("laptop"), false, vec![]),
+                ("10.0.0.40".to_string(), Some("nas"), true, vec![]),
+            ]
+        );
+        assert!(s.alive.iter().all(|h| h.mac.is_some()));
+        assert_eq!(s.seen().len(), 3, "the map gets all three");
+        let r = s.report();
+        assert!(r.contains("Mgmt ports checked on 2 of 3"), "{r}");
+        assert!(
+            ["10.0.0.1", "10.0.0.30", "10.0.0.40"]
+                .iter()
+                .all(|ip| r.contains(ip))
+        );
     }
 }

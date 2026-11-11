@@ -17,7 +17,7 @@ pub const PRESETS: &[(&str, &str)] = &[
     ("Well-known 1-1024", "1-1024"),
 ];
 
-/// Checked on each live host by Subnet Sweep's "Check mgmt ports": the
+/// Checked on live hosts by Subnet Sweep's "Mgmt ports" (Smart or All): the
 /// management ports of switches, APs and firewalls, plus a few that mark a
 /// host's role (SMB/RDP for Windows, 9100 printers, 554 cameras).
 pub const INFRA: &[u16] = &[
