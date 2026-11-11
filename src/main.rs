@@ -238,8 +238,8 @@ impl eframe::App for App {
         widgets::show_toasts(ui.ctx());
         self.bundle_window(ui.ctx());
         self.report_window(ui.ctx());
-        if self.manual.window(ui.ctx()) {
-            self.look.manual_window = self.manual.own_window;
+        if let Some(own) = self.manual.window(ui.ctx()) {
+            self.look.manual_window = own;
             theme::save(&self.look);
         }
         self.close_dialog(ui.ctx());
@@ -1139,7 +1139,10 @@ fn main() {
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
             net::clock::warm();
-            let look_manual_window = look.manual_window;
+            // The screenshot tour only sees the app's window: the manual
+            // stays over it there.
+            let look_manual_window =
+                look.manual_window && std::env::var_os("IS_ALIVE_SHOTS").is_none();
             let mut app = App {
                 tab: Tab::Ping,
                 shown_tab: Tab::Ping,

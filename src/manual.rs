@@ -8,7 +8,7 @@
 
 use crate::{Tab, widgets};
 use eframe::egui;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const TEXT: &str = include_str!("../docs/manual/MANUAL.md");
 
@@ -92,15 +92,35 @@ pub fn chapter_named(name: &str) -> usize {
 
 /// The manual's own window, when it's popped out.
 const OWN: &str = "manual_window";
+/// How long after it opens the manual's window gives the keyboard back.
+const GIVE_BACK_SECS: f64 = 1.5;
 
+/// The manual. Its state is shared with its own window, which draws on
+/// its own (an egui deferred viewport): the app and the manual each
+/// repaint and take input independently, and neither waits for the other.
 #[derive(Default)]
 pub struct Manual {
-    pub open: bool,
+    s: Arc<Mutex<State>>,
+}
+
+#[derive(Default)]
+struct State {
+    open: bool,
     /// In a window of its own (Pop out) rather than over the app; kept in
     /// the settings.
-    pub own_window: bool,
-    /// Bring its own window to the front on the next frame (F1, Help).
-    focus: bool,
+    own_window: bool,
+    /// Pop out or Back in is-alive was clicked: for the settings.
+    moved: bool,
+    /// F1 or Help while its own window is open: flash it in the taskbar.
+    /// It asks to be looked at; it never takes the keyboard from the app.
+    attention: bool,
+    /// Its own window is up (since it last opened or popped out).
+    shown_own: bool,
+    /// Until when (egui's clock) a just-opened window hands the keyboard
+    /// back to the app once the system gives it focus. Asked to open
+    /// inactive, Windows does; X11 and Wayland window managers focus a new
+    /// window anyway. A click on it later is left alone.
+    give_back_until: f64,
     /// The heading a link named, to bring into view: its anchor.
     heading: Option<String>,
     chapter: usize,
@@ -115,93 +135,117 @@ impl Manual {
     /// Closed, over the app or (`own_window`) popped out, as last left.
     pub fn new(own_window: bool) -> Self {
         Self {
-            own_window,
-            ..Default::default()
+            s: Arc::new(Mutex::new(State {
+                own_window,
+                ..Default::default()
+            })),
         }
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.s.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The chapter on show.
     pub fn chapter(&self) -> usize {
-        self.chapter
+        self.state().chapter
     }
 
-    /// Open the window at chapter `i`.
+    /// Open the manual at chapter `i`.
     pub fn show(&mut self, i: usize) {
-        self.open = true;
-        self.focus = true;
-        self.chapter = i.min(chapters().len().saturating_sub(1));
-        self.top = true;
-        self.heading = None;
-    }
-
-    /// Follow a link: another chapter or one of its headings
-    /// (`#13-speed-test`, `#bufferbloat-grades`), a web page, or a file in
-    /// the repository (`../../FOLLOW-ALONG.md`), opened on GitHub.
-    fn follow(&mut self, to: &str) {
-        match place(to) {
-            Some(Place::Chapter(i)) => self.show(i),
-            Some(Place::Heading(i, anchor)) => {
-                self.chapter = i;
-                self.top = true;
-                self.heading = Some(anchor);
-            }
-            Some(Place::Web(url)) => widgets::open_url(url),
-            None => widgets::toast(format!("The manual can't open {to}"), false),
-        }
+        let mut s = self.state();
+        s.attention = s.open && s.own_window;
+        s.open = true;
+        s.go(i);
     }
 
     /// Draw the manual if it's open, over the app or in its own window.
-    /// True when Pop out or Back in is-alive was clicked (to save it).
-    pub fn window(&mut self, ctx: &egui::Context) -> bool {
-        if !self.open {
-            return false;
-        }
-        let was = self.own_window;
-        if self.own_window {
+    /// Some(popped out) when Pop out or Back in is-alive was clicked (to
+    /// save it).
+    pub fn window(&mut self, ctx: &egui::Context) -> Option<bool> {
+        let now = ctx.input(|i| i.time);
+        // Not held while drawing: the own window's callback takes it.
+        let (open, own, moved) = {
+            let mut s = self.state();
+            if !(s.open && s.own_window) {
+                s.shown_own = false;
+            } else if !s.shown_own {
+                s.shown_own = true;
+                s.give_back_until = now + GIVE_BACK_SECS;
+            }
+            (s.open, s.own_window, std::mem::take(&mut s.moved))
+        };
+        if open && own {
             self.own(ctx);
-        } else {
+        } else if open {
             self.over_app(ctx);
         }
-        was != self.own_window
+        moved.then_some(own)
     }
 
-    /// A window of its own: moved, sized and closed like any other, and
-    /// left where it is while the app is used.
-    fn own(&mut self, ctx: &egui::Context) {
-        static ICON: OnceLock<std::sync::Arc<egui::IconData>> = OnceLock::new();
-        let icon = ICON
-            .get_or_init(|| std::sync::Arc::new(crate::icon()))
-            .clone();
+    /// A window of its own, moved, sized and closed like any other. It
+    /// opens without taking the keyboard, and draws on its own, so the app
+    /// and the manual can be used side by side.
+    fn own(&self, ctx: &egui::Context) {
+        static ICON: OnceLock<Arc<egui::IconData>> = OnceLock::new();
+        let icon = ICON.get_or_init(|| Arc::new(crate::icon())).clone();
         let builder = egui::ViewportBuilder::default()
             .with_title(format!("is-alive {} manual", crate::VERSION))
             .with_app_id("is-alive")
             .with_icon(icon)
+            .with_active(false)
             .with_inner_size([940.0, 680.0])
             .with_min_inner_size([560.0, 300.0]);
-        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(OWN), builder, |ui, _| {
-            if ui.input(|i| i.viewport().close_requested()) {
-                self.open = false;
-            }
-            if std::mem::take(&mut self.focus) {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-            // Opaque: Miami's panels are see-through over a backdrop this
-            // window doesn't have.
-            let bg = ui.visuals().window_fill.to_opaque();
-            ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
-            egui::Frame::new()
-                .inner_margin(8)
-                .show(ui, |ui| self.body(ui));
-            // This window's links and copies, as the app's own go.
-            widgets::open_requested_links(ui.ctx());
-            widgets::route_copies(ui.ctx());
-        });
+        let shared = Arc::clone(&self.s);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of(OWN),
+            builder,
+            move |ui, _| {
+                let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+                let ctx = ui.ctx().clone();
+                if ui.input(|i| i.viewport().close_requested()) {
+                    s.open = false;
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
+                let (now, focused) = ui.input(|i| (i.time, i.viewport().focused));
+                if now < s.give_back_until {
+                    if focused == Some(true) {
+                        s.give_back_until = 0.0;
+                        ctx.send_viewport_cmd_to(
+                            egui::ViewportId::ROOT,
+                            egui::ViewportCommand::Focus,
+                        );
+                    } else {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    }
+                }
+                if std::mem::take(&mut s.attention) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                        egui::UserAttentionType::Informational,
+                    ));
+                }
+                // Opaque: Miami's panels are see-through over a backdrop this
+                // window doesn't have.
+                let bg = ui.visuals().window_fill.to_opaque();
+                ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
+                egui::Frame::new().inner_margin(8).show(ui, |ui| s.body(ui));
+                if s.moved {
+                    // Back in is-alive: the app draws it from now on.
+                    ctx.request_repaint_of(egui::ViewportId::ROOT);
+                }
+                drop(s);
+                // This window's links and copies, as the app's own go.
+                widgets::open_requested_links(&ctx);
+                widgets::route_copies(&ctx);
+            },
+        );
     }
 
     /// Over the app, inside its window.
-    fn over_app(&mut self, ctx: &egui::Context) {
-        self.focus = false;
-        let mut open = self.open;
+    fn over_app(&self, ctx: &egui::Context) {
+        let mut s = self.state();
+        s.attention = false;
+        let mut open = true;
         let screen = ctx.content_rect();
         widgets::compact_title(ctx, || {
             egui::Window::new("Manual")
@@ -216,9 +260,35 @@ impl Manual {
                 ))
                 .min_size([560.0, 300.0])
                 .max_size(screen.size() - egui::vec2(24.0, 24.0))
-                .show(ctx, |ui| self.body(ui));
+                .show(ctx, |ui| s.body(ui));
         });
-        self.open = open;
+        if !open {
+            s.open = false;
+        }
+    }
+}
+
+impl State {
+    /// Chapter `i`, from its top.
+    fn go(&mut self, i: usize) {
+        self.chapter = i.min(chapters().len().saturating_sub(1));
+        self.top = true;
+        self.heading = None;
+    }
+
+    /// Follow a link: another chapter or one of its headings
+    /// (`#13-speed-test`, `#bufferbloat-grades`), a web page, or a file in
+    /// the repository (`../../FOLLOW-ALONG.md`), opened on GitHub.
+    fn follow(&mut self, to: &str) {
+        match place(to) {
+            Some(Place::Chapter(i)) => self.go(i),
+            Some(Place::Heading(i, anchor)) => {
+                self.go(i);
+                self.heading = Some(anchor);
+            }
+            Some(Place::Web(url)) => widgets::open_url(url),
+            None => widgets::toast(format!("The manual can't open {to}"), false),
+        }
     }
 
     fn body(&mut self, ui: &mut egui::Ui) {
@@ -292,7 +362,7 @@ impl Manual {
                         .clicked()
                     {
                         self.own_window = !self.own_window;
-                        self.focus = true;
+                        self.moved = true;
                     }
                 });
             });
