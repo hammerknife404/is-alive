@@ -161,6 +161,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
+  `other_macs` lists any other MAC the address answered from during the
+  sweep: two devices on one IP (a duplicate address), or a failover
+  mid-sweep. Flag it on that node and in `ACTIONS` (med).
   `private_mac: true` is a phone, laptop or VM, never infrastructure.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;
@@ -176,7 +179,8 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
-  `open_ports`, `is_gateway`, `is_this_machine`, `on_scanner_lan`.
+  `open_ports`, `other_macs`, `is_gateway`, `is_this_machine`,
+  `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
 - **Fill `ip` and `mac` on every node** you can (Step 2's schema): is-alive

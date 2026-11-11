@@ -579,6 +579,8 @@ pub struct Seen {
     pub open: Vec<u16>,
     /// Its management ports were checked (`open` then says what answered).
     pub checked: bool,
+    /// Other MACs it answered from during the sweep: a duplicate IP.
+    pub also: Vec<Mac>,
 }
 
 /// A backup or export open in Config Export: its file's name and the JSON
@@ -2306,6 +2308,27 @@ impl B {
 
     /// Findings the sweep's evidence supports.
     fn sweep_findings(&mut self, input: &Input, has_unifi: bool, device_idx: &[usize]) {
+        for s in input.sweep.iter().filter(|s| !s.also.is_empty()) {
+            let Some(i) = self.nodes.iter().position(|n| n.ip == Some(s.ip)) else {
+                continue;
+            };
+            let macs: Vec<String> = s.mac.iter().chain(&s.also).map(mac::fmt).collect();
+            self.nodes[i].flags.push(format!(
+                "Answered from {} MACs: a duplicate IP?",
+                macs.len()
+            ));
+            self.finding(
+                Sev::Med,
+                format!(
+                    "{} answered from more than one MAC ({}): two devices may share the address \
+                     (a duplicate IP), or it failed over during the sweep. Find the second one \
+                     by its MAC on the switch.",
+                    s.ip,
+                    macs.join(", ")
+                ),
+                &[i],
+            );
+        }
         let telnet: Vec<usize> = (0..self.nodes.len())
             .filter(|&i| self.nodes[i].open.contains(&23))
             .collect();
@@ -2989,6 +3012,7 @@ mod tests {
             rtt,
             open: vec![],
             checked: true,
+            also: vec![],
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -3021,6 +3045,41 @@ mod tests {
     }
 
     #[test]
+    fn an_address_answering_from_two_macs_is_a_finding_on_its_card() {
+        let input = Input {
+            sweep: vec![Seen {
+                ip: "192.168.1.1".parse().unwrap(),
+                mac: mac::parse_mac("02:00:00:00:00:01"),
+                name: None,
+                rtt: Some(1.0),
+                open: vec![],
+                checked: true,
+                also: vec![mac::parse_mac("02:00:00:00:00:02").unwrap()],
+            }],
+            gateway: Some("192.168.1.1".parse().unwrap()),
+            ..Default::default()
+        };
+        let m = build(&input);
+        let gw = by_label(&m, "Gateway");
+        assert!(
+            gw.flags.iter().any(|f| f.contains("duplicate IP")),
+            "{:?}",
+            gw.flags
+        );
+        let f = m
+            .findings
+            .iter()
+            .find(|f| f.text.contains("more than one MAC"))
+            .expect("a finding");
+        assert_eq!(f.sev, Sev::Med);
+        assert!(
+            f.text.contains("02:00:00:00:00:01, 02:00:00:00:00:02"),
+            "{}",
+            f.text
+        );
+    }
+
+    #[test]
     fn sweep_only_merges_gateway_and_infers_roles() {
         let s = |ip: &str, mac: Option<&str>, open: &[u16]| Seen {
             ip: ip.parse().unwrap(),
@@ -3029,6 +3088,7 @@ mod tests {
             rtt: Some(1.0),
             open: open.to_vec(),
             checked: true,
+            also: vec![],
         };
         let input = Input {
             sweep: vec![
@@ -3129,6 +3189,7 @@ mod tests {
                 rtt: Some(1.0),
                 open: vec![23],
                 checked: true,
+                also: vec![],
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -3418,6 +3479,7 @@ mod tests {
                 rtt: Some(1.0),
                 open: Vec::new(),
                 checked: true,
+                also: vec![],
             })
             .collect();
         let make = |clients, reveal| {
@@ -3556,6 +3618,7 @@ mod tests {
             rtt: Some(1.0),
             open: vec![],
             checked: true,
+            also: vec![],
         };
         let at_office = build(&Input {
             unifi: one(&j),

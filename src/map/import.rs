@@ -964,6 +964,7 @@ mod tests {
             rtt: Some(1.0),
             open: Vec::new(),
             checked: true,
+            also: vec![],
         };
         let look_alike = Input {
             sweep: vec![host([10, 0, 0, 2], Some([2, 0, 0, 0, 0, 9]))],
@@ -997,6 +998,7 @@ mod tests {
             rtt: Some(1.0),
             open: Vec::new(),
             checked: true,
+            also: vec![],
         };
         let laptop = [2, 0, 0, 0, 0, 0x99];
         let sweep = vec![
@@ -1097,6 +1099,7 @@ mod tests {
             rtt: Some(1.0),
             open,
             checked: true,
+            also: vec![],
         };
         // Swept at the branch: its firewall answers by MAC.
         let input = Input {
@@ -1430,6 +1433,7 @@ mod examples {
                 rtt: Some(1.0),
                 open: vec![],
                 checked: true,
+                also: vec![],
             })
             .collect();
         let open: HashMap<String, usize> = [("gateway".to_string(), usize::MAX)].into();
