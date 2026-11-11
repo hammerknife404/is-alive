@@ -1160,14 +1160,8 @@ pub enum MenuAction {
 
 /// Footer "Theme" menu: the themes (the default marked), and Miami's
 /// backdrop and animation.
-/// `renderer` says what draws the backdrop (GPU, or CPU and why).
 /// The appearance section of Settings: theme, emoji style, and the Miami backdrop.
-pub fn appearance(
-    ui: &mut egui::Ui,
-    s: &mut Settings,
-    renderer: &str,
-    gpu: bool,
-) -> Option<MenuAction> {
+pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<MenuAction> {
     let mut act = None;
     {
         ui.label(egui::RichText::new("Theme").strong());
@@ -1312,8 +1306,6 @@ pub fn appearance(
             {
                 act = Some(MenuAction::Changed);
             }
-            ui.label(egui::RichText::new(renderer).small().weak())
-                .on_hover_text("What draws the backdrop. Set IS_ALIVE_GPU=off to force the CPU.");
         });
     }
     act

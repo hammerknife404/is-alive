@@ -464,8 +464,8 @@ impl MapView {
         if ui
             .add(egui::Button::selectable(self.bar, "Saved maps"))
             .on_hover_text(
-                "Show or hide the saved maps along the bottom: keep this map as it is now and \
-                 come back to it",
+                "Show or hide the saved maps along the bottom, to open one or go back to Live \
+                 (Save, by the zoom controls, keeps the map on show)",
             )
             .clicked()
         {
@@ -579,7 +579,7 @@ impl MapView {
                 ui.add(
                     egui::Label::new(
                         RichText::new(
-                            "No saved map of this site yet. Saved maps › + Save current keeps \
+                            "No saved map of this site yet. Save (by the zoom controls) keeps \
                              this one, to compare with on the next visit.",
                         )
                         .weak(),
@@ -626,7 +626,7 @@ impl MapView {
                     ui.add(
                         egui::Label::new(
                             "A quick picture from what this app can see. For an accurate map, \
-                             run /mapnetwork on a Site Bundle.",
+                             upload a Site Bundle to Claude or another AI.",
                         )
                         .wrap(),
                     );
@@ -634,7 +634,9 @@ impl MapView {
                 ui.horizontal(|ui| {
                     if ui
                         .small_button("Site Bundle…")
-                        .on_hover_text("Zip it all for /mapnetwork")
+                        .on_hover_text(
+                            "Zip it all up to upload: the skills that draw the map come inside",
+                        )
                         .clicked()
                     {
                         act = Some(Action::Bundle);

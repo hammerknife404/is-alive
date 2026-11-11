@@ -616,6 +616,12 @@ fn describe(err: &eframe::Error) -> String {
     }
 }
 
+/// A line for startup.log from elsewhere in the app (what draws the
+/// Miami backdrop).
+pub fn note(line: &str) {
+    log(line);
+}
+
 /// Append a timestamped line to startup.log (and stderr), keeping the file
 /// small. Best effort: a read-only profile just means no log.
 fn log(line: &str) {

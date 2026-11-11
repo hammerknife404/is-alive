@@ -120,7 +120,7 @@ impl MapView {
     }
 
     /// Lay the legend out for the canvas `rect`: bottom left, at most
-    /// MAX_SHARE of its height, columns side by side as far as Saved maps
+    /// MAX_SHARE of its height, columns side by side as far as Save
     /// and the zoom controls (above them on a narrow canvas), scrolling past
     /// that.
     fn plan(&self, ui: &Ui, rect: Rect, entries: &[Entry]) -> Plan {
@@ -194,9 +194,9 @@ impl MapView {
                 rows += 1;
             }
         };
-        // Beside the zoom controls and Saved maps when it fits there without
+        // Beside the zoom controls and Save when it fits there without
         // scrolling (or scrolls less than above them), else above them, the
-        // canvas wide. Both stop where Saved maps starts (`tabs::corner_left`).
+        // canvas wide. Both stop where Save starts (`tabs::corner_left`).
         let beside_w = super::tabs::corner_left(rect) - 8.0 - (rect.min.x + 10.0);
         let above_w = rect.width() - 20.0;
         let above = || {

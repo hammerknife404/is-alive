@@ -1,13 +1,25 @@
 //! The Map tab with its saved maps: the live map (from the sweep and the
 //! files loaded) and maps saved as they were, each a sub-tab in a bar
-//! along the bottom. The bar is hidden until a map is saved or the
-//! Saved maps by the zoom controls opens it.
+//! along the bottom. Save, by the zoom controls, keeps the map on show;
+//! the bar is hidden until a map is saved or ⋯ › Saved maps opens it.
 
 use super::history::Edits;
 use super::saved::{self, Purpose, Snapshot};
 use super::toolbar::{TabsAsk, TabsMenu};
 use super::*;
 use std::path::{Path, PathBuf};
+
+/// What Save (by the zoom controls, or Ctrl+S) does for the map on show.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub enum SaveState {
+    /// The live map: Save keeps a copy of it as it is now.
+    #[default]
+    Live,
+    /// A saved map with changes: Save writes them into it.
+    Changed,
+    /// A saved map as it was saved: nothing to save.
+    Saved,
+}
 
 /// One saved map: its file, and its own view (with its own undo).
 struct Tab {
@@ -61,6 +73,8 @@ pub struct MapTabs {
     told: bool,
     /// How card notes are redacted, as every map was last told.
     ov: crate::redact::Overrides,
+    /// Save was clicked: done at the start of the next frame.
+    save_next: bool,
 }
 
 impl MapTabs {
@@ -88,6 +102,7 @@ impl MapTabs {
             skipped,
             told: false,
             ov: Default::default(),
+            save_next: false,
         }
     }
 
@@ -365,6 +380,48 @@ impl MapTabs {
     }
 
     /// The name a map gets when saved: the saved map's own, or the date.
+    /// What Save does for the map on show.
+    fn save_state(&self) -> SaveState {
+        match self.shown {
+            None => SaveState::Live,
+            Some(i) if self.saved[i].view.edits_differ(&self.saved[i].saved) => SaveState::Changed,
+            Some(_) => SaveState::Saved,
+        }
+    }
+
+    /// Save (by the zoom controls) or Ctrl+S: the live map is kept as a new
+    /// saved map, named with the date and time, ready to be renamed in the
+    /// bar, and Live stays on show; a saved map gets its changes written.
+    fn save(&mut self, src: &Sources) {
+        match (self.save_state(), self.shown) {
+            (SaveState::Changed, Some(i)) => self.update(i),
+            (SaveState::Saved, _) => widgets::toast("Already saved: nothing has changed", true),
+            _ => {
+                let name = self.default_name();
+                let Some(s) = self.snapshot_shown(src, &name, saved::now()) else {
+                    widgets::toast(NOTHING_YET, false);
+                    return;
+                };
+                match self.keep_new(s) {
+                    Ok(()) => {
+                        // Still the live map on show: it goes on updating.
+                        self.shown = None;
+                        let i = self.saved.len() - 1;
+                        widgets::toast(
+                            format!(
+                                "Saved \"{}\" with this site's saved maps, along the bottom",
+                                self.saved[i].name
+                            ),
+                            true,
+                        );
+                        self.renaming = Some((i, self.saved[i].name.clone()));
+                    }
+                    Err(e) => widgets::toast(format!("Couldn't save the map: {e}"), false),
+                }
+            }
+        }
+    }
+
     fn default_name(&self) -> String {
         match self.shown {
             Some(i) => format!("{} copy", self.saved[i].name),
@@ -432,6 +489,13 @@ impl MapTabs {
     pub fn ui(&mut self, ui: &mut Ui, src: Sources) -> Option<Action> {
         self.tell_skipped();
         self.redact(src.redact);
+        // Save (by the zoom controls) last frame, or Ctrl+S on the Map now
+        // (Notes has its own).
+        let key = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+        if std::mem::take(&mut self.save_next) || key {
+            self.save(&src);
+        }
+        let state = self.save_state();
         let mut open = false;
         if self.bar {
             open = egui::Panel::bottom("map_saved_bar")
@@ -446,10 +510,17 @@ impl MapTabs {
         let view = self.view();
         view.bar = bar;
         view.tabs_menu = menu;
+        view.save_state = state;
         let act = view.ui(ui, src);
+        let save = std::mem::take(&mut view.save_asked);
         let flip = std::mem::take(&mut view.bar_flip);
         let ask = view.tabs_ask.take();
         let empty = view.map.nodes.is_empty();
+        // Done next frame, before the map is drawn: Sources went to the view.
+        if save {
+            self.save_next = true;
+            ui.ctx().request_repaint();
+        }
         if flip {
             self.bar = !self.bar;
         }
@@ -469,7 +540,7 @@ impl MapTabs {
             Some(TabsAsk::Clear) => return Some(Action::ClearLive),
             None => {}
         }
-        // Nothing mapped, so no canvas to hold Saved maps: a link instead.
+        // Nothing mapped, so no canvas (or Save): a link to the bar instead.
         if empty && !self.bar && !self.saved.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(10.0);
@@ -555,19 +626,16 @@ impl MapTabs {
         self.live.compare_with(s);
     }
 
-    /// Live, a sub-tab for each saved map, + Save current and Open…; true
-    /// when Open… was clicked.
+    /// Live, a sub-tab for each saved map, and Open…; true when Open… was
+    /// clicked. (Save is by the zoom controls.)
     fn bar_ui(&mut self, ui: &mut Ui, src: &Sources) -> bool {
         let mut ev = None;
-        let mut save = false;
         let mut open = false;
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("⏷")
-                    .on_hover_text(
-                        "Hide this bar (Saved maps, by the zoom controls, opens it again)",
-                    )
+                    .on_hover_text("Hide this bar (⋯ › Saved maps opens it again)")
                     .clicked()
                 {
                     self.bar = false;
@@ -579,18 +647,6 @@ impl MapTabs {
                          backup, export or /mapnetwork map for the live map",
                     )
                     .on_disabled_hover_text("The file dialog is open")
-                    .clicked();
-                let empty = match self.shown {
-                    Some(_) => false,
-                    None => self.live.map.nodes.is_empty(),
-                };
-                save = ui
-                    .add_enabled(!empty, egui::Button::new("+ Save current"))
-                    .on_hover_text(
-                        "Keep the map showing as it is now, with your moves, pins and folds, \
-                         as a sub-tab here",
-                    )
-                    .on_disabled_hover_text(NOTHING_YET)
                     .clicked();
                 self.skipped_note(ui);
                 ui.separator();
@@ -607,25 +663,6 @@ impl MapTabs {
                 });
             });
         });
-        if save {
-            let name = self.default_name();
-            if let Some(s) = self.snapshot_shown(src, &name, saved::now()) {
-                match self.keep_new(s) {
-                    Ok(()) => {
-                        let i = self.saved.len() - 1;
-                        widgets::toast(
-                            format!(
-                                "Saved \"{}\": right-click its tab to rename it",
-                                self.saved[i].name
-                            ),
-                            true,
-                        );
-                        self.renaming = Some((i, self.saved[i].name.clone()));
-                    }
-                    Err(e) => widgets::toast(format!("Couldn't save the map: {e}"), false),
-                }
-            }
-        }
         match ev {
             Some(TabEv::Rename(i)) => self.renaming = Some((i, self.saved[i].name.clone())),
             Some(TabEv::Update(i)) => self.update(i),
@@ -1088,15 +1125,15 @@ fn tab_menu(
     ev
 }
 
-/// How wide Saved maps is on the canvas.
-const TOGGLE_W: f32 = 84.0;
+/// How wide Save is on the canvas.
+const TOGGLE_W: f32 = 56.0;
 /// The zoom controls' room from the canvas's right edge, and the gap
-/// before Saved maps (see zoom_controls).
+/// before Save (see zoom_controls).
 const ZOOM_W: f32 = 10.0 + 208.0 + 12.0;
 
-/// Where Saved maps goes: left of the zoom controls, or above them on a
-/// canvas too narrow for both in a row. None with no room at all (the
-/// bar's own button and the empty map's link still reach it).
+/// Where Save goes: left of the zoom controls, or above them on a canvas
+/// too narrow for both in a row. None with no room at all (Ctrl+S still
+/// saves).
 fn toggle_rect(rect: Rect) -> Option<Rect> {
     let right = rect.max.x - ZOOM_W;
     if right - TOGGLE_W >= rect.min.x + 8.0 {
@@ -1122,7 +1159,7 @@ pub fn corner_left(rect: Rect) -> f32 {
 }
 
 /// Where the controls in the canvas's bottom right corner start from the
-/// top: the zoom controls, or Saved maps when it sits above them. A legend
+/// top: the zoom controls, or Save when it sits above them. A legend
 /// laid out above them stops short of it.
 pub fn corner_top(rect: Rect) -> f32 {
     let zoom = rect.max.y - 32.0;
@@ -1133,24 +1170,30 @@ pub fn corner_top(rect: Rect) -> f32 {
 }
 
 impl MapView {
-    /// Saved maps, beside the zoom controls in the canvas corner: shows or
-    /// hides the bar along the bottom.
-    pub(super) fn bar_toggle(&mut self, ui: &mut Ui, rect: Rect) {
+    /// Save, beside the zoom controls in the canvas corner: keeps the map
+    /// on show (see `MapTabs::save`).
+    pub(super) fn save_button(&mut self, ui: &mut Ui, rect: Rect) {
         let Some(r) = toggle_rect(rect) else { return };
+        let (on, tip) = match self.save_state {
+            SaveState::Live => (
+                true,
+                "Keep this map as it is now, with your moves, pins, folds and notes, to come \
+                 back to or compare with on the next visit. It goes in the saved maps along \
+                 the bottom (Ctrl+S)",
+            ),
+            SaveState::Changed => (true, "Save your changes to this saved map (Ctrl+S)"),
+            SaveState::Saved => (false, ""),
+        };
+        let button = egui::Button::new("Save")
+            .corner_radius(6)
+            .min_size(r.size());
         if ui
-            .put(
-                r,
-                egui::Button::new("Saved maps")
-                    .selected(self.bar)
-                    .corner_radius(6),
-            )
-            .on_hover_text(
-                "Show or hide the saved maps along the bottom: keep this map as it is now and \
-                 come back to it",
-            )
+            .put(r, |ui: &mut Ui| ui.add_enabled(on, button))
+            .on_hover_text(tip)
+            .on_disabled_hover_text("Saved: nothing has changed since")
             .clicked()
         {
-            self.bar_flip = true;
+            self.save_asked = true;
         }
     }
 }
@@ -1297,8 +1340,121 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// One frame of the Map tab with nothing loaded: the text drawn, and
+    /// where.
+    fn draw(t: &mut MapTabs, ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
+        fn texts(s: &Shape, out: &mut Vec<(String, Rect)>) {
+            match s {
+                Shape::Text(t) => out.push((t.galley.text().to_string(), t.visual_bounding_rect())),
+                Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+                _ => {}
+            }
+        }
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let export = crate::tools::export::ExportTool::default();
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        let input = egui::RawInput {
+            events,
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1120.0, 720.0))),
+            time: Some(ctx.input(|i| i.time) + 0.1),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let src = Sources {
+                sweep: &sweep,
+                export: &export,
+                info: &info,
+                busy: false,
+                note: false,
+                legend: false,
+                redact: &ov,
+                animate: false,
+            };
+            t.ui(ui, src);
+        });
+        out.textures_delta.clear();
+        let mut found = Vec::new();
+        for c in &out.shapes {
+            texts(&c.shape, &mut found);
+        }
+        found
+    }
+
+    /// Save by the zoom controls (or Ctrl+S) writes a saved map's changes
+    /// into it, and has nothing to do once they're saved.
     #[test]
-    fn saved_maps_stays_on_the_canvas_clear_of_the_legend() {
+    fn save_writes_a_saved_maps_changes() {
+        let dir = temp("savebutton");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        t.keep_new(sample("Site", "2026-01-01T00:00:00Z")).unwrap();
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            draw(&mut t, &ctx, vec![]);
+        }
+        assert_eq!(t.save_state(), SaveState::Saved);
+        t.saved[0].view.placed.insert("gw".into(), pos2(5.0, 5.0));
+        assert_eq!(t.save_state(), SaveState::Changed);
+        let shown = draw(&mut t, &ctx, vec![]);
+        let at = shown
+            .iter()
+            .find(|(s, _)| s == "Save")
+            .expect("Save by the zoom controls")
+            .1
+            .center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(&mut t, &ctx, vec![egui::Event::PointerMoved(at)]);
+        draw(&mut t, &ctx, vec![press(true)]);
+        draw(&mut t, &ctx, vec![press(false)]);
+        // Done at the start of the next frame.
+        draw(&mut t, &ctx, vec![]);
+        assert_eq!(t.save_state(), SaveState::Saved);
+        let back = saved::read(&t.saved[0].path).unwrap();
+        assert_eq!(back.edits.placed.get("gw"), Some(&pos2(5.0, 5.0)));
+        // Ctrl+S does the same.
+        t.saved[0].view.placed.insert("gw".into(), pos2(9.0, 9.0));
+        let ctrl_s = egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        draw(&mut t, &ctx, vec![ctrl_s]);
+        assert_eq!(t.save_state(), SaveState::Saved);
+        let back = saved::read(&t.saved[0].path).unwrap();
+        assert_eq!(back.edits.placed.get("gw"), Some(&pos2(9.0, 9.0)));
+        assert_eq!(t.saved.len(), 1, "no copy made");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Save on an empty live map keeps nothing.
+    #[test]
+    fn save_on_an_empty_map_keeps_nothing() {
+        let dir = temp("saveempty");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        assert_eq!(t.save_state(), SaveState::Live);
+        let ctx = egui::Context::default();
+        let ctrl_s = egui::Event::Key {
+            key: egui::Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        draw(&mut t, &ctx, vec![ctrl_s]);
+        assert!(t.saved.is_empty());
+        assert_eq!(t.shown, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_stays_on_the_canvas_clear_of_the_legend() {
         let wide = Rect::from_min_size(pos2(240.0, 0.0), vec2(800.0, 500.0));
         let r = toggle_rect(wide).unwrap();
         assert_eq!(r.max.x, wide.max.x - ZOOM_W);
@@ -1308,7 +1464,7 @@ mod tests {
         let r = toggle_rect(narrow).unwrap();
         assert!(r.min.x >= narrow.min.x && r.max.y < narrow.max.y - 32.0);
         assert_eq!(corner_left(narrow), narrow.max.x - ZOOM_W + 12.0);
-        // A legend above the corner's controls stays above Saved maps too.
+        // A legend above the corner's controls stays above Save too.
         assert!(corner_top(narrow) <= r.min.y);
         assert_eq!(corner_top(wide), wide.max.y - 32.0);
         let tiny = Rect::from_min_size(pos2(240.0, 0.0), vec2(60.0, 500.0));

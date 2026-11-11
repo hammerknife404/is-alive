@@ -30,8 +30,9 @@ enum View {
     Preview,
 }
 
-/// Seconds after the last keystroke before the autosave.
-const SAVE_AFTER: f64 = 1.5;
+/// Seconds after the last keystroke before the autosave: short, so a
+/// laptop that dies mid-visit loses at most the last few words.
+const SAVE_AFTER: f64 = 0.5;
 const EDITOR_ID: &str = "tech_notes_editor";
 
 pub struct NotesTool {

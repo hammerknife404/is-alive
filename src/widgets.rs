@@ -248,45 +248,43 @@ pub fn speed_name(threads: usize, rate: u32) -> &'static str {
 /// run will go. Remembered per tab while the app runs.
 pub fn options(ui: &mut Ui, id: &str, summary: &[String], body: impl FnOnce(&mut Ui)) {
     let key = ui.make_persistent_id(("options", id));
-    let state =
+    let mut state =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), key, false);
     let open = state.is_open();
-    state
-        .show_header(ui, |ui| {
-            let r = ui
-                .add(
-                    egui::Label::new(RichText::new("Options").color(crate::theme::accent()))
-                        .sense(egui::Sense::click()),
-                )
-                .on_hover_text(if open {
-                    "Fold the settings away"
-                } else {
-                    "Show every setting"
-                });
-            if r.clicked() {
-                let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui.ctx(),
-                    key,
-                    false,
-                );
-                s.toggle(ui);
-                s.store(ui.ctx());
+    // The arrow and the word both fold and unfold. One state for both, kept
+    // by the body: egui's own header stores its copy after the body, which
+    // undid a click on the word.
+    ui.horizontal(|ui| {
+        state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        let r = ui
+            .add(
+                egui::Label::new(RichText::new("Options").color(crate::theme::accent()))
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(if open {
+                "Fold the settings away"
+            } else {
+                "Show every setting"
+            });
+        if r.clicked() {
+            state.toggle(ui);
+        }
+        if !open {
+            for c in summary {
+                let v = ui.visuals();
+                egui::Frame::new()
+                    .fill(v.widgets.inactive.weak_bg_fill)
+                    .stroke(v.widgets.noninteractive.bg_stroke)
+                    .corner_radius(9)
+                    .inner_margin(egui::Margin::symmetric(7, 1))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(c).small());
+                    });
             }
-            if !open {
-                for c in summary {
-                    let v = ui.visuals();
-                    egui::Frame::new()
-                        .fill(v.widgets.inactive.weak_bg_fill)
-                        .stroke(v.widgets.noninteractive.bg_stroke)
-                        .corner_radius(9)
-                        .inner_margin(egui::Margin::symmetric(7, 1))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(c).small());
-                        });
-                }
-            }
-        })
-        .body_unindented(|ui| body(ui));
+        }
+    });
+    state.show_body_unindented(ui, body);
 }
 
 pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
@@ -1124,6 +1122,76 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clicking the word Options unfolds the settings, as the arrow does,
+    /// and clicking it again folds them.
+    #[test]
+    fn the_word_options_folds_and_unfolds() {
+        let ctx = egui::Context::default();
+        let mut shown = false;
+        let mut word = egui::Rect::NOTHING;
+        let frame = |events: Vec<egui::Event>, shown: &mut bool, word: &mut egui::Rect| {
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                time: Some(ctx.input(|i| i.time) + 0.5),
+                ..Default::default()
+            };
+            *shown = false;
+            let mut out = ctx.run_ui(input, |ui| {
+                options(ui, "test", &["every 1000 ms".into()], |ui| {
+                    ui.label("Interval");
+                    *shown = true;
+                });
+            });
+            out.textures_delta.clear();
+            fn find(s: &egui::Shape, word: &mut egui::Rect) {
+                match s {
+                    egui::Shape::Text(t) if t.galley.text() == "Options" => {
+                        *word = t.visual_bounding_rect()
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| find(s, word)),
+                    _ => {}
+                }
+            }
+            for c in &out.shapes {
+                find(&c.shape, word);
+            }
+        };
+        let click = |at| {
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            [
+                vec![egui::Event::PointerMoved(at)],
+                vec![press(true)],
+                vec![press(false)],
+            ]
+        };
+        frame(vec![], &mut shown, &mut word);
+        assert!(!shown, "folded to start with");
+        assert!(word.is_positive(), "the word is drawn");
+        for e in click(word.center()) {
+            frame(e, &mut shown, &mut word);
+        }
+        for _ in 0..3 {
+            frame(vec![], &mut shown, &mut word);
+        }
+        assert!(shown, "a click on the word unfolds the settings");
+        for e in click(word.center()) {
+            frame(e, &mut shown, &mut word);
+        }
+        for _ in 0..3 {
+            frame(vec![], &mut shown, &mut word);
+        }
+        assert!(!shown, "and a second click folds them");
+    }
 
     /// A site's name as a folder: readable, and legal on Windows too.
     #[test]

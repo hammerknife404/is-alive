@@ -249,10 +249,14 @@ pub struct MapView {
     /// A training map's answer key, kept to be saved again. Never shown:
     /// only how many, in its sub-tab's tooltip.
     faults: Vec<saved::Fault>,
-    /// The saved maps bar is showing (the toolbar's toggle), and the
-    /// toggle was clicked.
+    /// The saved maps bar is showing (⋯ › Saved maps), and that was
+    /// clicked.
     bar: bool,
     bar_flip: bool,
+    /// What Save in the canvas's corner does for the map on show, and
+    /// whether it (or Ctrl+S) was pressed this frame.
+    save_state: tabs::SaveState,
+    save_asked: bool,
     /// The boxes floating over the canvas last frame (toolbar, notices,
     /// Layers and Legend): they take the pointer before the map does.
     float_rects: Vec<Rect>,
@@ -1517,7 +1521,7 @@ impl MapView {
         }
         self.zoom_controls(ui, rect, beside);
         self.links_pill(ui, beside);
-        self.bar_toggle(ui, beside);
+        self.save_button(ui, beside);
     }
 }
 

@@ -79,8 +79,6 @@ pub struct Backdrop {
     gpu: Option<Arc<Mutex<gpu::Gpu>>>,
     /// Static layers not yet on the GPU (after a resize).
     upload: Option<Arc<gpu::Layers>>,
-    /// What draws the scene, for the theme menu.
-    pub renderer: String,
     /// The palms' triangles at a phase, reused while the phase holds.
     palms: Option<(u32, Arc<Vec<f32>>)>,
 }
@@ -98,13 +96,13 @@ impl Backdrop {
             }
             (Some(gl), m) => gpu::Gpu::new(gl, m == "force"),
         };
-        let renderer = match &gpu {
-            Ok(g) => format!("GPU: {}", g.name),
-            Err(e) => format!("CPU: {e}"),
-        };
+        // What draws the scene goes in startup.log, not on screen.
+        crate::startup::note(&match &gpu {
+            Ok(g) => format!("Miami backdrop on the GPU: {}", g.name),
+            Err(e) => format!("Miami backdrop on the CPU: {e}"),
+        });
         Self {
             gpu: gpu.ok().map(|g| Arc::new(Mutex::new(g))),
-            renderer,
             ..Default::default()
         }
     }

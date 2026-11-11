@@ -575,12 +575,12 @@ impl MapView {
         let id = &self.map.nodes[i].id;
         match (&self.note_scope, self.note_store.is_some()) {
             (Scope::Saved, _) => {
-                "Kept in this saved map's file once you update it (right-click its tab)"
+                "Kept in this saved map's file once you save it (Save, by the zoom controls)"
             }
             (_, false) => "Kept until is-alive closes",
             (Scope::Blank, true) => {
                 "Kept only until is-alive closes or another map starts: the blank map is a \
-                 start for any site. Save the map (+ Save current) to keep its note"
+                 start for any site. Save the map (by the zoom controls) to keep its note"
             }
             (Scope::Example(_), true) => "Kept on this computer, with this example",
             (Scope::Live, true)
@@ -591,12 +591,12 @@ impl MapView {
             (Scope::Live, true) if id.starts_with("ip:") => {
                 "Kept only until is-alive closes, another map starts or a sweep runs again: \
                  this card has no hardware address to know it by next time. Save the map \
-                 (+ Save current) to keep its note"
+                 (by the zoom controls) to keep its note"
             }
             (Scope::Live, true) => {
                 "Kept only until is-alive closes or another map starts: this card has no \
-                 hardware address to know it by next time. Save the map (+ Save current) to \
-                 keep its note"
+                 hardware address to know it by next time. Save the map (by the zoom \
+                 controls) to keep its note"
             }
         }
     }

@@ -346,7 +346,7 @@ impl App {
         // the live map, which has them.
         if self.export.take_opened() && self.map.show_live() {
             widgets::toast(
-                "The Map is back on Live to show what you opened (saved maps stay in Saved maps)",
+                "The Map is back on Live to show what you opened (saved maps stay in the bar along the bottom)",
                 true,
             );
         }

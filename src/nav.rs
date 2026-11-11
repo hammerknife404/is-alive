@@ -1,7 +1,7 @@
 //! The nav down the window's left side: every tool, then Settings and Help
-//! at its foot. Open (icons and names) when the window has room, an icon
-//! rail when it doesn't, and a rail on the Map at any width so the canvas
-//! keeps the window. The fold button pins it open or folded.
+//! at its foot. Open (icons and names) by default, on every tab; an icon
+//! rail only on a window too narrow for it. The fold button pins it open
+//! or folded. Each tool's icon has its own colour from the theme.
 
 use crate::chrome::{Call, map_glow, map_ring};
 use crate::icons::{self, Icon};
@@ -11,20 +11,42 @@ use eframe::egui::{self, Align2, FontId, Rect, Sense, Vec2, vec2};
 /// The nav's width open, and as a rail.
 pub const OPEN: f32 = 216.0;
 pub const RAIL: f32 = 56.0;
-/// Below this window width the nav folds to the rail on its own.
-pub const OPEN_FROM: f32 = 1440.0;
+/// Below this window width the nav folds to the rail on its own: the
+/// window where panels float over the content (CLAUDE.md), 620 at the least.
+pub const OPEN_FROM: f32 = 1100.0;
 
-/// Whether the nav is open: what the user pinned, or else open only on a
-/// window at least `OPEN_FROM` wide and off the Map.
-pub fn open(width: f32, on_map: bool, pinned: Option<bool>) -> bool {
-    pinned.unwrap_or(width >= OPEN_FROM && !on_map)
+/// Whether the nav is open: what the user pinned, or else open on any
+/// window at least `OPEN_FROM` wide (the app opens at 1120), the Map too.
+pub fn open(width: f32, pinned: Option<bool>) -> bool {
+    pinned.unwrap_or(width >= OPEN_FROM)
 }
 
 /// What the fold button pins: the other state, or nothing (back to
 /// following the window) when that's what the window would pick anyway.
-pub fn toggled(width: f32, on_map: bool, pinned: Option<bool>) -> Option<bool> {
-    let want = !open(width, on_map, pinned);
-    (want != open(width, on_map, None)).then_some(want)
+pub fn toggled(width: f32, pinned: Option<bool>) -> Option<bool> {
+    let want = !open(width, pinned);
+    (want != open(width, None)).then_some(want)
+}
+
+/// A tool's icon colour: one of the theme's Map role colours, so every
+/// theme keeps its own palette, and no two tools side by side share one.
+pub fn tint(tab: Tab, theme: theme::Theme) -> egui::Color32 {
+    use crate::map::Zone;
+    let zone = match tab {
+        Tab::Ping => Zone::Wireless,
+        Tab::Ports => Zone::Server,
+        Tab::Trace => Zone::Gear,
+        Tab::Sweep => Zone::Device,
+        Tab::Dns => Zone::Gateway,
+        Tab::Advanced => Zone::Switch,
+        Tab::Export => Zone::Device,
+        Tab::Map => Zone::Gear,
+        Tab::Notes => Zone::Server,
+        Tab::Speed => Zone::Wireless,
+        Tab::Calc => Zone::Gateway,
+        Tab::Results => Zone::Switch,
+    };
+    zone.colour_in(theme)
 }
 
 pub fn icon(tab: Tab) -> Icon {
@@ -54,10 +76,16 @@ fn row_height(open: bool) -> f32 {
     if open { 32.0 } else { 36.0 }
 }
 
+/// The icon's side: a touch over the text's height, to find a tool at a glance.
+const ICON: f32 = 20.0;
+
 /// What a nav row looks like this frame.
 struct Row<'a> {
     icon: Icon,
     label: &'a str,
+    /// The tool's own colour for its icon; None (Settings, Help, Fold)
+    /// draws it as the text.
+    tint: Option<egui::Color32>,
     on: bool,
     /// The row's job is running: a pulsing dot.
     running: bool,
@@ -70,8 +98,7 @@ impl App {
     /// The nav panel, left of everything but the title and status bars.
     pub(crate) fn nav(&mut self, ui: &mut egui::Ui) {
         let width = ui.ctx().content_rect().width();
-        let on_map = self.tab == Tab::Map;
-        let is_open = open(width, on_map, self.look.nav);
+        let is_open = open(width, self.look.nav);
         let w = ui.ctx().animate_value_with_time(
             egui::Id::new("nav_width"),
             if is_open { OPEN } else { RAIL },
@@ -114,6 +141,7 @@ impl App {
                     let row = Row {
                         icon: icon(*tab),
                         label: name,
+                        tint: Some(tint(*tab, theme::current())),
                         on: self.tab == *tab,
                         running: self.tab_running(*tab),
                         glow,
@@ -137,6 +165,7 @@ impl App {
                     let fold = Row {
                         icon: if is_open { Icon::Fold } else { Icon::Unfold },
                         label: if is_open { "Fold" } else { "Open" },
+                        tint: None,
                         on: false,
                         running: false,
                         glow: 0.0,
@@ -146,16 +175,17 @@ impl App {
                         "Fold or open the nav. It stays as you leave it; open or fold it back the way the window \
                          would have it to let it follow the window's width again."
                     } else {
-                        "Fold or open the nav. Now it follows the window: open from 1440 points wide, \
-                         folded below that and on the Map."
+                        "Fold or open the nav. Now it follows the window: open from 1100 points wide, \
+                         folded below that."
                     };
                     if nav_row(ui, &fold, labels).on_hover_text(fold_tip).clicked() {
-                        self.look.nav = toggled(width, on_map, self.look.nav);
+                        self.look.nav = toggled(width, self.look.nav);
                         theme::save(&self.look);
                     }
                     let help = Row {
                         icon: Icon::Help,
                         label: "Help",
+                        tint: None,
                         on: false,
                         running: false,
                         glow: 0.0,
@@ -169,6 +199,7 @@ impl App {
                     let settings = Row {
                         icon: Icon::Settings,
                         label: "Settings",
+                        tint: None,
                         on: false,
                         running: false,
                         glow: 0.0,
@@ -252,7 +283,12 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
         v.text_color()
     };
     let colour = colour.lerp_to_gamma(accent, row.glow);
-    let side = 18.0;
+    // A tool's icon keeps its colour whether picked, hovered or not; the
+    // name and the row's fill say which is picked.
+    let ink = row
+        .tint
+        .map_or(colour, |t| t.lerp_to_gamma(accent, row.glow));
+    let side = ICON;
     let icon_at = if labels {
         Rect::from_center_size(
             egui::pos2(rect.left() + 10.0 + side / 2.0, rect.center().y),
@@ -261,7 +297,7 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
     } else {
         Rect::from_center_size(rect.center(), Vec2::splat(side))
     };
-    icons::paint(p, icon_at, row.icon, colour);
+    icons::paint(p, icon_at, row.icon, ink);
     if labels {
         p.text(
             egui::pos2(icon_at.right() + 10.0, rect.center().y),
@@ -323,31 +359,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nav_follows_the_window_unless_pinned() {
-        // A field laptop (1280 wide) gets the rail; a big window, the open nav.
-        assert!(!open(1280.0, false, None));
-        assert!(!open(1120.0, false, None));
-        assert!(open(1440.0, false, None));
-        assert!(open(1920.0, false, None));
-        // The Map keeps the window at any width.
-        assert!(!open(1920.0, true, None));
+    fn nav_is_open_by_default_unless_pinned() {
+        // Open on a field laptop (1280), the window the app opens at
+        // (1120) and anything bigger; the rail only on a narrow window.
+        assert!(open(1280.0, None));
+        assert!(open(1120.0, None));
+        assert!(open(1920.0, None));
+        assert!(!open(1000.0, None));
+        assert!(!open(620.0, None));
         // Pinned, it stays as the user left it.
-        assert!(open(1120.0, false, Some(true)));
-        assert!(open(1920.0, true, Some(true)));
-        assert!(!open(1920.0, false, Some(false)));
+        assert!(open(620.0, Some(true)));
+        assert!(!open(1920.0, Some(false)));
     }
 
     #[test]
     fn fold_button_pins_only_what_differs_from_the_window() {
-        // Opening on a small window pins it open.
-        assert_eq!(toggled(1280.0, false, None), Some(true));
-        // Folding it again there is what the window would pick: unpinned.
-        assert_eq!(toggled(1280.0, false, Some(true)), None);
-        // Folding on a big window pins it folded.
-        assert_eq!(toggled(1920.0, false, None), Some(false));
-        assert_eq!(toggled(1920.0, false, Some(false)), None);
-        // Opening on the Map pins it open everywhere.
-        assert_eq!(toggled(1920.0, true, None), Some(true));
+        // Folding on a laptop pins it folded.
+        assert_eq!(toggled(1280.0, None), Some(false));
+        // Opening it again there is what the window would pick: unpinned.
+        assert_eq!(toggled(1280.0, Some(false)), None);
+        // Opening on a narrow window pins it open.
+        assert_eq!(toggled(1000.0, None), Some(true));
+        assert_eq!(toggled(1000.0, Some(true)), None);
+    }
+
+    #[test]
+    fn tools_side_by_side_have_different_colours() {
+        // In every theme, so each row reads apart from its neighbours.
+        for t in theme::Theme::ALL {
+            for pair in TABS.windows(2) {
+                let (a, b) = (&pair[0], &pair[1]);
+                assert_ne!(tint(a.0, t), tint(b.0, t), "{t:?}: {} and {}", a.1, b.1);
+            }
+        }
     }
 
     #[test]
