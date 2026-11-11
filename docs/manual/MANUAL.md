@@ -132,8 +132,9 @@ Five parts, the same on every tab:
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#16-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
-- **The manual** opens in a window over the tab: the chapters down the left, **Find** above them to list only the chapters that mention a word. Leave it open beside the tab while you work; **×** closes it.
-  - **Pop out** (top right, beside the chapter's title) moves it into a window of its own, to keep beside is-alive or on another screen while you work; **Back in is-alive** puts it back over the app. It opens the same way next time, and **F1** brings the window to the front at the tab's chapter.
+- **The manual** opens in a window of its own: the chapters down the left, **Find** above them to list only the chapters that mention a word. Keep it beside is-alive or on another screen while you work; close it like any window.
+  - **The app keeps the keyboard.** The manual opens beside it without taking focus, and the two work independently: click either to use it. **F1** with the manual open turns it to the tab's chapter and flashes it in the taskbar rather than pulling it in front of your work.
+  - **Back in is-alive** (top right, beside the chapter's title) puts it in a window over the app instead, closed with **×**; **Pop out** there moves it back out. It opens the same way next time.
   - **Links** in it work: one to another chapter or heading (*see [Sites](#sites)*) opens it there, and a web link opens in your browser.
 
 ### Sites
@@ -777,7 +778,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Clients: …** ▸ | End devices, drawn as small tiles. **Off** (none), **Some**: up to 10 under each switch or AP (fewer on a big map), the rest folded into a **+N more** card; **More**: up to 30, on a map of up to 400 cards; **All**: every client its own card. The live map keeps your choice from one start to the next; a saved map keeps the one it was saved with. Named devices, servers, printers, cameras and phones, and anything with a warning, come first. A **+N** chip on a card shows its next 8 clients (Shift+click: all of them), at any level; **−** hides them again. The card stays where it is, so the next click on the same spot shows the next 8. The inspector of a switch or AP (or of its **+N more** card) has them as buttons |
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
-| **Compare** ▸ | On the live map: what changed since a saved map of this site (see *Compare with the last visit*, below) |
+| **Compare** ▸ | On the live map: what changed since a saved map of this site, or of another site (**Other sites ›**; see *Compare with the last visit*, below) |
 | **Examples** ▸ | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
 | **Saved maps** | Show or hide the saved maps bar (below), to open a saved map or go back to Live |
 | **Copy findings** | The findings as text, worst first, for a ticket |
@@ -860,7 +861,7 @@ A saved map doesn't change with the files: **Reload** and **Clients** are greyed
 
 ### Compare with the last visit
 
-Back at a site, **More › Compare** (on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since:
+Back at a site, **More › Compare** (on the live map) lists this site's saved maps, newest first; pick one (the last visit) and the live map shows what changed since. **Other sites ›** lists every other site's saved maps under the site's name: the same network kept as another site (one per visit), or a sister office to set beside this one. The comparison is named with its site (*HQ visit (Acme HQ, October)*).
 
 - **NEW** on a card (green) is a device that wasn't on the saved map; **CHANGED** (amber) is one whose address, open ports or name changed. Zoomed far out, each is a dot on the card's corner.
 - **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
@@ -1202,7 +1203,22 @@ Every finished run from every tab is logged here (Full scan runs too).
 | **On map** | Select its target on the Map, when the target is an address |
 | **Copy / Save…** | This run as text |
 | **Export ⏷** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
-| **Output / Table** | The output as the tool printed it, or the run's data as a table (the columns its CSV has) |
+| **Compare ▾** | The other runs of the same tool, those of the same target first; pick one to see what changed between them (below) |
+| **Output / Table / Compare** | The output as the tool printed it, the run's data as a table (the columns its CSV has), or the comparison |
+
+**Compare** sets the earlier run as *before* and the later as *after*, and lists what's **New** (green), **Gone** (red) and **Changed** (amber), with **Stop comparing** to go back. Rows are matched by what they're about, and timing noise isn't counted as a change:
+
+| Tool | Matched by | A change is |
+|---|---|---|
+| Subnet Sweep | IP | its MAC, vendor, name or open ports |
+| Port Check | IP and port | its state, service or certificate |
+| Traceroute | hop | its address or name |
+| DNS Lookup | the answer itself | an answer new or gone |
+| Domain Health | section and check | its status or text |
+| Speed Test | phase | its speed, latency, jitter, loss or MOS, with how much it moved (*412 → 380 (−32)*) |
+| Ping | | replies, loss and Avg / Min / Max side by side, with the difference |
+
+Runs with no table compare their lines. **Copy** copies the comparison while it's on screen. A sweep from the last visit (kept with the site) against today's says at a glance which devices are new, gone or renamed.
 
 At the top of the list:
 
