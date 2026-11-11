@@ -68,6 +68,7 @@ pub fn summarise(e: &log::Entry) -> String {
         ),
         "Traceroute" => plural(t.rows.len(), "hop", "hops"),
         "Subnet Sweep" => format!("{} alive", t.rows.len()),
+        "Network checks" => crate::tools::netcheck::summary(&t.rows),
         "Lookup" => {
             let notes = count("type", "note");
             plural(t.rows.len() - notes, "record", "records")

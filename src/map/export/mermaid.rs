@@ -193,6 +193,8 @@ mod tests {
                     rtt: Some(1.0),
                     open: vec![],
                     checked: true,
+                    also: vec![],
+                    web: None,
                 })
                 .collect(),
             gateway: Some("10.0.0.1".parse().unwrap()),

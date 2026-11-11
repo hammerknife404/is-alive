@@ -22,6 +22,11 @@ pub fn warm() {
     });
 }
 
+/// The time source this computer syncs to, once the lookup has finished.
+pub fn synced_to() -> Option<String> {
+    CLOCK.get().and_then(|c| c.source.clone())
+}
+
 /// "**2026-10-31 03:08** (UTC-05:00 America/Chicago, synced to time.windows.com) "
 pub fn stamp() -> String {
     let now = chrono::Local::now();

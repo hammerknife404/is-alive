@@ -148,6 +148,7 @@ const TOOLS: &[(&str, &[&str])] = &[
     ("Subnet Sweep", crate::tools::sweep::COLUMNS),
     ("Lookup", crate::tools::dns::COLUMNS),
     ("Domain Health", crate::tools::advanced::COLUMNS),
+    ("Network checks", crate::tools::netcheck::COLUMNS),
 ];
 
 /// Where the open site keeps its runs: its folder, or the profile folder
