@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod clock;
 pub mod dnsq;
 pub mod domain;

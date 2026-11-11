@@ -49,7 +49,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the window title, the status bar and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN. Results opens to show them. (Speed Test runs from its own tab.)";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN, and check whether HTTPS is inspected and this computer's clock is right. Results opens to show them. (Speed Test runs from its own tab.)";
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Tab {
@@ -138,6 +138,8 @@ struct App {
     calc: tools::calc::CalcTool,
     dns: tools::dns::DnsTool,
     advanced: tools::advanced::AdvancedTool,
+    /// Full scan's network checks (HTTPS inspection, the clock).
+    netcheck: tools::netcheck::NetCheck,
     export: tools::export::ExportTool,
     bundle: tools::bundle::BundleTool,
     report: tools::report::ReportTool,
@@ -395,6 +397,7 @@ impl App {
         self.was_sweeping = sweeping;
         self.dns.poll();
         self.advanced.poll();
+        self.netcheck.poll();
         self.export.poll(ctx);
         // Files the user opened are in: a saved map on show gives way to
         // the live map, which has them.
@@ -862,6 +865,7 @@ impl App {
             || self.sweep.is_running()
             || self.dns.is_running()
             || self.advanced.is_running()
+            || self.netcheck.running_since().is_some()
     }
 
     /// Run every tool against this machine's network and switch to Results.
@@ -890,6 +894,7 @@ impl App {
         }
         self.trace.run(ctx, WAN_TARGET);
         self.dns.run(ctx, DNS_TEST_NAME);
+        self.netcheck.run(ctx);
         if let Some((ip, bits)) = local.lan {
             self.sweep.run(ctx, &net::targets::subnet_cidr(ip, bits));
             self.scanning.push(Tab::Sweep);
@@ -915,6 +920,7 @@ impl App {
             ("Subnet Sweep", self.sweep.take_finished()),
             ("Lookup", self.dns.take_finished()),
             ("Domain Health", self.advanced.take_finished()),
+            ("Network checks", self.netcheck.take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -1013,6 +1019,11 @@ impl App {
                 "Domain Health",
                 self.advanced.running_since(),
                 self.advanced.output(),
+            ),
+            (
+                "Network checks",
+                self.netcheck.running_since(),
+                self.netcheck.output(),
             ),
         ]
         .into_iter()
@@ -1216,6 +1227,7 @@ fn main() {
                 calc: Default::default(),
                 dns: Default::default(),
                 advanced: Default::default(),
+                netcheck: Default::default(),
                 export: Default::default(),
                 bundle: Default::default(),
                 report: Default::default(),
