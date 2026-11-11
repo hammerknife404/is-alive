@@ -1,4 +1,33 @@
-# is-alive: notes for Claude
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```sh
+cargo build --release                      # -> target/release/is-alive(.exe)
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked                        # whole suite
+cargo test --locked <name>                 # one test, e.g. the_manual_has_no_pictures
+python3 skills/mapnetwork/scripts/test_engine_contract.py   # map engine contract (CI)
+python3 scripts/test_wiki_sync.py          # wiki sync script tests
+packaging/linux/build-appimage.sh          # -> target/appimage/is-alive-x86_64.AppImage
+```
+
+Rust edition 2024. Linux GUI needs a display; in a cloud sandbox use the scene tour (below) to see the window.
+
+## Architecture
+
+Native desktop app: Rust + egui/eframe, one binary, no installer. `src/main.rs` owns the `App`, the `Tab` enum/`TABS` table and the layout by window width; chrome (`chrome.rs`, `nav.rs`, `inspector.rs`, `widgets.rs`, `theme.rs`) is shared by every tab.
+
+- **Tools** (`src/tools/*.rs`): one module per tab (ping, ports, trace, sweep, dns, advanced, export, notes, speed, calc, ...) holding its UI state and run logic. The network primitives they call live in `src/net/` (ICMP, TCP ports, DNS, TLS, MAC/OUI, names, subnet math, speed); keep UI out of `net/`.
+- **Background work** goes through `src/job.rs`: a worker thread sends messages back over a channel (`Tx<T>`, which also requests a repaint and exposes the cancel flag); `pump` drains them on the UI thread. Long loops must poll `cancelled()` / use `Tx::sleep` so Stop stays responsive.
+- **Configs in** (`src/unifi`, `src/sonicwall`, `src/meraki.rs`): offline parsers that turn vendor exports into sanitized JSON (`redact.rs`). Sanitizing happens locally before anything is saved or shared.
+- **Map** (`src/map/`): builds the drawn network from the sweep, configs or a `/mapnetwork` map (`import.rs`), lays it out, computes findings and compares with the last visit (`compare.rs`, `runs.rs`). `src/mapnetwork.rs` is the contract with the bundled skill's map files.
+- **Site / Bundle / Report**: `site.rs` keeps a visit's data on disk; `bundle.rs` + `tools/bundle.rs` zip the Site Bundle (manifest, kickoff prompt, bundled `skills/`); `report.rs` + `tools/report.rs` render the one-page HTML report; `results_ui.rs`, `runs_compare.rs` and `markdown_out.rs` handle Results and exports.
+- **Docs are code-checked**: the manual (`docs/manual/MANUAL.md`) and Help (`help.rs`, `manual.rs`) are embedded and tested; the wiki pages in `docs/wiki/` sync to the GitHub wiki from CI (`scripts/wiki_sync.py`).
+- `src/shots.rs` drives the headless screenshot tour used by `screenshots.yml`; `startup.rs`/`build.rs` handle renderer fallback (glow/wgpu) and resources.
 
 ## Releases: small and often
 
