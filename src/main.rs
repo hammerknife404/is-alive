@@ -23,6 +23,7 @@ mod photos;
 mod redact;
 mod report;
 mod results_ui;
+mod runs_compare;
 mod shots;
 mod site;
 mod site_ui;
@@ -167,6 +168,8 @@ struct App {
     /// The run open in Results (None: the newest), and how it's shown.
     result_pick: Option<results_ui::RunKey>,
     result_view: results_ui::RunView,
+    /// The run the open one is compared with (Results › Compare): its start.
+    result_compare: Option<String>,
     look: theme::Settings,
     backdrop: backdrop::Backdrop,
     /// File dialog for the Miami backdrop image.
@@ -1177,6 +1180,7 @@ fn main() {
                 jump_to_new: false,
                 result_pick: None,
                 result_view: results_ui::RunView::Output,
+                result_compare: None,
                 look,
                 backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
                 pick_image: None,

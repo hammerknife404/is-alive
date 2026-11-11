@@ -1,7 +1,8 @@
 //! The Results tab: every run in a list down the left, newest first and
 //! grouped by day (what's running at the top), and the one picked in full
-//! beside it: what it was, Run again, the output, and the table it made.
-//! Built from the inspector's pieces, so a run reads like a device does.
+//! beside it: what it was, Run again, the output, the table it made, and
+//! what changed since another run of the same tool (Compare). Built from
+//! the inspector's pieces, so a run reads like a device does.
 
 use crate::{App, Tab, input, inspector, log, theme, widgets};
 use eframe::egui::{self, RichText, Sense, Ui, vec2};
@@ -14,12 +15,19 @@ pub(crate) enum RunKey {
     Running(&'static str),
 }
 
-/// What the open run shows: its output as it printed, or its table.
+/// What the open run shows: its output as it printed, its table, or what
+/// changed between it and another run of its tool.
 #[derive(Clone, Copy, PartialEq, Default, Debug)]
 pub(crate) enum RunView {
     #[default]
     Output,
     Table,
+    Compare,
+}
+
+/// "11-10 20:02" from "2026-11-10 20:02:09": a run's start, short.
+fn when(started: &str) -> &str {
+    started.get(5..16).unwrap_or(started)
 }
 
 /// The run list's width for a window `width` points wide: it always docks
@@ -468,7 +476,45 @@ impl App {
             && tab.is_some_and(|t| !self.tab_running(t))
             && (tool == "Speed Test" || !target.is_empty());
         let ip: Option<std::net::Ipv4Addr> = target.parse().ok();
-        let full = || format!("=== {tool} ===\n{}\n", text.trim_end());
+        // The run it's compared with: same tool, another run, still listed.
+        let other = done.and_then(|i| {
+            let key = self.result_compare.as_deref()?;
+            self.log
+                .entries
+                .iter()
+                .position(|e| e.tool == tool && e.started == key)
+                .filter(|&j| j != i)
+        });
+        let comparing = self.result_view == RunView::Compare && other.is_some();
+        let diff = match (done, other) {
+            (Some(i), Some(j)) if comparing => {
+                let (a, b) = (&self.log.entries[i], &self.log.entries[j]);
+                // The earlier run is "before", whichever is open.
+                let (before, after) = if a.started <= b.started {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+                let d = crate::runs_compare::compare(before, after);
+                let title = if target.is_empty() {
+                    tool.to_string()
+                } else {
+                    format!("{tool} {target}")
+                };
+                let text = d.render(&title, &before.started, &after.started);
+                Some((
+                    d,
+                    when(&before.started).to_string(),
+                    when(&after.started).to_string(),
+                    text,
+                ))
+            }
+            _ => None,
+        };
+        let full = || match &diff {
+            Some((.., text)) => text.clone(),
+            None => format!("=== {tool} ===\n{}\n", text.trim_end()),
+        };
         let acts = [
             inspector::Act {
                 label: "Run again",
@@ -483,7 +529,11 @@ impl App {
             },
             inspector::Act {
                 label: "Copy",
-                tip: "Copy this run as text",
+                tip: if diff.is_some() {
+                    "Copy the comparison as text"
+                } else {
+                    "Copy this run as text"
+                },
                 enabled: true,
             },
             inspector::Act {
@@ -519,6 +569,7 @@ impl App {
             if let Some(i) = done {
                 let e = &self.log.entries[i];
                 widgets::export_menu(ui, "result", || vec![e]);
+                self.compare_menu(ui, i);
             }
         });
         let has_table = done.is_some_and(|i| {
@@ -527,16 +578,28 @@ impl App {
                 .as_ref()
                 .is_some_and(|t| !t.rows.is_empty())
         });
-        if has_table {
+        if has_table || other.is_some() {
             ui.horizontal(|ui| {
-                for (v, label) in [(RunView::Output, "Output"), (RunView::Table, "Table")] {
-                    if ui.selectable_label(self.result_view == v, label).clicked() {
+                let views = [
+                    (RunView::Output, "Output", true),
+                    (RunView::Table, "Table", has_table),
+                    (RunView::Compare, "Compare", other.is_some()),
+                ];
+                for (v, label, on) in views {
+                    if on && ui.selectable_label(self.result_view == v, label).clicked() {
                         self.result_view = v;
                     }
                 }
             });
         }
         ui.separator();
+        if let Some((d, before, after, _)) = &diff {
+            if compare_view(ui, d, before, after) {
+                self.result_compare = None;
+                self.result_view = RunView::Output;
+            }
+            return;
+        }
         match (self.result_view, done) {
             (RunView::Table, Some(i)) if has_table => {
                 if let Some(t) = &self.log.entries[i].table {
@@ -558,6 +621,51 @@ impl App {
         }
     }
 
+    /// Compare ▾: the other runs of this run's tool, newest first, those
+    /// of the same target first; picking one shows what changed.
+    fn compare_menu(&mut self, ui: &mut Ui, i: usize) {
+        let e = &self.log.entries[i];
+        let (tool, target) = (e.tool, e.target().unwrap_or("").to_string());
+        let mut others: Vec<usize> = (0..self.log.entries.len())
+            .filter(|&j| j != i && self.log.entries[j].tool == tool)
+            .collect();
+        others.sort_by_key(|&j| {
+            let o = &self.log.entries[j];
+            (
+                o.target().unwrap_or("") != target,
+                std::cmp::Reverse(o.started.clone()),
+            )
+        });
+        let mut picked = None;
+        let r = ui.add_enabled_ui(!others.is_empty(), |ui| {
+            widgets::named_menu(ui, "Compare", |ui| {
+                ui.set_min_width(300.0);
+                ui.weak("What changed between this run and:");
+                for &j in others.iter().take(40) {
+                    let o = &self.log.entries[j];
+                    let label = format!(
+                        "{} · {} · {}",
+                        when(&o.started),
+                        o.target().unwrap_or(tool),
+                        summarise(o)
+                    );
+                    let on = self.result_compare.as_deref() == Some(o.started.as_str());
+                    if ui.add(egui::Button::selectable(on, label)).clicked() {
+                        picked = Some(o.started.clone());
+                        ui.close();
+                    }
+                }
+            })
+        });
+        r.response
+            .on_hover_text("What's new, gone or changed since another run of this tool")
+            .on_disabled_hover_text("No other run of this tool to compare with");
+        if let Some(k) = picked {
+            self.result_compare = Some(k);
+            self.result_view = RunView::Compare;
+        }
+    }
+
     /// Run `tab`'s tool again on `target` (the Speed Test has none).
     fn run_again(&mut self, ctx: &egui::Context, tab: Tab, target: &str) {
         match tab {
@@ -570,6 +678,93 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// The comparison: the two runs, the figures side by side, then what's
+/// new, gone and changed, each in its colour. True when Stop was clicked.
+fn compare_view(ui: &mut Ui, d: &crate::runs_compare::Diff, before: &str, after: &str) -> bool {
+    use crate::runs_compare::Change;
+    let mut stop = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("Before {before}  →  after {after}")).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            stop = ui
+                .add(egui::Button::new("Stop comparing").min_size(vec2(0.0, widgets::TARGET_H)))
+                .clicked();
+        });
+    });
+    let (new, gone, changed) = (
+        d.count(|c| matches!(c, Change::New(_))),
+        d.count(|c| matches!(c, Change::Gone(_))),
+        d.count(|c| matches!(c, Change::Changed(..))),
+    );
+    if d.figures.is_empty() {
+        ui.weak(format!("{new} new · {gone} gone · {changed} changed"));
+    }
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            if d.is_empty() {
+                ui.weak("No differences: the two runs found the same.");
+                return;
+            }
+            if !d.figures.is_empty() {
+                egui::Grid::new("compare_figures")
+                    .num_columns(4)
+                    .striped(true)
+                    .spacing([16.0, 4.0])
+                    .show(ui, |ui| {
+                        for h in ["", "Before", "After", "Change"] {
+                            ui.label(RichText::new(h).strong());
+                        }
+                        ui.end_row();
+                        for f in &d.figures {
+                            ui.label(f.name);
+                            ui.monospace(&f.before);
+                            ui.monospace(&f.after);
+                            ui.monospace(&f.delta);
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+            }
+            for (title, colour, pick) in [
+                ("New", widgets::ok(), 0),
+                ("Gone", widgets::bad(), 1),
+                ("Changed", widgets::warn(), 2),
+            ] {
+                let items: Vec<&Change> = d
+                    .changes
+                    .iter()
+                    .filter(|c| match c {
+                        Change::New(_) => pick == 0,
+                        Change::Gone(_) => pick == 1,
+                        Change::Changed(..) => pick == 2,
+                    })
+                    .collect();
+                if items.is_empty() {
+                    continue;
+                }
+                ui.label(
+                    RichText::new(format!("{title} ({})", items.len()))
+                        .strong()
+                        .color(colour),
+                );
+                for c in items {
+                    let line = match c {
+                        Change::New(w) | Change::Gone(w) => w.clone(),
+                        Change::Changed(w, how) => format!("{w}: {how}"),
+                    };
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(8.0);
+                        ui.add(egui::Label::new(RichText::new(line).monospace()).wrap());
+                    });
+                }
+                ui.add_space(6.0);
+            }
+        });
+    stop
 }
 
 /// A day's heading in the list.
