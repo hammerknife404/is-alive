@@ -23,8 +23,8 @@ Techs run this on site, on small laptops. Every UI change, and every step of the
 - **Target 1280 × 720 points**: a 1080p laptop at 150% scaling. The app already opens at 1120 × 720 and allows 620 × 400; those have to keep working too.
 - **Lay out by window width, not screen size.** Half a 4K monitor gets the same layout as a small laptop.
   - **1440 and up:** nav open (216), inspector docked (360), side panel docked (272).
-  - **1100–1439:** nav folds to the icon rail (56). Inspector docked at 320 on tool pages; on the Map it floats over the canvas. Opening the Map's side panel closes the inspector.
-  - **Under 1100:** inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
+  - **1100–1439:** nav open (216), the Map too. Inspector docked at 320 on tool pages; on the Map it floats over the canvas. Opening the Map's side panel closes the inspector.
+  - **Under 1100:** nav folds to the icon rail (56). Inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
 - **Height is the tighter limit.** At 720, the title bar, status bar and run bar together stay under 130 points, so results get most of the window.
 - **The Map keeps its zoom** when a panel opens over it. Panels float over the canvas; they don't shrink it.
 - **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC). Anything a row loses still shows in the inspector.

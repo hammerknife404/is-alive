@@ -174,12 +174,7 @@ impl App {
             ui.weak(format!("v{VERSION}"));
         });
         ui.separator();
-        match theme::appearance(
-            ui,
-            &mut self.look,
-            &self.backdrop.renderer,
-            self.backdrop.on_gpu(),
-        ) {
+        match theme::appearance(ui, &mut self.look, self.backdrop.on_gpu()) {
             Some(theme::MenuAction::Changed) => {
                 theme::apply(ui.ctx(), self.look.theme);
                 theme::save(&self.look);

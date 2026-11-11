@@ -624,10 +624,23 @@ pub(super) enum RunEv {
 pub(super) fn run_section(ui: &mut Ui, card: &str, r: &Run, busy: bool) -> Option<RunEv> {
     let mut out = None;
     let id = ui.make_persistent_id(("map_run", card, r.tool));
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
-        .show_header(ui, |ui| {
+    // The tool's name folds and unfolds the details, as the arrow does.
+    widgets::fold(
+        ui,
+        id,
+        true,
+        |ui, open| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.label(RichText::new(r.tool.name()).strong());
+            let name = ui
+                .add(
+                    egui::Label::new(RichText::new(r.tool.name()).strong())
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(if open {
+                    "Fold the details away"
+                } else {
+                    "Every reply, port or hop"
+                });
             if r.active() {
                 widgets::spinner(ui);
             }
@@ -656,8 +669,10 @@ pub(super) fn run_section(ui: &mut Ui, card: &str, r: &Run, busy: bool) -> Optio
                     out = Some(RunEv::Tab);
                 }
             });
-        })
-        .body(|ui| run_detail(ui, r));
+            name
+        },
+        |ui| run_detail(ui, r),
+    );
     let colour = match &r.state {
         State::Failed(_) => widgets::bad(),
         _ => ui.visuals().text_color(),
@@ -791,4 +806,66 @@ pub(super) fn slide(ctx: &egui::Context, id: &str, y: f32) -> f32 {
         ctx.request_repaint();
     }
     at(s, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A card's result opens to every reply from its tool's name, not just
+    /// the arrow beside it, and folds again the same way.
+    #[test]
+    fn a_results_name_opens_its_details() {
+        let ctx = egui::Context::default();
+        let run = Run::finished(Tool::Ping, "192.0.2.10".parse().unwrap());
+        let frame = |events: Vec<egui::Event>| {
+            let mut id = egui::Id::NULL;
+            let mut name = Rect::NOTHING;
+            let input = egui::RawInput {
+                events,
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(360.0, 400.0))),
+                time: Some(ctx.input(|i| i.time) + 0.5),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                id = ui.make_persistent_id(("map_run", "card", Tool::Ping));
+                run_section(ui, "card", &run, false);
+            });
+            out.textures_delta.clear();
+            fn find(s: &egui::Shape, at: &mut Rect) {
+                match s {
+                    egui::Shape::Text(t) if t.galley.text() == "Ping" => {
+                        *at = t.visual_bounding_rect()
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| find(s, at)),
+                    _ => {}
+                }
+            }
+            for c in &out.shapes {
+                find(&c.shape, &mut name);
+            }
+            (id, name)
+        };
+        let open = |ctx: &egui::Context, id| {
+            egui::collapsing_header::CollapsingState::load(ctx, id).is_some_and(|s| s.is_open())
+        };
+        let (id, name) = frame(vec![]);
+        assert!(!open(&ctx, id), "folded to start with");
+        assert!(name.is_positive(), "the tool's name is drawn");
+        let at = name.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for _ in 0..2 {
+            let was = open(&ctx, id);
+            frame(vec![egui::Event::PointerMoved(at)]);
+            frame(vec![press(true)]);
+            frame(vec![press(false)]);
+            frame(vec![]);
+            assert_eq!(open(&ctx, id), !was, "a click on the name flips it");
+        }
+    }
 }

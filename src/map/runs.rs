@@ -124,6 +124,15 @@ impl Run {
         }
     }
 
+    /// A finished run that found nothing, for tests that draw one.
+    #[cfg(test)]
+    pub fn finished(tool: Tool, ip: IpAddr) -> Self {
+        Self {
+            state: State::Done,
+            ..Self::new(tool, ip, 0)
+        }
+    }
+
     /// Queued or running.
     pub fn active(&self) -> bool {
         matches!(self.state, State::Queued | State::Running)

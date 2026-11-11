@@ -127,7 +127,8 @@ Five parts, the same on every tab:
 ### The nav (left)
 
 - **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
-- **Open or folded.** In a window 1440 points wide or more the nav is open, with each tab's icon and name. In a smaller window (a laptop, or half a big screen) it folds to a rail of icons, and on the **Map** it's always a rail so the map gets the room. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
+- **Open or folded.** The nav is open, with each tab's icon and name, in any window 1100 points wide or more, on every tab. In a narrower window it folds to a rail of icons. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
+- **Each tool's icon has its own colour**, taken from the theme's Map colours, so neighbouring tabs never share one and a tool is quick to spot in the rail. Settings, Help and Fold are in the text's colour.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#16-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
@@ -151,7 +152,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 All the testing tabs work the same way:
 
 1. **The run bar:** the main field first (Host, Range, Domain…), **▶ Start** right after it, and what decides the run (Ping's ICMP or TCP, Port Check's ports, Lookup's type and resolver).
-2. **Options** under it: the rest of the settings, folded. Their values show as small chips (*Normal*, *timeout 750 ms*, *names*), so you can see how the next run will go; click **Options** to change them. The tab remembers it open or folded while the app runs.
+2. **Options** under it: the rest of the settings, folded. Their values show as small chips (*Normal*, *timeout 750 ms*, *names*), so you can see how the next run will go; click **Options** (the word or its arrow) to change them. The tab remembers it open or folded while the app runs.
 3. **The status row** under it: what the run found on the left (counts, loss, time taken), **Copy** and **Save…** on the right. **Copy** puts the result on the clipboard for a ticket or email; **Save…** writes it to a text file.
 4. **The results** below. Before the first run, a short explanation says what to do.
 5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep), a card on the [Map](#selecting-cards)): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
@@ -776,7 +777,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site (see *Compare with the last visit*, below) |
 | **Examples** ▸ | Open one of two fictional sites, or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
-| **Saved maps** | Show or hide the saved maps bar (below) |
+| **Saved maps** | Show or hide the saved maps bar (below), to open a saved map or go back to Live |
 | **Copy findings** | The findings as text, worst first, for a ticket |
 | **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
 
@@ -795,7 +796,7 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 ### Moving around
 
-- **Drag the background** to pan; **scroll** or pinch to zoom; the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
+- **Drag the background** to pan; **scroll** or pinch to zoom; **Save**, the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
 - **Panels keep the zoom.** Layers and a card's inspector lie over the map's edges (or, on a wide window, beside it) without zooming it out: the map stays as it was, and a selected card is moved clear of them. **Fit** (or **F**, or a double-click) frames the whole map in the room the open panels leave, and keeps it there as the map grows; with every panel shut, it fills the window again.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links** (below), **Legend** and **Export** (the same formats).
@@ -838,10 +839,17 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
 
 **Undo** (↩, **Ctrl+Z**) and **Redo** (↪, **Ctrl+Shift+Z** or **Ctrl+Y**) step through what you changed by hand: cards or boxes dragged (a whole drag is one step) or put back, **Re-layout**, the **Links** view, the layout, **Clients**, clients shown or hidden on one card (**+N**, **−**, **Show all**), pins, sites collapsed or expanded, roles faded out, notes written, changed or taken off (*Undo: note on ACME-FS01*). Selecting cards isn't a step. The last 100 steps are kept; another map (an example, a file loaded) starts a fresh history.
 
-**Saved maps** keep a map as it is, with your moves, pins, folds and layout, to come back to later. Each site has its own (see [Sites](#sites)). Click **Saved maps** (beside the zoom controls, or in **⋯**) for the bar along the bottom of the tab; it stays open once a map is saved, and **⏷** hides it.
+**Saved maps** keep a map as it is, with your moves, pins, folds, notes and layout, to come back to later or compare with on the next visit. Each site has its own (see [Sites](#sites)).
 
-- **Live** is the map from the sweep and the files loaded now; each saved map has a tab beside it. Click one to open it. A **•** after its name means it has changed since it was saved.
-- **+ Save current** saves the map showing as a new tab, ready to be named.
+- **Save** (bottom right, beside the zoom controls, or **Ctrl+S** on the Map) does what it says:
+
+  | On show | Save |
+  |---|---|
+  | **Live** | Keeps a copy of the map as it is now, named with the date and time (*Map 2026-11-11 14:05*), ready to be renamed; you stay on Live, which goes on updating |
+  | A saved map with changes (**•**) | Writes the changes into it |
+  | A saved map with no changes | Greyed out: nothing to save |
+
+- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **⏷** hides it and **⋯ › Saved maps** shows it again.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (here, in **⋯** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
 - **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
@@ -912,11 +920,11 @@ A card's details open in the [inspector](#how-every-tab-is-laid-out), the same p
 Each selected card gets a section, newest on top:
 
 - **The role and name**, with its address (or what stands for one: *WAN …*, a site's hosts), its zone and tags; **⋯** (the card's right-click menu, see above), the 📌 pin button and **×** at the top.
-- **Ping**, **Port Check**, **Traceroute**: a quick check of this device, right here. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**, and the inspector scrolls to it; click it for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
+- **Ping**, **Port Check**, **Traceroute**: a quick check of this device, right here. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**, and the inspector scrolls to it; click the check's name (or the arrow beside it) for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
 - **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser.
 - **SSH** (when port 22 is open) and **RDP** (when 3389 is open) connect to the device in the computer's own client, which asks for the log-in; is-alive stores no passwords. On Windows, SSH opens `ssh` (built into Windows 10 and 11) in a console window that stays open when it ends, so a refused connection can be read; RDP opens Remote Desktop Connection (`mstsc`). On Linux, SSH opens in the desktop's terminal (Konsole, Ptyxis, GNOME Terminal and others); RDP uses Remmina or FreeRDP. A button is left out when the computer has no client for it. Hover one to see what it runs.
 - **Action items:** the card's own warnings and the findings that name it.
-- **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it.
+- **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it. Each line shows once. A device that answers the sweep on a second address with the same MAC (an alias, a second IP on one network card) stays one card, and that address's lines start with *Also at 10.0.0.252:*.
 - **Open ports**, each with what it's for (`22 ssh`, `443 https`).
 - **Results:** the quick checks above.
 - **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below); **Add note** starts one.
@@ -962,7 +970,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 5. Open **⋯ › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
 6. **⋯ › Examples › Close the example** goes back to this network's map.
 
-**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…** for an accurate one from `/mapnetwork`. **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
+**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…**: upload the bundle to Claude or another AI for an accurate one (the skills that draw it come inside the bundle). **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
 
 **Updating.** The map rebuilds by itself as a sweep finds devices and when a file is loaded in Config Export. Rebuilds keep pins, selections, moved cards and spot-check results. A pinned card that's no longer in the data stays, drawn in red with a dashed outline and marked *Not in the latest data*, so you can check it before unpinning it.
 
@@ -1026,7 +1034,7 @@ Everything is in one row above the notes:
 
 **Dropping files on Notes:** a photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) dropped on the Notes tab is taken as **Open…** takes it: the photo goes in at the end, and notes ask **Replace the notes**, **Add at the end** or **Read only** (one file at a time, when several are dropped). Anything else dropped here (a backup, an export, a map) goes to [Config Export](#10-config-export); see [Dropping files](#dropping-files).
 
-**Autosave** (on by default): the notes save themselves, redacted, a moment after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
+**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#16-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
 
 ### Photos
 
@@ -1251,7 +1259,7 @@ With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (d
 - **Glow** adds a soft glow to the bright parts.
 - **VHS** plays the scene like a worn video tape (needs a graphics card).
 
-The small line under them says what's drawing the backdrop (graphics card or processor) and why.
+What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#20-troubleshooting)), not in Settings.
 
 ### Network
 
@@ -1303,6 +1311,7 @@ It holds `settings` (theme and the choices above, plain text), `notes.md` (your 
 | **Ctrl+O** | Notes | Open notes, a photo or a file to read |
 | **Ctrl+Shift+S** | Notes | Save a copy as Markdown |
 | **Ctrl+S** | Notes | Save the notes now (with Autosave off, the only way they're saved) |
+| **Ctrl+S** | Map | Save the map: a copy of Live, or a saved map's changes (as **Save** by the zoom controls) |
 | **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
