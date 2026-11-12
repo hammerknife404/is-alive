@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.29.2**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -70,6 +70,8 @@ It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. 
 4. Optional, to check who built it: every release published after 12 November 2026 carries a *build attestation*, a statement signed through GitHub that this exact file was built by the project's own build from the published source. With the [GitHub CLI](https://cli.github.com) installed, `gh attestation verify is-alive.exe --repo hammerknife404/is-alive` (or the `.AppImage`) names the build and the commit, and fails for a file built anywhere else. The checksum only shows the download wasn't damaged.
 
 Put the file anywhere you like: the desktop, a tools folder, a USB stick. It runs from where it is.
+
+**To carry everything with it** (a USB stick, or a client's computer you want to leave as you found it), make a folder named `is-alive-data` beside the program before you start it. is-alive then keeps its settings, sites, notes, maps and runs in that folder and puts nothing in the computer's profile. See [Portable mode](#portable-mode).
 
 ### Windows
 
@@ -1420,12 +1422,30 @@ A line near the bottom of Settings gives the date of the vendor table built into
 
 ### Where settings and notes are kept
 
-The bottom of Settings shows the folder:
+The bottom of Settings shows the folder. Unless is-alive is portable (below), it is in your profile:
 
 - **Windows:** `%APPDATA%\is-alive` (for example `C:\Users\you\AppData\Roaming\is-alive`)
 - **Linux:** `~/.config/is-alive`
 
 It holds `settings` (theme and the choices above, plain text), `notes.md` (your notes, redacted), `startup.log` (how each start opened the window), `maps` (saved maps), `map-notes.json` (notes on the live map's and the examples' cards, redacted) and, if you've unredacted a detected value, `notes-allow.json` (the values you chose to keep, in notes or card notes). Those are Scratch's. Each site has a folder of its own in `sites` (for example `sites/harbor-dental`) with its own `notes.md`, `maps`, `map-notes.json` and `notes-allow.json`, `results.json` (its Results, unless **Keep with site** is off) and `site.json`: its name, when it was made and last opened, and the paths of its configs. The window also reopens at the size you last closed it.
+
+### Portable mode
+
+When a folder named `is-alive-data` sits beside the program (beside `is-alive.exe`, or beside the `.AppImage` file), is-alive keeps everything in it: settings, sites, notes, saved maps, runs and `startup.log`. Nothing is written to the computer's profile. Settings then reads *Portable: everything is kept beside the program, in* and the folder.
+
+- **To turn it on:** close is-alive, make the empty folder `is-alive-data` beside the program, start it again. It starts as new: what was in the profile stays there, untouched. To bring it along, copy the profile folder's contents into `is-alive-data` first.
+- **To turn it off:** remove or rename the folder. The next start uses the profile again.
+- It's decided as is-alive starts. A folder made or removed while it runs changes nothing until the next start.
+- Files you save with **Save…** or **Export** still go where the Save dialog says. Point **Save to** at a folder on the stick to keep those with it as well.
+- The stick has to be writable. A read-only one starts, but nothing is remembered.
+
+### Remove everything is-alive saved
+
+At the bottom of Settings, **Remove everything is-alive saved…** is for a client's computer you're done with. It lists what's in the folder (settings, how many sites, Scratch's notes, saved maps and runs, the startup log, and the number of files in all) and asks. **Remove it all and close** deletes every one of them and closes is-alive without writing anything on the way out; the next start is as new.
+
+- In a profile, the `is-alive` folder goes too. In portable mode the `is-alive-data` folder is emptied and stays, so is-alive is still portable there.
+- Files you saved elsewhere with **Save…** or **Export** (reports, bundles, exported maps) are yours and stay. So does the program file itself: delete that by hand.
+- It can't be undone. If a file can't be removed (open in another program), it says which.
 
 ---
 

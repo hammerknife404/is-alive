@@ -206,6 +206,10 @@ struct App {
     shots_help: bool,
     /// Closing waits on "Save the notes?" (autosave off, changes unsaved).
     close_asked: bool,
+    /// Settings › Remove everything is asking: what's there, and how
+    /// many files; then why it couldn't all be removed, if so.
+    remove_ask: Option<(Vec<String>, usize)>,
+    remove_failed: Option<String>,
     /// The user answered it: close without asking again.
     close_anyway: bool,
     /// The open site's name, for the header ("Scratch": none).
@@ -267,6 +271,7 @@ impl eframe::App for App {
             theme::save(&self.look);
         }
         self.close_dialog(ui.ctx());
+        self.remove_dialog(ui.ctx());
         self.site_dialog(ui.ctx());
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
@@ -275,6 +280,11 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Everything was removed: closing puts none of it back.
+        if theme::removed() {
+            widgets::clear_own_clipboard();
+            return;
+        }
         self.notes.set_elsewhere(self.map.note_texts());
         self.notes.flush();
         widgets::clear_own_clipboard();
@@ -356,6 +366,8 @@ impl App {
             shots_settings: false,
             shots_help: false,
             close_asked: false,
+            remove_ask: None,
+            remove_failed: None,
             close_anyway: false,
             site_name: site::name(),
             sites: Vec::new(),
@@ -647,6 +659,87 @@ impl App {
             }
             None if r.should_close() => self.close_asked = false,
             None => {}
+        }
+    }
+
+    /// Settings › Remove everything is-alive saved: says what's there
+    /// and asks. On yes it's removed and the app closes, writing nothing
+    /// on the way out.
+    fn remove_dialog(&mut self, ctx: &egui::Context) {
+        let Some((what, files)) = self.remove_ask.clone() else {
+            return;
+        };
+        let Some(dir) = theme::data_dir() else {
+            // Removed already (or nowhere to keep anything): say how it
+            // went until the window closes.
+            if let Some(e) = &self.remove_failed {
+                egui::Modal::new(egui::Id::new("remove_failed")).show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.strong("Not all of it could be removed");
+                    ui.label(e.as_str());
+                    if ui.button("Close is-alive").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            }
+            return;
+        };
+        let portable = theme::is_portable();
+        let mut go = false;
+        let r = egui::Modal::new(egui::Id::new("remove_everything")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.strong("Remove everything is-alive saved on this computer?");
+            ui.label(
+                egui::RichText::new(dir.display().to_string())
+                    .monospace()
+                    .small(),
+            );
+            ui.add_space(4.0);
+            if what.is_empty() {
+                ui.label("Nothing is saved there yet.");
+            } else {
+                for w in &what {
+                    ui.label(format!("•  {w}"));
+                }
+                ui.weak(format!(
+                    "{files} file{} in all. This can't be undone.",
+                    if files == 1 { "" } else { "s" }
+                ));
+            }
+            ui.add_space(4.0);
+            ui.weak(if portable {
+                "The folder itself stays, empty, so is-alive is still portable here. Files \
+                 you saved elsewhere with Save… or Export stay too. is-alive closes afterwards."
+            } else {
+                "Files you saved elsewhere with Save… or Export stay: they're yours. \
+                 is-alive closes afterwards, and starts as new next time."
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(egui::RichText::new("Remove it all and close").color(widgets::bad()))
+                    .clicked()
+                {
+                    go = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    ui.close();
+                }
+            });
+        });
+        if go {
+            // Runs under way would write as they finish: stopped first.
+            self.notes.set_autosave(false);
+            match theme::remove_everything(&dir, portable) {
+                Ok(()) => {
+                    self.remove_ask = None;
+                    self.close_anyway = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => self.remove_failed = Some(e),
+            }
+        } else if r.should_close() {
+            self.remove_ask = None;
         }
     }
 

@@ -1581,8 +1581,65 @@ pub fn write_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io:
     o.open(path)?.write_all(data.as_ref())
 }
 
-/// This app's folder in the user's profile (settings, autosaved notes).
+/// The folder that makes is-alive portable: when one of this name sits
+/// beside the program, everything is kept in it and nothing in the
+/// user's profile. For a USB stick, or a client's machine that should
+/// be left as it was found.
+pub const PORTABLE: &str = "is-alive-data";
+
+/// Where is-alive keeps everything: settings, sites, notes, maps, runs.
+/// The portable folder beside the program when there is one, else this
+/// app's folder in the user's profile. Decided once, as the app starts:
+/// a folder made or removed while it runs changes nothing until the next
+/// start, so one session's files never end up in two places.
 pub fn data_dir() -> Option<std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    // After Remove everything there is nowhere: whatever would save
+    // (autosave, the window's size on closing) finds no folder and
+    // writes nothing back.
+    if removed() {
+        return None;
+    }
+    DIR.get_or_init(|| pick(beside_program().as_deref(), profile_dir()))
+        .clone()
+}
+
+/// The data folder is the portable one beside the program.
+pub fn is_portable() -> bool {
+    is_portable_dir(data_dir().as_deref())
+}
+
+fn is_portable_dir(dir: Option<&std::path::Path>) -> bool {
+    match (dir, profile_dir().as_deref()) {
+        (Some(d), Some(p)) => d != p,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// `beside`/is-alive-data when that's a folder, else `profile`.
+fn pick(
+    beside: Option<&std::path::Path>,
+    profile: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    beside
+        .map(|b| b.join(PORTABLE))
+        .filter(|p| p.is_dir())
+        .or(profile)
+}
+
+/// The folder the program file is in: the AppImage's (not where it's
+/// mounted while it runs), or the exe's.
+fn beside_program() -> Option<std::path::PathBuf> {
+    let file = std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| std::env::current_exe().ok())?;
+    Some(file.parent()?.to_path_buf())
+}
+
+/// This app's folder in the user's profile.
+pub fn profile_dir() -> Option<std::path::PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(std::path::PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -1596,6 +1653,103 @@ pub fn data_dir() -> Option<std::path::PathBuf> {
             })
     };
     Some(base?.join("is-alive"))
+}
+
+static REMOVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Everything was removed (Settings): nothing more is written, so the
+/// app closing doesn't put its settings and notes straight back.
+pub fn removed() -> bool {
+    REMOVED.load(Ordering::Relaxed)
+}
+
+/// What Remove everything would take, for its confirmation: each thing
+/// in `dir` in words ("3 sites", "Settings"), and how many files in all.
+pub fn kept_in(dir: &std::path::Path) -> (Vec<String>, usize) {
+    fn files(p: &std::path::Path, depth: u8) -> usize {
+        let Ok(rd) = std::fs::read_dir(p) else {
+            return 0;
+        };
+        rd.flatten()
+            .map(|e| match e.file_type() {
+                Ok(t) if t.is_dir() && depth < 8 => files(&e.path(), depth + 1),
+                Ok(t) if t.is_dir() => 0,
+                _ => 1,
+            })
+            .sum()
+    }
+    let count = |name: &str| -> usize {
+        std::fs::read_dir(dir.join(name)).map_or(0, |rd| rd.flatten().count())
+    };
+    let plural = |n: usize, one: &str| format!("{n} {one}{}", if n == 1 { "" } else { "s" });
+    let mut what = Vec::new();
+    if dir.join("settings").is_file() {
+        what.push("Settings: the theme, the save folder, the window's size".to_string());
+    }
+    match count("sites") {
+        0 => {}
+        n => what.push(format!(
+            "{}, each with its notes, saved maps, runs and list of configs",
+            plural(n, "site")
+        )),
+    }
+    let names: Vec<String> = std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        },
+    );
+    let has = |part: &str| names.iter().any(|n| n.contains(part));
+    if has("notes") {
+        what.push("Scratch's notes".into());
+    }
+    match count("maps") {
+        0 => {}
+        n => what.push(format!("{} in Scratch", plural(n, "saved map"))),
+    }
+    if has("results") || has("runs") {
+        what.push("Scratch's runs in Results".into());
+    }
+    if has("startup") {
+        what.push("The startup log".into());
+    }
+    (what, files(dir, 0))
+}
+
+/// Remove everything is-alive saved: every file and folder in `dir`,
+/// and `dir` itself unless it's the portable folder (which is what
+/// makes the app portable: emptied, it stays). From here on nothing is
+/// written (`removed`). An error names what couldn't be removed.
+pub fn remove_everything(dir: &std::path::Path, portable: bool) -> Result<(), String> {
+    REMOVED.store(true, Ordering::Relaxed);
+    remove_in(dir, portable)
+}
+
+fn remove_in(dir: &std::path::Path, portable: bool) -> Result<(), String> {
+    let mut failed = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            // A link is removed, never followed.
+            let r = match e.file_type() {
+                Ok(t) if t.is_dir() => std::fs::remove_dir_all(&p),
+                _ => std::fs::remove_file(&p),
+            };
+            if let Err(err) = r {
+                failed.push(format!("{}: {err}", p.display()));
+            }
+        }
+    }
+    if !portable && failed.is_empty() {
+        let _ = std::fs::remove_dir(dir);
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("\n"))
+    }
 }
 
 fn settings_path() -> Option<std::path::PathBuf> {
@@ -1613,8 +1767,8 @@ pub fn load() -> Settings {
 /// Best effort: a read-only profile just means the choice isn't remembered.
 pub fn save(s: &Settings) {
     // A test that draws the app never writes the settings of whoever
-    // runs it.
-    if cfg!(test) {
+    // runs it; and after Remove everything, nothing is put back.
+    if cfg!(test) || removed() {
         return;
     }
     if let Some(p) = settings_path() {
@@ -1628,6 +1782,92 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("is-alive-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A folder named is-alive-data beside the program is where
+    /// everything goes; without one (or with a file of that name), the
+    /// profile.
+    #[test]
+    fn a_data_folder_beside_the_program_makes_it_portable() {
+        let beside = scratch("portable");
+        let profile = Some(std::path::PathBuf::from("/profile/is-alive"));
+        assert_eq!(pick(Some(&beside), profile.clone()), profile);
+        std::fs::write(beside.join(PORTABLE), "a file, not a folder").unwrap();
+        assert_eq!(pick(Some(&beside), profile.clone()), profile);
+        std::fs::remove_file(beside.join(PORTABLE)).unwrap();
+        std::fs::create_dir(beside.join(PORTABLE)).unwrap();
+        let here = pick(Some(&beside), profile.clone()).unwrap();
+        assert_eq!(here, beside.join(PORTABLE));
+        assert!(is_portable_dir(Some(&here)));
+        assert_eq!(pick(None, profile.clone()), profile);
+        // With no profile at all (no HOME), the portable folder still works.
+        assert_eq!(pick(Some(&beside), None), Some(here));
+        let _ = std::fs::remove_dir_all(beside);
+    }
+
+    /// Remove everything says what's there first, then takes all of it:
+    /// the folder too in a profile, and only its contents when it's the
+    /// portable folder, which has to stay for the app to stay portable.
+    #[test]
+    fn remove_everything_lists_it_and_leaves_nothing() {
+        for portable in [false, true] {
+            let dir = scratch(if portable { "wipe-p" } else { "wipe" });
+            std::fs::write(dir.join("settings"), "theme=dark\n").unwrap();
+            std::fs::write(dir.join("notes.md"), "door code").unwrap();
+            std::fs::write(dir.join("results.json"), "[]").unwrap();
+            std::fs::write(dir.join("startup.log"), "x").unwrap();
+            std::fs::create_dir_all(dir.join("maps")).unwrap();
+            std::fs::write(dir.join("maps/a.json"), "{}").unwrap();
+            for site in ["harbor-dental", "acme"] {
+                let s = dir.join("sites").join(site);
+                std::fs::create_dir_all(s.join("maps")).unwrap();
+                std::fs::write(s.join("site.json"), "{}").unwrap();
+                std::fs::write(s.join("maps/m.json"), "{}").unwrap();
+            }
+            let (what, files) = kept_in(&dir);
+            assert_eq!(files, 9);
+            let all = what.join("\n");
+            for part in [
+                "Settings",
+                "2 sites",
+                "Scratch's notes",
+                "1 saved map in Scratch",
+                "runs",
+                "startup log",
+            ] {
+                assert!(all.contains(part), "{part}: {all}");
+            }
+            remove_in(&dir, portable).unwrap();
+            if portable {
+                assert!(dir.is_dir(), "the portable folder stays");
+                assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+                assert_eq!(kept_in(&dir), (Vec::new(), 0));
+                std::fs::remove_dir(&dir).unwrap();
+            } else {
+                assert!(!dir.exists());
+            }
+        }
+    }
+
+    /// A link in the folder is removed; what it points at is not touched.
+    #[cfg(unix)]
+    #[test]
+    fn remove_everything_never_follows_a_link_out_of_the_folder() {
+        let outside = scratch("wipe-outside");
+        std::fs::write(outside.join("keep.txt"), "the client's").unwrap();
+        let dir = scratch("wipe-link");
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        remove_in(&dir, false).unwrap();
+        assert!(!dir.exists());
+        assert!(outside.join("keep.txt").is_file());
+        let _ = std::fs::remove_dir_all(outside);
+    }
 
     /// One frame at `time`, for a transition's value then.
     fn at<R>(ctx: &egui::Context, time: f64, f: impl Fn(&egui::Context) -> R) -> R {
