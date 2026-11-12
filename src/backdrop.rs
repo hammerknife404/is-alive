@@ -25,20 +25,36 @@ const K: i32 = 2;
 pub const FPS: f64 = 10.0;
 const LOOP_FRAMES: i64 = 40;
 const LOOP_SECS: f64 = LOOP_FRAMES as f64 / FPS;
-/// Frames a second for smooth motion (the Map's flowing links, its tab's
-/// glow after a Full scan). Not the display's rate: on a 120 Hz laptop
-/// that was 120 redraws of the whole window a second, on battery.
-pub const SMOOTH_FPS: f64 = 30.0;
-/// Frames a second for busy indicators (the Stop spinner, the nav's running
-/// dots). They share the tick, so together they cost 10 frames a second.
+/// Frames a second for busy indicators (the Stop spinner, the nav's
+/// running dots) while nothing else may move: Animate off, or When
+/// plugged in on battery. They still have to say a tool is running.
 pub const BUSY_FPS: f64 = 10.0;
 
-/// Time for a busy indicator, snapped to `BUSY_FPS` ticks, asking for the
-/// next tick while the window is focused. Unfocused, it holds still: a
-/// continuous ping can run for hours behind another window, and only its
-/// replies redraw the window then.
+/// Smooth motion (the Map's flowing links, its tab's glow, the line
+/// under the title bar) runs at the display's rate: the next frame is
+/// asked for at once, and the display's refresh paces it. Only while the
+/// window is focused; behind another window everything holds still.
+/// Callers draw nothing moving unless `theme::moves`, so on battery with
+/// When plugged in, or with Animate off, this is never reached.
+pub fn next_frame(ctx: &egui::Context) {
+    if ctx.input(|i| i.viewport().focused != Some(false)) {
+        ctx.request_repaint();
+    }
+}
+
+/// Time for a busy indicator, asking for its next frame while the window
+/// is focused: at the display's rate while things may move, on `BUSY_FPS`
+/// ticks while they may not. Unfocused, it holds still: a continuous ping
+/// can run for hours behind another window, and only its replies redraw
+/// the window then.
 pub fn busy_time(ctx: &egui::Context) -> f32 {
     let (time, focused) = ctx.input(|i| (i.time, i.viewport().focused != Some(false)));
+    if crate::theme::moves() {
+        if focused {
+            ctx.request_repaint();
+        }
+        return time as f32;
+    }
     let (t, wait) = tick(time, BUSY_FPS);
     if focused {
         repaint_in(ctx, wait);

@@ -73,6 +73,8 @@ pub fn show_as(
     open: &mut bool,
     add: impl FnOnce(&mut Ui, &mut bool),
 ) {
+    // A floating panel comes in from its edge as it opens, fading in.
+    let shown = crate::theme::appear(ui.ctx(), egui::Id::new((id, "appear")), *open);
     if !*open {
         return;
     }
@@ -107,8 +109,12 @@ pub fn show_as(
             let v = ui.visuals().clone();
             egui::Area::new(egui::Id::new(id))
                 .order(egui::Order::Middle)
-                .fixed_pos(at.min)
+                .fixed_pos(at.min + vec2((1.0 - shown) * SLIDE, 0.0))
                 .show(ui.ctx(), |ui| {
+                    // Never from nothing: readable from its first frame.
+                    ui.multiply_opacity(
+                        crate::inspector::FAINT + (1.0 - crate::inspector::FAINT) * shown,
+                    );
                     egui::Frame::new()
                         .fill(crate::theme::solid(v.panel_fill))
                         .stroke(v.widgets.noninteractive.bg_stroke)
@@ -131,6 +137,11 @@ pub fn show_as(
         }
     }
 }
+
+/// How far a floating panel travels as it opens, from its edge.
+pub const SLIDE: f32 = 24.0;
+/// How solid it is on the frame it opens.
+pub const FAINT: f32 = 0.3;
 
 /// The top of the inspector: a small capitalised kind, × (when `close`
 /// is given), the name, and its address in the accent colour.

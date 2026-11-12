@@ -136,6 +136,8 @@ impl MapView {
         focus_site: &mut Option<String>,
     ) {
         self.side_cover = 0.0;
+        // In from its edge as it opens (theme::appear), like the inspector.
+        let shown = crate::theme::appear(ui.ctx(), egui::Id::new("map_side_appear"), self.side);
         if !self.side {
             return;
         }
@@ -161,8 +163,12 @@ impl MapView {
         let mut since_ev = None;
         egui::Area::new(egui::Id::new("map_side"))
             .order(egui::Order::Middle)
-            .fixed_pos(canvas.min)
+            .fixed_pos(canvas.min - vec2((1.0 - shown) * crate::inspector::SLIDE, 0.0))
             .show(ui.ctx(), |ui| {
+                // Never from nothing: readable from its first frame.
+                ui.multiply_opacity(
+                    crate::inspector::FAINT + (1.0 - crate::inspector::FAINT) * shown,
+                );
                 egui::Frame::new()
                     .fill(crate::theme::solid(v.panel_fill))
                     .stroke(v.widgets.noninteractive.bg_stroke)

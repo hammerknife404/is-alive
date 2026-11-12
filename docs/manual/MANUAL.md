@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.29.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.29.1**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -1357,13 +1357,13 @@ The dots beside each name are that theme's Map colours for each role. Every them
 
 **Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
 
-**Animate** (in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, a card's amber **!** pulses three times when the Map shows it, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front.
+**Animate** (in every theme) lets things move: a tab's content fades in, the nav folds, a panel slides in from its edge, cards glide to their places, the Map tab pulses after a Full scan, dots flow along the Map's lit links, a card's amber **!** pulses three times when the Map shows it, and in Miami the backdrop and the line under the title bar drift (the RGB line too). It all runs as smooth as the screen allows (60 times a second on most laptops, more on a faster screen); only Miami's 16-bit backdrop keeps its own 10 frames a second. Every transition takes one of two lengths, about a tenth or a fifth of a second. Everything pauses while the window isn't in front.
 
 | Animate | Moves |
 |---|---|
-| **On** | Always, on battery too |
-| **When plugged in** (the default) | While the laptop is on its charger. On battery everything holds still, so it lasts longer on site. It checks every half minute; a desktop always counts as plugged in. *On battery now* shows under the choices when that's why nothing moves |
-| **Off** | Never: the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. For when motion bothers you |
+| **On** (the default) | Always, on battery too |
+| **When plugged in** | The battery-saving choice: while the laptop is on its charger. On battery everything holds still, so it lasts longer on site. It checks every half minute; a desktop always counts as plugged in. *On battery now* shows under the choices when that's why nothing moves |
+| **Off** | Never: nothing fades, slides or glides (a tab, a panel or a folded nav is just there), the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. A running tool's spinner still turns, slowly, so you can see it's working. For when motion bothers you |
 
 ### Miami backdrop
 

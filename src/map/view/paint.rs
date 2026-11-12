@@ -217,7 +217,7 @@ impl MapView {
             draw_packet(&p, at, lc, grey, r, alpha, behind);
         };
         let gap = packet_gap(z);
-        let (flow, flow_wait) = crate::backdrop::tick(self.flow, crate::backdrop::SMOOTH_FPS);
+        let flow = self.flow;
         let travel = packet_travel(flow, z);
         let clip = rect.expand(12.0);
         let width = |link: Link, on: bool| link_width(link, z, on);
@@ -401,16 +401,12 @@ impl MapView {
                 ring,
             );
         }
-        // Flowing links at 30 fps until the user leaves the map alone for a
-        // while; the warning pulse is slow enough for 20 fps, and it's over
-        // in a few seconds.
+        // Flowing links at the display's rate until the user leaves the
+        // map alone for a while; the warning pulse too, over in a few
+        // seconds.
         let flows = flows && self.flowing;
         if focused && (flows || pulse) {
-            if flows {
-                crate::backdrop::repaint_in(ui.ctx(), flow_wait);
-            } else {
-                crate::backdrop::repaint_in(ui.ctx(), std::time::Duration::from_millis(50));
-            }
+            crate::backdrop::next_frame(ui.ctx());
         }
     }
 
