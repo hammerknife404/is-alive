@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - run: cargo install cargo-audit --locked
       # Fails on a vulnerability; unmaintained crates (zbus's zvariant, from
       # accesskit's AT-SPI on Linux) are listed as warnings.
@@ -38,6 +38,6 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
-          toolchain: stable
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test --locked -- --ignored presets_answer --nocapture

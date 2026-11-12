@@ -1,0 +1,9 @@
+# The Rust version is-alive is built and checked with, here and in CI.
+# "stable" moves every six weeks, and a new release can add a lint that
+# turns an unrelated PR red. To update: change the number here and in
+# .github/workflows (`toolchain:` in build.yml, screenshots.yml and
+# weekly.yml), then run fmt, clippy and the tests.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

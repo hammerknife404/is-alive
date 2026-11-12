@@ -1,0 +1,24 @@
+# Weekly update PRs, so dependencies and CI actions don't quietly age.
+# `cargo audit` (weekly.yml) says when a crate has a known vulnerability;
+# this proposes the update. A lockfile-only update changes no version
+# number, so merging one publishes no release.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the compatible updates; a major version gets its own.
+      compatible:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
