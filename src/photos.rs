@@ -69,7 +69,7 @@ pub fn render(ui: &mut egui::Ui, line: &str) -> bool {
         ui.add(
             egui::Image::new(&texture)
                 .max_width(ui.available_width().min(640.0))
-                .corner_radius(8),
+                .corner_radius(crate::theme::R_CONTAINER),
         );
     } else {
         ui.colored_label(ui.visuals().error_fg_color, "Photo could not be decoded");

@@ -357,7 +357,7 @@ impl App {
             .on_hover_text(
                 "Show runs containing this. Copy, Save and Export in All runs follow it",
             );
-            if filtered && ui.small_button("×").on_hover_text("Clear filter").clicked() {
+            if filtered && ui.button("×").on_hover_text("Clear filter").clicked() {
                 self.filter.clear();
             }
         });
@@ -669,11 +669,13 @@ impl App {
                     (RunView::Table, "Table", has_table),
                     (RunView::Compare, "Compare", other.is_some()),
                 ];
-                for (v, label, on) in views {
-                    if on && ui.selectable_label(self.result_view == v, label).clicked() {
-                        self.result_view = v;
+                widgets::segmented(ui, |ui| {
+                    for (v, label, on) in views {
+                        if on && ui.selectable_label(self.result_view == v, label).clicked() {
+                            self.result_view = v;
+                        }
                     }
-                }
+                });
             });
         }
         ui.separator();
@@ -884,7 +886,7 @@ fn run_row(
         egui::Color32::TRANSPARENT
     };
     let p = ui.painter();
-    p.rect_filled(rect, 6.0, fill);
+    p.rect_filled(rect, crate::theme::R_CONTROL, fill);
     let dot = if live {
         theme::accent()
     } else {
@@ -902,18 +904,18 @@ fn run_row(
     first.append(
         tool,
         0.0,
-        egui::TextFormat::simple(egui::FontId::proportional(14.0), strong),
+        egui::TextFormat::simple(egui::FontId::proportional(theme::BODY), strong),
     );
     if !target.is_empty() {
         first.append(
             target,
             8.0,
-            egui::TextFormat::simple(egui::FontId::monospace(13.0), v.text_color()),
+            egui::TextFormat::simple(egui::FontId::monospace(theme::MONO), v.text_color()),
         );
     }
     let time_g = p.layout_no_wrap(
         time.to_string(),
-        egui::FontId::proportional(12.0),
+        egui::FontId::proportional(theme::CAPTION),
         v.weak_text_color(),
     );
     first.wrap = egui::text::TextWrapping {
@@ -931,7 +933,7 @@ fn run_row(
     );
     let mut second = egui::text::LayoutJob::simple_singleline(
         line.to_string(),
-        egui::FontId::proportional(12.5),
+        egui::FontId::proportional(theme::CAPTION),
         v.weak_text_color(),
     );
     second.wrap = egui::text::TextWrapping {

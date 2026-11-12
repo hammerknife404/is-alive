@@ -67,7 +67,11 @@ impl MapView {
 
         // On a see-through theme, calm the backdrop behind the map.
         if vis.panel_fill.a() < 255 {
-            p.rect_filled(rect, 6, vis.extreme_bg_color.gamma_multiply(0.55));
+            p.rect_filled(
+                rect,
+                crate::theme::R_CONTROL,
+                vis.extreme_bg_color.gamma_multiply(0.55),
+            );
         }
         // Dot grid that pans and zooms with the map.
         let step = 28.0 * z;

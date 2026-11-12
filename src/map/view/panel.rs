@@ -491,8 +491,11 @@ impl MapView {
             ui.allocate_exact_size(vec2(ui.available_width(), insp::ICON.y), Sense::click());
         let resp = resp.on_hover_text(tip);
         if resp.hovered() {
-            ui.painter()
-                .rect_filled(r, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            ui.painter().rect_filled(
+                r,
+                crate::theme::R_CONTROL,
+                ui.visuals().widgets.hovered.weak_bg_fill,
+            );
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         let p = ui.painter();

@@ -142,8 +142,10 @@ impl PingTool {
                 Action::None => {}
             }
             ui.separator();
-            ui.selectable_value(&mut self.mode, Mode::Icmp, "ICMP");
-            ui.selectable_value(&mut self.mode, Mode::Tcp, "TCP");
+            widgets::segmented(ui, |ui| {
+                ui.selectable_value(&mut self.mode, Mode::Icmp, "ICMP");
+                ui.selectable_value(&mut self.mode, Mode::Tcp, "TCP");
+            });
             if self.mode == Mode::Tcp {
                 widgets::num(ui, "Port", &mut self.port, 1..=65535, "");
             }

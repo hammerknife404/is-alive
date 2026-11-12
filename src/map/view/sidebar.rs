@@ -24,13 +24,16 @@ impl MapView {
             + 18.0;
         let r = Rect::from_min_size(
             pos2(rect.max.x - 10.0 - w, rect.min.y + 52.0),
-            vec2(w, 22.0),
+            vec2(w, crate::theme::TARGET_H),
         );
         if r.min.x < rect.min.x + 40.0 {
             return;
         }
         if ui
-            .put(r, egui::Button::new(text).corner_radius(11))
+            .put(
+                r,
+                egui::Button::new(text).corner_radius(crate::theme::R_PILL),
+            )
             .on_hover_text(format!(
                 "{}.\nClick to show all links again (or right-click the map, Links)",
                 self.links.tip()
@@ -45,28 +48,28 @@ impl MapView {
     /// − 100% + Fit in the bottom right of the canvas `rect` (of `place`,
     /// beside a floating inspector), for when there's no wheel.
     pub(super) fn zoom_controls(&mut self, ui: &mut Ui, rect: Rect, place: Rect) {
-        let h = 22.0;
+        let h = crate::theme::TARGET_H;
         let mut x = place.max.x - 10.0;
         let y = place.max.y - 10.0 - h;
         let mut button = |ui: &mut Ui, w: f32, text: &str, tip: &str| {
             x -= w;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, h));
             x -= 4.0;
-            ui.put(r, egui::Button::new(text).corner_radius(6))
+            ui.put(r, egui::Button::new(text))
                 .on_hover_text(tip)
                 .clicked()
         };
-        let fit = button(ui, 36.0, "Fit", "Show the whole map (F)");
+        let fit = button(ui, 40.0, "Fit", "Show the whole map (F)");
         let center = button(
             ui,
-            56.0,
+            66.0,
             "Center",
             "Move the middle of the map to the middle of the view, at this zoom",
         );
-        let zoom_in = button(ui, 24.0, "+", "Zoom in (+)");
+        let zoom_in = button(ui, 28.0, "+", "Zoom in (+)");
         let pct = format!("{:.0}%", self.zoom * 100.0);
-        let reset = button(ui, 48.0, &pct, "Back to 100% (0)");
-        let zoom_out = button(ui, 24.0, "−", "Zoom out (−)");
+        let reset = button(ui, 54.0, &pct, "Back to 100% (0)");
+        let zoom_out = button(ui, 28.0, "−", "Zoom out (−)");
         let target = if zoom_in {
             Some(self.zoom * 1.25)
         } else if zoom_out {
@@ -161,7 +164,7 @@ impl MapView {
             .fixed_pos(canvas.min)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
-                    .fill(v.panel_fill)
+                    .fill(crate::theme::solid(v.panel_fill))
                     .stroke(v.widgets.noninteractive.bg_stroke)
                     .inner_margin(egui::Margin::same(10))
                     .shadow(if flush {
@@ -227,7 +230,7 @@ impl MapView {
                                                 if ui
                                                     .add_enabled(
                                                         any_open,
-                                                        egui::Button::new("Collapse all").small(),
+                                                        egui::Button::new("Collapse all"),
                                                     )
                                                     .on_hover_text("Fold every site to one card")
                                                     .clicked()
@@ -237,7 +240,7 @@ impl MapView {
                                                 if ui
                                                     .add_enabled(
                                                         any_closed,
-                                                        egui::Button::new("Expand all").small(),
+                                                        egui::Button::new("Expand all"),
                                                     )
                                                     .on_hover_text("Open every site again")
                                                     .clicked()

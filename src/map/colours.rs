@@ -346,7 +346,7 @@ pub(crate) fn chroma(c: Color32) -> f32 {
 }
 
 /// OKLab (lightness, a, b) of a colour, ignoring its alpha.
-fn oklab(c: Color32) -> [f32; 3] {
+pub(crate) fn oklab(c: Color32) -> [f32; 3] {
     let [r, g, b, _] = c.to_srgba_unmultiplied();
     let lin = |v: u8| {
         let x = v as f32 / 255.0;
@@ -368,7 +368,7 @@ fn oklab(c: Color32) -> [f32; 3] {
 }
 
 /// An OKLab colour in sRGB, or None when a screen can't show it.
-fn from_oklab([l, a, b]: [f32; 3]) -> Option<[u8; 3]> {
+pub(crate) fn from_oklab([l, a, b]: [f32; 3]) -> Option<[u8; 3]> {
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
     let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
     let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);

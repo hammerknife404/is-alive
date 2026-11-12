@@ -523,7 +523,13 @@ impl App {
         if fade < 1.0 {
             ui.ctx().request_repaint();
         }
-        egui::CentralPanel::default().show(ui, |ui| {
+        // Six points over the run row, not eight: the run bar's share of
+        // the 130-point budget (chrome.rs).
+        let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin {
+            top: 6,
+            ..egui::Margin::same(8)
+        });
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             ui.multiply_opacity(fade);
             self.tab_ui(ui)
         });

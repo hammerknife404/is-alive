@@ -28,27 +28,74 @@ pub fn toggled(width: f32, pinned: Option<bool>) -> Option<bool> {
     (want != open(width, None)).then_some(want)
 }
 
-/// A tool's icon colour: one of the theme's Map role colours, so every
-/// theme keeps its own palette, and no two tools side by side share one.
+/// The tools in the order of their icons' hues around the colour wheel,
+/// a thirteenth of a turn apart. Neighbours in the nav are far apart
+/// here, and the old favourites keep their colour: Ping green, Lookup
+/// blue, Sweep orange.
+const WHEEL: [Tab; 13] = [
+    Tab::Results,
+    Tab::Export,
+    Tab::Sweep,
+    Tab::Ports,
+    Tab::Notes,
+    Tab::Ping,
+    Tab::Map,
+    Tab::Trace,
+    Tab::Calc,
+    Tab::Dns,
+    Tab::Join,
+    Tab::Advanced,
+    Tab::Speed,
+];
+
+/// A tool's icon colour: its own in every theme, no two tools sharing
+/// one. Each has its own hue, as light and as strong as the theme's Map
+/// colours so it belongs to the theme, and every other one a tone lighter
+/// so two hues side by side on the wheel still differ. Kept clear of the
+/// panel it's drawn on.
 pub fn tint(tab: Tab, theme: theme::Theme) -> egui::Color32 {
-    use crate::map::Zone;
-    let zone = match tab {
-        Tab::Ping => Zone::Wireless,
-        Tab::Ports => Zone::Server,
-        Tab::Trace => Zone::Gear,
-        Tab::Sweep => Zone::Device,
-        Tab::Dns => Zone::Gateway,
-        Tab::Advanced => Zone::Switch,
-        Tab::Export => Zone::Device,
-        Tab::Map => Zone::Gear,
-        Tab::Notes => Zone::Server,
-        Tab::Speed => Zone::Wireless,
-        Tab::Calc => Zone::Gateway,
-        Tab::Join => Zone::Server,
-        Tab::Results => Zone::Switch,
+    use crate::map::{Zone, colours};
+    // How light and how colourful this theme's role colours are.
+    let roles = [
+        Zone::Gateway,
+        Zone::Switch,
+        Zone::Wireless,
+        Zone::Gear,
+        Zone::Server,
+        Zone::Device,
+    ]
+    .map(|z| colours::oklab(z.colour_in(theme)));
+    let n = roles.len() as f32;
+    let light = roles.iter().map(|c| c[0]).sum::<f32>() / n;
+    let chroma = roles.iter().map(|c| c[1].hypot(c[2])).sum::<f32>() / n;
+    let k = WHEEL.iter().position(|t| *t == tab).unwrap_or(0);
+    let hue = (5.0 + 360.0 / WHEEL.len() as f32 * k as f32).to_radians();
+    // Thirteen is odd: the last on the wheel sits between the two tones,
+    // so it differs from the first as well as from the one before it.
+    let tone = match k {
+        k if k + 1 == WHEEL.len() => 0.0,
+        k if k % 2 == 0 => TONE,
+        _ => -TONE,
     };
-    zone.colour_in(theme)
+    // Not so light (Blueprint's pastels) that no colour is left in it.
+    let l = light.clamp(0.5, 0.78) + tone;
+    // Less chroma until it's a colour a screen can show.
+    let mut c = chroma.max(0.11);
+    let rgb = loop {
+        if let Some(rgb) = colours::from_oklab([l, c * hue.cos(), c * hue.sin()]) {
+            break rgb;
+        }
+        c *= 0.9;
+        if c < 0.01 {
+            break [128; 3];
+        }
+    };
+    let [r, g, b] = rgb;
+    colours::legible(egui::Color32::from_rgb(r, g, b), theme::panel_of(theme))
 }
+
+/// How much lighter or darker (OKLab) every other icon on the wheel is.
+const TONE: f32 = 0.06;
 
 pub fn icon(tab: Tab) -> Icon {
     match tab {
@@ -245,6 +292,10 @@ impl App {
                 // off the end at a small window. The popup starts at egui's
                 // default area size (400 high), so the height is asked for.
                 let room = (ui.ctx().content_rect().height() - 80.0).max(200.0);
+                // Room for the scroll bar beside the settings, not over
+                // the ends of their rows.
+                let scroll = &mut ui.spacing_mut().scroll;
+                scroll.floating_allocated_width = scroll.bar_width + 4.0;
                 egui::ScrollArea::vertical()
                     .max_height(room)
                     .min_scrolled_height(room)
@@ -273,7 +324,7 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
         egui::Color32::TRANSPARENT
     };
     let p = ui.painter();
-    p.rect_filled(rect, 6.0, fill);
+    p.rect_filled(rect, crate::theme::R_CONTROL, fill);
     if row.glow > 0.0 {
         map_glow(p, rect, row.glow);
     }
@@ -305,7 +356,7 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
             egui::pos2(icon_at.right() + 10.0, rect.center().y),
             Align2::LEFT_CENTER,
             row.label,
-            FontId::proportional(14.0),
+            FontId::proportional(theme::BODY),
             colour,
         );
     }
@@ -383,14 +434,31 @@ mod tests {
     }
 
     #[test]
-    fn tools_side_by_side_have_different_colours() {
-        // In every theme, so each row reads apart from its neighbours.
+    fn every_tool_has_a_colour_of_its_own_in_every_theme() {
+        use crate::map::colours::oklab;
         for t in theme::Theme::ALL {
-            for pair in TABS.windows(2) {
-                let (a, b) = (&pair[0], &pair[1]);
-                assert_ne!(tint(a.0, t), tint(b.0, t), "{t:?}: {} and {}", a.1, b.1);
+            let panel = oklab(theme::panel_of(t));
+            for (i, a) in TABS.iter().enumerate() {
+                let ca = oklab(tint(a.0, t));
+                // Clear of the panel it's drawn on.
+                assert!((ca[0] - panel[0]).abs() >= 0.249, "{t:?}: {}", a.1);
+                // And of every other tool: far enough apart to tell at a
+                // glance (OKLab; 0.02 is a just-noticeable difference).
+                for b in &TABS[i + 1..] {
+                    let cb = oklab(tint(b.0, t));
+                    let d = (0..3).map(|k| (ca[k] - cb[k]).powi(2)).sum::<f32>().sqrt();
+                    assert!(d >= 0.05, "{t:?}: {} and {} ({d})", a.1, b.1);
+                }
             }
         }
+    }
+
+    #[test]
+    fn the_wheel_holds_every_tool_once() {
+        for (tab, name, _) in TABS {
+            assert_eq!(WHEEL.iter().filter(|t| *t == tab).count(), 1, "{name}");
+        }
+        assert_eq!(WHEEL.len(), TABS.len());
     }
 
     #[test]

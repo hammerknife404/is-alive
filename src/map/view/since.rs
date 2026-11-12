@@ -175,7 +175,7 @@ pub(super) fn since_side(ui: &mut Ui, s: &Since, map: &Map) -> Option<SinceEv> {
             });
             ui.horizontal(|ui| {
                 if ui
-                    .small_button("Copy")
+                    .button("Copy")
                     .on_hover_text("Copy the changes as text, for a report")
                     .clicked()
                 {
@@ -183,7 +183,7 @@ pub(super) fn since_side(ui: &mut Ui, s: &Since, map: &Map) -> Option<SinceEv> {
                     widgets::toast("Changes copied", true);
                 }
                 if ui
-                    .small_button("Stop")
+                    .button("Stop")
                     .on_hover_text("Stop comparing: the marks go")
                     .clicked()
                 {
@@ -253,7 +253,7 @@ pub(super) fn since_side(ui: &mut Ui, s: &Since, map: &Map) -> Option<SinceEv> {
                     let at = index.get(h.id.as_str()).copied();
                     let tip = match at {
                         Some(_) => "Show it on the map".to_string(),
-                        None => "A client not drawn now: Clients ⏷ shows more".to_string(),
+                        None => "A client not drawn now: Clients ▾ shows more".to_string(),
                     };
                     if let Some(i) = row(
                         ui,

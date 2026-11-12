@@ -106,7 +106,7 @@ impl DomainJoin {
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!running, |ui| {
                 if ui
-                    .add(egui::Button::new("▶ Check").min_size(egui::vec2(0.0, widgets::TARGET_H)))
+                    .add(widgets::primary("▶ Check"))
                     .on_hover_text("Ask again, and log the answer to Results")
                     .clicked()
                 {

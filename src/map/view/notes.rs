@@ -896,7 +896,7 @@ fn hits_badge(ui: &mut Ui, hits: &[Hit]) {
     let warn = widgets::warn();
     egui::Frame::new()
         .fill(warn.gamma_multiply(0.12))
-        .corner_radius(4)
+        .corner_radius(crate::theme::R_CONTROL)
         .inner_margin(egui::Margin::symmetric(5, 0))
         .show(ui, |ui| {
             ui.add(egui::Label::new(RichText::new(&text).small().color(warn)).truncate())

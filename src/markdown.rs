@@ -396,7 +396,7 @@ fn render_in(
             }
             egui::Frame::new()
                 .fill(ui.visuals().code_bg_color)
-                .corner_radius(4)
+                .corner_radius(crate::theme::R_CONTROL)
                 .inner_margin(6)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());

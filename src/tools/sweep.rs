@@ -454,8 +454,8 @@ impl SweepTool {
         let width = ui.available_width();
         let cols = columns(width, self.ran_ports != PortCheck::Off);
         let row_h = 24.0;
-        let font = FontId::proportional(14.0);
-        let mono = FontId::monospace(13.0);
+        let font = FontId::proportional(crate::theme::BODY);
+        let mono = FontId::monospace(crate::theme::MONO);
         let v = ui.visuals().clone();
         // The header, outside the scroll so it stays put.
         let (head, _) = ui.allocate_exact_size(vec2(width, row_h), Sense::hover());
@@ -487,7 +487,8 @@ impl SweepTool {
                     } else {
                         egui::Color32::TRANSPARENT
                     };
-                    ui.painter().rect_filled(rect, 4.0, fill);
+                    ui.painter()
+                        .rect_filled(rect, crate::theme::R_CONTROL, fill);
                     let (text, weak) = (v.text_color(), v.weak_text_color());
                     for (c, r) in cols.cells(rect) {
                         let (s, f, colour) = match c {

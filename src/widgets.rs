@@ -97,7 +97,7 @@ pub fn show_toasts(ctx: &egui::Context) {
         let (icon, colour) = if *good { ("✔", ok()) } else { ("⚠", bad()) };
         let g = painter.layout_no_wrap(
             format!("{icon}  {text}"),
-            egui::FontId::proportional(13.5),
+            egui::FontId::proportional(crate::theme::BODY),
             vis.strong_text_color(),
         );
         let r = egui::Rect::from_center_size(
@@ -111,11 +111,11 @@ pub fn show_toasts(ctx: &egui::Context) {
                 spread: 0,
                 color: Color32::from_black_alpha((80.0 * a) as u8),
             }
-            .as_shape(r, 10),
+            .as_shape(r, crate::theme::R_CONTAINER),
         );
         painter.rect(
             r,
-            10,
+            crate::theme::R_CONTAINER,
             vis.window_fill.gamma_multiply(a),
             egui::Stroke::new(1.0, colour.gamma_multiply(0.7 * a)),
             egui::StrokeKind::Inside,
@@ -159,7 +159,7 @@ pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
             return Action::Stop;
         }
     } else if ui
-        .button("▶ Start")
+        .add(primary("▶ Start"))
         .on_hover_text("Start (Enter)")
         .clicked()
         || enter
@@ -167,6 +167,45 @@ pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
         return Action::Start;
     }
     Action::None
+}
+
+/// The one main action of a screen (Start, Full scan): filled with the
+/// theme's accent, so it's the first button the eye finds. One a screen.
+pub fn primary<'a>(text: &str) -> egui::Button<'a> {
+    let accent = crate::theme::accent();
+    egui::Button::new(
+        RichText::new(text)
+            .strong()
+            .color(crate::chrome::on(accent)),
+    )
+    .fill(accent)
+    .min_size(egui::vec2(0.0, TARGET_H))
+}
+
+/// A choice of views (ICMP or TCP, Edit or Preview, Layers and Legend):
+/// the `selectable_label`s that `add` draws, side by side in one tray
+/// with the picked one filled. The one look for such a choice anywhere
+/// in the app; a list of settings to pick one of stays radio buttons.
+pub fn segmented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let v = ui.visuals();
+    egui::Frame::new()
+        .fill(v.extreme_bg_color)
+        .corner_radius(crate::theme::R_CONTROL)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().button_padding.x = 10.0;
+            // A segment at rest is its name alone; the picked one and the
+            // one under the pointer are filled.
+            ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::NONE;
+            ui.horizontal(add).inner
+        })
+        .inner
+}
+
+/// The label of a button that opens a menu: its name and the one arrow
+/// the app uses for that.
+pub fn menu_label(label: &str) -> String {
+    format!("{label} ▾")
 }
 
 /// Scan speed presets: (name, threads, probes per second, tooltip).
@@ -281,6 +320,9 @@ pub fn fold(
 /// app runs.
 pub fn options(ui: &mut Ui, id: &str, summary: &[String], body: impl FnOnce(&mut Ui)) {
     let key = ui.make_persistent_id(("options", id));
+    // Close under the run row and close to the rule below: two rows of
+    // 28-point targets, inside the height the run bar is allowed.
+    ui.add_space(RUN_GAP - ui.spacing().item_spacing.y);
     fold(
         ui,
         key,
@@ -298,22 +340,45 @@ pub fn options(ui: &mut Ui, id: &str, summary: &[String], body: impl FnOnce(&mut
                 });
             if !open {
                 for c in summary {
-                    let v = ui.visuals();
-                    egui::Frame::new()
-                        .fill(v.widgets.inactive.weak_bg_fill)
-                        .stroke(v.widgets.noninteractive.bg_stroke)
-                        .corner_radius(9)
-                        .inner_margin(egui::Margin::symmetric(7, 1))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(c).small());
-                        });
+                    tag(ui, c);
                 }
             }
             r
         },
         body,
     );
+    ui.add_space(-ui.spacing().item_spacing.y);
 }
+
+/// A small pill that says something and does nothing ("timeout 750
+/// ms"): as tall as its text, whatever the row's click targets need.
+pub fn tag(ui: &mut Ui, text: &str) -> egui::Response {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let v = ui.visuals();
+    let (fill, stroke, ink) = (
+        v.widgets.inactive.weak_bg_fill,
+        v.widgets.noninteractive.bg_stroke,
+        v.text_color(),
+    );
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
+    let size = galley.size() + egui::vec2(14.0, 4.0);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        p.rect(
+            rect,
+            crate::theme::R_PILL,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        p.galley(rect.center() - galley.size() / 2.0, galley, ink);
+    }
+    r
+}
+
+/// Between a tool's run row and its Options row.
+const RUN_GAP: f32 = 2.0;
 
 pub fn speed(ui: &mut Ui, id: &str, threads: &mut usize, rate: &mut u32) {
     let current = SPEEDS
@@ -367,6 +432,8 @@ pub const LEAD_W: f32 = 76.0;
 pub const MAIN_W: f32 = 240.0;
 /// Widest an empty state's text runs before it wraps.
 const EMPTY_W: f32 = 560.0;
+/// How far down the window an empty screen's title sits.
+const EMPTY_AT: f32 = 0.28;
 
 /// A label; at the start of a row it takes `LEAD_W`, so the rows of a
 /// toolbar line up.
@@ -424,9 +491,13 @@ pub fn empty_state(
 ) -> Option<usize> {
     let avail = ui.available_rect_before_wrap();
     let w = avail.width().min(EMPTY_W);
-    let top = (avail.height() * 0.12).clamp(12.0, 90.0);
+    // The same height on every tab, however tall the bars above it: a
+    // little over a quarter of the way down the window, or just under
+    // what's above when that reaches further.
+    let window = ui.ctx().content_rect();
+    let top = (window.top() + window.height() * EMPTY_AT).max(avail.top() + 12.0);
     let rect = egui::Rect::from_min_max(
-        egui::pos2(avail.center().x - w / 2.0, avail.top() + top),
+        egui::pos2(avail.center().x - w / 2.0, top),
         egui::pos2(avail.center().x + w / 2.0, avail.bottom()),
     );
     let mut hit = None;
@@ -435,7 +506,7 @@ pub fn empty_state(
             .max_rect(rect)
             .layout(egui::Layout::top_down(egui::Align::Center)),
         |ui| {
-            ui.label(RichText::new(title).size(17.0).strong());
+            ui.label(RichText::new(title).heading().strong());
             ui.add_space(4.0);
             ui.add(egui::Label::new(RichText::new(hint).weak()).wrap());
             if actions.is_empty() {
@@ -638,7 +709,7 @@ pub fn save_text(file_name: String, text: String) {
 }
 
 /// The shortest a click target is (CLAUDE.md: a trackpad on a tailgate).
-pub const TARGET_H: f32 = 28.0;
+pub use crate::theme::TARGET_H;
 
 /// A menu behind a button that says what's in it ("All runs ▾"), at
 /// least `TARGET_H` tall: not a bare ⋯, which is small and hides the
@@ -648,7 +719,7 @@ pub fn named_menu<R>(
     label: &str,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    let button = egui::Button::new(format!("{label} ▾")).min_size(egui::vec2(0.0, TARGET_H));
+    let button = egui::Button::new(menu_label(label)).min_size(egui::vec2(0.0, TARGET_H));
     let (response, inner) =
         egui::containers::menu::MenuButton::from_button(button).ui(ui, add_contents);
     egui::InnerResponse::new(inner.map(|i| i.inner), response)
@@ -663,7 +734,7 @@ pub fn named_menu_stay<R>(
     label: &str,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    let button = egui::Button::new(format!("{label} ▾")).min_size(egui::vec2(0.0, TARGET_H));
+    let button = egui::Button::new(menu_label(label)).min_size(egui::vec2(0.0, TARGET_H));
     let stay = egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     let (response, inner) = egui::containers::menu::MenuButton::from_button(button)
@@ -679,7 +750,7 @@ pub fn export_menu<'a>(
     entries: impl FnOnce() -> Vec<&'a crate::log::Entry>,
 ) {
     let mut picked = None;
-    ui.menu_button("Export ⏷", |ui| {
+    ui.menu_button(menu_label("Export"), |ui| {
         for f in crate::log::Format::ALL {
             if ui.button(f.name()).on_hover_text(f.hint()).clicked() {
                 picked = Some(f);
@@ -915,7 +986,7 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let p = ui.painter_at(rect);
     let vis = ui.visuals();
-    p.rect_filled(rect, 4.0, vis.extreme_bg_color);
+    p.rect_filled(rect, crate::theme::R_CONTROL, vis.extreme_bg_color);
     if samples.is_empty() {
         return;
     }
@@ -950,7 +1021,7 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
         rect.left_top() + egui::vec2(6.0, 4.0),
         egui::Align2::LEFT_TOP,
         fmt_ms(max / 1.15),
-        egui::FontId::monospace(10.0),
+        egui::FontId::monospace(crate::theme::SMALL),
         vis.weak_text_color(),
     );
 
@@ -978,8 +1049,10 @@ pub fn compact_title(ctx: &egui::Context, show: impl FnOnce()) {
     let heading = egui::TextStyle::Heading;
     let before = ctx.global_style().text_styles.get(&heading).cloned();
     ctx.global_style_mut(|s| {
-        s.text_styles
-            .insert(heading.clone(), egui::FontId::proportional(14.5));
+        s.text_styles.insert(
+            heading.clone(),
+            egui::FontId::proportional(crate::theme::BODY),
+        );
     });
     show();
     if let Some(f) = before {

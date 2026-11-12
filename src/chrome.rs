@@ -6,63 +6,63 @@ use crate::job::Job;
 use crate::{App, FULL_SCAN_TIP, TABS, VERSION, theme, widgets};
 use eframe::egui;
 
+/// The title bar's and the status bar's heights. With a tool's run bar
+/// they stay under 130 points of a 720-point window (CLAUDE.md), and
+/// every button in them is `TARGET_H` tall.
+const TITLE_H: f32 = 34.0;
+const STATUS_H: f32 = 28.0;
+
 impl App {
     /// The title bar: the app's name and the site switcher on the left,
     /// Report and Full scan on the right.
     pub(crate) fn title_bar(&mut self, ui: &mut egui::Ui) {
-        let bar = egui::Panel::top("title").exact_size(40.0).show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("is-alive").heading().strong());
-                ui.add_space(6.0);
-                self.site_chip(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let bar = egui::Panel::top("title")
+            .exact_size(TITLE_H)
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
                     ui.add_space(4.0);
-                    let busy = self.any_running();
-                    let tip = if busy {
-                        "Wait for running tools to finish (or stop them) to run a full scan."
-                    } else {
-                        FULL_SCAN_TIP
-                    };
-                    let accent = theme::accent();
-                    if ui
-                        .add_enabled(
-                            !busy,
-                            egui::Button::new(
-                                egui::RichText::new("Full scan").strong().color(on(accent)),
+                    ui.label(egui::RichText::new("is-alive").heading().strong());
+                    ui.add_space(6.0);
+                    self.site_chip(ui);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        let busy = self.any_running();
+                        let tip = if busy {
+                            "Wait for running tools to finish (or stop them) to run a full scan."
+                        } else {
+                            FULL_SCAN_TIP
+                        };
+                        if ui
+                            .add_enabled(!busy, widgets::primary("Full scan"))
+                            .on_hover_text(tip)
+                            .on_disabled_hover_text(tip)
+                            .clicked()
+                        {
+                            self.full_scan(ui.ctx());
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new("Report…")
+                                    .selected(self.report.open)
+                                    .min_size(egui::vec2(0.0, 28.0)),
                             )
-                            .fill(accent)
-                            .min_size(egui::vec2(0.0, 28.0)),
-                        )
-                        .on_hover_text(tip)
-                        .on_disabled_hover_text(tip)
-                        .clicked()
-                    {
-                        self.full_scan(ui.ctx());
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new("Report…")
-                                .selected(self.report.open)
-                                .min_size(egui::vec2(0.0, 28.0)),
-                        )
-                        .on_hover_text(
-                            "One web page documenting the visit: the map, findings, every \
+                            .on_hover_text(
+                                "One web page documenting the visit: the map, findings, every \
                              device and the notes. Opens in any browser; prints to PDF",
-                        )
-                        .clicked()
-                    {
-                        self.report.open = !self.report.open;
-                    }
-                    if self.look.theme == theme::Theme::Miami
-                        && let Some(e) = &self.backdrop.err
-                    {
-                        ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
-                            .on_hover_text(e.as_str());
-                    }
+                            )
+                            .clicked()
+                        {
+                            self.report.open = !self.report.open;
+                        }
+                        if self.look.theme == theme::Theme::Miami
+                            && let Some(e) = &self.backdrop.err
+                        {
+                            ui.label(egui::RichText::new("⚠ backdrop").color(widgets::warn()))
+                                .on_hover_text(e.as_str());
+                        }
+                    });
                 });
             });
-        });
         theme::top_rule(ui.ctx(), bar.response.rect.bottom(), self.look.moves());
     }
 
@@ -90,87 +90,97 @@ impl App {
     /// The status bar: LAN, gateway and WAN on the left; what's running,
     /// a newer release and the version on the right.
     pub(crate) fn footer(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("footer").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let i = &self.info;
-                let na = || "unknown".to_string();
-                ui.label(format!(
-                    "LAN {}",
-                    i.lan.map_or_else(na, |(ip, bits)| format!("{ip}/{bits}"))
-                ));
-                ui.separator();
-                ui.label(format!(
-                    "Gateway {}",
-                    i.gateway.map_or_else(na, |g| g.to_string())
-                ));
-                ui.separator();
-                // The domain this computer is joined to; a click opens its tab.
-                // A long name gives way (…) so WAN and Refresh stay on a
-                // small window; the hover has it whole.
-                let room = (ui.available_width() - 240.0).max(80.0);
-                let domain = ui
-                    .allocate_ui(egui::vec2(room, ui.available_height()), |ui| {
-                        ui.add(
-                            egui::Label::new(format!("Domain {}", self.join.short()))
-                                .truncate()
-                                .sense(egui::Sense::click()),
-                        )
-                    })
-                    .inner
-                    .on_hover_text(self.join.tip())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if domain.clicked() {
-                    self.tab = crate::Tab::Join;
-                }
-                ui.separator();
-                let wan = match (i.wan, self.info_job.is_some(), self.wan_asked) {
-                    (Some(w), ..) => w.to_string(),
-                    (None, true, _) => "looking up…".into(),
-                    (None, false, true) => na(),
-                    (None, false, false) => "not looked up".into(),
-                };
-                ui.label(format!("WAN {wan}")).on_hover_text(
-                    "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
+        let frame =
+            egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 0));
+        egui::Panel::bottom("footer")
+            .frame(frame)
+            .exact_size(STATUS_H)
+            .show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    let i = &self.info;
+                    let na = || "unknown".to_string();
+                    ui.label(format!(
+                        "LAN {}",
+                        i.lan.map_or_else(na, |(ip, bits)| format!("{ip}/{bits}"))
+                    ));
+                    ui.separator();
+                    ui.label(format!(
+                        "Gateway {}",
+                        i.gateway.map_or_else(na, |g| g.to_string())
+                    ));
+                    ui.separator();
+                    // The domain this computer is joined to; a click opens its tab.
+                    // A long name gives way (…) so WAN and Refresh stay on a
+                    // small window; the hover has it whole.
+                    let room = (ui.available_width() - 240.0).max(80.0);
+                    let domain = ui
+                        .allocate_ui(egui::vec2(room, ui.available_height()), |ui| {
+                            ui.add(
+                                egui::Label::new(format!("Domain {}", self.join.short()))
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            )
+                        })
+                        .inner
+                        .on_hover_text(self.join.tip())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if domain.clicked() {
+                        self.tab = crate::Tab::Join;
+                    }
+                    ui.separator();
+                    let wan = match (i.wan, self.info_job.is_some(), self.wan_asked) {
+                        (Some(w), ..) => w.to_string(),
+                        (None, true, _) => "looking up…".into(),
+                        (None, false, true) => na(),
+                        (None, false, false) => "not looked up".into(),
+                    };
+                    ui.label(format!("WAN {wan}")).on_hover_text(
+                        "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
                          on Refresh or a full scan",
-                );
-                if ui
-                    .add_enabled(
-                        self.info_job.is_none(),
-                        egui::Button::new("Refresh").small(),
-                    )
-                    .on_hover_text("Re-read LAN, gateway and domain, look up the public IP")
-                    .clicked()
-                {
-                    self.refresh_info(ui.ctx());
-                    self.join.check(ui.ctx(), false);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.weak(format!("v{VERSION}"));
-                    if let Some(crate::update::Found::Newer(r)) = &self.update {
-                        ui.separator();
-                        ui.hyperlink_to(
-                            egui::RichText::new(format!("Update: v{}", r.version))
-                                .color(widgets::ok())
-                                .small(),
-                            &r.url,
+                    );
+                    if ui
+                        .add_enabled(
+                            self.info_job.is_none(),
+                            // As tall as the bar, so drawn as a link: a framed
+                            // button would touch both its edges.
+                            egui::Button::new(
+                                egui::RichText::new("Refresh").color(ui.visuals().hyperlink_color),
+                            )
+                            .frame(false),
                         )
-                        .on_hover_text(format!(
-                            "Version {} is out (this is v{VERSION}). Opens its release page; \
+                        .on_hover_text("Re-read LAN, gateway and domain, look up the public IP")
+                        .clicked()
+                    {
+                        self.refresh_info(ui.ctx());
+                        self.join.check(ui.ctx(), false);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.weak(format!("v{VERSION}"));
+                        if let Some(crate::update::Found::Newer(r)) = &self.update {
+                            ui.separator();
+                            ui.hyperlink_to(
+                                egui::RichText::new(format!("Update: v{}", r.version))
+                                    .color(widgets::ok())
+                                    .small(),
+                                &r.url,
+                            )
+                            .on_hover_text(format!(
+                                "Version {} is out (this is v{VERSION}). Opens its release page; \
                              nothing is downloaded.",
-                            r.version
-                        ));
-                    }
-                    let running = self.running_names();
-                    if !running.is_empty() {
-                        ui.separator();
-                        ui.label(format!("{} running", running.join(", ")));
-                        let (dot, _) =
-                            ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                        ui.painter().circle_filled(dot.center(), 3.0, widgets::ok());
-                    }
+                                r.version
+                            ));
+                        }
+                        let running = self.running_names();
+                        if !running.is_empty() {
+                            ui.separator();
+                            ui.label(format!("{} running", running.join(", ")));
+                            let (dot, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter().circle_filled(dot.center(), 3.0, widgets::ok());
+                        }
+                    });
                 });
             });
-        });
     }
 
     /// The names of the tools running now, for the status bar.
@@ -195,23 +205,9 @@ impl App {
             ui.weak(format!("v{VERSION}"));
         });
         ui.separator();
-        match theme::appearance(ui, &mut self.look, self.backdrop.on_gpu()) {
-            Some(theme::MenuAction::Changed) => {
-                theme::apply(ui.ctx(), self.look.theme);
-                theme::save(&self.look);
-            }
-            Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
-                self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
-                    tx.send(
-                        rfd::FileDialog::new()
-                            .set_title("Miami backdrop")
-                            .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
-                            .pick_file(),
-                    )
-                }));
-            }
-            _ => {}
-        }
+        // General first: where files go, what the app sends on start.
+        // How it looks comes after.
+        self.files_settings(ui);
         ui.separator();
         ui.label(egui::RichText::new("Network").strong());
         if ui
@@ -246,7 +242,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.update_job.is_none(),
-                    framed(ui, egui::Button::new("Check now").small()),
+                    framed(ui, egui::Button::new("Check now")),
                 )
                 .clicked()
             {
@@ -287,7 +283,23 @@ impl App {
             theme::save(&self.look);
         }
         ui.separator();
-        self.files_settings(ui);
+        match theme::appearance(ui, &mut self.look, self.backdrop.on_gpu()) {
+            Some(theme::MenuAction::Changed) => {
+                theme::apply(ui.ctx(), self.look.theme);
+                theme::save(&self.look);
+            }
+            Some(theme::MenuAction::PickImage) if self.pick_image.is_none() => {
+                self.pick_image = Some(Job::spawn(ui.ctx(), |tx| {
+                    tx.send(
+                        rfd::FileDialog::new()
+                            .set_title("Miami backdrop")
+                            .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                            .pick_file(),
+                    )
+                }));
+            }
+            _ => {}
+        }
         ui.separator();
         if let Some(dir) = theme::data_dir() {
             ui.weak("Settings and autosaved notes are kept in");

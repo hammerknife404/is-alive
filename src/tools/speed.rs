@@ -1139,7 +1139,7 @@ fn tile(ui: &mut Ui, label: &str, value: String, sub: String, level: Option<Leve
         ui.set_min_width(112.0);
         ui.vertical(|ui| {
             ui.weak(label);
-            let mut v = RichText::new(value).size(22.0).strong();
+            let mut v = RichText::new(value).heading().strong();
             if let Some(l) = level {
                 v = v.color(l.color());
             }
@@ -1157,7 +1157,7 @@ fn rate_chart(ui: &mut Ui, rates: &[Vec<f64>; 3], height: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let p = ui.painter_at(rect);
     let vis = ui.visuals();
-    p.rect_filled(rect, 4.0, vis.extreme_bg_color);
+    p.rect_filled(rect, crate::theme::R_CONTROL, vis.extreme_bg_color);
     let series = [
         (Phase::Down, widgets::ok()),
         (Phase::Up, crate::theme::accent()),
@@ -1184,7 +1184,7 @@ fn rate_chart(ui: &mut Ui, rates: &[Vec<f64>; 3], height: f32) {
                 egui::pos2(legend, rect.top() + 4.0),
                 egui::Align2::RIGHT_TOP,
                 ph.name(),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(crate::theme::SMALL),
                 *colour,
             );
             legend = r.left() - 10.0;
@@ -1207,7 +1207,7 @@ fn rate_chart(ui: &mut Ui, rates: &[Vec<f64>; 3], height: f32) {
         rect.left_top() + egui::vec2(6.0, 4.0),
         egui::Align2::LEFT_TOP,
         speed::fmt_rate(max / HEADROOM),
-        egui::FontId::monospace(10.0),
+        egui::FontId::monospace(crate::theme::SMALL),
         vis.weak_text_color(),
     );
 }
