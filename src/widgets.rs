@@ -91,9 +91,8 @@ pub fn show_toasts(ctx: &egui::Context) {
     let mut y = screen.bottom() - 40.0;
     for (text, good, at) in list.iter().rev() {
         let age = at.elapsed().as_secs_f32();
-        // In over 0.15 s, out over the last 0.4 s, rising a few points.
-        let a = (age / 0.15).min(1.0) * ((TOAST_FOR - age) / 0.4).clamp(0.0, 1.0);
-        let rise = 6.0 * (1.0 - (age / 0.15).min(1.0));
+        // In quickly, rising a few points; out over the last 0.4 s.
+        let (a, rise) = toast_look(age, crate::theme::moves());
         let (icon, colour) = if *good { ("✔", ok()) } else { ("⚠", bad()) };
         let g = painter.layout_no_wrap(
             format!("{icon}  {text}"),
@@ -127,7 +126,51 @@ pub fn show_toasts(ctx: &egui::Context) {
         );
         y = r.top() - 22.0;
     }
-    ctx.request_repaint_after(Duration::from_millis(16));
+    // Frames only while one fades in or out; between the two a toast
+    // holds still, and the window with it. One more as the next change
+    // (a fade-out starting, the last one gone) comes due.
+    let ages = list.iter().map(|x| x.2.elapsed().as_secs_f32());
+    let (fading, next) = toast_frames(ages, crate::theme::moves());
+    if fading {
+        ctx.request_repaint();
+    } else if let Some(wait) = next {
+        ctx.request_repaint_after(Duration::from_secs_f32(wait));
+    }
+}
+
+/// Seconds a toast takes to come in, and to go.
+const TOAST_IN: f32 = crate::theme::QUICK;
+const TOAST_OUT: f32 = 0.4;
+
+/// How see-through (0 to 1) and how far below its place a toast of `age`
+/// seconds is. Fully there at once, and gone at once, while nothing moves.
+fn toast_look(age: f32, moves: bool) -> (f32, f32) {
+    if !moves {
+        return (1.0, 0.0);
+    }
+    let come = crate::theme::ease(age / TOAST_IN);
+    let go = ((TOAST_FOR - age) / TOAST_OUT).clamp(0.0, 1.0);
+    (come * go, 6.0 * (1.0 - come))
+}
+
+/// Whether any toast (given their ages) is mid-fade now, so the next
+/// frame is wanted at once; and otherwise how long until one is.
+fn toast_frames(ages: impl Iterator<Item = f32>, moves: bool) -> (bool, Option<f32>) {
+    let (mut fading, mut next) = (false, None::<f32>);
+    for age in ages {
+        let out_at = TOAST_FOR - TOAST_OUT;
+        if moves && (age < TOAST_IN || (age >= out_at && age < TOAST_FOR)) {
+            fading = true;
+        }
+        // Still: the only change left is its going.
+        let due = if moves && age < out_at {
+            out_at
+        } else {
+            TOAST_FOR
+        } - age;
+        next = Some(next.map_or(due, |n| n.min(due)));
+    }
+    (fading, next.map(|n| n.max(0.0) + 0.01))
 }
 
 /// Status colours, tuned per theme so they stay readable.
@@ -248,8 +291,10 @@ pub fn tall_popups<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// Busy indicator. egui's own spinner asks for a redraw every frame, which
 /// means 60 full window redraws a second (unbounded without vsync) for as
-/// long as a tool runs; this one turns at 10 frames a second, on the nav
-/// dots' tick, and holds still while the window isn't focused.
+/// long as a tool runs, focused or not, whatever Animate says. This one
+/// shares the nav dots' clock (backdrop::busy_time): the display's rate
+/// while things may move, 10 frames a second while they may not, and
+/// still while the window isn't focused.
 pub fn spinner(ui: &mut Ui) {
     let size = ui.spacing().interact_size.y;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
@@ -993,9 +1038,12 @@ pub fn latency_chart(ui: &mut Ui, samples: &[Option<f64>], height: f32) {
     // Floor of 0.1 ms so LAN pings aren't a flat line; the scale eases
     // to a new peak instead of jumping.
     let peak = samples.iter().flatten().fold(0.1f64, |a, &b| a.max(b)) * 1.15;
-    let max =
-        ui.ctx()
-            .animate_value_with_time(ui.id().with("chart_scale"), peak as f32, 0.3) as f64;
+    let max = crate::theme::glide(
+        ui.ctx(),
+        ui.id().with("chart_scale"),
+        peak as f32,
+        crate::theme::SLOW,
+    ) as f64;
     let n = samples.len().max(2) - 1;
     let x = |i: usize| rect.left() + 4.0 + (rect.width() - 8.0) * i as f32 / n as f32;
     let y = |v: f64| rect.bottom() - 4.0 - (rect.height() - 8.0) * (v / max) as f32;
@@ -1410,6 +1458,32 @@ mod tests {
     /// Saves start in the folder picked, in the open site's own folder when
     /// asked (made on the first save), and where the system says when the
     /// folder isn't there.
+    /// A toast on screen used to redraw the whole window every 16 ms for
+    /// its 2.4 seconds. Now only its fades want frames, and in between
+    /// one wake-up is booked for when the fade-out starts.
+    #[test]
+    fn a_toast_asks_for_frames_only_while_it_fades() {
+        let out_at = TOAST_FOR - TOAST_OUT;
+        // Coming in: the next frame at once.
+        assert!(toast_frames([0.05].into_iter(), true).0);
+        // Holding: none, and a wake-up for the start of the fade-out.
+        let (fading, next) = toast_frames([1.0].into_iter(), true);
+        assert!(!fading);
+        assert!((next.unwrap() - (out_at - 1.0)).abs() < 0.02);
+        // Going: frames again.
+        assert!(toast_frames([out_at + 0.1].into_iter(), true).0);
+        // Two toasts: the earlier change is the one waited for.
+        let (fading, next) = toast_frames([0.5, 1.5].into_iter(), true);
+        assert!(!fading && (next.unwrap() - (out_at - 1.5)).abs() < 0.02);
+        // Nothing may move: no fades at all, one wake-up to take it away.
+        let (fading, next) = toast_frames([0.05].into_iter(), false);
+        assert!(!fading && (next.unwrap() - (TOAST_FOR - 0.05)).abs() < 0.02);
+        assert_eq!(toast_look(0.01, false), (1.0, 0.0));
+        assert_eq!(toast_look(1.0, true), (1.0, 0.0));
+        assert!(toast_look(0.01, true).0 < 0.5);
+        assert!(toast_frames(std::iter::empty(), true).1.is_none());
+    }
+
     #[test]
     fn saves_start_where_settings_say() {
         let dir = std::env::temp_dir().join(format!("is-alive-save-{}", std::process::id()));

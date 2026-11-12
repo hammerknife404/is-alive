@@ -1171,9 +1171,12 @@ fn rate_chart(ui: &mut Ui, rates: &[Vec<f64>; 3], height: f32) {
         .flat_map(|(ph, _)| rates[ph.i()].iter())
         .fold(0.1f64, |a, &b| a.max(b))
         * HEADROOM;
-    let max = ui
-        .ctx()
-        .animate_value_with_time(ui.id().with("rate_scale"), peak as f32, 0.3) as f64;
+    let max = crate::theme::glide(
+        ui.ctx(),
+        ui.id().with("rate_scale"),
+        peak as f32,
+        crate::theme::SLOW,
+    ) as f64;
     let step = (rect.width() - 8.0) / (n.max(2) - 1) as f32;
     let y = |v: f64| rect.bottom() - 4.0 - (rect.height() - 8.0) * (v / max).min(1.0) as f32;
     let mut i = 0;

@@ -536,6 +536,87 @@ pub fn panel_of(t: Theme) -> Color32 {
     }
 }
 
+/// How long a transition takes. Quick: something appearing where it is
+/// (a tab's content, a toast, a panel fading in). Slow: something
+/// travelling (the nav folding, a card gliding up the stack, a chart's
+/// scale). Every transition takes one of the two and the one curve
+/// (`ease`), through `glide`, `appear` or `since`, so they hold still
+/// together when Animate says so.
+pub const QUICK: f32 = 0.12;
+pub const SLOW: f32 = 0.20;
+
+static MOVES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Told once a frame whether things may move now (`Settings::moves`).
+/// egui's own transitions (a window fading in, a fold opening) follow.
+pub fn set_moves(ctx: &egui::Context, moves: bool) {
+    MOVES.store(moves, Ordering::Relaxed);
+    let secs = if moves { QUICK } else { 0.0 };
+    if ctx.global_style().animation_time != secs {
+        ctx.all_styles_mut(|s| s.animation_time = secs);
+    }
+}
+
+/// Things may move now: Animate is on, or plugged in and not on battery.
+pub fn moves() -> bool {
+    MOVES.load(Ordering::Relaxed)
+}
+
+/// The one curve: fast away, gentle into place (cubic ease-out), 0 to 1.
+pub fn ease(k: f32) -> f32 {
+    let k = k.clamp(0.0, 1.0);
+    1.0 - (1.0 - k).powi(3)
+}
+
+/// How far along (0 to 1, eased) a transition that began at `since` and
+/// takes `secs` is, asking for frames until it's done. 1 at once while
+/// nothing may move.
+pub fn since(ctx: &egui::Context, since: f64, secs: f32) -> f32 {
+    since_if(ctx, since, secs, moves())
+}
+
+fn since_if(ctx: &egui::Context, since: f64, secs: f32, moves: bool) -> f32 {
+    if !moves {
+        return 1.0;
+    }
+    let k = ((ctx.input(|i| i.time) - since) / f64::from(secs)) as f32;
+    if k < 1.0 {
+        ctx.request_repaint();
+    }
+    ease(k)
+}
+
+/// `to`, eased to over `secs` from wherever `id` was drawn when `to`
+/// changed. The first time, and while nothing may move, it is `to`.
+pub fn glide(ctx: &egui::Context, id: egui::Id, to: f32, secs: f32) -> f32 {
+    glide_if(ctx, id, to, secs, moves())
+}
+
+fn glide_if(ctx: &egui::Context, id: egui::Id, to: f32, secs: f32, moves: bool) -> f32 {
+    let now = ctx.input(|i| i.time);
+    let at = |(from, to, t0): (f32, f32, f64), t: f64| {
+        from + (to - from) * ease(((t - t0) / f64::from(secs)) as f32)
+    };
+    let mut s = ctx
+        .data(|d| d.get_temp::<(f32, f32, f64)>(id))
+        .unwrap_or((to, to, now));
+    if !moves {
+        s = (to, to, now - f64::from(secs));
+    } else if (s.1 - to).abs() > 0.001 {
+        s = (at(s, now), to, now);
+    }
+    ctx.data_mut(|d| d.insert_temp(id, s));
+    if now - s.2 < f64::from(secs) {
+        ctx.request_repaint();
+    }
+    at(s, now)
+}
+
+/// 0 to 1 as something shows and back as it goes, over `QUICK`.
+pub fn appear(ctx: &egui::Context, id: egui::Id, shown: bool) -> f32 {
+    glide(ctx, id, if shown { 1.0 } else { 0.0 }, QUICK)
+}
+
 /// A panel's fill for one drawn over something else (the Map's canvas,
 /// Miami's backdrop): the same colour with nothing showing through, so
 /// cards and a skyline don't sit behind its text.
@@ -810,12 +891,10 @@ pub fn top_rule(ctx: &egui::Context, y: f32, animate: bool) {
         return scanner_rule(ctx, y, animate);
     }
     let shift = if animate {
-        // In step with the backdrop's 10 frames a second.
-        let (t, wait) = crate::backdrop::tick(ctx.input(|i| i.time), crate::backdrop::FPS);
-        let t = t as f32;
-        if ctx.input(|i| i.viewport().focused != Some(false)) {
-            crate::backdrop::repaint_in(ctx, wait);
-        }
+        // At the display's rate; Miami's scene behind it keeps its own
+        // 10 frames a second.
+        let t = ctx.input(|i| i.time) as f32;
+        crate::backdrop::next_frame(ctx);
         // Over to one side and back every 12 seconds.
         0.5 - 0.5 * (t * std::f32::consts::TAU / 12.0).cos()
     } else {
@@ -869,8 +948,6 @@ const LAMPS: usize = 24;
 const SWEEP_SECS: f64 = 2.0;
 /// Lamps lit behind the light as it moves, fading.
 const TRAIL: f32 = 4.0;
-/// Frames a second for the sweep: lamps step, as a scanner's do.
-const SCANNER_FPS: f64 = 15.0;
 
 /// Where the light is (0 to LAMPS - 1) and which way it's going, `t`
 /// seconds in: across and back, slowing a little at each end.
@@ -903,11 +980,8 @@ fn lamp(i: usize, x: f32, dir: f32) -> f32 {
 /// across and back. Still, it rests in the middle.
 fn scanner_rule(ctx: &egui::Context, y: f32, animate: bool) {
     let (x, dir) = if animate {
-        let (t, wait) = crate::backdrop::tick(ctx.input(|i| i.time), SCANNER_FPS);
-        if ctx.input(|i| i.viewport().focused != Some(false)) {
-            crate::backdrop::repaint_in(ctx, wait);
-        }
-        scanner_at(t)
+        crate::backdrop::next_frame(ctx);
+        scanner_at(ctx.input(|i| i.time))
     } else {
         ((LAMPS - 1) as f32 / 2.0, 0.0)
     };
@@ -941,10 +1015,11 @@ fn scanner_rule(ctx: &egui::Context, y: f32, animate: bool) {
 /// Settings › Animate: when moving effects play.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Animate {
+    /// Smooth by default (0.29.1): things move, at the display's rate.
+    #[default]
     On,
     /// Only while the machine isn't running on its battery: on site, a
     /// laptop on battery holds still and lasts longer.
-    #[default]
     Plugged,
     Off,
 }
@@ -960,14 +1035,15 @@ impl Animate {
         }
     }
 
-    /// What the settings file says. Before 0.28.18 Animate was on or off and
-    /// every file said which (animate=1 whether chosen or not): on reads as
-    /// the new default.
+    /// What the settings file says. Only a choice that isn't the default
+    /// is written, so a file from 0.28.18 to 0.29.0 with no line (When
+    /// plugged in, the default then, chosen or not) reads as On, the
+    /// default now; one that says "on" or "0" keeps its choice.
     fn from_key(v: &str) -> Self {
         match v.trim() {
             "0" => Animate::Off,
-            "on" => Animate::On,
-            _ => Animate::Plugged,
+            "plugged" => Animate::Plugged,
+            _ => Animate::On,
         }
     }
 
@@ -981,12 +1057,13 @@ impl Animate {
 
     fn tip(self) -> &'static str {
         match self {
-            Animate::On => "Always, on battery too.",
+            Animate::On => "Always, on battery too, as smooth as the screen allows.",
             Animate::Plugged => {
-                "While the laptop is plugged in. On battery everything holds still \
-                 (checked every half minute); a desktop always counts as plugged in."
+                "While the laptop is plugged in. On battery everything holds still, so it \
+                 lasts longer on site (checked every half minute); a desktop always counts \
+                 as plugged in."
             }
-            Animate::Off => "Everything holds still.",
+            Animate::Off => "Everything holds still: nothing flows, pulses, slides or fades.",
         }
     }
 }
@@ -1399,19 +1476,13 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
         ui.weak("Emoji in the notes can keep a style of their own (Notes emoji menu).");
         ui.separator();
         // In every theme: the Map tab's glow and the map's packets too.
-        let tip = if gpu {
-            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links until it's left alone for half a minute, a finding's warning pulses \
-             three times, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
-             Scanner's light sweeps (10 to 30 frames a second on the GPU, paused while the \
-             window isn't focused)."
-        } else {
-            "Moving effects: the Map tab pulses after a Full scan, dots flow along the map's \
-             lit links until it's left alone for half a minute, a finding's warning pulses \
-             three times, Miami's backdrop and the Miami and RGB line under the tabs drift, and \
-             Scanner's light sweeps (10 to 30 frames a second, no usable GPU, paused while the \
-             window isn't focused)."
-        };
+        let _ = gpu;
+        let tip = "What moves: tabs fade in and panels slide, the Map tab pulses after a Full \
+             scan, dots flow along the Map's lit links until it's left alone for half a minute, \
+             a finding's warning pulses three times, the Miami and RGB line under the title \
+             bar drifts and Scanner's light sweeps, all as smooth as the screen allows; \
+             Miami's 16-bit backdrop keeps its 10 frames a second. Everything pauses while \
+             the window isn't in front.";
         ui.label(egui::RichText::new("Animate").strong())
             .on_hover_text(tip);
         crate::widgets::segmented(ui, |ui| {
@@ -1557,6 +1628,56 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame at `time`, for a transition's value then.
+    fn at<R>(ctx: &egui::Context, time: f64, f: impl Fn(&egui::Context) -> R) -> R {
+        let mut r = None;
+        let input = egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| r = Some(f(ui.ctx())));
+        out.textures_delta.clear();
+        r.unwrap()
+    }
+
+    #[test]
+    fn a_glide_eases_out_to_its_target_over_its_time() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("g");
+        // First seen: where it is, no travel.
+        assert_eq!(at(&ctx, 1.0, |c| glide_if(c, id, 216.0, SLOW, true)), 216.0);
+        // The target moves: from where it was, fast at first (ease-out
+        // is past halfway at half time), there at the end, and then still.
+        assert_eq!(at(&ctx, 2.0, |c| glide_if(c, id, 56.0, SLOW, true)), 216.0);
+        let half = at(&ctx, 2.1, |c| glide_if(c, id, 56.0, SLOW, true));
+        assert!(half < 136.0 && half > 56.0, "{half}");
+        assert_eq!(at(&ctx, 2.2, |c| glide_if(c, id, 56.0, SLOW, true)), 56.0);
+        // Turned round halfway: on from where it is, not from an end.
+        at(&ctx, 3.0, |c| glide_if(c, id, 216.0, SLOW, true));
+        let mid = at(&ctx, 3.05, |c| glide_if(c, id, 56.0, SLOW, true));
+        assert!(mid > 56.0 && mid < 216.0, "{mid}");
+        let next = at(&ctx, 3.06, |c| glide_if(c, id, 56.0, SLOW, true));
+        assert!(next < mid, "{next} {mid}");
+    }
+
+    /// Animate off (or When plugged in, on battery): every transition is
+    /// at its end at once, and asks for no more frames.
+    #[test]
+    fn nothing_travels_while_nothing_may_move() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("still");
+        assert_eq!(
+            at(&ctx, 1.0, |c| glide_if(c, id, 216.0, SLOW, false)),
+            216.0
+        );
+        assert_eq!(at(&ctx, 2.0, |c| glide_if(c, id, 56.0, SLOW, false)), 56.0);
+        assert_eq!(at(&ctx, 2.01, |c| since_if(c, 2.0, QUICK, false)), 1.0);
+        let part = at(&ctx, 2.06, |c| since_if(c, 2.0, QUICK, true));
+        assert!(part > 0.5 && part < 1.0, "{part}");
+        assert_eq!(at(&ctx, 2.2, |c| since_if(c, 2.0, QUICK, true)), 1.0);
+        assert_eq!((ease(0.0), ease(1.0), ease(7.0)), (0.0, 1.0, 1.0));
+    }
 
     /// Shapes and text sizes come from this file's tokens: a corner
     /// radius or a font size written as a number in another file fails
@@ -1793,13 +1914,19 @@ mod tests {
         let old = Settings::parse("theme=miami\n");
         assert_eq!(
             (old.theme, old.animate, old.backdrop),
-            (Theme::Miami, Animate::Plugged, Source::Scene)
+            (Theme::Miami, Animate::On, Source::Scene)
         );
-        // Animate: only when plugged in, unless set. Before 0.28.18 every file
-        // said animate=1, chosen or not: that's the new default too.
-        assert_eq!(Settings::default().animate, Animate::Plugged);
+        // Animate: on, unless set (smooth by default, 0.29.1). A file
+        // with no line, or animate=1 from before 0.28.18, is the default;
+        // a choice that was written down is kept.
+        assert_eq!(Settings::default().animate, Animate::On);
         assert!(!Settings::default().text().contains("animate"));
-        assert_eq!(Settings::parse("animate=1\n").animate, Animate::Plugged);
+        assert_eq!(Settings::parse("animate=1\n").animate, Animate::On);
+        assert_eq!(Settings::parse("animate=on\n").animate, Animate::On);
+        assert_eq!(
+            Settings::parse("animate=plugged\n").animate,
+            Animate::Plugged
+        );
         assert_eq!(Settings::parse("animate=0\n").animate, Animate::Off);
         for a in Animate::ALL {
             let s = Settings {

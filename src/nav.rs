@@ -148,10 +148,11 @@ impl App {
     pub(crate) fn nav(&mut self, ui: &mut egui::Ui) {
         let width = ui.ctx().content_rect().width();
         let is_open = open(width, self.look.nav);
-        let w = ui.ctx().animate_value_with_time(
+        let w = theme::glide(
+            ui.ctx(),
             egui::Id::new("nav_width"),
             if is_open { OPEN } else { RAIL },
-            0.14,
+            theme::SLOW,
         );
         let labels = w > (OPEN + RAIL) / 2.0;
         let visuals = ui.visuals().clone();
@@ -383,7 +384,7 @@ fn running_dots(ui: &egui::Ui, rows: &[(Rect, bool)]) {
     if rows.is_empty() {
         return;
     }
-    // Slow pulse on the spinner's 10 fps tick, held still while the window
+    // Slow pulse on the spinner's clock (backdrop::busy_time), held still while the window
     // isn't focused: a continuous ping can run for hours, and each frame
     // redraws the window.
     let focused = ui.input(|i| i.viewport().focused != Some(false));

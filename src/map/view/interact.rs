@@ -1180,7 +1180,12 @@ impl MapView {
     /// Ease cards toward the layout and the view toward its aim.
     pub(super) fn animate(&mut self, ctx: &egui::Context) {
         let dt = ctx.input(|i| i.stable_dt).min(0.1);
-        let k = 1.0 - (-dt * 11.0).exp();
+        // Straight there while nothing may move.
+        let k = if self.animate {
+            1.0 - (-dt * 11.0).exp()
+        } else {
+            1.0
+        };
         let mut moving = false;
         for i in 0..self.map.nodes.len() {
             let Some(t) = self.target(i) else { continue };

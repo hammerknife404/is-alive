@@ -223,6 +223,7 @@ struct App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
+        theme::set_moves(ui.ctx(), self.look.moves());
         if ui.input(|i| i.viewport().close_requested())
             && self.notes.unsaved()
             && !self.close_anyway
@@ -587,10 +588,8 @@ impl App {
     /// The tab's own content, faded in for a moment after a switch.
     fn central(&mut self, ui: &mut egui::Ui, now: f64) {
         // A quick fade as a tab comes in.
-        let fade = ((now - self.tab_since) / 0.16).min(1.0) as f32;
-        if fade < 1.0 {
-            ui.ctx().request_repaint();
-        }
+        let _ = now;
+        let fade = theme::since(ui.ctx(), self.tab_since, theme::QUICK);
         // Six points over the run row, not eight: the run bar's share of
         // the 130-point budget (chrome.rs).
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin {
@@ -782,7 +781,7 @@ impl App {
             self.export.open(ctx, export);
             self.tab = show;
         }
-        let fade = ctx.animate_bool(egui::Id::new("drop_fade"), hovering);
+        let fade = theme::appear(ctx, egui::Id::new("drop_fade"), hovering);
         if fade > 0.0 {
             let rect = ctx.content_rect();
             let p = ctx.layer_painter(egui::LayerId::new(

@@ -785,30 +785,16 @@ pub(super) fn card_text(n: &crate::map::Node) -> String {
     s
 }
 
-/// How long a panel card takes to glide to a new place in the stack.
-pub(super) const SLIDE_SECS: f64 = 0.22;
-
-/// Where to draw the panel card `id`, laid out `y` down the stack: easing
-/// (cubic ease-out) from where it was shown toward `y` whenever `y` moves.
+/// Where to draw the panel card `id`, laid out `y` down the stack: gliding
+/// (theme::glide) from where it was shown toward `y` whenever `y` moves.
 /// A card seen for the first time is just drawn where it is.
 pub(super) fn slide(ctx: &egui::Context, id: &str, y: f32) -> f32 {
-    let key = egui::Id::new(("panel_slide", id));
-    let now = ctx.input(|i| i.time);
-    let at = |(from, to, t0): (f32, f32, f64), t: f64| {
-        let k = ((t - t0) / SLIDE_SECS).clamp(0.0, 1.0) as f32;
-        from + (to - from) * (1.0 - (1.0 - k).powi(3))
-    };
-    let mut s = ctx
-        .data(|d| d.get_temp::<(f32, f32, f64)>(key))
-        .unwrap_or((y, y, now));
-    if (s.1 - y).abs() > 0.5 {
-        s = (at(s, now), y, now);
-    }
-    ctx.data_mut(|d| d.insert_temp(key, s));
-    if now - s.2 < SLIDE_SECS {
-        ctx.request_repaint();
-    }
-    at(s, now)
+    crate::theme::glide(
+        ctx,
+        egui::Id::new(("panel_slide", id)),
+        y,
+        crate::theme::SLOW,
+    )
 }
 
 #[cfg(test)]

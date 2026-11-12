@@ -294,7 +294,7 @@ impl MapView {
         {
             self.legend = false;
         }
-        let flow = crate::backdrop::tick(self.flow, crate::backdrop::SMOOTH_FPS).0;
+        let flow = self.flow;
         let z = self.zoom.clamp(0.6, 1.2);
         let mut flip = None;
         let mut body = ui.new_child(
