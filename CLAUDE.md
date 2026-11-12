@@ -4,7 +4,7 @@
 
 The owner wants point releases: each finished change ships on its own, not in a big batch.
 
-- **One change, one PR, one release.** A PR that changes what users get (a fix, a feature, wording in the app) bumps the patch version in that same PR: `version` in `Cargo.toml` from 0.25.0 to 0.25.1, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). Merging it to `main` publishes the release: `build.yml` tags `v<version>` and uploads both binaries with their checksums.
+- **One change, one PR, one release.** A PR that changes what users get (a fix, a feature, wording in the app) bumps the patch version in that same PR: `version` in `Cargo.toml` from 0.25.0 to 0.25.1, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). The same number goes in the first line of `docs/manual/MANUAL.md` and step 4 of `FOLLOW-ALONG.md`; `the_manual_and_the_guide_name_this_version` (src/manual.rs) fails otherwise. Merging it to `main` publishes the release: `build.yml` tags `v<version>` and uploads both binaries with their checksums.
 - **PRs go straight into `main`.** No `release-*` branch collecting several PRs.
 - **Take the next free number when merging.** If another release landed first, merge `main` into the branch and bump to the next patch (0.25.2).
 - **No bump** for what users don't get: docs, the wiki, CI, tests only.
