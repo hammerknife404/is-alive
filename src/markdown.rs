@@ -662,6 +662,31 @@ mod tests {
         out.textures_delta.clear();
     }
 
+    /// Notes are whatever a tech pastes: a log, half a table, a config
+    /// with every kind of bracket. Drawing, exporting and redacting any
+    /// of it is never a panic (slicing text between characters would be).
+    #[test]
+    fn hostile_notes_never_panic() {
+        let text = include_str!("../assets/notes-format-test.md");
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        crate::hostile::each_text(text, |t| texts.push(t.to_string()));
+        for t in &texts {
+            let _ = crate::markdown_out::to_html(t, "t");
+            let _ = crate::markdown_out::to_text(t);
+            let (clean, hits) = crate::redact::sanitize(t);
+            let _ = crate::redact::summary(&hits);
+            let _ = crate::redact::markers(&clean);
+        }
+        // Drawing lays every glyph out: a spread of them is enough.
+        for t in texts.iter().step_by(9) {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let _ = render(ui, t, &FontId::proportional(13.0));
+            });
+            out.textures_delta.clear();
+        }
+    }
+
     #[test]
     fn shortcodes_become_emoji() {
         assert_eq!(shortcode(":fire: hot"), Some(("🔥", 6)));

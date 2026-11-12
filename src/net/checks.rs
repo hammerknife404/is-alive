@@ -444,6 +444,15 @@ mod tests {
 
     /// A server 2 s ahead of us, answering at once.
     #[test]
+    fn hostile_ntp_replies_never_panic() {
+        let mut good = vec![0x24, 1, 0, 0xec];
+        good.extend(std::iter::repeat_n(0x5a, 44));
+        crate::hostile::each(&good, |r| {
+            let _ = sntp_offset(r, 1_800_000_000.0, 1_800_000_000.1);
+        });
+    }
+
+    #[test]
     fn an_ntp_reply_gives_the_offset() {
         let ts = |t: f64| {
             let n = t + NTP_EPOCH;

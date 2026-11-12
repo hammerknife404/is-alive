@@ -412,6 +412,14 @@ mod tests {
     </script></html>"#;
 
     #[test]
+    fn hostile_maps_never_panic() {
+        crate::hostile::each(PAGE.as_bytes(), |d| {
+            let _ = sniff(d);
+            let _ = parse(d);
+        });
+    }
+
+    #[test]
     fn reads_the_site_data_block() {
         assert!(sniff(PAGE.as_bytes()));
         let d = parse(PAGE.as_bytes()).unwrap();

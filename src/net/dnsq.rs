@@ -611,6 +611,39 @@ mod tests {
     }
 
     #[test]
+    fn hostile_answers_never_panic() {
+        let q = encode_query(9, "example.com", MX, true, false).unwrap();
+        let mut rrs = vec![0xc0, 12, 0, 15, 0, 1, 0, 0, 0, 60, 0, 9, 0, 10, 4];
+        rrs.extend_from_slice(b"mail");
+        rrs.extend_from_slice(&[0xc0, 12]);
+        rrs.extend_from_slice(&[0xc0, 12, 0, 16, 0, 1, 0, 0, 0, 60, 0, 8, 3]);
+        rrs.extend_from_slice(b"v=s");
+        rrs.push(3);
+        rrs.extend_from_slice(b"pf1");
+        crate::hostile::each(&answer(&q, &rrs, 2), |r| {
+            let _ = parse(r, 9);
+        });
+        // Every record type's data, whatever its length says.
+        for rtype in 0..=260u16 {
+            crate::hostile::each(
+                &[
+                    3, b'a', b'b', b'c', 0, 0, 10, 0xc0, 0, 1, 2, 3, 4, 5, 6, 7, 8,
+                ],
+                |d| {
+                    let _ = parse_data(d, 0, d, rtype);
+                },
+            );
+        }
+        crate::hostile::each_text(
+            "nameserver 192.0.2.1\nnameserver fe80::1%eth0\n# x\n",
+            |t| {
+                let _ = parse_resolv_conf(t);
+                let _ = parse_server(t);
+            },
+        );
+    }
+
+    #[test]
     fn parses_mx_txt_and_compression() {
         let q = encode_query(9, "example.com", MX, true, false).unwrap();
         let mut rrs = vec![0xc0, 12, 0, 15, 0, 1, 0, 0, 0, 60, 0, 9, 0, 10, 4];

@@ -6,6 +6,8 @@ mod chrome;
 mod connect;
 mod fonts;
 mod help;
+#[cfg(test)]
+mod hostile;
 mod icons;
 mod input;
 mod inspector;
@@ -295,6 +297,72 @@ fn small_screen(monitor: egui::Vec2) -> bool {
 }
 
 impl App {
+    /// The app as it starts, before anything is read from disk or asked
+    /// of the network: every tab empty.
+    fn fresh(
+        look: theme::Settings,
+        gl: Option<&std::sync::Arc<eframe::glow::Context>>,
+        manual_window: bool,
+    ) -> Self {
+        App {
+            tab: Tab::Ping,
+            shown_tab: Tab::Ping,
+            tab_since: f64::NEG_INFINITY,
+            size: None,
+            maximized: look.maximized,
+            fitted: false,
+            ping: Default::default(),
+            ports: Default::default(),
+            trace: Default::default(),
+            speed: Default::default(),
+            sweep: Default::default(),
+            calc: Default::default(),
+            dns: Default::default(),
+            advanced: Default::default(),
+            netcheck: Default::default(),
+            join: Default::default(),
+            export: Default::default(),
+            bundle: Default::default(),
+            report: Default::default(),
+            map: map::view::MapTabs::new(look.map_layout),
+            notes: Default::default(),
+            log: Default::default(),
+            log_saved: 0,
+            info: HostInfo::local(),
+            info_job: None,
+            wan_asked: false,
+            was_sweeping: false,
+            scanning: Vec::new(),
+            map_call: Default::default(),
+            update_job: None,
+            update: None,
+            update_asked: false,
+            filter: String::new(),
+            filter_cache: None,
+            jump_to_new: false,
+            result_pick: None,
+            results_edit: None,
+            result_view: results_ui::RunView::Output,
+            result_compare: None,
+            look,
+            backdrop: backdrop::Backdrop::new(gl),
+            pick_image: None,
+            pick_save_dir: None,
+            reloading: false,
+            manual: manual::Manual::new(manual_window),
+            shots: shots::Shots::from_env(),
+            shots_settings: false,
+            shots_help: false,
+            close_asked: false,
+            close_anyway: false,
+            site_name: site::name(),
+            sites: Vec::new(),
+            site_ask: None,
+            site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
+            site_missing: Vec::new(),
+        }
+    }
+
     /// Note the window's size (as a normal window) and whether it's
     /// maximised. The first time is-alive opens (no size saved), once the
     /// screen's size is known, a small screen gets the window maximised:
@@ -1234,63 +1302,7 @@ fn main() {
             // stays over it there.
             let look_manual_window =
                 look.manual_window && std::env::var_os("IS_ALIVE_SHOTS").is_none();
-            let mut app = App {
-                tab: Tab::Ping,
-                shown_tab: Tab::Ping,
-                tab_since: f64::NEG_INFINITY,
-                size: None,
-                maximized: look.maximized,
-                fitted: false,
-                ping: Default::default(),
-                ports: Default::default(),
-                trace: Default::default(),
-                speed: Default::default(),
-                sweep: Default::default(),
-                calc: Default::default(),
-                dns: Default::default(),
-                advanced: Default::default(),
-                netcheck: Default::default(),
-                join: Default::default(),
-                export: Default::default(),
-                bundle: Default::default(),
-                report: Default::default(),
-                map: map::view::MapTabs::new(look.map_layout),
-                notes: Default::default(),
-                log: Default::default(),
-                log_saved: 0,
-                info: HostInfo::local(),
-                info_job: None,
-                wan_asked: false,
-                was_sweeping: false,
-                scanning: Vec::new(),
-                map_call: Default::default(),
-                update_job: None,
-                update: None,
-                update_asked: false,
-                filter: String::new(),
-                filter_cache: None,
-                jump_to_new: false,
-                result_pick: None,
-                results_edit: None,
-                result_view: results_ui::RunView::Output,
-                result_compare: None,
-                look,
-                backdrop: backdrop::Backdrop::new(cc.gl.as_ref()),
-                pick_image: None,
-                pick_save_dir: None,
-                reloading: false,
-                manual: manual::Manual::new(look_manual_window),
-                shots: shots::Shots::from_env(),
-                shots_settings: false,
-                shots_help: false,
-                close_asked: false,
-                close_anyway: false,
-                site_name: site::name(),
-                sites: Vec::new(),
-                site_ask: None,
-                site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
-                site_missing: Vec::new(),
-            };
+            let mut app = App::fresh(look, cc.gl.as_ref(), look_manual_window);
             app.notes.set_autosave(app.look.notes_autosave);
             app.export.set_clients(app.look.unifi_clients);
             widgets::set_save_dir(app.look.save_dir.clone(), app.look.save_by_site);
@@ -1331,12 +1343,111 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        Tab, Target, drop_hint, drop_target, egui, notice_toasts, route_drop, small_screen,
+        App, TABS, Tab, Target, drop_hint, drop_target, egui, fonts, log, notice_toasts,
+        results_ui, route_drop, small_screen, theme, tools,
     };
     use std::path::{Path, PathBuf};
 
     /// The screens the first window opens maximised on: a 1080p laptop at
     /// 150% and 1366 × 768; not 1280 × 800 (it fits) or bigger.
+    /// One frame of the window's own drawing (bars, nav, the tab), at
+    /// `size`, without the parts that read or write this computer.
+    fn draw(app: &mut App, ctx: &egui::Context, size: (f32, f32)) {
+        let now = ctx.input(|i| i.time) + 0.2;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(size.0, size.1),
+            )),
+            time: Some(now),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            app.title_bar(ui);
+            app.footer(ui);
+            app.nav(ui);
+            app.central(ui, now);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn run(tool: &'static str, started: &str) -> log::Entry {
+        log::Entry {
+            tool,
+            started: started.into(),
+            ended: started.into(),
+            text: format!("{tool}\nline two\n"),
+            table: Some(log::Table {
+                columns: &["host", "ms"],
+                rows: vec![vec!["192.0.2.1".into(), "1.0".into()]],
+            }),
+        }
+    }
+
+    /// Release builds end on any panic, and v0.28.21's was an index kept
+    /// past a list that had been cleared. So every tab is drawn, at three
+    /// window sizes and in every theme's colours: empty, as it starts;
+    /// with a map and runs in it and something picked on each; and then
+    /// with all of that cleared from under whatever the tabs had picked,
+    /// which is harsher than Clear all or Clear map, since they tidy up.
+    #[test]
+    fn every_tab_draws_empty_filled_and_just_cleared() {
+        for (n, size) in [(1280.0, 720.0), (1120.0, 720.0), (620.0, 400.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts::definitions());
+            let look = theme::Settings {
+                theme: theme::Theme::ALL[n * 4],
+                ..Default::default()
+            };
+            theme::apply(&ctx, look.theme);
+            let mut app = App::fresh(look, None, false);
+            let all = |app: &mut App, what: &str| {
+                for (tab, name, _) in TABS {
+                    app.tab = *tab;
+                    for _ in 0..3 {
+                        draw(app, &ctx, size);
+                    }
+                    let _ = (name, what);
+                }
+            };
+            all(&mut app, "empty");
+
+            app.export = tools::export::ExportTool::with_example(0);
+            for (i, (_, name, _)) in TABS.iter().enumerate() {
+                app.log
+                    .push(run(name, &format!("2026-11-12T10:{i:02}:00+00:00")));
+                app.log
+                    .push(run(name, &format!("2026-11-12T11:{i:02}:00+00:00")));
+            }
+            app.result_pick = Some(results_ui::RunKey::Done {
+                tool: TABS[3].1,
+                started: "2026-11-12T11:03:00+00:00".into(),
+            });
+            app.result_compare = Some("2026-11-12T10:03:00+00:00".into());
+            app.result_view = results_ui::RunView::Compare;
+            app.filter = "192".into();
+            all(&mut app, "filled");
+            for view in [results_ui::RunView::Table, results_ui::RunView::Output] {
+                app.result_view = view;
+                app.tab = Tab::Results;
+                draw(&mut app, &ctx, size);
+            }
+
+            // Everything goes, and nothing the tabs hold on to is told.
+            app.log.clear();
+            app.export.clear();
+            app.sweep.clear_results();
+            all(&mut app, "the data gone");
+            app.map.clear_live();
+            app.result_view = results_ui::RunView::Compare;
+            all(&mut app, "the map cleared");
+        }
+        theme::apply(&egui::Context::default(), theme::Theme::Dark);
+    }
+
     #[test]
     fn small_screens_get_a_maximised_first_window() {
         let at = |w: f32, h: f32| small_screen(egui::vec2(w, h));

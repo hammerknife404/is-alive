@@ -189,6 +189,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hostile_pages_never_panic() {
+        let raw = b"HTTP/1.1 301 Moved\r\nServer: x\r\nLocation: https://192.0.2.1:8443/a?b#c\r\n\
+                    Content-Type: text/html\r\n\r\n<html><head><TITLE> A &amp; B &#x41;&#65; </TITLE>";
+        crate::hostile::each(raw, |r| {
+            if let Some(p) = parse(r) {
+                let _ = p.label();
+            }
+        });
+    }
+
+    #[test]
     fn a_pages_title_and_headers_are_read() {
         let raw = b"HTTP/1.1 200 OK\r\nServer: lighttpd/1.4\r\nDate: Wed, 11 Nov 2026 06:00:00 GMT\r\n\
                     Content-Type: text/html\r\n\r\n<html><head>\n<TITLE>\n  UniFi &amp; Network\n</TITLE>";

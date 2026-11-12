@@ -1541,6 +1541,11 @@ pub fn load() -> Settings {
 
 /// Best effort: a read-only profile just means the choice isn't remembered.
 pub fn save(s: &Settings) {
+    // A test that draws the app never writes the settings of whoever
+    // runs it.
+    if cfg!(test) {
+        return;
+    }
     if let Some(p) = settings_path() {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);

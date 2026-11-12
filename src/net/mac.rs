@@ -265,6 +265,20 @@ mod tests {
     }
 
     #[test]
+    fn hostile_tables_never_panic() {
+        let t = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                 192.168.1.1      0x1         0x2         24:5a:4c:aa:bb:cc     *        eth0\n\
+                 192.168.1.9 dev eth0 lladdr 24:5a:4c:aa:bb:cc REACHABLE\n\
+                 ? (192.168.1.1) at 24:5a:4c:aa:bb:cc on en0 ifscope [ethernet]\n";
+        crate::hostile::each_text(t, |t| {
+            let _ = parse_proc_arp(t);
+            let _ = parse_ip_neigh(t);
+            let _ = parse_arp_an(t);
+            let _ = parse_mac(t);
+        });
+    }
+
+    #[test]
     fn parses_proc_net_arp() {
         let t = "IP address       HW type     Flags       HW address            Mask     Device\n\
                  192.168.1.1      0x1         0x2         24:5a:4c:aa:bb:cc     *        eth0\n\

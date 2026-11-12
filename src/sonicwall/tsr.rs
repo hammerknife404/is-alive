@@ -549,6 +549,14 @@ Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:
 #Debug Information_START:\n#Network : Interfaces_START\nInterface Name : X9\n#Network : Interfaces_END\n";
 
     #[test]
+    fn hostile_reports_never_panic() {
+        crate::hostile::each(REPORT.as_bytes(), |d| {
+            let _ = sniff(d);
+            let _ = convert(d);
+        });
+    }
+
+    #[test]
     fn reads_a_sonicos_7_report() {
         assert!(sniff(REPORT.as_bytes()));
         let r = convert(REPORT.as_bytes()).unwrap();
