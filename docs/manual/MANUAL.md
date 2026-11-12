@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.29.1**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.29.2**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -220,7 +220,7 @@ When every check is done and the sweep found something, the **Map** tab glows fo
 | **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section |
 | **Findings** | The map's findings, worst first, each with the devices it names |
 | **Changes since** | What changed since the saved map you're comparing with (**More › Compare** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
-| **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A link the data didn't show is marked *(assumed)* |
+| **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A role or an uplink that is-alive worked out, not read from a backup or a config, is marked *inferred*; point at the word for what it was worked out from |
 | **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
 | **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
 | **Test results** | Every run in Results. Off by default: like the Site Bundle's, it can hold other clients' hosts, so the row lists its targets for you to check |
@@ -743,8 +743,10 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A UniFi backup** (in Config Export) | The real topology: each device under the switch or AP it uplinks to, with the port, wired or wireless |
 | **+ a SonicWall export** | The firewall as the gateway, matched by its MAC addresses; a tech support report adds the switches and APs it heard on each port |
 | **Several backups or exports** (two sites, say) | All of them on one map. Each controller's sites get their own box, and each firewall is a gateway of its own under the internet (see below) |
-| **A sweep alone** | Devices hang under the gateway on dotted *assumed* links, with roles guessed from vendor and open ports (marked *inferred*) |
+| **A sweep alone** | Devices hang under the gateway on dotted *inferred* links, with roles worked out from vendor and open ports (marked *inferred* too) |
 | **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered, and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized). With several backups open, each joins only when the map shows its devices |
+
+**Measured or inferred.** What is-alive read or measured is shown plain. What it worked out carries one word, *inferred*, wherever it shows: a card's tag, its inspector, the legend, the Site report, a map's CSV export and the bundle's card notes. Two things can be: a device's **role**, when a sweep has only its vendor and open ports to go on, and a card's **uplink**, when it answered on the network but no backup or config says which port it's on. Point at the word (in the app or the report) for which it was.
 
 A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Site Bundle for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
 
@@ -794,7 +796,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Re-layout** | (After you've dragged cards or boxes) Put every card and box back where the layout had it |
 | **Reload** | Read the map's files from disk again and rebuild, keeping selections and pins |
 | **Compare** ▸ | On the live map: what changed since a saved map of this site, or of another site (**Other sites ›**; see *Compare with the last visit*, below) |
-| **Examples** ▸ | Open one of two fictional sites; **Home**, a fictional house (ISP modem, Wi-Fi router, a mesh node, a switch behind the TV) with dashed links that are assumed, and the issues a home usually has (double NAT, a port forwarded to the NAS, a default password, IoT on the family network); or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
+| **Examples** ▸ | Open one of two fictional sites; **Home**, a fictional house (ISP modem, Wi-Fi router, a mesh node, a switch behind the TV) with dashed links that are inferred, and the issues a home usually has (double NAT, a port forwarded to the NAS, a default password, IoT on the family network); or **Blank map** (the Internet and one gateway at one site, nothing else: a start for a map drawn by hand, or a small map to try things on), or **Close the example** |
 | **Saved maps** | Show or hide the saved maps bar (below), to open a saved map or go back to Live |
 | **Copy findings** | The findings as text, worst first, for a ticket |
 | **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
@@ -849,7 +851,7 @@ The **Legend** panel in the bottom left corner says what everything on the map m
 
 - **Roles:** each role's colour, as a small card. Click a role to fade those cards out, or back in (as in the left panel).
 - **Cards:** the internet, collapsed sites and **+N more** cards, cards *not in the latest data* (red, dashed), pinned cards (📌), the amber **!** of a card with warnings, cards with a note (the small folded sheet), the chips cards carry (an uplink's port, or a tag such as *inferred*), the *drawn* chip of cards drawn by hand on a plan or a training map, and the **+N** and **−** chips of cards with clients to show or hide.
-- **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
+- **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), inferred (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
 Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** at the top right, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ▾** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.

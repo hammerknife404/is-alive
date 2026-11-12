@@ -37,7 +37,7 @@ pub const HOME: &str = "Home_network.dc.html";
 pub const HOME_LABEL: &str = "Home: a router, mesh Wi-Fi and the usual issues";
 
 /// The home map's site data: fictional, in the template's own format.
-const HOME_DATA: &str = r#"    // HOME NETWORK: a fictional house. Dashed wired links are assumed (the
+const HOME_DATA: &str = r#"    // HOME NETWORK: a fictional house. Dashed wired links are inferred (the
     // switch behind the TV is unmanaged: nothing to scan); dashed Wi-Fi
     // links are wireless.
     this.META = {

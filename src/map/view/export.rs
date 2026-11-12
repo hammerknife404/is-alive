@@ -193,6 +193,7 @@ impl MapView {
                     site: n.site.clone().unwrap_or_default(),
                     uplink,
                     assumed: n.link() == Some(Link::Assumed),
+                    role_inferred: n.role_inferred(),
                     ports: n.open.clone(),
                     flags: n.flags.clone(),
                     note: note.to_string(),

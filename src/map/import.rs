@@ -774,9 +774,7 @@ fn place_added(b: &mut B, first: usize, hints: &Hints) -> usize {
             match n.ip.and_then(|ip| hints.get(&net24(ip))) {
                 Some(&p) => {
                     n.up = Some((p, Link::Assumed, None));
-                    n.details.push(
-                        "Uplink guessed from its subnet: other cards there hang off it".into(),
-                    );
+                    n.details.push(crate::inferred::UPLINK_SUBNET.into());
                 }
                 None => {
                     unplaced.push(i);

@@ -217,6 +217,7 @@ impl MapTabs {
                     "ip": n.ip.map(|ip| ip.to_string()),
                     "mac": n.mac.as_ref().map(crate::net::mac::fmt),
                     "site": n.site,
+                    "inferred": n.inferred(),
                     "note": crate::theme::strip_emoji_styles(&super::notes::clean(raw, ov)),
                 })
             })
@@ -1342,6 +1343,36 @@ mod tests {
         assert_eq!(
             saved::read(&path).unwrap().edits.kept,
             t.saved[0].saved.kept
+        );
+    }
+
+    /// The Site Bundle's card notes say what about each card is inferred:
+    /// its role (the mark on the card) and its uplink (a link nothing
+    /// read shows). Nothing, for a card whose role and port were read.
+    #[test]
+    fn the_bundles_card_notes_say_what_is_inferred() {
+        let mut live = MapView::new(None);
+        live.map.nodes = saved::sample().map.nodes;
+        let ids: Vec<String> = live.map.nodes.iter().map(|n| n.id.clone()).collect();
+        for id in &ids {
+            live.notes.insert(id.clone(), "seen".into());
+        }
+        let last = live.map.nodes.len() - 1;
+        live.map.nodes[last]
+            .chips
+            .push(crate::inferred::WORD.into());
+        live.map.nodes[last].up = Some((0, crate::map::Link::Assumed, None));
+        let t = MapTabs::in_dir(live, None);
+        let (_, json) = t.bundle_notes(&secrets()).expect("notes");
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            rows[last]["inferred"],
+            serde_json::json!(["role", "uplink"])
+        );
+        assert!(
+            rows[..last]
+                .iter()
+                .all(|r| !r["inferred"].as_array().unwrap().contains(&"role".into()))
         );
     }
 

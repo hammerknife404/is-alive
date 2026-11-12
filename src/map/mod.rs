@@ -123,7 +123,7 @@ impl Zone {
             Zone::Gateway => "Gateway / firewall",
             Zone::Switch => "Switches",
             Zone::Wireless => "Access points",
-            Zone::Gear => "Network gear (inferred)",
+            Zone::Gear => "Network gear",
             Zone::Server => "Servers / NAS",
             Zone::Device => "Printers / cameras",
             Zone::Client => "Clients",
@@ -285,6 +285,34 @@ impl Node {
 
     pub fn link(&self) -> Option<Link> {
         self.up.as_ref().map(|u| u.1)
+    }
+
+    /// Its role was worked out, not read: it carries the mark (from a
+    /// sweep's vendor and ports, or a /mapnetwork map that says so).
+    pub fn role_inferred(&self) -> bool {
+        self.chips.iter().any(|c| c == crate::inferred::WORD)
+    }
+
+    /// What about this card is inferred ("role", "uplink"), for a file:
+    /// empty when everything was read or measured.
+    pub fn inferred(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if self.role_inferred() {
+            v.push("role");
+        }
+        if self.link() == Some(Link::Assumed) {
+            v.push("uplink");
+        }
+        v
+    }
+
+    /// Where this card's inferred role came from, for the mark's hover:
+    /// its own detail line when it has one.
+    pub fn inferred_why(&self) -> &str {
+        self.details
+            .iter()
+            .find(|d| d.starts_with("Role inferred"))
+            .map_or(crate::inferred::ROLE, String::as_str)
     }
 
     fn seen(&mut self, by: &'static str) {
@@ -1513,9 +1541,8 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
             .push("No MAC: past a router, or this machine".into());
     }
     if zone == Zone::Gear || zone == Zone::Server {
-        n.chip("inferred");
-        n.details
-            .push("Role inferred from vendor and open ports".into());
+        n.chip(crate::inferred::WORD);
+        n.details.push(crate::inferred::ROLE.into());
     }
     n
 }

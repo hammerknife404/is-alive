@@ -392,7 +392,7 @@ pub fn entries(
             Link::Backbone => "Internet uplink",
             Link::Wired => "Wired",
             Link::Wireless => "Wireless",
-            Link::Assumed => "Assumed, not in the data",
+            Link::Assumed => "Inferred: not in the data",
         };
         // The internet's uplinks are the gateway's colour and assumed links
         // grey wherever they don't run into a role's box: that, if any
@@ -595,7 +595,7 @@ mod tests {
                     "Gateway / firewall",
                     "Switches",
                     "Access points",
-                    "Network gear (inferred)",
+                    "Network gear",
                     "Servers / NAS",
                     "Printers / cameras"
                 ]

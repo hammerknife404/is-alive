@@ -55,6 +55,8 @@ pub struct Device {
     pub uplink: String,
     /// The link up isn't in the data: placed where it answered.
     pub assumed: bool,
+    /// Its role was worked out from its vendor and open ports.
+    pub role_inferred: bool,
     pub ports: Vec<u16>,
     pub flags: Vec<String>,
     /// The technician's note on its card, redacted.
@@ -146,6 +148,7 @@ white-space:pre-wrap}pre code{padding:0}\
 blockquote{margin:0;padding:0 1em;color:var(--weak);border-left:3px solid var(--line)}\
 li.task{list-style:none;margin-left:-1.2em}\
 .redacted{background:#fff3cd;color:#7a5600;border-radius:3px;padding:0 .2em}\
+i.inferred{font-size:11px;color:var(--weak);border-bottom:1px dotted currentColor;cursor:help;white-space:nowrap}\
 footer{margin-top:32px;padding-top:8px;border-top:1px solid var(--line);font-size:12px;\
 color:var(--weak)}\
 @media print{body{margin:0;max-width:none;font-size:12px}nav{display:none}\
@@ -226,8 +229,9 @@ pub fn html(r: &Report) -> String {
         body,
         "<footer>Made with is-alive {} on the technician's computer. Configs were sanitized \
          and notes redacted there before anything was written. Devices and links come from \
-         what was observed and the config files opened: a link marked <i>assumed</i> \
-         wasn't in any of them.</footer>",
+         what was observed and the config files opened. A role or an uplink marked \
+         <i class=\"inferred\">inferred</i> wasn't in any of them: is-alive worked it out, and \
+         pointing at the word says from what.</footer>",
         crate::VERSION
     );
     format!(
@@ -449,9 +453,16 @@ fn devices(body: &mut String, id: &str, heading: &str, list: &[&Device], site: b
         cols.push((
             "Role",
             false,
-            Box::new(|d| match d.kind.trim() {
-                "" => escape(&d.role),
-                k => escape(&format!("{} · {}", d.role, k.to_lowercase())),
+            Box::new(|d| {
+                let role = match d.kind.trim() {
+                    "" => escape(&d.role),
+                    k => escape(&format!("{} · {}", d.role, k.to_lowercase())),
+                };
+                if d.role_inferred {
+                    format!("{role} {}", crate::inferred::html(crate::inferred::ROLE))
+                } else {
+                    role
+                }
             }),
         ));
     }
@@ -473,7 +484,11 @@ fn devices(body: &mut String, id: &str, heading: &str, list: &[&Device], site: b
         if clients { "Connected to" } else { "Uplink" },
         false,
         Box::new(|d| match (d.uplink.is_empty(), d.assumed) {
-            (false, true) => format!("{} <i>(assumed)</i>", escape(&d.uplink)),
+            (false, true) => format!(
+                "{} {}",
+                escape(&d.uplink),
+                crate::inferred::html(crate::inferred::UPLINK)
+            ),
             _ => escape(&d.uplink),
         }),
     ));
@@ -614,6 +629,25 @@ mod tests {
         assert!(h.contains("1 high"));
         assert!(h.contains("fc:ec:da:01:02:03"));
         assert!(h.contains("LAN 10.0.0.50/24 · Gateway 10.0.0.1"));
+    }
+
+    /// One mark, the same for a role and an uplink, each saying on hover
+    /// what it was worked out from; nothing on what was read.
+    #[test]
+    fn inferred_roles_and_uplinks_carry_the_one_mark() {
+        let mut m = map();
+        let mut gear = device("nvr", false);
+        gear.role_inferred = true;
+        gear.assumed = true;
+        m.devices = vec![device("usw-office", false), gear];
+        let h = html(&report(Some(m)));
+        let mark = |why: &str| crate::inferred::html(why);
+        assert!(h.contains(&mark(crate::inferred::ROLE)), "{h}");
+        assert!(h.contains(&mark(crate::inferred::UPLINK)));
+        // Twice in the table (the second device), once in the footer.
+        assert_eq!(h.matches("class=\"inferred\"").count(), 3);
+        assert!(!h.contains("assumed") && !h.contains("guessed"));
+        assert!(h.contains(POLICY));
     }
 
     #[test]

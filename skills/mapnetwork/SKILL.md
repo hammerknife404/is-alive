@@ -194,6 +194,12 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
+  Its `inferred` list says what about that card is-alive worked out and did
+  not read or measure: `role` (from the vendor and open ports alone) or
+  `uplink` (it answered, but no backup or config says which port it's on).
+  Empty means both were read. Treat an inferred value as a lead to confirm
+  from the other files, and keep the `inferred` chip on the node until one
+  does.
 - **Fill `ip` and `mac` on every node** you can (Step 2's schema): is-alive
   reopens the map and matches devices, sweeps and notes by them.
 

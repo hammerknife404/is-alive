@@ -9,6 +9,7 @@ mod help;
 #[cfg(test)]
 mod hostile;
 mod icons;
+mod inferred;
 mod input;
 mod inspector;
 mod job;
