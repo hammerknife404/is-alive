@@ -301,6 +301,14 @@ impl App {
             _ => {}
         }
         ui.separator();
+        // Read (and unpacked) only while Settings is open.
+        let (date, prefixes) = crate::net::mac::table();
+        ui.weak(format!("MAC vendor table: {date} ({prefixes} prefixes)"))
+            .on_hover_text(
+                "The list of hardware makers that names a device's vendor from its MAC, \
+                 built into the app and refreshed with each release. A device made by a \
+                 company registered since then shows no vendor",
+            );
         if let Some(dir) = theme::data_dir() {
             ui.weak("Settings and autosaved notes are kept in");
             ui.label(

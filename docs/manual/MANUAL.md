@@ -1374,6 +1374,10 @@ Shown only while Miami is the theme picked. Its panels sit over a backdrop: **16
 
 What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#21-troubleshooting)), not in Settings.
 
+### MAC vendor table
+
+A line near the bottom of Settings gives the date of the vendor table built into the app, and how many prefixes it holds (*MAC vendor table: 2 Nov 2026 (53438 prefixes)*). It is what names a device's maker from its MAC address in Subnet Sweep and on the Map. The table is checked against the IEEE registry every week and comes with each release; a device from a maker registered since that date shows no vendor.
+
 ### Where settings and notes are kept
 
 The bottom of Settings shows the folder:

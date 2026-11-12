@@ -29,6 +29,20 @@ fn usable(m: &Mac) -> bool {
 /// IEEE MA-L, MA-M and MA-S registries, rebuilt by scripts/update-oui.py.
 static OUI_GZ: &[u8] = include_bytes!("../../assets/oui.txt.gz");
 
+/// The day that table last changed (YYYY-MM-DD), written by the same
+/// script: a vendor missing from a card may just be newer than this.
+static OUI_DATE: &str = include_str!("../../assets/oui.date");
+
+/// The vendor table's date as Settings shows it ("2 Nov 2026"), and how
+/// many prefixes it holds.
+pub fn table() -> (String, usize) {
+    let date = chrono::NaiveDate::parse_from_str(OUI_DATE.trim(), "%Y-%m-%d").map_or_else(
+        |_| OUI_DATE.trim().to_string(),
+        |d| d.format("%-d %b %Y").to_string(),
+    );
+    (date, registry().iter().map(|t| t.1.len()).sum())
+}
+
 /// Sorted (prefix, vendor) tables for 9-, 7- and 6-hex-digit prefixes;
 /// longest match wins.
 type Registry = [(usize, Vec<(u64, String)>); 3];
@@ -262,6 +276,18 @@ mod tests {
         assert!(local_admin(&m));
         assert_eq!(vendor_label(&m), "(private/virtual MAC)");
         assert!(!local_admin(&[0x24, 0x5a, 0x4c, 1, 2, 3]));
+    }
+
+    /// Settings shows the table's date: scripts/update-oui.py writes it
+    /// as YYYY-MM-DD whenever the table changes.
+    #[test]
+    fn the_vendor_table_has_a_date_and_rows() {
+        let day = chrono::NaiveDate::parse_from_str(OUI_DATE.trim(), "%Y-%m-%d")
+            .expect("assets/oui.date is YYYY-MM-DD");
+        assert!(day.format("%Y").to_string().starts_with("20"));
+        let (shown, prefixes) = table();
+        assert!(!shown.contains('-'), "{shown}");
+        assert!(prefixes > 30_000, "{prefixes}");
     }
 
     #[test]
