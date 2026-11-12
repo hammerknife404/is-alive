@@ -23,6 +23,15 @@ Each release has a `.sha256` file beside `is-alive.exe` and `is-alive-x86_64.App
 - **Windows:** `Get-FileHash is-alive.exe -Algorithm SHA256`
 - **Linux:** `sha256sum -c is-alive-x86_64.AppImage.sha256`
 
+That shows the file arrived undamaged. To check **who built it**, each release after v0.29.0 also has a build attestation: a statement signed through GitHub that this exact file was built by this repository's `build` workflow from the tagged commit. With the [GitHub CLI](https://cli.github.com) installed:
+
+```
+gh attestation verify is-alive.exe --repo hammerknife404/is-alive
+gh attestation verify is-alive-x86_64.AppImage --repo hammerknife404/is-alive
+```
+
+It prints the workflow and the commit, and fails for a file built anywhere else. The attestations are also listed on the repository's **Attestations** page (under **Actions**).
+
 The Windows build is not code-signed yet, so Windows shows *Unknown Publisher* when it starts.
 
 ## What is-alive sends
