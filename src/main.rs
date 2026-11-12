@@ -840,6 +840,11 @@ impl App {
                 self.map.find(ip);
                 self.tab = Tab::Map;
             }
+            // Fills the box; Start is the technician's.
+            Some(inspector::Ask::Join(host)) => {
+                self.join.ask_about(&host);
+                self.tab = Tab::Join;
+            }
             None => {}
         }
     }
@@ -867,6 +872,10 @@ impl App {
             Some(Action::Trace(ip)) => {
                 self.trace.run(ctx, &ip);
                 self.tab = Tab::Trace;
+            }
+            Some(Action::Join(host)) => {
+                self.join.ask_about(&host);
+                self.tab = Tab::Join;
             }
             Some(Action::Bundle) => self.bundle.open = true,
             Some(Action::Example(i)) => self.export.open_example(ctx, i),
@@ -939,7 +948,9 @@ impl App {
             Tab::Dns => self.dns.is_running(),
             Tab::Advanced => self.advanced.is_running(),
             Tab::Export => self.export.is_running(),
-            Tab::Join => self.join.running_since().is_some(),
+            Tab::Join => {
+                self.join.running_since().is_some() || self.join.others_running_since().is_some()
+            }
             Tab::Map | Tab::Notes | Tab::Calc | Tab::Results => false,
         }
     }
@@ -1010,6 +1021,7 @@ impl App {
             ("Domain Health", self.advanced.take_finished()),
             ("Network checks", self.netcheck.take_finished()),
             ("Domain join", self.join.take_finished()),
+            (tools::join::OTHERS, self.join.take_finished_others()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -1115,6 +1127,11 @@ impl App {
                 self.netcheck.output(),
             ),
             ("Domain join", self.join.running_since(), None),
+            (
+                tools::join::OTHERS,
+                self.join.others_running_since(),
+                self.join.others_output(),
+            ),
         ]
         .into_iter()
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))

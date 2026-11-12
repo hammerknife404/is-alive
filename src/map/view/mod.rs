@@ -44,6 +44,8 @@ pub enum Action {
     Ping(String),
     Ports(String),
     Trace(String),
+    /// Put this address in Domain join's Other computers box.
+    Join(String),
     /// Open the Site Bundle window.
     Bundle,
     /// The accuracy note was closed: don't show it again.

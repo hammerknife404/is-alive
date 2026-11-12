@@ -90,6 +90,7 @@ fn spec(tool: &str) -> Option<Spec> {
         "Domain Health" => s(&["section", "check", "kind"], &["status", "text"]),
         "Network checks" => s(&["check"], &["status"]),
         "Domain join" => s(&["section", "field"], &["value"]),
+        "Domain join (others)" => s(&["host"], &["verdict", "computer", "dns_domain"]),
         "Speed Test" => s(
             &["phase"],
             &["mbps", "latency_avg_ms", "jitter_ms", "loss_pct", "mos"],
