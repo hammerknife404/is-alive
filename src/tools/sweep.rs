@@ -600,6 +600,12 @@ impl SweepTool {
                     tip: "Select it on the Map",
                     enabled: true,
                 },
+                Act {
+                    label: "Domain join",
+                    tip: "Put it in Domain join's Other computers box, to ask whether it's \
+                          joined to Active Directory. Nothing is sent until you press Start",
+                    enabled: true,
+                },
             ];
             match insp::actions(ui, &acts) {
                 Some(0) => ask = Some(Ask::Ping(address.clone())),
@@ -607,6 +613,7 @@ impl SweepTool {
                 Some(2) => ask = Some(Ask::Trace(address.clone())),
                 Some(3) => insp::open(web.clone()),
                 Some(4) => ask = Some(Ask::OnMap(ip)),
+                Some(5) => ask = Some(Ask::Join(address.clone())),
                 _ => {}
             }
             insp::section(ui, "Details");

@@ -69,6 +69,19 @@ pub fn summarise(e: &log::Entry) -> String {
         "Traceroute" => plural(t.rows.len(), "hop", "hops"),
         "Subnet Sweep" => format!("{} alive", t.rows.len()),
         "Network checks" => crate::tools::netcheck::summary(&t.rows),
+        // "2 of 5 in Active Directory".
+        "Domain join (others)" => {
+            let col = t.columns.iter().position(|c| *c == "verdict");
+            let ad = t
+                .rows
+                .iter()
+                .filter(|r| {
+                    col.and_then(|c| r.get(c))
+                        .is_some_and(|v| v.starts_with("AD:"))
+                })
+                .count();
+            format!("{ad} of {} in Active Directory", t.rows.len())
+        }
         // "hybrid · corp.example.com", from its first two rows.
         "Domain join" => {
             let v = |field: &str| {
@@ -1037,6 +1050,43 @@ mod tests {
             ],
         );
         assert_eq!(summarise(&join), "hybrid · corp.example.com");
+        let others = entry(
+            "Domain join (others)",
+            crate::net::joined::COLUMNS,
+            &[
+                &[
+                    "pc-01",
+                    "PC-01",
+                    "HARBOR",
+                    "harbor.example",
+                    "",
+                    "AD: harbor.example",
+                    "445",
+                    "",
+                ],
+                &[
+                    "kiosk",
+                    "KIOSK",
+                    "KIOSK",
+                    "",
+                    "",
+                    "Not AD-joined (Entra not checked)",
+                    "445",
+                    "",
+                ],
+                &[
+                    "10.0.0.9",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "No answer on 445 or 3389",
+                    "",
+                    "",
+                ],
+            ],
+        );
+        assert_eq!(summarise(&others), "1 of 3 in Active Directory");
         let workgroup = entry(
             "Domain join",
             crate::net::join::COLUMNS,

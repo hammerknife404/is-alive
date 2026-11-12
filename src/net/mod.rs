@@ -5,6 +5,7 @@ pub mod domain;
 pub mod hostinfo;
 pub mod icmp;
 pub mod join;
+pub mod joined;
 pub mod mac;
 pub mod names;
 pub mod ports;

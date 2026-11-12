@@ -50,6 +50,8 @@ pub enum Ask {
     Trace(String),
     /// Select it on the Map.
     OnMap(std::net::Ipv4Addr),
+    /// Put it in Domain join's Other computers box.
+    Join(String),
 }
 
 /// The inspector beside (or over) the rest of `ui`, while `open`. Call it

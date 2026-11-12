@@ -781,6 +781,17 @@ impl MapView {
                         ui.close();
                     }
                 }
+                if ui
+                    .button("Domain join")
+                    .on_hover_text(
+                        "Put it in Domain join's Other computers box, to ask whether it's \
+                         joined to Active Directory. Nothing is sent until you press Start",
+                    )
+                    .clicked()
+                {
+                    self.menu_act = Some(Action::Join(ip.to_string()));
+                    ui.close();
+                }
             });
         }
         if let Some(url) = admin

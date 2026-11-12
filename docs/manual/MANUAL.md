@@ -1211,6 +1211,8 @@ A rule must cover `10.0.0.5` to `10.0.1.20`, but the firewall only takes CIDR bl
 
 It's checked once when is-alive opens, and the answer is in the status bar as **Domain …** (see [The status bar](#the-status-bar-bottom)). Click it to open this tab.
 
+The tab has two halves, picked at its top: **This computer** (the rest of this chapter up to *Other computers*) and **Other computers**, which asks computers you name whether they're in an Active Directory domain.
+
 ### Controls
 
 | Control | What it does |
@@ -1251,6 +1253,40 @@ The fields that matter most when a join is broken: **DeviceAuthStatus** (*SUCCES
 2. It reads *Hybrid joined: Active Directory and Entra ID*, **AD domain** `corp.example.com`, **Entra tenant** *Example Ltd*.
 3. **AzureAdPrt** reads NO, and the user is asked to sign in to Outlook again and again. That's the missing Primary Refresh Token: sign out of Windows and back in while the computer can reach a domain controller, then **▶ Check** again.
 
+### Other computers
+
+**What it's for:** finding out, from your own laptop and without an account, whether a PC or server is joined to the client's Active Directory domain, and what it calls itself.
+
+| Control | What it does |
+|---|---|
+| **Computers** | One computer or several, by name or address, separated by commas or spaces: `pc-01, 10.0.0.7`. 32 at most. A range or a subnet (`10.0.0.0/24`, `10.0.0.1-20`) is refused: this asks the computers you name, never a network |
+| **▶ Start** / **■ Stop** | Ask them, eight at a time (or press Enter); stop a run |
+| **Copy** / **Save…** | The answers, a line each |
+
+**How it asks.** It starts a sign-in on SMB (port 445) and stops at the server's first reply. That reply, an NTLM challenge, names the computer and its domain before any user name or password is asked for, and is-alive sends neither: no account is tried, so nothing can be locked out. If 445 is shut it does the same on RDP (3389), which works when the computer takes Network Level Authentication (the default on Windows).
+
+| Column | What it shows |
+|---|---|
+| **Asked** | What you typed |
+| **Computer** | Its own short (NetBIOS) name |
+| **Domain** | Its domain's short name; its own name again when it's in none |
+| **DNS domain** | Its domain's DNS name (`corp.example.com`) |
+| **Verdict** | See below; hover it for why, and for what each port said |
+| **Port** | 445 or 3389: the one that answered with names |
+
+| Verdict | Meaning |
+|---|---|
+| **AD: corp.example.com** (green) | Its reply names a domain that isn't itself, with a DNS name: a member of that domain, or one of its domain controllers |
+| **Not AD-joined (Entra not checked)** | It names no domain but itself. It may still be joined to Entra ID: that shows only to someone signed in, so is-alive never calls it a workgroup machine as a fact |
+| **Answers, but doesn't say** (amber) | A port answered, but not with names: SMB 1 only, NTLM turned off there, RDP without Network Level Authentication, or a name that didn't resolve. The hover says which |
+| **No answer on 445 or 3389** | Both shut or filtered: off, firewalled (Windows blocks both from other subnets by default), or not a Windows computer |
+
+**From the Map or a sweep.** Right-click a card, **Open in a tab › Domain join**, or **Domain join** among a Subnet Sweep row's actions, puts that address in the box and opens this view. It never starts by itself, and it is never part of a sweep or a Full scan.
+
+**In Results**, the run is **Domain join (others)** and reads like *2 of 5 in Active Directory*, with a row per computer.
+
+**Who sees it.** The computer asked logs a sign-in that was started and not finished (as anything browsing to it would cause), from your laptop's address. A domain's security monitoring may count several of those in a row; ask before running it across a client's servers.
+
 ---
 
 ## 16. Results
@@ -1283,6 +1319,7 @@ Every finished run from every tab is logged here (Full scan runs too).
 | DNS Lookup | the answer itself | an answer new or gone |
 | Domain Health | section and check | its status or text |
 | Domain join | the field's section and name | its value (`AzureAdPrt` YES → NO) |
+| Domain join (others) | the computer asked | its verdict, name or DNS domain |
 | Speed Test | phase | its speed, latency, jitter, loss or MOS, with how much it moved (*412 → 380 (−32)*) |
 | Ping | | replies, loss and Avg / Min / Max side by side, with the difference |
 

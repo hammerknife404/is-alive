@@ -147,6 +147,14 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   technician's laptop it's the technician's own, so say which it was before
   using it. A join that's broken (`DeviceAuthStatus` not SUCCESS,
   `AzureAdPrt` NO on a joined PC) is a finding.
+  A `Domain join (others)` run is different: each row is another computer
+  on the network, asked without credentials (`host` as typed, `computer`,
+  `domain`, `dns_domain`, `dns_name`, `verdict`, `port`, `detail`). A
+  verdict starting `AD:` is observed fact: put that domain in the node's
+  `details`, and use `computer` as its name when the map has none. `Not
+  AD-joined (Entra not checked)` means only that: never write that a
+  device is a workgroup machine or has no directory from it. `No answer`
+  and `Answers, but doesn't say` are not findings.
 - **Several of a kind** (one visit, more than one controller or firewall):
   the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
   `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`

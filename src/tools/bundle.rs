@@ -98,7 +98,9 @@ with where it came from: mac_from, name_from), TTL and open management ports (nu
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
-and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network.";
+and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network. \
+A Domain join (others) run is about other computers: one row each, saying whether it named an Active \
+Directory domain when asked without credentials (an Entra ID join doesn't show that way).";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
