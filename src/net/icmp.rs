@@ -699,6 +699,18 @@ mod tests {
     }
 
     #[test]
+    fn hostile_ping_output_never_panics() {
+        let dest = "192.0.2.1".parse().unwrap();
+        let out = "PING 192.0.2.1 (192.0.2.1) 56(84) bytes of data.\n\
+                   64 bytes from 192.0.2.1: icmp_seq=1 ttl=64 time=0.42 ms\n\
+                   From 10.0.0.1 icmp_seq=1 Time to live exceeded\n\
+                   36 bytes from 10.0.0.1: Time to live exceeded\n";
+        crate::hostile::each_text(out, |t| {
+            let _ = super::cmd::parse(t, dest, 1.0);
+        });
+    }
+
+    #[test]
     fn ping_output_errors() {
         use super::EchoStatus;
         let dest = "192.0.2.1".parse().unwrap();

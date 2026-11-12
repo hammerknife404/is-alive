@@ -455,6 +455,14 @@ mod tests {
 ";
 
     #[test]
+    fn hostile_output_never_panics() {
+        crate::hostile::each_text(HYBRID, |t| {
+            let _ = parse_dsregcmd(t).short();
+            let _ = parse_realm(t).short();
+        });
+    }
+
+    #[test]
     fn dsregcmd_hybrid_names_the_domain_and_tenant() {
         let j = parse_dsregcmd(HYBRID);
         assert_eq!(j.kind, Kind::Hybrid);

@@ -1065,6 +1065,14 @@ mod tests {
     }
 
     #[test]
+    fn hostile_saved_maps_never_panic() {
+        crate::hostile::each(to_json(&sample()).as_bytes(), |d| {
+            let _ = sniff(d);
+            let _ = parse(d);
+        });
+    }
+
+    #[test]
     fn a_saved_map_reads_back_as_it_was_written() {
         let s = sample();
         let text = to_json(&s);

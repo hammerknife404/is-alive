@@ -765,6 +765,14 @@ mod tests {
     }"#;
 
     #[test]
+    fn hostile_exports_never_panic() {
+        crate::hostile::each(EXPORT.as_bytes(), |d| {
+            let _ = sniff(d);
+            let _ = convert(d);
+        });
+    }
+
+    #[test]
     fn reads_an_export_without_secrets() {
         assert!(sniff(EXPORT.as_bytes()));
         let bom = [b"\xEF\xBB\xBF".as_slice(), EXPORT.as_bytes()].concat();

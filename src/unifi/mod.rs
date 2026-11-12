@@ -301,7 +301,11 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
                 let mut v = Value::Object(std::mem::take(&mut doc));
                 redact(&mut v, c, &mut redacted, &mut secrets);
                 out.push(v.to_string());
-                kept.last_mut().expect("marker precedes rows").1 += 1;
+                // A document before any collection marker (a damaged or
+                // hand-made dump) is still kept; it just isn't counted.
+                if let Some(k) = kept.last_mut() {
+                    k.1 += 1;
+                }
                 continue;
             }
         }

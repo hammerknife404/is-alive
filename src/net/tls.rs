@@ -669,6 +669,18 @@ mod tests {
     }
 
     #[test]
+    fn hostile_certificates_never_panic() {
+        let p = pki(
+            &["test.example", "127.0.0.1", "::1"],
+            (2025, 1, 1),
+            (2030, 6, 1),
+        );
+        crate::hostile::each(&p.leaf, |der| {
+            let _ = parse(der);
+        });
+    }
+
+    #[test]
     fn rubbish_is_not_a_certificate() {
         assert!(parse(b"").is_none());
         assert!(parse(&[0x30, 0x03, 0x02, 0x01, 0x00]).is_none());

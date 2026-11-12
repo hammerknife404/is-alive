@@ -312,6 +312,23 @@ mod tests {
     }
 
     #[test]
+    fn hostile_answers_never_panic() {
+        let mut r = dns_query(7, "myip.opendns.com");
+        r[2] = 0x81;
+        r[7] = 1;
+        r.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4, 203, 0, 113, 5]);
+        crate::hostile::each(&r, |r| {
+            let _ = parse_a_answer(r, 7);
+        });
+        crate::hostile::each_text(
+            "Iface\tDestination\tGateway\neth0\t00000000\t0102A8C0\t0003\n",
+            |t| {
+                let _ = parse_proc_route(t);
+            },
+        );
+    }
+
+    #[test]
     fn parses_a_answer() {
         let mut r = dns_query(7, "myip.opendns.com");
         r[2] = 0x81; // response

@@ -240,6 +240,13 @@ mod tests {
     }
 
     #[test]
+    fn hostile_answers_never_panic() {
+        crate::hostile::each(&nbstat_answer(7, PC, MAC), |r| {
+            let _ = parse_nbstat(r, 7);
+        });
+    }
+
+    #[test]
     fn a_windows_answer_gives_name_workgroup_and_mac() {
         let r = nbstat_answer(7, PC, MAC);
         assert_eq!(
