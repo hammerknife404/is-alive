@@ -309,12 +309,44 @@ impl App {
                  company registered since then shows no vendor",
             );
         if let Some(dir) = theme::data_dir() {
-            ui.weak("Settings and autosaved notes are kept in");
+            if theme::is_portable() {
+                ui.weak("Portable: everything is kept beside the program, in")
+                    .on_hover_text(
+                        "A folder named is-alive-data sits beside the program, so settings, \
+                         sites, notes, maps and runs go there and nothing goes in this \
+                         computer's profile. Remove the folder to go back to the profile",
+                    );
+            } else {
+                ui.weak("Settings, sites, notes, maps and runs are kept in")
+                    .on_hover_text(format!(
+                        "To carry them with the program (a USB stick), make a folder named \
+                         {} beside it before starting: everything then goes there instead",
+                        theme::PORTABLE
+                    ));
+            }
             ui.label(
                 egui::RichText::new(dir.display().to_string())
                     .monospace()
                     .small(),
             );
+            if ui
+                .add(framed(
+                    ui,
+                    egui::Button::new(
+                        egui::RichText::new("Remove everything is-alive saved…")
+                            .color(widgets::bad()),
+                    ),
+                ))
+                .on_hover_text(
+                    "For a client's computer you're done with: lists what's in that folder, \
+                     and on your say-so removes it all and closes is-alive. Files you saved \
+                     elsewhere with Save… stay",
+                )
+                .clicked()
+            {
+                self.remove_ask = Some(theme::kept_in(&dir));
+                ui.close();
+            }
         }
     }
 }
