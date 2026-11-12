@@ -2,6 +2,7 @@ Every release, newest first. Each GitHub release has the Windows `.exe`, the Lin
 
 | Release | Date | Highlights |
 |---|---|---|
+| [v0.28.24](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.24) | 2026-11-12 | the manual's status-bar section no longer prints a version number that could go stale: it points at the one in the corner. Behind the scenes, tests now keep the manual's version and the follow-along guide's version and list of tabs in step with the app |
 | [v0.28.23](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.23) | 2026-11-12 | the manual and the follow-along guide catch up: **More ▾** and **All runs ▾** where they said ⋯, **Domain join** in the list of tabs, the right version, and the guide's *window doesn't open* link goes to the manual's troubleshooting |
 | [v0.28.22](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.22) | 2026-11-11 | **Domain join**: a new tab says how this computer is joined (Active Directory, Entra ID, hybrid or a workgroup) and to which domain, from `dsregcmd /status` on Windows or `realm list` on Linux; the domain is in the status bar too, a click away from the tab; logged to Results by **Check** and a Full scan |
 | [v0.28.21](https://github.com/hammerknife404/is-alive/releases/tag/v0.28.21) | 2026-11-11 | Results: **Clear all** no longer stops is-alive with *out of bounds access* (the saved runs came back on the next start, so nothing seemed cleared), and **All runs ▾** stays open after the first click so the second can confirm; **Remove** takes a single run out |

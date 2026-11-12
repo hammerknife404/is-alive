@@ -574,6 +574,8 @@ mod tests {
     use super::*;
     use crate::TABS;
 
+    const GUIDE: &str = include_str!("../FOLLOW-ALONG.md");
+
     #[test]
     fn chapters_are_the_manuals_numbered_ones() {
         let c = chapters();
@@ -599,6 +601,40 @@ mod tests {
         for name in ["Troubleshooting", "Keyboard and mouse"] {
             assert_eq!(chapters()[chapter_named(name)].name(), name);
         }
+    }
+
+    /// The guide people follow at a demo names every tab, as the app
+    /// labels it: a new tab that isn't in its list fails here.
+    #[test]
+    fn the_follow_along_guide_names_every_tab() {
+        let list = GUIDE
+            .lines()
+            .find(|l| l.starts_with("You'll see the tools down the left side"))
+            .expect("the guide's list of tabs");
+        for (_, name, _) in TABS {
+            assert!(list.contains(&format!("**{name}**")), "{name}");
+        }
+    }
+
+    /// The version is written out in two places, and a release moves
+    /// both: the manual's first line and the guide's "check the version"
+    /// step. Nowhere else in the manual, so nothing else goes stale.
+    #[test]
+    fn the_manual_and_the_guide_name_this_version() {
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(
+            TEXT.contains(&format!("**is-alive {version}**")),
+            "docs/manual/MANUAL.md: the first line says another version"
+        );
+        assert_eq!(
+            TEXT.matches(version).count(),
+            1,
+            "docs/manual/MANUAL.md names {version} somewhere besides its first line"
+        );
+        assert!(
+            GUIDE.contains(&format!("says `v{version}` (or newer)")),
+            "FOLLOW-ALONG.md: step 4 says another version"
+        );
     }
 
     /// Text only: no screenshots to fall out of date (CLAUDE.md).
