@@ -117,6 +117,9 @@ pub struct Sources<'a> {
 /// Far enough out for Fit to show a wide Tree of a big map whole: its
 /// cards are colour tiles by then.
 const MIN_ZOOM: f32 = 0.07;
+/// The least zoom a card's name reads whole at ("Edge firewall", not
+/// "Edge fir…"): a map that fits only below it opens at it instead.
+const READ_ZOOM: f32 = 0.6;
 const MAX_ZOOM: f32 = 2.5;
 /// Seconds without input after which the flowing packets hold still.
 const FLOW_IDLE_SECS: f64 = 30.0;
@@ -171,8 +174,12 @@ pub struct MapView {
     zoom: f32,
     /// (pan, zoom) the view is easing to.
     aim: Option<(Vec2, f32)>,
-    /// Keep the whole map in view as it grows, until the user pans or zooms.
+    /// Keep the map in view as it grows, until the user pans or zooms.
     follow: bool,
+    /// Fit was asked for: `follow` keeps the whole map in view however
+    /// small that draws it. Without it, a map too big to read whole opens
+    /// at `READ_ZOOM` on its gateway.
+    whole: bool,
     /// What a fit asked for left of the canvas, at its left and right: the
     /// panels open then (Layers, the inspector). Keeping the map in view as
     /// it grows frames the canvas less these, so a panel opened or shut
@@ -276,6 +283,8 @@ pub struct MapView {
     pick_ip: Option<std::net::Ipv4Addr>,
     /// The canvas is narrow: Export is in More rather than beside Legend.
     export_in_menu: bool,
+    /// The toolbar has one row's room only without Scan: it's in More.
+    scan_in_menu: bool,
     /// A floating inspector leaves too little room: Layers and Legend are
     /// in More as well.
     controls_in_menu: bool,
@@ -668,6 +677,7 @@ impl MapView {
     /// pinned cards selected.
     fn new_map(&mut self) {
         self.follow = true;
+        self.whole = false;
         self.fit_insets = self.open_insets();
         self.aim = None;
         self.placed.clear();
@@ -1143,7 +1153,34 @@ impl MapView {
     /// fit asked for left of it (`fit_insets`).
     fn fit(&mut self, view: Rect) {
         let frame = self.frame(view);
-        self.fit_to(view, frame, self.bounds());
+        let b = self.bounds();
+        self.fit_to(view, frame, b);
+        // Whole, a big site's cards are too narrow for their names
+        // ("Edge fir…"). Until Fit asks for the whole of it, it opens
+        // close enough to read, the gateway top and centre: where
+        // reading a network starts.
+        if let Some((_, zoom)) = self.aim
+            && !self.whole
+            && zoom < READ_ZOOM
+        {
+            let head = self.head().unwrap_or(pos2(b.center().x, b.top()));
+            let room = fit_room(frame, self.legend_size, &|_| READ_ZOOM);
+            let at = room.center_top();
+            self.aim = Some((at - view.min - vec2(head.x, b.top()) * READ_ZOOM, READ_ZOOM));
+        }
+    }
+
+    /// The top middle of the card a map is read from: its gateway, or
+    /// the Internet card over one.
+    fn head(&self) -> Option<Pos2> {
+        let of = |zone: Zone| {
+            (0..self.map.nodes.len())
+                .filter(|&i| self.map.nodes[i].zone == zone)
+                .find_map(|i| Some(layout::card_rect(&self.map.nodes[i], self.target(i)?)))
+        };
+        of(Zone::Gateway)
+            .or_else(|| of(Zone::Internet))
+            .map(|r| r.center_top())
     }
 
     /// Fit asked for (the Fit button, F, a double-click on the background):
@@ -1152,6 +1189,7 @@ impl MapView {
     fn fit_view(&mut self, view: Rect) {
         self.fit_insets = self.open_insets();
         self.follow = true;
+        self.whole = true;
         self.fit(view);
     }
 
@@ -1602,7 +1640,7 @@ fn below_in(kids: &[Vec<usize>], i: usize) -> Vec<usize> {
 /// map be drawn bigger (`zoom` says how big in a room).
 fn fit_room(view: Rect, legend: Vec2, zoom: &dyn Fn(Rect) -> f32) -> Rect {
     // The toolbar floats over the top of the canvas: the map starts below it.
-    let room = Rect::from_min_max(view.min + vec2(30.0, 60.0), view.max - vec2(30.0, 44.0));
+    let room = Rect::from_min_max(view.min + vec2(30.0, 60.0), view.max - vec2(30.0, 50.0));
     if legend == Vec2::ZERO {
         return room;
     }
@@ -2046,6 +2084,41 @@ mod tests {
         assert_eq!(v.hit(pos2(5.0, 5.0)), None);
     }
 
+    /// A site too big to read whole (30 cards in a row fit a laptop's
+    /// canvas at about a seventh of their size) opens at the zoom names
+    /// read at, its gateway top and centre; Fit then shows all of it. A
+    /// small map opens whole, as before.
+    #[test]
+    fn a_big_map_opens_readable_on_its_gateway_and_fit_shows_it_whole() {
+        let canvas = Rect::from_min_size(pos2(216.0, 34.0), vec2(1064.0, 658.0));
+        let mut v = view(30);
+        v.map.nodes[7].zone = Zone::Gateway;
+        v.lay.pos = (0..30).map(|i| Some(pos2(i as f32 * 220.0, 0.0))).collect();
+        v.fit(canvas);
+        let (pan, zoom) = v.aim.expect("eases there");
+        assert_eq!(zoom, READ_ZOOM);
+        (v.pan, v.zoom) = (pan, zoom);
+        let gw = layout::card_rect(&v.map.nodes[7], pos2(7.0 * 220.0, 0.0));
+        let at = v.to_screen(canvas, gw.center_top());
+        assert!((at.x - canvas.center().x).abs() < 0.5, "{at:?}");
+        assert!(
+            at.y > canvas.top() + 40.0 && at.y < canvas.top() + 90.0,
+            "{at:?}"
+        );
+        // Fit: the whole of it, however small.
+        v.fit_view(canvas);
+        let (_, zoom) = v.aim.unwrap();
+        assert!(zoom < 0.2, "{zoom}");
+        // And a new map starts over.
+        v.new_map();
+        assert!(!v.whole);
+
+        let mut small = view(3);
+        small.lay.pos = (0..3).map(|i| Some(pos2(i as f32 * 220.0, 0.0))).collect();
+        small.fit(canvas);
+        assert!(small.aim.unwrap().1 > READ_ZOOM);
+    }
+
     #[test]
     fn fit_leaves_room_for_the_zoom_controls() {
         let mut v = view(1);
@@ -2058,7 +2131,7 @@ mod tests {
         let (pan, zoom) = v.aim.unwrap();
         (v.pan, v.zoom) = (pan, zoom);
         let bottom = v.to_screen(view, pos2(0.0, 2000.0)).y;
-        assert!(bottom <= view.max.y - 44.0 + 0.01, "{bottom}");
+        assert!(bottom <= view.max.y - 50.0 + 0.01, "{bottom}");
     }
 
     #[test]

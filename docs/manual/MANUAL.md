@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.28.24**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.29.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -131,7 +131,7 @@ The first time it opens, is-alive takes 1120 × 720, or the whole screen on a sm
 
 - **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc**, **Domain join** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
 - **Open or folded.** The nav is open, with each tab's icon and name, in any window 1100 points wide or more, on every tab. In a narrower window it folds to a rail of icons. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
-- **Each tool's icon has its own colour**, taken from the theme's Map colours, so neighbouring tabs never share one and a tool is quick to spot in the rail. Settings, Help and Fold are in the text's colour.
+- **Each tool's icon has a colour of its own**, in every theme: thirteen tools, thirteen colours, as light and as strong as that theme's Map colours, so a tool is quick to spot in the rail and is the same colour wherever you learnt it. Settings, Help and Fold are in the text's colour.
 - **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#17-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
@@ -310,7 +310,7 @@ How to read it:
 |---|---|
 | **Host** | The device's name or address |
 | **Ports** | A list and/or ranges: `22,80,443,8000-8100` |
-| **Presets ⏷** | Ready-made lists (below); hover one to see its ports |
+| **Presets ▾** | Ready-made lists (below); hover one to see its ports |
 | **Timeout** | How long to wait for each port (default 1500 ms) |
 | **Speed** | How fast to probe: **Gentle**, **Normal** (default), **Fast**, **Unthrottled**. The two numbers beside it are the rate (probes per second, 0 = no limit) and how many run at once; change them by hand for *Custom* |
 | **Show closed/filtered** | List every port, not just the open ones |
@@ -780,9 +780,9 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **↩ / ↪** | Undo or redo your last change to the map; the tooltip says what (*Undo: move 3 cards*) |
 | **⚠ 2 high · 4 med** | The map's findings, worst first: click to open them in **Layers** (below). Only there when the map has findings |
 | **More ▾** | Everything used less often (below) |
-| **Layers** (top right) | The panel of sites, roles and findings (below) |
+| **Layers** (top right) | The panel of sites, roles and findings (below). Beside an open inspector on a laptop-sized window, **Layers** and **Legend** are in **More** instead, so the toolbar stays on one row; on the smallest windows **Scan** joins them there |
 | **Legend** (top right) | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Off until you turn it on; your choice is remembered |
-| **Export ⏷** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **More** instead |
+| **Export ▾** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **More** instead |
 
 **More ▾** holds:
 
@@ -798,7 +798,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **Copy findings** | The findings as text, worst first, for a ticket |
 | **Clear map…** | On the live map: asks, then closes the configs opened in Config Export and forgets the sweep's results, and the live map starts over. Saved maps, the files on disk, your layout, **Clients** choice and card notes are kept, and Notes keeps hiding the configs' secrets. Greyed out while there's nothing to clear |
 
-On a saved map, a **Saved: *name* ⏷** chip starts the toolbar: its menu has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first.
+On a saved map, a **Saved: *name* ▾** chip starts the toolbar: its menu has **Close map** (back to Live; the saved copy stays) and **Delete saved map…**, which asks first.
 
 Under the toolbar the map says what it needs to: that it's a plan or a training map, the accuracy note (below), how far a running sweep has got, and the file Config Export is reading (*Reading backup.unf*).
 
@@ -815,6 +815,7 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 - **Drag the background** to pan; **scroll** or pinch to zoom; **Save**, the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
+- **A big map opens close enough to read.** A site whose cards would be too narrow for their names if all of it were shown opens at 60%, its gateway at the top and centre, and you pan from there; **Fit** (or **F**, or a double-click on the background) shows the whole of it, however small. A map that fits at 60% or more opens whole.
 - **Panels keep the zoom.** Layers and a card's inspector lie over the map's edges (or, on a wide window, beside it) without zooming it out: the map stays as it was, and a selected card is moved clear of them. **Fit** (or **F**, or a double-click) frames the whole map in the room the open panels leave, and keeps it there as the map grows; with every panel shut, it fills the window again.
 - **Right-click the background** for **Fit**, **Center**, **Clear selection**, **Re-layout**, **Links** (below), **Legend** and **Export** (the same formats).
 - **Drag a card** to move it (dragging one of several selected cards moves them all). Its links follow, and never through another card: nudged a little out of its column, a card stays on the column's line; moved further, its link goes round the cards in the way. Dropped onto other cards' links, it moves them round it the same way.
@@ -839,7 +840,7 @@ In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, 
 | **Common links only** | The backbone: links that more than one device's traffic runs over, from the internet to firewalls, switches and access points. A link to an end device (a server, a printer, a laptop) is left out; an access point whose clients aren't drawn but counted on it still counts |
 | **Confirmed links only** | The links the data shows (a controller, a firewall, a /mapnetwork map); the grey dotted ones a sweep placed by guess are left out |
 
-A selected card's lit path always shows, whatever the view. While a view other than **All links** is on, a pill in the map's top right corner, under **Legend**, says which; click it to show all links again. The legend lists only the lines drawn, and **Export ⏷** draws what the map shows. The view is an undo step and is kept in saved maps.
+A selected card's lit path always shows, whatever the view. While a view other than **All links** is on, a pill in the map's top right corner, under **Legend**, says which; click it to show all links again. The legend lists only the lines drawn, and **Export ▾** draws what the map shows. The view is an undo step and is kept in saved maps.
 
 ### The legend
 
@@ -850,7 +851,7 @@ The **Legend** panel in the bottom left corner says what everything on the map m
 - **Links:** the internet uplink, wired (solid, in the colour of the card it leads to), wireless (dashed), assumed (grey dots: placed by a sweep, not shown by the data), links folded into one line into a box (**×N**), and how a selected card's path lights up.
 - **Boxes:** site boxes (Sites) or role boxes (Zones).
 
-Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** at the top right, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ⏷** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
+Each swatch is drawn exactly as the map draws it. Hover an entry for a word on it. **×** hides the legend; **Legend** at the top right, **L** (when no text box has the keyboard) or **Legend** in the background's right-click menu brings it back. **Fit** keeps the map clear of it, above it or beside it, and on a small window it wraps into columns or scrolls. **Export ▾** puts the same legend under the map in an **SVG** or **PNG** image while it's shown.
 
 ### Undo and saved maps
 
@@ -866,7 +867,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
   | A saved map with changes (**•**) | Writes the changes into it |
   | A saved map with no changes | Greyed out: nothing to save |
 
-- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **⏷** hides it and **More › Saved maps** shows it again.
+- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **▾** hides it and **More › Saved maps** shows it again.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (here, in **More** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
 - **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
@@ -1101,7 +1102,7 @@ Select `Sunny-Harbor-2026` and press **Ctrl+R**: the line becomes `Guest Wi-Fi p
 | Control | What it does |
 |---|---|
 | **Server** | **Download a file** (default): Cloudflare's 25 MB test file, or any large file's direct link. **speed.cloudflare.com**: Cloudflare's full test, download and upload, and it names the data centre and ISP. **Upload to a URL**: posts data to a server that accepts and discards it, such as your own or a LibreSpeed server's `…/backend/empty.php` |
-| **Servers ⏷** | Next to the URL for **Download a file** and **Upload to a URL**: free public test servers by region (US East, Central, West, Canada, Europe) from Cloudflare, Hetzner, Vultr, OVH, ThinkBroadband and LibreSpeed hosts. Picking one fills in the URL; the one in use is highlighted, and hovering **Servers** names it |
+| **Servers ▾** | Next to the URL for **Download a file** and **Upload to a URL**: free public test servers by region (US East, Central, West, Canada, Europe) from Cloudflare, Hetzner, Vultr, OVH, ThinkBroadband and LibreSpeed hosts. Picking one fills in the URL; the one in use is highlighted, and hovering **Servers** names it |
 | **Duration** | Seconds per direction (5–60, default 10) |
 | **Streams** | Parallel connections (1–16, default 4; 4 suits most lines) |
 | **Download / Upload** | Which directions to test (a file can only be downloaded; an upload URL only uploaded) |
@@ -1264,7 +1265,7 @@ Every finished run from every tab is logged here (Full scan runs too).
 | **Run again** | The same tool on the same target, with its tab's settings as they are now (a ping sends 4); the new run opens here as it goes. Not for Lookup, whose record type and resolver a rerun wouldn't repeat |
 | **On map** | Select its target on the Map, when the target is an address |
 | **Copy / Save…** | This run as text |
-| **Export ⏷** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
+| **Export ▾** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
 | **Compare ▾** | The other runs of the same tool, those of the same target first; pick one to see what changed between them (below) |
 | **Remove** | Take this run out of Results (click twice; it reads **Remove: sure?** after the first). With **Keep with site** on, it goes from the saved copy too. The next newest run opens in its place |
 | **Output / Table / Compare** | The output as the tool printed it, the run's data as a table (the columns its CSV has), or the comparison |
@@ -1290,7 +1291,7 @@ At the top of the list:
 |---|---|
 | **Filter** | Show only runs whose tool name or output contains this text (`FAIL`, `443`, `timeout`, a hostname). × clears it |
 | **All runs ▾ › Copy all / Save all…** | Every run listed, as text |
-| **All runs ▾ › Export ⏷** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
+| **All runs ▾ › Export ▾** | Every run listed, as **CSV**, **JSON**, **Markdown** or **HTML** |
 | **All runs ▾ › Keep with site** | Save Results in the open site's folder (on by default), so they're there the next time the site opens. Off: in memory only, gone when is-alive closes, and the site's saved runs are taken off disk (they stay on screen until you close). In Scratch it reads **Keep for a day**: the same setting, keeping Scratch's runs for 24 hours |
 | **All runs ▾ › Clear all** | Empty the log (click twice: the menu stays open and the button reads **Clear all: sure?** for three seconds); with **Keep with site** on, the saved copy too. Runs still going stay under **Running** and are logged when they finish |
 
@@ -1304,50 +1305,22 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 1. After a Full scan and a few tests, open **Results**.
 2. Type `FAIL` in **Filter** to see only runs that found a failure, or a hostname to see everything about one device.
-3. **All runs ▾ › Export ⏷ → HTML**, save, and attach it to the ticket.
+3. **All runs ▾ › Export ▾ → HTML**, save, and attach it to the ticket.
 
 ---
 
 ## 17. Settings and themes
 
-Click **Settings** at the foot of the nav to open it. Changes apply at once and are remembered. In a small window, scroll it for the rest.
+Click **Settings** at the foot of the nav to open it. Changes apply at once and are remembered. In a small window, scroll it for the rest. What the app does comes first (**Files**, **Network**, **Notes**, **Map**), then how it looks (**Theme**, **Emoji**, **Animate**).
 
-### Theme
+### Files
 
-| Theme | Look |
+Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site report](#site-report) and the Site Bundle open the system's Save dialog; you can always pick another folder there.
+
+| Setting | What it does |
 |---|---|
-| **Dark** (default) | Standard dark |
-| **Slate** | Soft blue-grey, easy on the eyes |
-| **Phosphor** | Green-screen terminal |
-| **Blueprint** | White lines on drafting blue |
-| **High contrast** | Black and white, bright colours |
-| **RGB** | Neon on black, with a rainbow line under the tabs |
-| **Scanner** | Gloss black, red and amber like a car's dashboard at night, with a red light sweeping across and back along the line under the tabs (still in the middle with **Animate** off) |
-| **Miami** | Midnight purple, hot pink and teal, over a 16-bit sunset |
-| **Light** | For bright rooms and screenshots in tickets |
-| **Paper** | Warm light, like a printed site map |
-
-The dots beside each name are that theme's Map colours for each role.
-
-**Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
-
-**Animate** (in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, a card's amber **!** pulses three times when the Map shows it, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front.
-
-| Animate | Moves |
-|---|---|
-| **On** | Always, on battery too |
-| **When plugged in** (the default) | While the laptop is on its charger. On battery everything holds still, so it lasts longer on site. It checks every half minute; a desktop always counts as plugged in. *On battery now* shows under the choices when that's why nothing moves |
-| **Off** | Never: the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. For when motion bothers you |
-
-### Miami backdrop
-
-With the Miami theme, the panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
-
-- While **Animate** (above) lets things move, the scene moves at 10 frames a second, paused when the window isn't in front.
-- **Glow** adds a soft glow to the bright parts.
-- **VHS** plays the scene like a worn video tape (needs a graphics card).
-
-What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#21-troubleshooting)), not in Settings.
+| **Save to** | The folder that dialog starts in. Until one is chosen, the first **Save…** of a session asks for it (*Choose the folder is-alive saves to*) before its Save dialog, and keeps it; cancel, and that save goes ahead where the system says and the next session asks again. **Choose folder…** picks it here; **Reset** forgets it, so the next Save… asks again. A folder that isn't there (an unplugged drive) is shown in amber, and saves start where the system says until it's back |
+| **A folder for each site** | Inside it, a folder named after the open site, made on the first save, so each client's files stay together. Scratch saves straight into the folder |
 
 ### Network
 
@@ -1362,14 +1335,44 @@ What draws the backdrop (graphics card or processor, and why) goes in `startup.l
 
 - **Show the accuracy note**: brings back the note under the Map's toolbar if you closed it.
 
-### Files
+### Theme
 
-Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site report](#site-report) and the Site Bundle open the system's Save dialog; you can always pick another folder there.
+The themes to work in come first; the four showpieces are folded under **More themes** (open while one of them is picked).
 
-| Setting | What it does |
+| Theme | Look |
 |---|---|
-| **Save to** | The folder that dialog starts in. Until one is chosen, the first **Save…** of a session asks for it (*Choose the folder is-alive saves to*) before its Save dialog, and keeps it; cancel, and that save goes ahead where the system says and the next session asks again. **Choose folder…** picks it here; **Reset** forgets it, so the next Save… asks again. A folder that isn't there (an unplugged drive) is shown in amber, and saves start where the system says until it's back |
-| **A folder for each site** | Inside it, a folder named after the open site, made on the first save, so each client's files stay together. Scratch saves straight into the folder |
+| **Dark** (default) | Graphite and blue: the one the app is designed in |
+| **Slate** | Soft blue-grey, easy on the eyes |
+| **Blueprint** | White lines on drafting blue |
+| **Light** | For bright rooms and screenshots in tickets |
+| **Paper** | Warm light, like a printed site map |
+| **High contrast** | Black and white, bright colours |
+| *More themes:* **Phosphor** | Green-screen terminal |
+| **RGB** | Neon on black, with a rainbow line under the tabs |
+| **Scanner** | Gloss black, red and amber like a car's dashboard at night, with a red light sweeping across and back along the line under the tabs (still in the middle with **Animate** off) |
+| **Miami** | Midnight purple, hot pink and teal, over a 16-bit sunset |
+
+The dots beside each name are that theme's Map colours for each role. Every theme has the same controls: buttons, fields and choices are the same shape and at least 28 points tall in each, the one main action of a screen (**Start**, **Full scan**) is filled with the theme's accent, and a choice of views (**ICMP / TCP**, **Edit / Split / Preview**) is one tray with the picked one filled.
+
+**Emoji** sets how emoji are drawn across the app: **Match theme**, **Monochrome**, **Colour** or **Miami neon**. Emoji added in Notes in a style of their own keep it (see [Notes](#12-notes)).
+
+**Animate** (in every theme) lets things move: the Map tab pulses after a Full scan, dots flow along the Map's lit links, a card's amber **!** pulses three times when the Map shows it, and in Miami the backdrop and the line under the title bar drift (the RGB line too). Everything pauses while the window isn't in front.
+
+| Animate | Moves |
+|---|---|
+| **On** | Always, on battery too |
+| **When plugged in** (the default) | While the laptop is on its charger. On battery everything holds still, so it lasts longer on site. It checks every half minute; a desktop always counts as plugged in. *On battery now* shows under the choices when that's why nothing moves |
+| **Off** | Never: the Map tab lights up still instead, a lit path keeps its colours with no dots, and the rest holds still. For when motion bothers you |
+
+### Miami backdrop
+
+Shown only while Miami is the theme picked. Its panels sit over a backdrop: **16-bit sunset scene** (drawn by the app), **Your image…** (a picture of your own with a slow pan; only its location is saved, the picture never leaves the computer), or **None**.
+
+- While **Animate** (above) lets things move, the scene moves at 10 frames a second, paused when the window isn't in front.
+- **Glow** adds a soft glow to the bright parts.
+- **VHS** plays the scene like a worn video tape (needs a graphics card).
+
+What draws the backdrop (graphics card or processor, and why) goes in `startup.log` (see [Troubleshooting](#21-troubleshooting)), not in Settings.
 
 ### Where settings and notes are kept
 

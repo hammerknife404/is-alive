@@ -710,7 +710,7 @@ impl MapTabs {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .small_button("⏷")
+                    .button("▾")
                     .on_hover_text("Hide this bar (More › Saved maps opens it again)")
                     .clicked()
                 {
@@ -1205,7 +1205,9 @@ fn tab_menu(
 const TOGGLE_W: f32 = 56.0;
 /// The zoom controls' room from the canvas's right edge, and the gap
 /// before Save (see zoom_controls).
-const ZOOM_W: f32 = 10.0 + 208.0 + 12.0;
+const ZOOM_W: f32 = 10.0 + 232.0 + 12.0;
+/// How tall Save and the zoom controls are.
+const CORNER_H: f32 = crate::theme::TARGET_H;
 
 /// Where Save goes: left of the zoom controls, or above them on a canvas
 /// too narrow for both in a row. None with no room at all (Ctrl+S still
@@ -1214,13 +1216,16 @@ fn toggle_rect(rect: Rect) -> Option<Rect> {
     let right = rect.max.x - ZOOM_W;
     if right - TOGGLE_W >= rect.min.x + 8.0 {
         return Some(Rect::from_min_max(
-            pos2(right - TOGGLE_W, rect.max.y - 32.0),
+            pos2(right - TOGGLE_W, rect.max.y - 10.0 - CORNER_H),
             pos2(right, rect.max.y - 10.0),
         ));
     }
     let r = Rect::from_min_max(
-        pos2(rect.max.x - 10.0 - TOGGLE_W, rect.max.y - 60.0),
-        pos2(rect.max.x - 10.0, rect.max.y - 38.0),
+        pos2(
+            rect.max.x - 10.0 - TOGGLE_W,
+            rect.max.y - 16.0 - 2.0 * CORNER_H,
+        ),
+        pos2(rect.max.x - 10.0, rect.max.y - 16.0 - CORNER_H),
     );
     (r.min.x >= rect.min.x + 8.0 && r.min.y >= rect.min.y + 40.0).then_some(r)
 }
@@ -1238,7 +1243,7 @@ pub fn corner_left(rect: Rect) -> f32 {
 /// top: the zoom controls, or Save when it sits above them. A legend
 /// laid out above them stops short of it.
 pub fn corner_top(rect: Rect) -> f32 {
-    let zoom = rect.max.y - 32.0;
+    let zoom = rect.max.y - 10.0 - CORNER_H;
     match toggle_rect(rect) {
         Some(r) if r.max.y <= rect.max.y - 30.0 => r.min.y.min(zoom),
         _ => zoom,
@@ -1261,7 +1266,7 @@ impl MapView {
             SaveState::Saved => (false, ""),
         };
         let button = egui::Button::new("Save")
-            .corner_radius(6)
+            .corner_radius(crate::theme::R_CONTROL)
             .min_size(r.size());
         if ui
             .put(r, |ui: &mut Ui| ui.add_enabled(on, button))
@@ -1579,11 +1584,11 @@ mod tests {
         // 250 px: above the zoom controls, inside the canvas.
         let narrow = Rect::from_min_size(pos2(240.0, 0.0), vec2(250.0, 500.0));
         let r = toggle_rect(narrow).unwrap();
-        assert!(r.min.x >= narrow.min.x && r.max.y < narrow.max.y - 32.0);
+        assert!(r.min.x >= narrow.min.x && r.max.y < narrow.max.y - 10.0 - CORNER_H);
         assert_eq!(corner_left(narrow), narrow.max.x - ZOOM_W + 12.0);
         // A legend above the corner's controls stays above Save too.
         assert!(corner_top(narrow) <= r.min.y);
-        assert_eq!(corner_top(wide), wide.max.y - 32.0);
+        assert_eq!(corner_top(wide), wide.max.y - 10.0 - CORNER_H);
         let tiny = Rect::from_min_size(pos2(240.0, 0.0), vec2(60.0, 500.0));
         assert!(toggle_rect(tiny).is_none());
     }

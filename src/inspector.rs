@@ -110,7 +110,7 @@ pub fn show_as(
                 .fixed_pos(at.min)
                 .show(ui.ctx(), |ui| {
                     egui::Frame::new()
-                        .fill(v.panel_fill)
+                        .fill(crate::theme::solid(v.panel_fill))
                         .stroke(v.widgets.noninteractive.bg_stroke)
                         .inner_margin(egui::Margin::same(10))
                         .shadow(egui::Shadow {
@@ -279,7 +279,7 @@ pub fn chips(ui: &mut Ui, items: &[String]) {
             egui::Frame::new()
                 .fill(fill)
                 .stroke(stroke)
-                .corner_radius(4)
+                .corner_radius(crate::theme::R_PILL)
                 .inner_margin(egui::Margin::symmetric(6, 1))
                 .show(ui, |ui| {
                     ui.label(RichText::new(c).monospace().small());

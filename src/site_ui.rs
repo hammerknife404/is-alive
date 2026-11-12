@@ -68,7 +68,7 @@ impl App {
                 egui::Button::new(job)
                     .fill(fill)
                     .stroke(egui::Stroke::new(1.0, stroke))
-                    .corner_radius(10),
+                    .corner_radius(crate::theme::R_CONTROL),
             )
             .on_hover_text(if scratch {
                 "No site open: Scratch. Click to open a site or make one, so this visit's notes, maps and configs stay together."

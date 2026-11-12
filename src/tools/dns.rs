@@ -113,8 +113,10 @@ impl DnsTool {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.registration, false, "DNS records");
-            ui.selectable_value(&mut self.registration, true, "WHOIS registration");
+            widgets::segmented(ui, |ui| {
+                ui.selectable_value(&mut self.registration, false, "DNS records");
+                ui.selectable_value(&mut self.registration, true, "WHOIS registration");
+            });
         });
         ui.separator();
         if self.registration {

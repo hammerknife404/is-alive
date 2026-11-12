@@ -1,4 +1,4 @@
-//! Look and feel: Dark (egui's stock look, the default), Light, Miami, and
+//! Look and feel: Dark (graphite and blue, the default), Light, Miami, and
 //! themes after /mapnetwork's (Slate, Phosphor, Blueprint, High contrast,
 //! RGB, Paper); status colours that stay readable on each, and the choice
 //! remembered between launches.
@@ -27,19 +27,23 @@ pub enum Theme {
 }
 
 impl Theme {
-    /// Menu order: the dark ones, then the light ones.
+    /// Settings order: the themes to work in, then the showpieces
+    /// (`SHOWPIECES` of them), which Settings folds under More themes.
     pub const ALL: [Theme; 10] = [
         Theme::Dark,
         Theme::Slate,
-        Theme::Phosphor,
         Theme::Blueprint,
+        Theme::Light,
+        Theme::Paper,
         Theme::Contrast,
+        Theme::Phosphor,
         Theme::Rgb,
         Theme::Scanner,
         Theme::Miami,
-        Theme::Light,
-        Theme::Paper,
     ];
+
+    /// How many of `ALL`, from its end, are showpieces.
+    pub const SHOWPIECES: usize = 4;
 
     pub fn name(self) -> &'static str {
         match self {
@@ -443,7 +447,6 @@ pub fn accent() -> Color32 {
 
 pub(crate) fn accent_for(t: Theme) -> Color32 {
     match t {
-        Theme::Dark => Visuals::dark().hyperlink_color,
         Theme::Light => Color32::from_rgb(28, 104, 176),
         Theme::Miami => PINK,
         t => tokens(t).map_or(PINK, |k| k.accent),
@@ -456,8 +459,6 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
         Ordering::Relaxed,
     );
     let (slot, visuals) = match theme {
-        // egui's own dark colours, as the app always looked.
-        Theme::Dark => (egui::Theme::Dark, Visuals::dark()),
         Theme::Light => (egui::Theme::Light, light()),
         Theme::Miami => (egui::Theme::Dark, miami()),
         t => {
@@ -484,7 +485,10 @@ pub fn apply(ctx: &egui::Context, theme: Theme) {
 /// each: rows and buttons don't change size with the colours.
 fn spacing(s: &mut egui::style::Spacing) {
     s.item_spacing = egui::vec2(8.0, 6.0);
-    s.button_padding = egui::vec2(5.0, 4.0);
+    s.button_padding = egui::vec2(8.0, 4.0);
+    // Every button, tick box, choice and field is at least this tall
+    // (CLAUDE.md: a trackpad on a tailgate).
+    s.interact_size.y = TARGET_H;
     s.window_margin = egui::Margin::same(12);
     s.menu_margin = egui::Margin::same(6);
 }
@@ -494,14 +498,58 @@ fn spacing(s: &mut egui::style::Spacing) {
 fn text_sizes(style: &mut Style) {
     use egui::{FontFamily::*, FontId, TextStyle};
     style.text_styles = [
-        (TextStyle::Small, FontId::new(11.0, Proportional)),
-        (TextStyle::Body, FontId::new(14.0, Proportional)),
-        (TextStyle::Button, FontId::new(14.0, Proportional)),
-        (TextStyle::Monospace, FontId::new(13.5, Monospace)),
-        (TextStyle::Heading, FontId::new(20.0, Proportional)),
+        (TextStyle::Small, FontId::new(SMALL, Proportional)),
+        (caption_style(), FontId::new(CAPTION, Proportional)),
+        (TextStyle::Body, FontId::new(BODY, Proportional)),
+        (TextStyle::Button, FontId::new(BODY, Proportional)),
+        (TextStyle::Monospace, FontId::new(MONO, Monospace)),
+        (TextStyle::Heading, FontId::new(HEADING, Proportional)),
     ]
     .into();
 }
+
+/// The shortest a click target is.
+pub const TARGET_H: f32 = 28.0;
+
+/// The app's text sizes: the five text styles and a caption. Text drawn
+/// by hand (a chart's axis, a nav row) takes one of these, not a number
+/// of its own; only the Map's cards scale theirs, with the zoom.
+pub const SMALL: f32 = 11.0;
+pub const CAPTION: f32 = 12.0;
+pub const MONO: f32 = 13.5;
+pub const BODY: f32 = 14.0;
+pub const HEADING: f32 = 20.0;
+
+/// The text style between Small and Body: a legend's rows, a chart's
+/// title, a card's second line.
+pub fn caption_style() -> egui::TextStyle {
+    egui::TextStyle::Name("caption".into())
+}
+
+/// The colour of a theme's panels (the nav, the bars), as if nothing
+/// showed through them.
+pub fn panel_of(t: Theme) -> Color32 {
+    match t {
+        Theme::Light => light().panel_fill,
+        Theme::Miami => solid(miami().panel_fill),
+        t => tokens(t).map_or(Color32::BLACK, |k| k.panel),
+    }
+}
+
+/// A panel's fill for one drawn over something else (the Map's canvas,
+/// Miami's backdrop): the same colour with nothing showing through, so
+/// cards and a skyline don't sit behind its text.
+pub fn solid(fill: Color32) -> Color32 {
+    let [r, g, b, _] = fill.to_srgba_unmultiplied();
+    Color32::from_rgb(r, g, b)
+}
+
+/// The app's three corner shapes. A control: buttons, fields, chips with
+/// an action, a row's highlight. A container: trays, cards, panels drawn
+/// by hand, windows. A pill: a tag or a count that only says something.
+pub const R_CONTROL: u8 = 6;
+pub const R_CONTAINER: u8 = 10;
+pub const R_PILL: u8 = 255;
 
 fn rounded(v: &mut Visuals, r: u8) {
     for w in [
@@ -515,8 +563,8 @@ fn rounded(v: &mut Visuals, r: u8) {
         // Hover grows nothing: no jiggle under the pointer.
         w.expansion = 0.0;
     }
-    v.window_corner_radius = CornerRadius::same(r + 4);
-    v.menu_corner_radius = CornerRadius::same(r + 2);
+    v.window_corner_radius = CornerRadius::same(R_CONTAINER);
+    v.menu_corner_radius = CornerRadius::same(R_CONTAINER);
 }
 
 fn light() -> Visuals {
@@ -540,7 +588,10 @@ fn light() -> Visuals {
     v.widgets.inactive.bg_fill = Color32::from_rgb(228, 231, 236);
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(214, 219, 226);
     v.widgets.hovered.bg_fill = Color32::from_rgb(214, 219, 226);
-    rounded(&mut v, 5);
+    // Outlined controls, as in every other theme.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(204, 209, 217));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, accent_for(Theme::Light));
+    rounded(&mut v, R_CONTROL);
     v
 }
 
@@ -598,6 +649,16 @@ fn tokens(t: Theme) -> Option<Tokens> {
         link: hex(link),
     };
     Some(match t {
+        // The default: neutral graphite a shade towards blue, so panels,
+        // fields and buttons are three surfaces and not one grey, with
+        // the blue the app has always used for what's picked.
+        Theme::Dark => k(
+            false,
+            [
+                0x1a1c20, 0x202329, 0x131518, 0x22252b, 0x2b2f37, 0x3d424d, 0xd5d9e0, 0xf3f5f8,
+                0x8d939f, 0x5aaaff, 0x7dbcff,
+            ],
+        ),
         Theme::Slate => k(
             false,
             [
@@ -647,7 +708,7 @@ fn tokens(t: Theme) -> Option<Tokens> {
                 0x8a7f6c, 0x2f5fb3, 0x2f5fb3,
             ],
         ),
-        Theme::Dark | Theme::Light | Theme::Miami => return None,
+        Theme::Light | Theme::Miami => return None,
     })
 }
 
@@ -687,7 +748,7 @@ fn from_tokens(k: &Tokens) -> Visuals {
         s.bg_stroke = Stroke::new(1.0, stroke);
         s.fg_stroke = Stroke::new(1.0, if mix > 0.0 { k.strong } else { k.text });
     }
-    rounded(&mut v, 6);
+    rounded(&mut v, R_CONTROL);
     v
 }
 
@@ -734,7 +795,7 @@ fn miami() -> Visuals {
         s.weak_bg_fill = s.bg_fill;
         s.bg_stroke = Stroke::new(1.0, stroke);
     }
-    rounded(&mut v, 6);
+    rounded(&mut v, R_CONTROL);
     v
 }
 
@@ -1246,9 +1307,14 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
     let mut act = None;
     {
         ui.label(egui::RichText::new("Theme").strong());
-        for t in Theme::ALL {
+        let (working, showpieces) = Theme::ALL.split_at(Theme::ALL.len() - Theme::SHOWPIECES);
+        let picked = showpieces.contains(&s.theme);
+        let mut row = |ui: &mut egui::Ui, t: Theme| {
             let (label, tip) = match t {
-                Theme::Dark => ("Dark (default)", "egui's standard dark look"),
+                Theme::Dark => (
+                    "Dark (default)",
+                    "Graphite and blue: the one the app is designed in",
+                ),
                 Theme::Light => ("Light", "For bright rooms and screenshots in tickets"),
                 Theme::Miami => (
                     "Miami",
@@ -1265,9 +1331,6 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
                 ),
                 Theme::Paper => ("Paper", "Warm light, like a printed site map"),
             };
-            if t == Theme::Light {
-                ui.separator();
-            }
             // Its map colours, as /mapnetwork's Themes menu shows them.
             let r = ui
                 .horizontal(|ui| {
@@ -1287,10 +1350,33 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
                 s.theme = t;
                 act = Some(MenuAction::Changed);
             }
+        };
+        for t in working {
+            row(ui, *t);
         }
+        // The showpieces fold away, open while one of them is picked.
+        let id = ui.make_persistent_id("more_themes");
+        if picked {
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                .set_open(true);
+        }
+        crate::widgets::fold(
+            ui,
+            id,
+            false,
+            |ui, _| {
+                ui.add(egui::Label::new("More themes").sense(egui::Sense::click()))
+                    .on_hover_text("Phosphor, RGB, Scanner and Miami: the showpieces")
+            },
+            |ui| {
+                for t in showpieces {
+                    row(ui, *t);
+                }
+            },
+        );
         ui.separator();
         ui.label(egui::RichText::new("Emoji").strong());
-        ui.horizontal_wrapped(|ui| {
+        crate::widgets::segmented(ui, |ui| {
             for e in EmojiStyle::ALL {
                 let tip = match e {
                     EmojiStyle::Theme => "Monochrome, or neon in Miami and RGB",
@@ -1299,7 +1385,7 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
                     EmojiStyle::Neon => "Miami's pink, teal, sunset and violet",
                 };
                 if ui
-                    .radio(s.emoji == e, e.name())
+                    .selectable_label(s.emoji == e, e.name())
                     .on_hover_text(tip)
                     .clicked()
                     && s.emoji != e
@@ -1328,22 +1414,25 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
         };
         ui.label(egui::RichText::new("Animate").strong())
             .on_hover_text(tip);
-        for a in Animate::ALL {
-            if ui
-                .radio(s.animate == a, a.name())
-                .on_hover_text(a.tip())
-                .clicked()
-                && s.animate != a
-            {
-                s.animate = a;
-                act = Some(MenuAction::Changed);
+        crate::widgets::segmented(ui, |ui| {
+            for a in Animate::ALL {
+                if ui
+                    .selectable_label(s.animate == a, a.name())
+                    .on_hover_text(a.tip())
+                    .clicked()
+                    && s.animate != a
+                {
+                    s.animate = a;
+                    act = Some(MenuAction::Changed);
+                }
             }
-        }
+        });
         if s.animate == Animate::Plugged && crate::power::on_battery() {
             ui.weak("On battery now: everything holds still.");
         }
-        ui.separator();
-        ui.add_enabled_ui(s.theme == Theme::Miami, |ui| {
+        // A theme's own options show only while it's the one picked.
+        if s.theme == Theme::Miami {
+            ui.separator();
             ui.label(egui::RichText::new("Miami backdrop").strong());
             if ui
                 .radio(s.backdrop == Source::Scene, "16-bit sunset scene")
@@ -1398,7 +1487,7 @@ pub fn appearance(ui: &mut egui::Ui, s: &mut Settings, gpu: bool) -> Option<Menu
             {
                 act = Some(MenuAction::Changed);
             }
-        });
+        }
     }
     act
 }
@@ -1463,6 +1552,56 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shapes and text sizes come from this file's tokens: a corner
+    /// radius or a font size written as a number in another file fails
+    /// here. The Map's canvas is left out: its cards' corners and text
+    /// scale with the zoom.
+    #[test]
+    fn no_file_picks_a_corner_radius_or_a_text_size_of_its_own() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        assert!(files.len() > 40, "found the source");
+        // Written in halves so this file's own text doesn't match.
+        let radius = [".corner_", "radius("].concat();
+        let size = ["RichText::new(", ").size("].concat();
+        let mut found = Vec::new();
+        for f in files {
+            let name = f.strip_prefix(&src).unwrap().display().to_string();
+            if name == "theme.rs" {
+                continue;
+            }
+            for (n, line) in std::fs::read_to_string(&f).unwrap().lines().enumerate() {
+                let digit_after = |pat: &str| {
+                    line.match_indices(pat).any(|(i, _)| {
+                        line[i + pat.len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_digit())
+                    })
+                };
+                if digit_after(&radius) || digit_after(".size(") && line.contains(&size[..14]) {
+                    found.push(format!("{name}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "use theme::R_* and the text styles:\n{}",
+            found.join("\n")
+        );
+    }
 
     #[test]
     fn emoji_are_a_size_up_and_in_their_own_sections() {

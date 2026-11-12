@@ -199,7 +199,7 @@ impl BundleTool {
                             ui,
                             text,
                             &spans,
-                            &eframe::egui::FontId::monospace(13.0),
+                            &eframe::egui::FontId::monospace(crate::theme::MONO),
                         );
                         job.wrap.max_width = wrap;
                         ui.fonts_mut(|f| f.layout_job(job))
@@ -236,7 +236,7 @@ impl BundleTool {
                             _ => "Redact",
                         };
                         let clicked = ui
-                            .add_enabled(pick.is_some(), egui::Button::new(label).small())
+                            .add_enabled(pick.is_some(), egui::Button::new(label))
                             .on_hover_text(
                                 "Hide the selected text (Ctrl+R). Notes' redactions apply here too",
                             )

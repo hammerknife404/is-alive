@@ -128,7 +128,7 @@ impl PortTool {
                 ui.available_width() - widgets::LEAD_W - 90.0,
                 "22,80,443,8000-8100",
             );
-            ui.menu_button("Presets ⏷", |ui| {
+            ui.menu_button("Presets ▾", |ui| {
                 for (name, spec) in PRESETS {
                     if ui.button(*name).on_hover_text(*spec).clicked() {
                         self.ports = spec.to_string();

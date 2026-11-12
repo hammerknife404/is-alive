@@ -67,7 +67,7 @@ impl CalcTool {
             );
             if let Some((ip, bits)) = info.lan
                 && ui
-                    .small_button("This network")
+                    .button("This network")
                     .on_hover_text(format!("{ip}/{bits}"))
                     .clicked()
             {

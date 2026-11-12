@@ -125,7 +125,7 @@ impl MapView {
     /// that.
     fn plan(&self, ui: &Ui, rect: Rect, entries: &[Entry]) -> Plan {
         let vis = ui.visuals();
-        let font = FontId::proportional(11.5);
+        let font = FontId::proportional(crate::theme::CAPTION);
         let labels: Vec<_> = entries
             .iter()
             .map(|e| {
@@ -277,7 +277,7 @@ impl MapView {
             plan.panel.min + vec2(PAD, PAD + TITLE / 2.0 - 2.0),
             egui::Align2::LEFT_CENTER,
             "Legend",
-            FontId::proportional(12.5),
+            FontId::proportional(crate::theme::CAPTION),
             vis.strong_text_color(),
         );
         let x = Rect::from_center_size(

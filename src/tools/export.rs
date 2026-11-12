@@ -745,9 +745,9 @@ impl ExportTool {
             if folded > 0 {
                 let shown_folded = self.shown < folded;
                 let label = if shown_folded {
-                    format!("{} ⏷", self.slots[self.shown].label())
+                    format!("{} ▾", self.slots[self.shown].label())
                 } else {
-                    format!("{folded} more ⏷")
+                    format!("{folded} more ▾")
                 };
                 ui.menu_button(label, |ui| {
                     for (i, s) in self.slots[..folded].iter().enumerate() {

@@ -9,10 +9,10 @@ use eframe::egui::{self, Pos2, Ui};
 use std::collections::HashMap;
 
 impl MapView {
-    /// "Export ⏷" on the toolbar.
+    /// "Export ▾" on the toolbar.
     pub(super) fn export_button(&self, ui: &mut Ui, empty: bool) {
         ui.add_enabled_ui(!empty, |ui| {
-            ui.menu_button("Export ⏷", |ui| self.export_items(ui))
+            ui.menu_button("Export ▾", |ui| self.export_items(ui))
                 .response
                 .on_hover_text(
                     "Save the map as a picture (SVG, PNG), a diagram to edit (draw.io, which \

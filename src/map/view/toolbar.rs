@@ -8,9 +8,9 @@ use super::*;
 
 /// Narrower than this, the layouts fold into one drop-down.
 const COMPACT: f32 = 980.0;
-/// Narrower than this beside a floating inspector (the smallest windows),
+/// Narrower than this beside a floating inspector (a laptop's window),
 /// Layers and Legend go into More too: there's room for the toolbar only.
-const TIGHT: f32 = 460.0;
+const TIGHT: f32 = 760.0;
 /// Room around the controls, from the canvas's edges.
 const EDGE: f32 = 10.0;
 
@@ -49,13 +49,17 @@ pub(super) enum TabsAsk {
     Clear,
 }
 
+/// The least width the toolbar's items fit one row in with the search
+/// box at its compact width.
+const ONE_ROW: f32 = 620.0;
+
 /// A rounded box over the canvas, in the panel's colours.
 fn float_frame(ui: &Ui) -> egui::Frame {
     let v = ui.visuals();
     egui::Frame::new()
-        .fill(v.panel_fill)
+        .fill(crate::theme::solid(v.panel_fill))
         .stroke(v.widgets.noninteractive.bg_stroke)
-        .corner_radius(8)
+        .corner_radius(crate::theme::R_CONTAINER)
         .inner_margin(egui::Margin::symmetric(6, 4))
         .shadow(egui::Shadow {
             offset: [0, 4],
@@ -169,22 +173,26 @@ impl MapView {
         let frame = float_frame(&row).show(&mut row, |ui| {
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(!empty, |ui| {
-                    if ui
-                        .selectable_label(self.side, "Layers")
-                        .on_hover_text("Sites, roles to fade out, and the findings, worst first")
-                        .on_disabled_hover_text(NOTHING_YET)
-                        .clicked()
-                    {
-                        self.side = !self.side;
-                    }
-                    if ui
-                        .selectable_label(self.legend, "Legend")
-                        .on_hover_text("What the colours, lines and badges mean (L)")
-                        .on_disabled_hover_text(NOTHING_YET)
-                        .clicked()
-                    {
-                        self.legend = !self.legend;
-                    }
+                    crate::widgets::segmented(ui, |ui| {
+                        if ui
+                            .selectable_label(self.side, "Layers")
+                            .on_hover_text(
+                                "Sites, roles to fade out, and the findings, worst first",
+                            )
+                            .on_disabled_hover_text(NOTHING_YET)
+                            .clicked()
+                        {
+                            self.side = !self.side;
+                        }
+                        if ui
+                            .selectable_label(self.legend, "Legend")
+                            .on_hover_text("What the colours, lines and badges mean (L)")
+                            .on_disabled_hover_text(NOTHING_YET)
+                            .clicked()
+                        {
+                            self.legend = !self.legend;
+                        }
+                    });
                 });
                 // On a narrow canvas Export is in More instead.
                 if !compact {
@@ -216,7 +224,11 @@ impl MapView {
             ui.separator();
         }
         // Narrower with text in it: room for the count and ×.
+        // Beside an open inspector on a laptop there's room for the
+        // toolbar on one row only with a short box: it gives way first.
+        let tight = compact && ui.available_width() < ONE_ROW;
         let width = match (self.search.is_empty(), compact) {
+            _ if tight => 72.0,
             (true, false) => 200.0,
             (true, true) => 140.0,
             (false, _) => 120.0,
@@ -226,7 +238,11 @@ impl MapView {
             crate::input::Field::Text,
             &mut self.search,
             width,
-            "Find name, IP, MAC, note",
+            if tight {
+                "Find"
+            } else {
+                "Find name, IP, MAC, note"
+            },
         )
         .on_hover_text(
             "Finds cards by name, IP, MAC, vendor, details or note; Enter selects the first",
@@ -237,7 +253,7 @@ impl MapView {
         if !self.search.is_empty() {
             let n = self.map.nodes.iter().filter(|n| self.matches(n)).count();
             ui.weak(format!("{n} match{}", if n == 1 { "" } else { "es" }));
-            if ui.small_button("×").on_hover_text("Clear search").clicked() {
+            if ui.button("×").on_hover_text("Clear search").clicked() {
                 self.search.clear();
             }
         }
@@ -252,7 +268,9 @@ impl MapView {
             act = Some(Action::Layout(m));
         }
         ui.separator();
-        if !empty && self.scan_button(ui, src) {
+        // With no room for it on the row, Scan is in More.
+        self.scan_in_menu = tight;
+        if !empty && !tight && self.scan_button(ui, src) {
             act = Some(Action::Sweep);
         }
         self.history_buttons(ui);
@@ -268,7 +286,7 @@ impl MapView {
                 .add(
                     egui::Button::new(RichText::new(format!("⚠ {label}")).color(colour))
                         .selected(self.side)
-                        .corner_radius(11),
+                        .corner_radius(crate::theme::R_PILL),
                 )
                 .on_hover_text("The findings, worst first: open Layers to see them all")
                 .clicked()
@@ -297,9 +315,9 @@ impl MapView {
         };
         let b = ui
             .add(
-                egui::Button::new(RichText::new(format!("Saved: {short} ⏷")).color(accent))
+                egui::Button::new(RichText::new(format!("Saved: {short} ▾")).color(accent))
                     .selected(true)
-                    .corner_radius(11),
+                    .corner_radius(crate::theme::R_PILL),
             )
             .on_hover_text(format!(
                 "{name}\nA saved map. Close it to go back to the live map"
@@ -414,6 +432,13 @@ impl MapView {
                 .clicked()
             {
                 self.legend = !self.legend;
+                ui.close();
+            }
+            ui.separator();
+        }
+        if self.scan_in_menu && !empty {
+            if self.scan_button(ui, src) {
+                act = Some(Action::Sweep);
                 ui.close();
             }
             ui.separator();
@@ -642,7 +667,7 @@ impl MapView {
         let warn = widgets::warn();
         let note = |ui: &mut Ui| {
             float_frame(ui)
-                .fill(ui.visuals().panel_fill)
+                .fill(crate::theme::solid(ui.visuals().panel_fill))
                 .stroke(Stroke::new(1.0, warn.gamma_multiply(0.5)))
         };
         // A plan or a training map says so first: it isn't what was found.
@@ -667,7 +692,7 @@ impl MapView {
                 });
                 ui.horizontal(|ui| {
                     if ui
-                        .small_button("Site Bundle…")
+                        .button("Site Bundle…")
                         .on_hover_text(
                             "Zip it all up to upload: the skills that draw the map come inside",
                         )
@@ -676,7 +701,7 @@ impl MapView {
                         act = Some(Action::Bundle);
                     }
                     if ui
-                        .small_button("Don't show again")
+                        .button("Don't show again")
                         .on_hover_text("Settings › Map brings it back")
                         .clicked()
                     {

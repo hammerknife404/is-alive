@@ -346,7 +346,7 @@ impl State {
             // The chapter's title stays put while its text scrolls, with
             // Pop out (or Back in is-alive) beside it.
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(c.title).heading().size(22.0).strong());
+                ui.label(egui::RichText::new(c.title).heading().strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (label, tip) = if self.own_window {
                         ("Back in is-alive", "Put the manual back over the app")

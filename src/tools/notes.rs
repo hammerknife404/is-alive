@@ -758,20 +758,20 @@ impl NotesTool {
             };
             ui.weak(label);
             if ui
-                .small_button("↑")
+                .button("↑")
                 .on_hover_text("Previous (Shift+Enter)")
                 .clicked()
             {
                 step = Some(false);
             }
-            if ui.small_button("↓").on_hover_text("Next (Enter)").clicked() {
+            if ui.button("↓").on_hover_text("Next (Enter)").clicked() {
                 step = Some(true);
             }
             ui.toggle_value(&mut bar.case, "Aa")
                 .on_hover_text("Match case");
             ui.toggle_value(&mut bar.replacing, "Replace")
                 .on_hover_text("Replace (Ctrl+H)");
-            if ui.small_button("×").on_hover_text("Close (Esc)").clicked() {
+            if ui.button("×").on_hover_text("Close (Esc)").clicked() {
                 close = true;
             }
         });
@@ -1315,19 +1315,21 @@ impl NotesTool {
                 self.outline = Some(!outline);
             }
             ui.separator();
-            for (v, name, tip) in [
-                (View::Edit, "Edit", "Editor only"),
-                (View::Split, "Split", "Editor and preview"),
-                (View::Preview, "Preview", "Formatted, as saved"),
-            ] {
-                if ui
-                    .selectable_label(self.view == v, name)
-                    .on_hover_text(tip)
-                    .clicked()
-                {
-                    self.view = v;
+            widgets::segmented(ui, |ui| {
+                for (v, name, tip) in [
+                    (View::Edit, "Edit", "Editor only"),
+                    (View::Split, "Split", "Editor and preview"),
+                    (View::Preview, "Preview", "Formatted, as saved"),
+                ] {
+                    if ui
+                        .selectable_label(self.view == v, name)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        self.view = v;
+                    }
                 }
-            }
+            });
             ui.separator();
             if ui
                 .button(RichText::new("B").strong())
@@ -1457,8 +1459,7 @@ impl NotesTool {
             // Picking a style keeps the menu open; picking an emoji closes it.
             let stay = egui::containers::menu::MenuConfig::new()
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-            let button =
-                egui::containers::menu::MenuButton::new(RichText::new("☺").size(16.0)).config(stay);
+            let button = egui::containers::menu::MenuButton::new(RichText::new("☺")).config(stay);
             // Large note fonts in a short window: the groups scroll.
             let menu = widgets::tall_popups(ui, |ui| {
                 button.ui(ui, |ui| {
@@ -1644,7 +1645,7 @@ impl NotesTool {
                     RichText::new(format!("🔑 {}", redact::summary(hits))).color(warn),
                 )
                 .fill(warn.gamma_multiply(0.10 + 0.25 * glow))
-                .corner_radius(4),
+                .corner_radius(crate::theme::R_CONTROL),
             )
             .on_hover_text(if self.show_hits {
                 "Hidden in saves, copies and the Site Bundle. Click to stop highlighting them \
@@ -1886,11 +1887,7 @@ impl NotesTool {
             {
                 self.on_file = true;
             }
-            if ui
-                .small_button("×")
-                .on_hover_text("Close the file")
-                .clicked()
-            {
+            if ui.button("×").on_hover_text("Close the file").clicked() {
                 self.file = None;
                 self.on_file = false;
             }
@@ -1997,11 +1994,7 @@ impl NotesTool {
                 let mut drop = None;
                 for (i, v) in self.ov.redact.iter().enumerate() {
                     ui.horizontal(|ui| {
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Stop redacting it")
-                            .clicked()
-                        {
+                        if ui.button("×").on_hover_text("Stop redacting it").clicked() {
                             drop = Some(i);
                         }
                         let shown: String = v.chars().take(2).collect();
@@ -2019,11 +2012,7 @@ impl NotesTool {
                 let mut drop = None;
                 for (i, v) in self.ov.allow.iter().enumerate() {
                     ui.horizontal(|ui| {
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Redact it again")
-                            .clicked()
-                        {
+                        if ui.button("×").on_hover_text("Redact it again").clicked() {
                             drop = Some(i);
                         }
                         let shown: String = v.chars().take(40).collect();
