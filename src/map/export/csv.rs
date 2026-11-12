@@ -53,7 +53,7 @@ fn link_name(l: Link) -> &'static str {
         Link::Backbone => "backbone",
         Link::Wired => "wired",
         Link::Wireless => "wireless",
-        Link::Assumed => "assumed",
+        Link::Assumed => crate::inferred::WORD,
     }
 }
 

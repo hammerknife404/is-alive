@@ -224,7 +224,12 @@ impl MapView {
                 ui.painter().circle_filled(r.center(), 4.5, accent);
                 ui.label(RichText::new(n.zone.name()).color(accent));
                 for c in &n.chips {
-                    ui.label(RichText::new(c).small().weak());
+                    // The one mark, saying where the value came from.
+                    if c == crate::inferred::WORD {
+                        crate::inferred::mark(ui, n.inferred_why());
+                    } else {
+                        ui.label(RichText::new(c).small().weak());
+                    }
                 }
             });
             if let Some((p, to)) = self.reveal_row(ui, i) {
@@ -374,12 +379,12 @@ impl MapView {
                     Link::Backbone => "uplink · WAN".to_string(),
                     Link::Wired => format!("uplink · {}", port.as_deref().unwrap_or("wired")),
                     Link::Wireless => "uplink · wireless".into(),
-                    Link::Assumed => "uplink · assumed".into(),
+                    Link::Assumed => format!("uplink · {}", crate::inferred::WORD),
                 };
                 let tip = match link {
                     Link::Assumed => {
-                        "Show it (Ctrl+click adds it). Assumed: it answered here, but its \
-                         switch port isn't known"
+                        "Show it (Ctrl+click adds it). Its uplink is inferred: it answered \
+                         here, but no backup or config says which port it's on"
                     }
                     _ => SHOW_IT,
                 };
@@ -390,7 +395,7 @@ impl MapView {
             for &k in kids.iter().take(14) {
                 let via = match &self.map.nodes[k].up {
                     Some((_, Link::Wireless, _)) => "wireless".to_string(),
-                    Some((_, Link::Assumed, _)) => "assumed".to_string(),
+                    Some((_, Link::Assumed, _)) => crate::inferred::WORD.to_string(),
                     Some((_, _, Some(port))) => port.clone(),
                     _ => "below it".to_string(),
                 };

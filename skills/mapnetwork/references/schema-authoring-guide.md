@@ -288,7 +288,7 @@ Links between nodes. Direction matters for the flow animation: list `from` as th
 ```
 - `cls`: `'backbone'` (thick, always blue — internet→gateway spine) ·
   `'wired'` (zone-coloured solid) · `'wifi'` (zone-coloured, use with `dashed:true`)
-- `dashed:true` — dashed line. With `cls:'wifi'` this is wireless; with `cls:'wired'` it means an assumed/inferred link, matching is-alive.
+- `dashed:true` — dashed line. With `cls:'wifi'` this is wireless; with `cls:'wired'` it means an inferred link (one no backup or config shows), matching is-alive.
 - `label` — optional small text on the line (port, link name)
 - `anchor:'L'`/`'R'` — optional, fan two edges to the left/right of the same target
   (used when one device has two NICs into a switch)

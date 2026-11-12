@@ -104,7 +104,8 @@ const PROBLEMS_ID: &str = "bundle_known_problems";
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
 Update it rather than starting over: keep what still holds, change what the other files show.";
 const CARD_NOTES_WHAT: &str = "The technician's notes on cards of the Map tab's live map: each \
-card's name, role, IP and MAC with its note. Sanitized on their machine like notes.md. Observations \
+card's name, role, IP and MAC with its note, and an `inferred` list naming what is-alive worked out \
+and didn't read or measure (role, uplink; empty when neither). Sanitized on their machine like notes.md. Observations \
 about those devices; carry what bears on the map into its device notes and findings.";
 const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
 machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
