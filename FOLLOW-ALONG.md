@@ -15,12 +15,12 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
-4. Check the version: the bottom right corner of the window says `v0.28.0` (or newer), and so does the title bar.
+4. Check the version: the bottom right corner of the window says `v0.28.23` (or newer), and so does the title bar.
 5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
 
-> **Nothing opens, or the window stays blank?** See [If the window doesn't open](README.md#if-the-window-doesnt-open): what to try, and where the app writes down why.
+> **Nothing opens, or the window stays blank?** See [The .exe doesn't open](docs/manual/MANUAL.md#the-exe-doesnt-open) in the manual: what to try, and where the app writes down why.
 
-You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc** and **Results**. On a laptop they're icons only; hover one for its name. **Settings** (theme and the like) and **Help** are at the bottom of that column. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Across the top are **Full scan** and **Report…** on the right. The bar at the bottom shows your computer's local address, your router (gateway) and your public internet address, with **Refresh** beside them and the version on the right.
+You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc**, **Domain join** and **Results**. On a laptop they're icons only; hover one for its name. **Settings** (theme and the like) and **Help** are at the bottom of that column. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Across the top are **Full scan** and **Report…** on the right. The bar at the bottom shows your computer's local address, your router (gateway), the domain this computer is joined to (click it for **Domain join**) and your public internet address, with **Refresh** beside them and the version on the right.
 
 > **Please watch, don't run, the Ports and Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -105,12 +105,12 @@ Then try these, one at a time:
 The **Map** tab draws a network as a picture: the internet at the top, then the firewall, switches, wireless access points and servers below, each a coloured card. It's safe to try: the built-in examples are made-up companies, so nothing on the real network is touched.
 
 1. Click the **Map** tab.
-2. Click **⋯** at the right end of the map's toolbar, then **Examples**, and pick **Contoso Health: 23 clinics, 81 devices**.
+2. Click **More ▾** at the right end of the map's toolbar, then **Examples**, and pick **Contoso Health: 23 clinics, 81 devices**.
 3. Each grey box is one clinic. Scroll to zoom in, and drag the background to move around.
 4. Click any card. Its details open on the right, in the same inspector a device opens in on Subnet Sweep (what's known about it: its address, its model, any problems found, with Ping, Port Check and Traceroute), and the line to the box it plugs into lights up.
 5. Right-click a card and choose **Select the path to the WAN**. Every box between that card and the internet lights up: that's the route its traffic takes.
 6. Try the layout buttons along the top (**Sites**, **Cluster**, **Tree**, **Zones**): the same network, arranged four ways.
-7. To leave the example, open **⋯ › Examples** again and click **Close the example**.
+7. To leave the example, open **More ▾ › Examples** again and click **Close the example**.
 
 **What it means:** when something breaks, the map shows what it depends on. If a switch fails, everything drawn below it loses its connection.
 
@@ -119,7 +119,7 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 ## 7. Results and sharing
 
 1. Click the **Results** tab. Every check you ran is listed down the left, newest first, with a few words on what it found. Click one to read it in full.
-2. **Copy** puts that run on the clipboard, ready to paste into an email or support ticket; **Save…** writes it to a text file. **⋯** at the top of the list copies or saves all of them.
+2. **Copy** puts that run on the clipboard, ready to paste into an email or support ticket; **Save…** writes it to a text file. **All runs ▾** at the top of the list copies or saves all of them.
 3. Click **Report…** at the top right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
 
 ---
