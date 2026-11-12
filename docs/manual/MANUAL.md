@@ -67,6 +67,7 @@ It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. 
    - **Windows:** `is-alive.exe`
    - **Linux:** `is-alive-x86_64.AppImage`
 3. Optional: each file has a `.sha256` beside it. To check the download wasn't damaged or changed, compare its SHA-256 (Windows PowerShell: `Get-FileHash .\is-alive.exe`; Linux: `sha256sum is-alive-x86_64.AppImage`) with the one in the `.sha256` file.
+4. Optional, to check who built it: every release published after 12 November 2026 carries a *build attestation*, a statement signed through GitHub that this exact file was built by the project's own build from the published source. With the [GitHub CLI](https://cli.github.com) installed, `gh attestation verify is-alive.exe --repo hammerknife404/is-alive` (or the `.AppImage`) names the build and the commit, and fails for a file built anywhere else. The checksum only shows the download wasn't damaged.
 
 Put the file anywhere you like: the desktop, a tools folder, a USB stick. It runs from where it is.
 

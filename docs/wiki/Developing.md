@@ -45,7 +45,7 @@ CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts).
 
 Versions: a release with new features bumps the minor number (0.11.0); fixes and polish between feature releases bump the patch (0.11.1, 0.11.2, …).
 
-To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) in a PR and merge it to `main`: CI tags `v<version>`, publishes a GitHub release with both binaries and checksums, and generates release notes from the PRs merged since the last release. Pushing a `v*` tag by hand does the same, as long as it matches `Cargo.toml`.
+To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) in a PR and merge it to `main`: CI attests both binaries (`gh attestation verify <file> --repo hammerknife404/is-alive` checks one), tags `v<version>`, publishes a GitHub release with both binaries and checksums, and generates release notes from the PRs merged since the last release. Pushing a `v*` tag by hand does the same, as long as it matches `Cargo.toml`.
 
 On other platforms (macOS etc.) ICMP falls back to the system `ping` command (dev/testing only).
 
