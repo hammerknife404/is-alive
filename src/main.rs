@@ -1546,6 +1546,14 @@ mod tests {
                 draw(&mut app, &ctx, size);
             }
 
+            // The Map opened up into the exploded view, and split; at one
+            // size it stays so while everything goes from under it.
+            app.map.explode_for_shots(Some(1.0));
+            all(&mut app, "exploded");
+            if n != 1 {
+                app.map.explode_for_shots(None);
+            }
+
             // Everything goes, and nothing the tabs hold on to is told.
             app.log.clear();
             app.export.clear();

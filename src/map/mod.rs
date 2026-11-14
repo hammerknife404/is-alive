@@ -7,6 +7,7 @@
 
 pub(crate) mod colours;
 pub mod compare;
+pub mod explode;
 pub mod export;
 pub mod import;
 pub mod layout;

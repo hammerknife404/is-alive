@@ -293,6 +293,12 @@ impl MapTabs {
         self.view().zones_for_shots()
     }
 
+    /// For the screenshot tour: the map opened up into the exploded view,
+    /// split this far (None: flat again). False until it has settled.
+    pub fn explode_for_shots(&mut self, split: Option<f32>) -> bool {
+        self.view().explode_for_shots(split)
+    }
+
     /// For the screenshot tour: back to the map's own layout.
     pub fn default_layout_for_shots(&mut self) {
         self.view().default_layout_for_shots();
@@ -1213,7 +1219,7 @@ const CORNER_H: f32 = crate::theme::TARGET_H;
 /// Where Save goes: left of the zoom controls, or above them on a canvas
 /// too narrow for both in a row. None with no room at all (Ctrl+S still
 /// saves).
-fn toggle_rect(rect: Rect) -> Option<Rect> {
+pub(super) fn toggle_rect(rect: Rect) -> Option<Rect> {
     let right = rect.max.x - ZOOM_W;
     if right - TOGGLE_W >= rect.min.x + 8.0 {
         return Some(Rect::from_min_max(

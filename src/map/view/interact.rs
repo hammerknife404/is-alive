@@ -47,7 +47,11 @@ impl MapView {
         let sel: HashSet<usize> = self.selection().into_iter().collect();
         let menu: HashSet<usize> = self.menu_cards().into_iter().collect();
         let raised: HashSet<&str> = self.raised.iter().map(String::as_str).collect();
-        let mut v: Vec<usize> = (0..self.map.nodes.len()).collect();
+        // Opened up: the lowest plate first, a nearer card over a farther.
+        let mut v: Vec<usize> = match self.scene() {
+            Some(s) => s.order.clone(),
+            None => (0..self.map.nodes.len()).collect(),
+        };
         v.sort_by_key(|&i| {
             if raised.contains(self.map.nodes[i].id.as_str()) {
                 2
@@ -85,7 +89,8 @@ impl MapView {
 
     /// The site whose box title is under the screen point `at`.
     pub(super) fn site_title_at(&self, rect: Rect, at: Option<Pos2>) -> Option<String> {
-        let at = at.filter(|p| rect.contains(*p))?;
+        // Opened up, there are plates, not boxes.
+        let at = at.filter(|p| rect.contains(*p) && !self.exploded())?;
         self.lay
             .boxes
             .iter()
@@ -96,7 +101,7 @@ impl MapView {
     /// The box whose title is under the screen point `at`: the one drawn
     /// on top where moved boxes overlap.
     pub(super) fn box_title_at(&self, rect: Rect, at: Option<Pos2>) -> Option<usize> {
-        let at = at.filter(|p| rect.contains(*p))?;
+        let at = at.filter(|p| rect.contains(*p) && !self.exploded())?;
         self.lay
             .boxes
             .iter()
@@ -206,10 +211,12 @@ impl MapView {
         }
         if resp.secondary_clicked() {
             let group = boxed.or_else(|| {
-                pointer.filter(|p| rect.contains(*p)).and_then(|p| {
-                    let world = self.to_world(rect, p);
-                    self.lay.boxes.iter().rposition(|b| b.rect.contains(world))
-                })
+                pointer
+                    .filter(|p| rect.contains(*p) && !self.exploded())
+                    .and_then(|p| {
+                        let world = self.to_world(rect, p);
+                        self.lay.boxes.iter().rposition(|b| b.rect.contains(world))
+                    })
             });
             let key = group.and_then(|g| self.lay.box_key(self.mode(), g));
             self.menu = Some(match (over, key) {
@@ -288,7 +295,10 @@ impl MapView {
             let had = self.selection().len();
             self.select(None);
             let small = ui.ctx().content_rect().width() < 1100.0;
-            if self.selection().len() == had && small {
+            if self.selection().len() == had && self.ex_on {
+                // Nothing to let go of: back to the flat map.
+                self.explode_toggle();
+            } else if self.selection().len() == had && small {
                 self.side = false;
             }
         }
@@ -347,6 +357,16 @@ impl MapView {
             .fold(Vec2::ZERO, |a, d| a + d);
             (k(Key::F), zoom, pan)
         });
+        if self.ex_on {
+            let turn = ui.input(|i| {
+                let none = i.modifiers.is_none();
+                (none && i.key_pressed(Key::CloseBracket)) as i8
+                    - (none && i.key_pressed(Key::OpenBracket)) as i8
+            });
+            if turn != 0 {
+                self.explode_turn(turn as f32);
+            }
+        }
         if fit {
             self.fit_view(rect);
         }
@@ -373,7 +393,12 @@ impl MapView {
     /// selection along); dragging the background pans. Near the canvas
     /// edge, a dragged card scrolls the map.
     fn drag_cards(&mut self, ui: &Ui, rect: Rect, resp: &egui::Response) {
-        if resp.drag_started() {
+        // Opened up, cards and boxes stay where the view puts them: a drag
+        // pans, and with Alt held it turns the view.
+        if resp.drag_started() && self.exploded() {
+            self.drag = None;
+            self.box_drag = None;
+        } else if resp.drag_started() {
             // Where the button went down, not where the pointer is once it
             // counts as a drag: a quick flick off a card still moves it.
             self.drag = ui
@@ -432,6 +457,9 @@ impl MapView {
                     }
                 }
                 self.follow = false;
+            } else if self.ex_on && ui.input(|i| i.modifiers.alt) {
+                self.ex.yaw += d.x * 0.008;
+                self.ex_now.yaw = self.ex.yaw;
             } else {
                 self.pan += d;
                 self.follow = false;
@@ -1197,6 +1225,9 @@ impl MapView {
         } else {
             1.0
         };
+        // Opened up, the view itself eases (`explode_update`): the cards
+        // keep to it, so they and their lines never part.
+        let k_card = if self.exploded() { 1.0 } else { k };
         let mut moving = false;
         for i in 0..self.map.nodes.len() {
             let Some(t) = self.target(i) else { continue };
@@ -1207,7 +1238,7 @@ impl MapView {
             let p = self.pos.entry(id.clone()).or_insert(t);
             let d = t - *p;
             if d.length() > 0.3 {
-                *p += d * k;
+                *p += d * k_card;
                 moving = true;
             } else {
                 *p = t;
