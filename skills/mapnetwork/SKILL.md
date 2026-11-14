@@ -321,12 +321,18 @@ controller and firewall config.
      uplinks; (3) whichever end serves more downstream devices; (4) still
      tied → lower id, arbitrarily. Then mark it unverified so nobody reads
      the arrow as fact: `dashed:true`, append `· reciprocal` to the edge
-     `label`, add a node `flags[]` entry on both ends, and one `med` ACTIONS
-     entry per site covering every pair there — "controller uplink data
-     disagrees with itself; direction shown is a layout assumption; verify
-     cabling on-site." Raise it to `high` only when resolving the pair
-     leaves part of the site disconnected from its root. The Contoso Health
-     example (edges `e35`, `e44`) shows the pattern.
+     `label`, and one `low` ACTIONS entry per site covering every pair
+     there — "controller uplink data disagrees with itself; direction
+     shown is a layout assumption; verify cabling when next on-site."
+     **It is `low` by default, and no node `flags[]`:** stale uplink
+     records are on nearly every controller (a re-cabling the controller
+     never caught up with), so a reciprocal pair is hygiene, not an
+     alarm, and must never head a site's findings or put a warning on its
+     cards. Raise it to `med` only when resolving the pair leaves part of
+     the site disconnected from its root, and to `high` only when a
+     second source (a scan, the firewall's config) shows a real loop or
+     an unmapped path there. The Contoso Health example (edges `e35`,
+     `e44`, action `a1`) shows the pattern.
    - **Cross-source conflicts.** When two sources disagree about the same fact
      (subnet, VLAN, IP, firmware, a device's existence or uplink), never
      silently pick one. Resolve with this ladder, stopping at the first rung
