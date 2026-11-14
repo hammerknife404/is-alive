@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.1**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -827,6 +827,35 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 - **Drag a box by its title** (a role's box in Zones, a site's in Sites) to move it with its cards; cards you dragged out of it come along too. In Zones the folded **×N** line into it follows it; the way into a moved site's box takes its own route, round the cards in its way. **Re-layout** puts boxes back too.
 - Zoomed out, cards drop detail lines rather than shrinking the text, so names stay readable. Hover a card for its details.
 
+### The exploded view
+
+**Explode** (bottom right, above the zoom buttons, or **E**) pulls the map apart like an exploded drawing of a machine. Each role gets a plate of its own, stacked from the internet at the top to the clients at the bottom, tilted back so you look down on them from a corner. It is the same map opened up, in whichever layout you picked: press **Explode** or **E** again and every card goes back where it was.
+
+| On screen | What it is |
+|---|---|
+| **A plate** | A tinted sheet in its role's colour holding that role's cards, named at its top corner with a count (*SWITCHES · 4*). Access points, network gear and servers share one plate; a role with no cards has none |
+| **A card** | The same card as on the flat map, upright and at its own size at any angle. A nearer card can cover part of the one behind it, but not its name at any of the eight views **⟲** and **⟳** step through |
+| **A line** | From each uplink straight down to the plate its cards sit on, then across that plate to each of them. Cards under one uplink share the way down |
+| **A small ring** | Where a line from the plate above lands |
+
+While the map is opened up, a row of controls sits beside **Explode**:
+
+| Control | What it does |
+|---|---|
+| **⟲ / ⟳** | Turn the view an eighth of a turn left or right (also **[** and **]**). **Alt+drag** on the map turns it freely |
+| **Explode** slider | How far the plates are pulled apart. All the way left is the flat map, and leaves the view |
+| **Split** slider | Pulls each branch of the network away from the others, onto plates of its own: a switch and everything under it, or each site's firewall and its network. The branches are the ones under the first card the tree forks at |
+
+Everything else works as on the flat map: click a card for its inspector and its lit path to the internet (the rest dims), **Ctrl+click** to add cards, right-click for the menu, search, **Layers**, the legend, **Fit** and the zoom buttons. Opening the view shows the whole map; on a big site that is small, so zoom in on the plate you want. **Esc** lets go of the selected cards, and pressed again with none selected goes back to the flat map.
+
+What the view leaves out, for now:
+
+- **Cards and boxes don't drag.** A drag pans the map. Cards you moved on the flat map keep their places on their plates.
+- **Site and zone boxes aren't drawn** (the plates stand in for them), so a site can't be folded from here; fold it on the flat map and it stays folded.
+- **Export and the Site report** save the flat map, and a saved map opens flat.
+
+With **Animate** off the view opens, turns and closes at once.
+
 ### Boxes
 
 In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
@@ -1470,7 +1499,9 @@ At the bottom of Settings, **Remove everything is-alive saved…** is for a clie
 | **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
-| **Esc** | Map | Clear the selection (pinned cards stay); with none to clear, on a window under 1100 points wide, shut Layers |
+| **Esc** | Map | Clear the selection (pinned cards stay); with none to clear, leave the exploded view; else, on a window under 1100 points wide, shut Layers |
+| **E** | Map | Open the map up into the exploded view, or put it back flat |
+| **[** / **]** | Map, exploded view | Turn the view left / right |
 | **Esc** | The inspector, on a window under 1100 points wide (on the Map, under 1440) | Close it |
 | **N** | Map, one card selected | Write or edit its note |
 | **Ctrl+Enter** / **Esc** | A card's note | Save it / leave it as it was |

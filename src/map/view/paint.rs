@@ -37,12 +37,15 @@ impl MapView {
     /// Lines the Links view leaves out are gone, but for a selected
     /// card's lit path.
     pub(super) fn lines_now(&self) -> Vec<layout::Line> {
-        let all = layout::lines(
-            &self.map,
-            &self.lay,
-            &|i| self.pos.get(&self.map.nodes[i].id).copied(),
-            &|i| self.freed(i),
-        );
+        let all = match self.scene() {
+            Some(scene) => self.explode_lines(scene),
+            None => layout::lines(
+                &self.map,
+                &self.lay,
+                &|i| self.pos.get(&self.map.nodes[i].id).copied(),
+                &|i| self.freed(i),
+            ),
+        };
         if self.links == Links::All {
             return all;
         }
@@ -122,7 +125,17 @@ impl MapView {
         // Titles written above their boxes sit in the gap the links run
         // through: drawn after the links, on a patch of the canvas.
         let mut above = Vec::new();
-        for (g, b) in self.lay.boxes.iter().enumerate() {
+        // Opened up, the plates stand in for the boxes.
+        let scene = self.scene();
+        if let Some(scene) = scene {
+            self.paint_plates(&p, rect, vis, scene);
+        }
+        let boxes: &[layout::Group] = if scene.is_some() {
+            &[]
+        } else {
+            &self.lay.boxes
+        };
+        for (g, b) in boxes.iter().enumerate() {
             let r = Rect::from_min_size(self.to_screen(rect, b.rect.min), b.rect.size() * z);
             if !r.intersects(rect) {
                 continue;

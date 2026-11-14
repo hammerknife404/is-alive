@@ -87,8 +87,10 @@ impl MapView {
     }
 
     /// The map as laid out now, for any export.
-    fn drawn<R>(&self, f: impl FnOnce(&Drawn) -> R) -> R {
-        let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len()).map(|i| self.target(i)).collect();
+    pub(super) fn drawn<R>(&self, f: impl FnOnce(&Drawn) -> R) -> R {
+        let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len())
+            .map(|i| self.flat_target(i))
+            .collect();
         let moved: Vec<bool> = (0..self.map.nodes.len()).map(|i| self.freed(i)).collect();
         f(&Drawn {
             map: &self.map,

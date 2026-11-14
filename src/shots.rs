@@ -301,10 +301,31 @@ const SCENES: &[Scene] = &[
         },
     ),
     scene(
+        "map-exploded",
+        Tab::Map,
+        |a, _| a.map.default_layout_for_shots(),
+        |a| {
+            if a.map.explode_for_shots(Some(0.0)) {
+                Ready::Yes
+            } else {
+                Ready::Wait
+            }
+        },
+    ),
+    scene("map-exploded-split", Tab::Map, nothing, |a| {
+        if a.map.explode_for_shots(Some(1.0)) {
+            a.map.select_for_shots();
+            Ready::Yes
+        } else {
+            Ready::Wait
+        }
+    }),
+    scene(
         "map-sites",
         Tab::Map,
         |a, ctx| {
             a.look.map_legend = true;
+            a.map.explode_for_shots(None);
             a.map.default_layout_for_shots();
             a.export.open_example(ctx, 1)
         },

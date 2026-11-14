@@ -70,6 +70,7 @@ impl MapView {
         let pct = format!("{:.0}%", self.zoom * 100.0);
         let reset = button(ui, 54.0, &pct, "Back to 100% (0)");
         let zoom_out = button(ui, 28.0, "−", "Zoom out (−)");
+        self.explode_controls(ui, place);
         let target = if zoom_in {
             Some(self.zoom * 1.25)
         } else if zoom_out {
@@ -111,7 +112,12 @@ impl MapView {
             return;
         };
         self.select_group(first, &cards);
-        let area = match self.lay.boxes.iter().find(|b| b.tree && b.title == site) {
+        let boxed = self
+            .lay
+            .boxes
+            .iter()
+            .find(|b| b.tree && b.title == site && !self.exploded());
+        let area = match boxed {
             Some(b) => b.rect,
             None => cards
                 .iter()

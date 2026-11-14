@@ -4,6 +4,7 @@
 //! and − zoom, 0 is 100% and the arrows pan from the keyboard. It rebuilds
 //! as the sweep finds hosts, so a scan can be watched filling in the map.
 
+mod exploded;
 mod export;
 mod history;
 mod interact;
@@ -249,6 +250,13 @@ pub struct MapView {
     /// How much of the canvas's bottom left corner the legend took last
     /// frame (zero when hidden): Fit keeps the map clear of it.
     legend_size: Vec2,
+    /// The exploded view is asked for (`exploded`), opened up as `ex`
+    /// says; `ex_now` is how far it has eased there (amount 0: flat), and
+    /// `ex_scene` the layout opened up that far, as of this frame.
+    ex_on: bool,
+    ex: crate::map::explode::Camera,
+    ex_now: crate::map::explode::Camera,
+    ex_scene: Option<crate::map::explode::Scene>,
     /// Steps to undo and redo on this map.
     history: history::History<history::Edits>,
     /// A saved map: drawn from this (every site open) rather than from the
@@ -407,6 +415,11 @@ impl MapView {
             clients,
             note_scope: notes::Scope::Live,
             animate: true,
+            ex: crate::map::explode::Camera {
+                amount: 1.0,
+                yaw: crate::map::explode::SNAP,
+                split: 0.0,
+            },
             ..Default::default()
         }
     }
@@ -1118,9 +1131,13 @@ impl MapView {
         self.drag.is_some() || self.box_drag.is_some()
     }
 
+    /// Where card `i` is drawn once it gets there: on the layout, where
+    /// it was dragged to, or its place in the exploded view.
     fn target(&self, i: usize) -> Option<Pos2> {
-        let n = &self.map.nodes[i];
-        self.placed.get(&n.id).copied().or(self.lay.pos[i])
+        match self.scene() {
+            Some(s) => s.pos[i],
+            None => self.flat_target(i),
+        }
     }
 
     fn index(&self, id: &str) -> Option<usize> {
@@ -1139,6 +1156,9 @@ impl MapView {
 
     /// Bounds of the laid-out map, with cards dragged elsewhere.
     fn bounds(&self) -> Rect {
+        if let Some(s) = self.scene() {
+            return s.bounds(&|i| layout::card_size(&self.map.nodes[i]));
+        }
         let mut r = Rect::NOTHING;
         for i in 0..self.map.nodes.len() {
             if let Some(p) = self.target(i) {
@@ -1247,6 +1267,10 @@ impl MapView {
         let (left, right) = self.fit_insets;
         r.max.x = (r.max.x - right).max(r.min.x + 100.0);
         r.min.x = (r.min.x + left).min(r.max.x - 100.0);
+        // Opened up, the view's own controls sit above the zoom buttons.
+        if self.ex_on {
+            r.max.y = (r.max.y - crate::theme::TARGET_H - 8.0).max(r.min.y + 100.0);
+        }
         r
     }
 
@@ -1517,6 +1541,14 @@ impl MapView {
         {
             self.open_note(&[i]);
         }
+        // E opens the map up into the exploded view, and puts it back.
+        if !self.keys_busy
+            && !ctx.text_edit_focused()
+            && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::E))
+        {
+            self.explode_toggle();
+        }
+        self.explode_update(&ctx);
         if self.zoom == 0.0 {
             // The first look: clear of whatever panels are open already.
             self.zoom = 1.0;
@@ -3129,5 +3161,184 @@ mod tests {
         let mut nas = card(Zone::Server, "NAS");
         nas.client = true;
         assert!(!interact::has_admin(&nas));
+    }
+
+    /// tree8 with a role on each card, opened up all the way and settled:
+    /// 0 internet - 1 gateway - 2 core - {3 access - {5 ap - 7, 6 ap}, 4 server}
+    fn opened(ctx: &egui::Context) -> MapView {
+        let mut v = tree8();
+        v.zoom = 1.0;
+        v.animate = false;
+        let zones = [
+            Zone::Internet,
+            Zone::Gateway,
+            Zone::Switch,
+            Zone::Switch,
+            Zone::Server,
+            Zone::Wireless,
+            Zone::Wireless,
+            Zone::Client,
+        ];
+        for (n, z) in v.map.nodes.iter_mut().zip(zones) {
+            n.zone = z;
+        }
+        v.animate(ctx);
+        v.explode_toggle();
+        settle(ctx, &mut v);
+        v
+    }
+
+    /// A frame of the exploded view without the canvas: the view eased
+    /// (at once, with Animate off) and the cards put where it has them.
+    fn settle(ctx: &egui::Context, v: &mut MapView) {
+        v.explode_update(ctx);
+        v.animate(ctx);
+    }
+
+    #[test]
+    fn the_exploded_view_moves_the_cards_and_puts_them_back() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        assert!(v.exploded());
+        let at = |v: &MapView, i: usize| v.pos[&format!("n{i}")];
+        // Each role a plate of its own, the internet's at the top and the
+        // client's at the bottom, none reaching into the next.
+        let rows: Vec<f32> = [0, 1, 2, 5, 7].iter().map(|&i| at(&v, i).y).collect();
+        assert!(rows.windows(2).all(|w| w[1] > w[0] + CARD.y), "{rows:?}");
+        // A line for every card with an uplink, drawn like any other.
+        assert_eq!(v.lines_now().len(), 7);
+        // The pictures and files Export saves are of the flat map.
+        let flat: Vec<Option<Pos2>> = v.lay.pos.clone();
+        assert_eq!(v.drawn(|d| d.pos.to_vec()), flat);
+        // Back flat, every card is where the layout put it.
+        v.explode_toggle();
+        settle(&ctx, &mut v);
+        assert!(!v.exploded());
+        for i in 0..8 {
+            assert_eq!(Some(at(&v, i)), v.lay.pos[i], "card {i}");
+        }
+    }
+
+    #[test]
+    fn a_click_in_the_exploded_view_picks_the_card_drawn_on_top() {
+        let ctx = egui::Context::default();
+        // Two cards on one spot, barely opened up: the higher plate's card
+        // is drawn over the lower's, whichever comes first in the map.
+        for zones in [[Zone::Client, Zone::Gateway], [Zone::Gateway, Zone::Client]] {
+            let mut v = view(2);
+            v.animate = false;
+            v.zoom = 1.0;
+            v.lay.pos = vec![Some(Pos2::ZERO); 2];
+            v.map.nodes[0].zone = zones[0];
+            v.map.nodes[1].zone = zones[1];
+            v.explode_toggle();
+            v.ex.amount = 0.02;
+            settle(&ctx, &mut v);
+            let gateway = zones.iter().position(|z| *z == Zone::Gateway).unwrap();
+            assert_eq!(v.stack().last(), Some(&gateway));
+            let on_both = v.pos["n0"].max(v.pos["n1"]) + vec2(5.0, 5.0);
+            assert_eq!(v.hit(on_both), Some(gateway));
+        }
+    }
+
+    #[test]
+    fn a_click_in_the_exploded_view_selects_and_lights_the_path() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        // Card 5 (an access point) brought onto the test canvas.
+        v.pan = vec2(100.0, 100.0) - v.pos["n5"].to_vec2();
+        // Past the moment after a site's title was last clicked (never,
+        // which is time zero): clicks count from then.
+        for _ in 0..5 {
+            frame(&ctx, &mut v, vec![]);
+        }
+        click(
+            &ctx,
+            &mut v,
+            pos2(110.0, 110.0),
+            egui::PointerButton::Primary,
+        );
+        assert_eq!(v.selected.as_deref(), Some("n5"), "the inspector shows it");
+        // Its way to the internet is lit, and the card under it; the rest
+        // is dimmed as on the flat map.
+        let (cards, links) = v.lit(&v.selection());
+        assert_eq!(links, set(&[1, 2, 3, 5, 7]));
+        assert!(cards.contains(&0) && !cards.contains(&4) && !cards.contains(&6));
+    }
+
+    #[test]
+    fn a_drag_in_the_exploded_view_pans_and_moves_no_card() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        v.pan = vec2(100.0, 100.0) - v.pos["n5"].to_vec2();
+        let (pan, at) = (v.pan, pos2(110.0, 110.0));
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut v, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, &mut v, vec![press(true)]);
+        for k in 1..=4 {
+            let to = at + vec2(20.0 * k as f32, 0.0);
+            frame(&ctx, &mut v, vec![egui::Event::PointerMoved(to)]);
+        }
+        frame(&ctx, &mut v, vec![press(false)]);
+        assert!(v.placed.is_empty(), "no card was moved: {:?}", v.placed);
+        assert!(v.drag.is_none());
+        assert!(
+            v.pan.x > pan.x + 40.0,
+            "the map panned: {:?} from {pan:?}",
+            v.pan
+        );
+    }
+
+    #[test]
+    fn esc_lets_go_of_the_cards_then_puts_the_map_back_flat() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        v.select(Some(5));
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut v, vec![key(egui::Key::Escape)]);
+        assert!(v.selection().is_empty());
+        assert!(v.ex_on, "the first Esc only lets go of the card");
+        // [ and ] turn the view a step.
+        let yaw = v.ex.yaw;
+        frame(&ctx, &mut v, vec![key(egui::Key::CloseBracket)]);
+        assert!((v.ex.yaw - yaw - crate::map::explode::SNAP).abs() < 1e-4);
+        frame(&ctx, &mut v, vec![key(egui::Key::OpenBracket)]);
+        assert!((v.ex.yaw - yaw).abs() < 1e-4);
+        frame(&ctx, &mut v, vec![key(egui::Key::Escape)]);
+        assert!(!v.ex_on);
+        settle(&ctx, &mut v);
+        assert!(!v.exploded());
+    }
+
+    #[test]
+    fn a_rebuilt_map_is_never_drawn_from_the_last_ones_scene() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        // The data changes under the view (a sweep, a file): until the
+        // next frame opens the new layout up, cards are the layout's.
+        v.map.nodes.truncate(3);
+        v.lay = layout::layout_in(&v.map, &|_| true, Mode::Cluster);
+        assert_eq!(v.target(2), v.lay.pos[2]);
+        assert_eq!(v.stack().len(), 3);
+        v.bounds();
+        settle(&ctx, &mut v);
+        assert_eq!(v.scene().map(|s| s.pos.len()), Some(3));
+        // Emptied: nothing to open up, and nothing breaks.
+        v.map.nodes.clear();
+        v.lay = Layout::default();
+        settle(&ctx, &mut v);
+        assert!(v.lines_now().is_empty());
+        assert!(!v.bounds().is_finite());
     }
 }
