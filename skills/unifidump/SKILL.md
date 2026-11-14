@@ -196,7 +196,9 @@ directly) decides what's worth flagging on a given site:
   and B's points right back at A. Physically impossible (one end has to
   be upstream), so this means the controller's uplink data disagrees
   with itself — usually stale state from a re-cabling. Worth a physical
-  verification, not an assumption either way.
+  verification, not an assumption either way. Nearly every controller
+  has some, so on its own this is a `low` finding (see `/mapnetwork`),
+  never a site's headline.
 - **`unresolved_uplinks`** — a device's `uplink_mac` doesn't match any
   device in this export. Either hardware that was never adopted into
   this controller, or something removed before the backup was taken.

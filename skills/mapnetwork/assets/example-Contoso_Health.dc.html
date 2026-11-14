@@ -2844,9 +2844,6 @@ class Component extends DCLogic {
           "Firmware: 7.5.10.17129",
           "IP: 10.110.10.134"
         ],
-        "flags": [
-          "Reciprocal uplink in controller data — direction shown is a layout assumption; verify cabling on-site"
-        ],
         "chips": [
           "USW"
         ]
@@ -2991,9 +2988,6 @@ class Component extends DCLogic {
           "Firmware: 7.5.10.17129",
           "IP: 10.110.10.110"
         ],
-        "flags": [
-          "Reciprocal uplink in controller data — direction shown is a layout assumption; verify cabling on-site"
-        ],
         "chips": [
           "USW"
         ]
@@ -3010,9 +3004,6 @@ class Component extends DCLogic {
           "Firmware: 7.5.10.17129",
           "IP: 10.124.10.167"
         ],
-        "flags": [
-          "Reciprocal uplink in controller data — direction shown is a layout assumption; verify cabling on-site"
-        ],
         "chips": [
           "USW"
         ]
@@ -3028,9 +3019,6 @@ class Component extends DCLogic {
           "Model: USPM48P",
           "Firmware: 7.5.10.17129",
           "IP: 10.124.10.156"
-        ],
-        "flags": [
-          "Reciprocal uplink in controller data — direction shown is a layout assumption; verify cabling on-site"
         ],
         "chips": [
           "USW"
@@ -3781,20 +3769,9 @@ class Component extends DCLogic {
 
     this.ACTIONS = [
       {
-        "id": "a1",
-        "sev": "high",
-        "text": "Two switch-to-switch reciprocal uplink pairs at Alpha (Exec Suites IDF Center <-> New Building IDF 3, and New Building IDF 1 <-> IDF 2) — controller data disagrees with itself on which end is upstream. Direction shown on the map is an assumption for layout only; verify physically before trusting it.",
-        "nodes": [
-          "d_1c6a1b79c63f",
-          "d_1c6a1b022d16",
-          "d_1c6a1b916541",
-          "d_58d61fd56f66"
-        ]
-      },
-      {
         "id": "a2",
         "sev": "high",
-        "text": "Alpha campus is topologically split into 3 disconnected clusters on this data (Exec Suites IDF Right/MDF, Exec Suites IDF Center + New Building IDF 3 + Alpha Lab, and New Building IDF 1/IDF 2) — no uplink record ties them together even after resolving the reciprocal pairs above. If this is genuinely one campus, there is a physical link the controller never recorded; trace it on-site.",
+        "text": "Alpha campus is topologically split into 3 disconnected clusters on this data (Exec Suites IDF Right/MDF, Exec Suites IDF Center + New Building IDF 3 + Alpha Lab, and New Building IDF 1/IDF 2) — no uplink record ties them together even after resolving the reciprocal pairs (a1). If this is genuinely one campus, there is a physical link the controller never recorded; trace it on-site.",
         "nodes": [
           "d_1c6a1b096548",
           "d_1c6a1b79c63f",
@@ -3812,20 +3789,20 @@ class Component extends DCLogic {
         ]
       },
       {
+        "id": "a5",
+        "sev": "high",
+        "text": "Alpha Lab - UPS PC switch is on firmware 2.1.6.762 — a major-version outlier (everything else on this network is on 6.x/7.x/8.x). Likely long overdue for adoption/upgrade; check for EOL/security exposure.",
+        "nodes": [
+          "d_f4e2c6acb8c7"
+        ]
+      },
+      {
         "id": "a4",
         "sev": "med",
         "text": "Foxtrot's switch uplinks through Golf's switch (port 24) — an unexpected cross-site wired link. Confirm this is intentional WAN/backhaul routing and not a stale or mistaken patch.",
         "nodes": [
           "d_d021f95e37df",
           "d_d021f98f073b"
-        ]
-      },
-      {
-        "id": "a5",
-        "sev": "high",
-        "text": "Alpha Lab - UPS PC switch is on firmware 2.1.6.762 — a major-version outlier (everything else on this network is on 6.x/7.x/8.x). Likely long overdue for adoption/upgrade; check for EOL/security exposure.",
-        "nodes": [
-          "d_f4e2c6acb8c7"
         ]
       },
       {
@@ -3836,6 +3813,26 @@ class Component extends DCLogic {
           "d_74fa29c3fe56",
           "d_8cede1c6648a",
           "d_8cede1d0cb4a"
+        ]
+      },
+      {
+        "id": "a9",
+        "sev": "med",
+        "text": "Oscar - Clinic switch shows two SonicWall-OUI devices with adjacent MACs (...70:ee and ...70:ef) as plain \"clients\" on ports 19 and 24 — the classic signature of one physical appliance with two legs into the switch, not two coincidental client devices. Rendered here as an inferred gateway node; confirm model/firmware/config on-site since this was inferred from client-table data, not the device list.",
+        "nodes": [
+          "d_sonicwall_inferred",
+          "d_f4e2c6e04b0f"
+        ]
+      },
+      {
+        "id": "a1",
+        "sev": "low",
+        "text": "Two switch-to-switch reciprocal uplink pairs at Alpha (Exec Suites IDF Center <-> New Building IDF 3, and New Building IDF 1 <-> IDF 2) — controller data disagrees with itself on which end is upstream. Direction shown on the map is an assumption for layout only; verify physically when next on-site. Stale uplink records like these are common after a re-cabling.",
+        "nodes": [
+          "d_1c6a1b79c63f",
+          "d_1c6a1b022d16",
+          "d_1c6a1b916541",
+          "d_58d61fd56f66"
         ]
       },
       {
@@ -3851,15 +3848,6 @@ class Component extends DCLogic {
         "nodes": [
           "d_d8b37066650f",
           "d_602232cd1630"
-        ]
-      },
-      {
-        "id": "a9",
-        "sev": "med",
-        "text": "Oscar - Clinic switch shows two SonicWall-OUI devices with adjacent MACs (...70:ee and ...70:ef) as plain \"clients\" on ports 19 and 24 — the classic signature of one physical appliance with two legs into the switch, not two coincidental client devices. Rendered here as an inferred gateway node; confirm model/firmware/config on-site since this was inferred from client-table data, not the device list.",
-        "nodes": [
-          "d_sonicwall_inferred",
-          "d_f4e2c6e04b0f"
         ]
       }
     ];

@@ -2023,7 +2023,9 @@ impl B {
             let (ia, Some(ib)) = (device_idx[a], resolved[a]) else {
                 continue;
             };
-            // Each other's uplink: one record is stale, or there's a loop.
+            // Each other's uplink: one record is stale (nearly every
+            // controller has some, left by a re-cabling), or there's a
+            // loop. Hygiene, not an alarm: low.
             if let Some(bpos) = device_idx.iter().position(|&x| x == ib)
                 && resolved[bpos] == Some(ia)
                 && ia < ib
@@ -2032,9 +2034,9 @@ impl B {
                 let top = if children(ia) >= children(ib) { ia } else { ib };
                 cut.insert(top);
                 self.finding(
-                    Sev::Med,
+                    Sev::Low,
                     format!(
-                        "UniFi lists {} and {} as each other's uplink: one record is stale or there's a loop. Drawn with {} on top; check the uplink port on both.",
+                        "UniFi lists {} and {} as each other's uplink: most often a stale record left by a re-cabling, rarely a loop. Drawn with {} on top; check the uplink port on both when next on site.",
                         self.nodes[ia].label, self.nodes[ib].label, self.nodes[top].label
                     ),
                     &[ia, ib],
@@ -3113,11 +3115,14 @@ mod tests {
             parent(&m, "Unidentified upstream device"),
             "Gateway (not in the data)"
         );
-        assert!(
-            m.findings
-                .iter()
-                .any(|f| f.text.contains("each other's uplink"))
-        );
+        // Stale uplink records are on nearly every controller: hygiene,
+        // never the top of a site's findings.
+        let pair = m
+            .findings
+            .iter()
+            .find(|f| f.text.contains("each other's uplink"))
+            .expect("the pair is a finding");
+        assert_eq!(pair.sev, Sev::Low);
         assert!(
             m.findings
                 .iter()
