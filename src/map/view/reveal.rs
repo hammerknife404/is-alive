@@ -142,7 +142,10 @@ impl MapView {
             let Some(&at) = self.pos.get(&n.id).filter(|_| !self.faded(i, &lit)) else {
                 continue;
             };
-            let card = Rect::from_min_size(self.to_screen(rect, at), layout::card_size(n) * z);
+            let card = Rect::from_min_size(
+                self.to_screen(rect, at),
+                layout::card_size(n) * z * self.card_scale(i),
+            );
             if !card.intersects(rect) {
                 continue;
             }

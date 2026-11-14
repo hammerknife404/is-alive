@@ -305,7 +305,7 @@ const SCENES: &[Scene] = &[
         Tab::Map,
         |a, _| a.map.default_layout_for_shots(),
         |a| {
-            if a.map.explode_for_shots(Some(0.0)) {
+            if a.map.explode_for_shots(Some(0.0), false) {
                 Ready::Yes
             } else {
                 Ready::Wait
@@ -313,19 +313,30 @@ const SCENES: &[Scene] = &[
         },
     ),
     scene("map-exploded-split", Tab::Map, nothing, |a| {
-        if a.map.explode_for_shots(Some(1.0)) {
+        if a.map.explode_for_shots(Some(1.0), false) {
             a.map.select_for_shots();
             Ready::Yes
         } else {
             Ready::Wait
         }
     }),
+    scene("map-three-d", Tab::Map, nothing, |a| {
+        if a.map.explode_for_shots(Some(0.0), true) {
+            Ready::Yes
+        } else {
+            Ready::Wait
+        }
+    }),
+    scene("map-three-d-selected", Tab::Map, nothing, |a| {
+        a.map.select_for_shots();
+        Ready::Yes
+    }),
     scene(
         "map-sites",
         Tab::Map,
         |a, ctx| {
             a.look.map_legend = true;
-            a.map.explode_for_shots(None);
+            a.map.explode_for_shots(None, false);
             a.map.default_layout_for_shots();
             a.export.open_example(ctx, 1)
         },

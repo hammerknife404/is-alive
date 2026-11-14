@@ -458,11 +458,11 @@ fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
     b.frame(true).fill(fill)
 }
 
-/// Seconds the Map tab pulses for after a full scan (three slow pulses);
+/// Seconds the Map tab pulses for after a full scan (five slow pulses);
 /// with Animate off it lights up, still, for a moment instead.
-const PULSE_SECS: f64 = 3.6;
-const PULSES: f64 = 3.0;
-const STILL_SECS: f64 = 1.5;
+const PULSE_SECS: f64 = 6.0;
+const PULSES: f64 = 5.0;
+const STILL_SECS: f64 = 2.5;
 
 /// The Map tab calling for attention once a full scan is done: it glows in
 /// the accent colour for a few seconds, then keeps a ring until it's opened.
@@ -532,19 +532,47 @@ fn glow_secs(animate: bool) -> f64 {
     if animate { PULSE_SECS } else { STILL_SECS }
 }
 
-/// A soft accent fill behind the Map's nav row, `glow` 0–1.
+/// The Map's nav row lit in the accent colour, `glow` 0–1: a strong fill
+/// and edge, and a halo spreading a few points past the row, so it's seen
+/// from the corner of the eye across the window.
 pub(crate) fn map_glow(p: &egui::Painter, r: egui::Rect, glow: f32) {
     if glow <= 0.0 {
         return;
     }
     let accent = theme::accent();
+    // The halo: wider and fainter, ring by ring. Over whatever is beside
+    // the row, so not clipped to it.
+    let halo = p.with_clip_rect(r.expand(GLOW_HALO + 1.0));
+    for k in (1..=GLOW_RINGS).rev() {
+        let out = GLOW_HALO * k as f32 / GLOW_RINGS as f32;
+        halo.add(egui::epaint::RectShape::stroke(
+            r.expand(out),
+            6.0 + out,
+            egui::Stroke::new(
+                GLOW_HALO / GLOW_RINGS as f32 + 0.5,
+                accent.gamma_multiply(glow_ring(k) * glow),
+            ),
+            egui::StrokeKind::Middle,
+        ));
+    }
     p.add(egui::epaint::RectShape::new(
         r,
         6.0,
-        accent.gamma_multiply(0.3 * glow),
-        egui::Stroke::new(1.0, accent.gamma_multiply(0.7 * glow)),
+        accent.gamma_multiply(GLOW_FILL * glow),
+        egui::Stroke::new(2.0, accent.gamma_multiply(glow)),
         egui::StrokeKind::Inside,
     ));
+}
+
+/// How strong the glow's fill is at its brightest, how far its halo
+/// reaches past the row in points, and in how many rings.
+const GLOW_FILL: f32 = 0.55;
+const GLOW_HALO: f32 = 6.0;
+const GLOW_RINGS: usize = 4;
+
+/// How strong halo ring `k` (1 the innermost) is at full glow.
+fn glow_ring(k: usize) -> f32 {
+    0.4 * (1.0 - (k as f32 - 1.0) / GLOW_RINGS as f32).powi(2)
 }
 
 /// A small ring at the top-right corner of `r` (the Map's icon) until the
@@ -589,6 +617,16 @@ pub(crate) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Map's glow after a full scan is strong at its heart and fades
+    /// outward: each ring of its halo fainter than the one inside it, the
+    /// outermost still there to be seen.
+    #[test]
+    fn the_maps_glow_fades_outward_from_a_strong_heart() {
+        let rings: Vec<f32> = (1..=GLOW_RINGS).map(glow_ring).collect();
+        assert!(rings.windows(2).all(|w| w[1] < w[0]), "{rings:?}");
+        assert!(rings[0] < GLOW_FILL && *rings.last().unwrap() > 0.01);
+    }
 
     #[test]
     fn full_scan_text_reads_on_every_themes_accent() {

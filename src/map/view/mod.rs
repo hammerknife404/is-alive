@@ -257,6 +257,9 @@ pub struct MapView {
     ex: crate::map::explode::Camera,
     ex_now: crate::map::explode::Camera,
     ex_scene: Option<crate::map::explode::Scene>,
+    /// In 3D, the view turns slowly by itself (Spin), while Animate is on
+    /// and until the map has been left alone for a while.
+    ex_spin: bool,
     /// Steps to undo and redo on this map.
     history: history::History<history::Edits>,
     /// A saved map: drawn from this (every site open) rather than from the
@@ -1153,7 +1156,12 @@ impl MapView {
     /// Bounds of the laid-out map, with cards dragged elsewhere.
     fn bounds(&self) -> Rect {
         if let Some(s) = self.scene() {
-            return s.bounds(&|i| layout::card_size(&self.map.nodes[i]));
+            // Spinning, the room it needs whichever way it faces: the
+            // map doesn't grow and shrink as it turns.
+            return match s.frame.filter(|_| self.ex_spin) {
+                Some(frame) => frame,
+                None => s.bounds(&|i| layout::card_size(&self.map.nodes[i])),
+            };
         }
         let mut r = Rect::NOTHING;
         for i in 0..self.map.nodes.len() {
@@ -1543,6 +1551,13 @@ impl MapView {
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::E))
         {
             self.explode_toggle();
+        }
+        // 3 puts the map in 3D (opening it up), and back.
+        if !self.keys_busy
+            && !ctx.text_edit_focused()
+            && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::Num3))
+        {
+            self.three_d_toggle();
         }
         self.explode_update(&ctx);
         if self.zoom == 0.0 {
@@ -3381,5 +3396,126 @@ mod tests {
         settle(&ctx, &mut v);
         assert!(v.lines_now().is_empty());
         assert!(!v.bounds().is_finite());
+    }
+
+    #[test]
+    fn three_d_opens_the_map_up_and_leaves_it_opened_up() {
+        let ctx = egui::Context::default();
+        let mut v = tree8();
+        v.animate = false;
+        v.zoom = 1.0;
+        v.animate(&ctx);
+        // From the flat map, 3D opens it up and puts it in 3D at once.
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        assert!(v.exploded() && v.three_d());
+        assert!(v.scene().unwrap().frame.is_some());
+        // Spin is 3D's: leaving 3D stops it, and leaves the exploded
+        // drawing on show.
+        v.ex_spin = true;
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        assert!(v.exploded() && !v.three_d() && !v.ex_spin);
+        assert!(v.scene().unwrap().scale.iter().all(|&k| k == 1.0));
+    }
+
+    #[test]
+    fn in_three_d_a_card_is_clicked_at_the_size_it_is_drawn() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        // The nearest card is drawn last, bigger than its own size, and is
+        // hit anywhere inside what's drawn.
+        let i = *v.stack().last().unwrap();
+        let k = v.card_scale(i);
+        assert!(k > 1.05, "{k}");
+        let at = v.pos[&format!("n{i}")];
+        let size = layout::card_size(&v.map.nodes[i]);
+        let inside = at + size * k - vec2(3.0, 3.0);
+        assert!(!Rect::from_min_size(at, size).contains(inside));
+        assert_eq!(v.hit(inside), Some(i));
+        // The farthest is smaller than its own size, and isn't hit where
+        // it would have been at full size.
+        let j = v.stack()[0];
+        assert!(v.card_scale(j) < 0.98, "{}", v.card_scale(j));
+    }
+
+    #[test]
+    fn a_drag_in_three_d_turns_and_tips_the_view() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        let (pan, cam, at) = (v.pan, v.ex, pos2(400.0, 250.0));
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, &mut v, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, &mut v, vec![press(true)]);
+        for k in 1..=4 {
+            let to = at + vec2(20.0 * k as f32, 10.0 * k as f32);
+            frame(&ctx, &mut v, vec![egui::Event::PointerMoved(to)]);
+        }
+        frame(&ctx, &mut v, vec![press(false)]);
+        assert!(
+            v.ex.yaw > cam.yaw + 0.2,
+            "turned: {} from {}",
+            v.ex.yaw,
+            cam.yaw
+        );
+        assert!(v.ex.pitch > cam.pitch + 0.05, "tipped: {}", v.ex.pitch);
+        assert_eq!(v.pan, pan, "and the map stayed put");
+        assert!(v.placed.is_empty());
+        // However far it's dragged, the view never tips past its limits.
+        v.orbit(vec2(0.0, 1e6));
+        assert_eq!(v.ex.pitch, crate::map::explode::PITCH_MAX);
+        v.orbit(vec2(0.0, -1e6));
+        assert_eq!(v.ex.pitch, crate::map::explode::PITCH_MIN);
+    }
+
+    #[test]
+    fn spin_turns_the_view_only_in_three_d_with_animate_on_and_someone_there() {
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        v.ex_spin = true;
+        let turned = |v: &mut MapView| {
+            let before = v.ex.yaw;
+            v.explode_update(&ctx);
+            v.ex.yaw != before
+        };
+        v.animate = true;
+        v.flowing = true;
+        assert!(turned(&mut v));
+        // Left alone for a while: it holds still, costing nothing.
+        v.flowing = false;
+        assert!(!turned(&mut v));
+        v.flowing = true;
+        v.animate = false;
+        assert!(!turned(&mut v));
+        v.animate = true;
+        v.three_d_toggle();
+        assert!(!turned(&mut v), "not in the exploded drawing");
+    }
+
+    #[test]
+    fn a_picture_from_three_d_is_the_exploded_drawing_from_the_same_side() {
+        use crate::map::export::{Format, Look};
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        let look = Look::new(&egui::Visuals::dark(), false);
+        let svg = |v: &MapView| v.drawn(|d| Format::Svg.text(d, look)).unwrap();
+        let drawing = svg(&v);
+        v.three_d_toggle();
+        settle(&ctx, &mut v);
+        // A picture's cards are all one size, so it's drawn without the
+        // view from a point: the same picture as before 3D.
+        assert_eq!(svg(&v), drawing);
+        assert!(v.picture_scene().unwrap().scale.iter().all(|&k| k == 1.0));
     }
 }

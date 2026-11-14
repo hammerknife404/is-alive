@@ -6,6 +6,12 @@
 use super::*;
 use crate::map::explode::{self, Camera, Part, Scene};
 
+/// How fast Spin turns the 3D view, in radians a second: once round in
+/// about 40 seconds.
+const SPIN: f32 = 0.16;
+/// How far a drag turns the 3D view, in radians a point.
+const ORBIT: f32 = 0.008;
+
 /// The plates, top to bottom: the roles each holds.
 const TIERS: [&[Zone]; 7] = [
     &[Zone::Internet],
@@ -28,6 +34,32 @@ impl MapView {
     /// The map is drawn opened up (or is on its way there or back).
     pub(super) fn exploded(&self) -> bool {
         self.ex_scene.is_some()
+    }
+
+    /// How big card `i` is drawn, of its own size: 1 but in 3D, where a
+    /// nearer card is bigger.
+    pub(super) fn card_scale(&self, i: usize) -> f32 {
+        self.scene().map_or(1.0, |s| s.scale_of(i))
+    }
+
+    /// The view is in 3D (or on its way there).
+    pub(super) fn three_d(&self) -> bool {
+        self.ex_on && self.ex.depth >= 0.5
+    }
+
+    /// 3D on or off: the view from a point, turned any way with a drag.
+    /// It opens the map up if it's flat.
+    pub(super) fn three_d_toggle(&mut self) {
+        let on = !self.three_d();
+        self.ex.depth = if on { 1.0 } else { 0.0 };
+        if !on {
+            self.ex_spin = false;
+        }
+        if on && !self.ex_on {
+            self.explode_toggle();
+        }
+        self.follow = true;
+        self.whole = true;
     }
 
     /// Where the layout puts card `i` on the flat map (or where it was
@@ -55,9 +87,10 @@ impl MapView {
         self.ex.yaw = explode::turned(self.ex.yaw, dir);
     }
 
-    /// For the screenshot tour: opened up and split this far, nothing
-    /// selected (None: flat again). False until the view has settled.
-    pub fn explode_for_shots(&mut self, split: Option<f32>) -> bool {
+    /// For the screenshot tour: opened up and split this far, in 3D or
+    /// not, nothing selected (None: flat again). False until the view has
+    /// settled.
+    pub fn explode_for_shots(&mut self, split: Option<f32>, three_d: bool) -> bool {
         let on = split.is_some();
         if self.ex_on != on {
             self.select(None);
@@ -66,8 +99,44 @@ impl MapView {
         if let Some(split) = split {
             self.ex.split = split;
         }
+        let depth = if three_d { 1.0 } else { 0.0 };
+        if self.ex.depth != depth {
+            self.select(None);
+            self.ex.depth = depth;
+        }
         let want = if on { self.ex.amount } else { 0.0 };
-        self.ex_now.amount == want && self.ex_now.split == self.ex.split && self.aim.is_none()
+        self.ex_now.amount == want
+            && self.ex_now.split == self.ex.split
+            && self.ex_now.depth == self.ex.depth
+            && self.aim.is_none()
+    }
+
+    /// A drag by `d` on the map in 3D turns the view: across turns it
+    /// about its upright axis, up and down tips it.
+    pub(super) fn orbit(&mut self, d: Vec2) {
+        self.ex.yaw += d.x * ORBIT;
+        self.ex.pitch =
+            (self.ex.pitch + d.y * ORBIT * 0.75).clamp(explode::PITCH_MIN, explode::PITCH_MAX);
+        // Under the hand, not easing after it; and the zoom is the user's
+        // now (Fit frames it again).
+        self.ex_now.yaw = self.ex.yaw;
+        self.ex_now.pitch = self.ex.pitch;
+        self.follow = false;
+    }
+
+    /// The scene Export's pictures draw: the view as shown, but in 3D
+    /// the exploded drawing from the same side (a picture's cards are all
+    /// one size).
+    pub(super) fn picture_scene(&self) -> Option<std::borrow::Cow<'_, Scene>> {
+        let scene = self.scene()?;
+        if self.ex_now.depth <= 0.0 {
+            return Some(std::borrow::Cow::Borrowed(scene));
+        }
+        let cam = Camera {
+            depth: 0.0,
+            ..self.ex_now
+        };
+        Some(std::borrow::Cow::Owned(explode::build(&self.parts(), cam)))
     }
 
     /// The flat layout as `explode::build` takes it.
@@ -126,6 +195,15 @@ impl MapView {
         ease(&mut self.ex_now.amount, want.amount);
         ease(&mut self.ex_now.yaw, want.yaw);
         ease(&mut self.ex_now.split, want.split);
+        ease(&mut self.ex_now.pitch, want.pitch);
+        ease(&mut self.ex_now.depth, want.depth);
+        // Spin: a slow turn of its own, while the packets would flow (it
+        // holds still once the map has been left alone a while).
+        if self.ex_spin && self.three_d() && self.animate && self.flowing {
+            self.ex.yaw += dt * SPIN;
+            self.ex_now.yaw = self.ex.yaw;
+            moving = true;
+        }
         if moving {
             ctx.request_repaint();
         }
@@ -175,10 +253,28 @@ impl MapView {
             let shown = zones.iter().any(|zn| !self.hidden.contains(zn));
             let a = if shown { a } else { a * 0.25 };
             let c = zone_colour(zones.first().copied().unwrap_or_default());
+            // In 3D each plate is a lit sheet ruled with a grid: a soft
+            // wide edge under a bright thin one.
+            let lit = self.ex_now.depth;
+            if lit > 0.0 {
+                let rule = Stroke::new(1.0, c.gamma_multiply(0.16 * a * lit));
+                p.extend(
+                    plate
+                        .grid
+                        .iter()
+                        .map(|l| Shape::line_segment(l.map(|q| self.to_screen(rect, q)), rule)),
+                );
+                let mut edge = quad.to_vec();
+                edge.push(quad[0]);
+                p.add(Shape::line(
+                    edge,
+                    Stroke::new(5.0, c.gamma_multiply(0.14 * a * lit)),
+                ));
+            }
             p.add(Shape::convex_polygon(
                 quad.to_vec(),
-                c.gamma_multiply(0.07 * a),
-                Stroke::new(1.0, c.gamma_multiply(0.55 * a)),
+                c.gamma_multiply((0.07 + 0.03 * lit) * a),
+                Stroke::new(1.0, c.gamma_multiply((0.55 + 0.35 * lit) * a)),
             ));
             // Named above its top-left corner as drawn, while it's wide
             // enough to carry a name: zoomed out to colour tiles, the
@@ -197,6 +293,24 @@ impl MapView {
                 );
             }
         }
+        // The circle the map stands on in 3D.
+        if scene.ring.len() > 2 {
+            let glow = crate::theme::accent();
+            let pts: Vec<Pos2> = scene
+                .ring
+                .iter()
+                .map(|q| self.to_screen(rect, *q))
+                .collect();
+            let lit = self.ex_now.depth * a;
+            p.add(Shape::line(
+                pts.clone(),
+                Stroke::new(6.0, glow.gamma_multiply(0.10 * lit)),
+            ));
+            p.add(Shape::line(
+                pts,
+                Stroke::new(1.0, glow.gamma_multiply(0.55 * lit)),
+            ));
+        }
         let ring = vis.weak_text_color().gamma_multiply(0.8 * a);
         for foot in &scene.feet {
             let at = self.to_screen(rect, *foot);
@@ -206,12 +320,12 @@ impl MapView {
         }
     }
 
-    /// Explode, above the zoom buttons in the corner of `place`; and,
-    /// while the map is opened up, beside it: turn left and right, how far
-    /// it's exploded, how far split.
+    /// Explode and 3D, above the zoom buttons in the corner of `place`;
+    /// and, while the map is opened up, beside them: turn left and right,
+    /// how far it's exploded, how far split, and (in 3D) Spin.
     pub(super) fn explode_controls(&mut self, ui: &mut Ui, place: Rect) {
         let h = crate::theme::TARGET_H;
-        let w = 74.0;
+        let (w, w3) = (74.0, 40.0);
         // Left of Save, where a narrow canvas puts it above the zoom
         // buttons too.
         let (right, y) = match tabs::toggle_rect(place) {
@@ -232,16 +346,36 @@ impl MapView {
         {
             self.explode_toggle();
         }
+        let mut left = right - w - 4.0;
+        if left - w3 >= place.min.x + 4.0 {
+            let r = Rect::from_min_size(pos2(left - w3, y), vec2(w3, h));
+            if ui
+                .put(r, egui::Button::new("3D").selected(self.three_d()))
+                .on_hover_text(
+                    "3D: the opened-up map seen from a point, nearer cards bigger. Drag to \
+                     turn and tip it, Shift+drag to move it, scroll to zoom (3)",
+                )
+                .clicked()
+            {
+                self.three_d_toggle();
+            }
+            left -= w3 + 4.0;
+        }
         if !self.ex_on {
             return;
         }
-        let slider = 96.0;
-        let row = 28.0 * 2.0 + 4.0 + 2.0 * (slider + 68.0) + 22.0;
-        let panel = Rect::from_min_size(pos2(right - w - 6.0 - row, y - 4.0), vec2(row, h + 8.0));
+        // Spin only in 3D; the sliders give way when room is short.
+        let spin = if self.three_d() { 52.0 + 4.0 } else { 0.0 };
+        let label = 68.0;
+        let fixed = 8.0 + 2.0 * 32.0 + 2.0 * (label + 4.0) + spin;
+        let room = left - 2.0 - (place.min.x + 4.0);
         // No room beside a floating inspector: the keys still turn it.
-        if panel.min.x < place.min.x + 4.0 {
+        if room < fixed + 2.0 * 40.0 {
             return;
         }
+        let slider = ((room - fixed) / 2.0).min(96.0);
+        let row = fixed + 2.0 * slider;
+        let panel = Rect::from_min_size(pos2(left - 2.0 - row, y - 4.0), vec2(row, h + 8.0));
         // The row takes clicks, so none reach the map under it.
         ui.interact(panel, ui.id().with("map_explode"), Sense::click_and_drag());
         let vis = ui.visuals().clone();
@@ -259,16 +393,21 @@ impl MapView {
             at += w + 4.0;
             r
         };
+        let how = if self.three_d() {
+            "drag the map to turn it freely"
+        } else {
+            "Alt+drag on the map turns it freely"
+        };
         if ui
             .put(place(28.0), egui::Button::new("⟲"))
-            .on_hover_text("Turn the view left ([); Alt+drag on the map turns it freely")
+            .on_hover_text(format!("Turn the view left ([); {how}"))
             .clicked()
         {
             self.explode_turn(-1.0);
         }
         if ui
             .put(place(28.0), egui::Button::new("⟳"))
-            .on_hover_text("Turn the view right (]); Alt+drag on the map turns it freely")
+            .on_hover_text(format!("Turn the view right (]); {how}"))
             .clicked()
         {
             self.explode_turn(1.0);
@@ -290,7 +429,7 @@ impl MapView {
                 .changed()
         };
         let mut cam = self.ex;
-        let r = place(slider + 68.0);
+        let r = place(slider + label);
         let exploded = dial(
             ui,
             r,
@@ -298,7 +437,7 @@ impl MapView {
             "Explode",
             "How far the plates are pulled apart: all the way left is the flat map",
         );
-        let r = place(slider + 68.0);
+        let r = place(slider + label);
         let split = dial(
             ui,
             r,
@@ -307,6 +446,22 @@ impl MapView {
             "Pull each branch of the network (a switch and everything under it) away from \
              the others, onto plates of its own",
         );
+        if self.three_d() {
+            let r = place(52.0);
+            let can = self.animate;
+            let b = egui::Button::new("Spin").selected(self.ex_spin && can);
+            if ui
+                .put(r, |ui: &mut Ui| ui.add_enabled(can, b))
+                .on_hover_text(
+                    "Turn the view slowly by itself. It holds still once the map has been \
+                     left alone for half a minute",
+                )
+                .on_disabled_hover_text("Animate is off (Settings)")
+                .clicked()
+            {
+                self.ex_spin = !self.ex_spin;
+            }
+        }
         if exploded || split {
             self.ex = cam;
             // All the way down is the flat map: back out of the view.

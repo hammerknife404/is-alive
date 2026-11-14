@@ -877,7 +877,7 @@ impl MapView {
                 && self.pos.get(&n.id).is_some_and(|&p| {
                     let r = Rect::from_min_size(
                         self.to_screen(rect, p),
-                        layout::card_size(n) * self.zoom,
+                        layout::card_size(n) * self.zoom * self.card_scale(i),
                     );
                     paint::note_rect(r, self.zoom).expand(2.0).contains(at)
                 })
