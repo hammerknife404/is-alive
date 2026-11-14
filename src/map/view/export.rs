@@ -86,8 +86,14 @@ impl MapView {
         }
     }
 
-    /// The map as laid out now, for any export.
+    /// The map as laid out now, for any export: its pictures as the canvas
+    /// shows it, opened up when it is.
     pub(super) fn drawn<R>(&self, f: impl FnOnce(&Drawn) -> R) -> R {
+        self.drawn_as(true, f)
+    }
+
+    /// As `drawn`; without `as_shown`, flat whatever the canvas shows.
+    fn drawn_as<R>(&self, as_shown: bool, f: impl FnOnce(&Drawn) -> R) -> R {
         let pos: Vec<Option<Pos2>> = (0..self.map.nodes.len())
             .map(|i| self.flat_target(i))
             .collect();
@@ -99,6 +105,7 @@ impl MapView {
             moved: &moved,
             legend: self.legend,
             caption: self.purpose.caption(),
+            exploded: self.scene().filter(|_| as_shown),
         })
     }
 
@@ -131,7 +138,7 @@ impl MapView {
         }
         let svg = if picture {
             let look = Look::new(&egui::Visuals::light(), true).without_findings();
-            self.drawn(|d| Format::Svg.text(d, look))?
+            self.drawn_as(false, |d| Format::Svg.text(d, look))?
         } else {
             String::new()
         };

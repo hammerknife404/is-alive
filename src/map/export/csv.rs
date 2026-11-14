@@ -160,6 +160,7 @@ mod tests {
             moved: &[false, false],
             legend: false,
             caption: None,
+            exploded: None,
         });
         let r = rows(&s);
         assert_eq!(r.len(), 3);

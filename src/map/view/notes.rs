@@ -1396,6 +1396,7 @@ mod tests {
             moved: &moved,
             legend: true,
             caption: None,
+            exploded: None,
         };
         let look = Look::new(&egui::Visuals::dark(), false);
         for f in [

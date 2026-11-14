@@ -36,6 +36,7 @@ use super::history::Edits;
 use super::*;
 use crate::input;
 use crate::map::Finding;
+use crate::map::explode::Camera;
 use serde_json::{Map as Obj, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -141,6 +142,9 @@ pub struct Snapshot {
     pub edits: Edits,
     /// Pan and zoom, or None to fit the whole map.
     pub camera: Option<(Vec2, f32)>,
+    /// The exploded view it was saved in: how far apart, turned and
+    /// split. None: flat.
+    pub exploded: Option<Camera>,
     pub purpose: Purpose,
     /// The answer key (a training map only).
     pub faults: Vec<Fault>,
@@ -294,6 +298,9 @@ pub fn to_json(s: &Snapshot) -> String {
     let camera = s
         .camera
         .map(|(pan, zoom)| json!({"pan": [pan.x, pan.y], "zoom": zoom}));
+    let exploded = s
+        .exploded
+        .map(|c| json!({"amount": c.amount, "yaw": c.yaw, "split": c.split}));
     let mut doc = json!({
         "format": FORMAT,
         "version": VERSION,
@@ -320,6 +327,7 @@ pub fn to_json(s: &Snapshot) -> String {
             "boxes": boxes,
             "links": s.edits.links.key(),
             "camera": camera,
+            "exploded": exploded,
         },
     });
     // Only a training map carries an answer key (one on another map
@@ -582,6 +590,21 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .contains(&zoom)
             .then_some((pan.to_vec2(), zoom))
     });
+    // A map saved before the exploded view, or flat, has none. Numbers
+    // out of range are brought into it; anything else is flat.
+    let exploded = view.get("exploded").and_then(|c| {
+        let num = |k: &str| {
+            c.get(k)
+                .and_then(Value::as_f64)
+                .map(|n| n as f32)
+                .filter(|n| n.is_finite())
+        };
+        Some(Camera {
+            amount: num("amount")?.clamp(0.05, 1.0),
+            yaw: num("yaw")? % std::f32::consts::TAU,
+            split: num("split")?.clamp(0.0, 1.0),
+        })
+    });
     let faults = faults_of(&doc, stated, &ids)?;
     let name = text(&doc, "name", NAME_MAX);
     Ok(Snapshot {
@@ -594,6 +617,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         map,
         edits,
         camera,
+        exploded,
         purpose,
         faults,
     })
@@ -906,6 +930,10 @@ impl MapView {
             frozen: Some(Box::new(s.map)),
             purpose: s.purpose,
             faults: s.faults,
+            ex_on: s.exploded.is_some(),
+            ex: s.exploded.unwrap_or(Camera::OPEN),
+            // Opened as it was saved, not opening up as it's shown.
+            ex_now: s.exploded.unwrap_or_default(),
             ..Default::default()
         };
         v.apply_edits(&s.edits);
@@ -930,6 +958,7 @@ impl MapView {
             map: full,
             edits,
             camera: (!self.follow && self.zoom > 0.0).then_some((self.pan, self.zoom)),
+            exploded: self.ex_on.then_some(self.ex),
             purpose: self.purpose,
             faults: self.faults.clone(),
         }
@@ -1040,6 +1069,7 @@ pub(super) fn sample() -> Snapshot {
         map,
         edits,
         camera: Some((vec2(10.0, 20.0), 0.75)),
+        exploded: None,
         purpose: Purpose::AsFound,
         faults: Vec::new(),
     }
@@ -1070,6 +1100,71 @@ mod tests {
             let _ = sniff(d);
             let _ = parse(d);
         });
+    }
+
+    #[test]
+    fn a_saved_map_keeps_its_angle_and_explode() {
+        let mut s = sample();
+        let cam = Camera {
+            amount: 0.75,
+            yaw: -crate::map::explode::SNAP,
+            split: 0.5,
+        };
+        s.exploded = Some(cam);
+        let r = from_json(&to_json(&s)).unwrap();
+        assert_eq!(r.exploded, Some(cam));
+        // Opened as it was saved: exploded from the first frame.
+        let v = MapView::from_saved(r);
+        assert!(v.ex_on);
+        assert_eq!((v.ex, v.ex_now), (cam, cam));
+        // And saved again from the view, the same.
+        assert_eq!(v.snapshot("x", now(), Map::default()).exploded, Some(cam));
+    }
+
+    #[test]
+    fn an_older_or_flat_saved_map_opens_flat() {
+        // Saved flat: the key is there, and null.
+        let flat = to_json(&sample());
+        assert!(flat.contains("\"exploded\": null"), "{flat}");
+        assert_eq!(from_json(&flat).unwrap().exploded, None);
+        // Saved before the exploded view: no key at all.
+        let mut doc: Value = serde_json::from_str(&flat).unwrap();
+        doc["view"].as_object_mut().unwrap().remove("exploded");
+        let old = from_json(&doc.to_string()).unwrap();
+        assert_eq!(old.exploded, None);
+        let v = MapView::from_saved(old);
+        assert!(!v.ex_on);
+        // Explode then opens it as any map: all the way, from a corner.
+        assert_eq!(v.ex, Camera::OPEN);
+        assert_eq!(v.snapshot("x", now(), Map::default()).exploded, None);
+    }
+
+    #[test]
+    fn an_exploded_view_that_makes_no_sense_is_brought_into_range_or_dropped() {
+        let with = |exploded: Value| {
+            let mut doc: Value = serde_json::from_str(&to_json(&sample())).unwrap();
+            doc["view"]["exploded"] = exploded;
+            from_json(&doc.to_string()).unwrap().exploded
+        };
+        let c = with(json!({"amount": 9.0, "yaw": 100.0, "split": -3.0})).unwrap();
+        assert_eq!((c.amount, c.split), (1.0, 0.0));
+        assert!(c.yaw.abs() < std::f32::consts::TAU);
+        // Never saved so nearly flat that Explode would seem to do nothing.
+        assert_eq!(
+            with(json!({"amount": 0.0, "yaw": 0.0, "split": 0.0}))
+                .unwrap()
+                .amount,
+            0.05
+        );
+        for odd in [
+            json!("yes"),
+            json!([1, 2, 3]),
+            json!({"amount": "far"}),
+            json!({"amount": 1.0, "yaw": 1e300, "split": 0.0}),
+            json!({"amount": 1.0, "split": 0.0}),
+        ] {
+            assert_eq!(with(odd.clone()), None, "{odd}");
+        }
     }
 
     #[test]

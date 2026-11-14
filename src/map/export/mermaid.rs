@@ -211,6 +211,7 @@ mod tests {
             moved: &moved,
             legend: false,
             caption: None,
+            exploded: None,
         });
         assert!(too_big(&s));
         let body: Vec<&str> = s.lines().skip(3).collect();

@@ -364,6 +364,7 @@ mod tests {
                 moved: &moved,
                 legend,
                 caption: None,
+                exploded: None,
             };
             let img = decode(&write(&scene::draw(&d, look), 1.0).expect("png"));
             (img.width(), img.height())
