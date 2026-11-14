@@ -231,19 +231,26 @@ pub fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
 pub fn draw(d: &Drawn, look: Look) -> Scene {
     let ink = Ink::new(look);
     let map = d.map;
-    let b = d.bounds();
+    let b = d.picture_bounds();
     let (m, head) = (32.0, 64.0);
     let foot = if look.findings {
         28.0 + 20.0 * map.findings.len().min(12) as f32
     } else {
         0.0
     };
-    let drawn = d.lines();
-    // In Sites the box already names the site.
-    let sites = d.lay.boxes.iter().any(|g| g.tree);
+    let drawn = d.picture_lines();
+    // In Sites the box already names the site. Opened up, plates stand
+    // in for the boxes.
+    let no_boxes: &[layout::Group] = &[];
+    let shown_boxes = if d.exploded.is_some() {
+        no_boxes
+    } else {
+        &d.lay.boxes
+    };
+    let sites = shown_boxes.iter().any(|g| g.tree);
     // The legend, when it's shown on the canvas, goes under the map.
     let entries = if d.legend {
-        legend::entries(map, &d.lay.boxes, &drawn, sites, 0, false)
+        legend::entries(map, shown_boxes, &drawn, sites, 0, false)
     } else {
         Vec::new()
     };
@@ -291,9 +298,12 @@ pub fn draw(d: &Drawn, look: Look) -> Scene {
             .chain(run(d.summary(), ink.weak, 400))
             .collect(),
     ));
-    boxes(d, &ink, &at, &mut items);
+    match d.exploded {
+        Some(scene) => plates(d, scene, &ink, &at, &mut items),
+        None => boxes(d, &ink, &at, &mut items),
+    }
     lines(d, &drawn, &ink, &at, &mut items);
-    for (_, n, p) in d.cards() {
+    for (_, n, p) in d.picture_cards() {
         items.push(Item::Card(card(n, at(p), sites, &ink)));
     }
     // The legend under the map, clear of everything on it.
@@ -326,6 +336,63 @@ fn boxes(d: &Drawn, ink: &Ink, at: &dyn Fn(Pos2) -> Pos2, items: &mut Vec<Item>)
                 600,
             ),
         ));
+    }
+}
+
+/// The exploded view's plates, under the links and cards: each outlined
+/// in its role's colour and named above its top corner, with a ring where
+/// each line from the plate above lands.
+fn plates(
+    d: &Drawn,
+    scene: &crate::map::explode::Scene,
+    ink: &Ink,
+    at: &dyn Fn(Pos2) -> Pos2,
+    items: &mut Vec<Item>,
+) {
+    for plate in &scene.plates {
+        let zones: Vec<crate::map::Zone> = plate
+            .cards
+            .iter()
+            .filter_map(|&i| d.map.nodes.get(i).map(|n| n.zone))
+            .collect();
+        let colour = ink.role(zones.first().copied().unwrap_or_default());
+        let quad = plate.quad.map(at);
+        let mut outline = quad.to_vec();
+        outline.push(quad[0]);
+        items.push(Item::Line {
+            pts: outline,
+            stroke: Stroke {
+                rgb: colour,
+                alpha: 0.7,
+                width: 1.0,
+                dash: None,
+            },
+        });
+        let corner = quad
+            .into_iter()
+            .min_by(|a, b| (a.x + a.y * 2.0).total_cmp(&(b.x + b.y * 2.0)))
+            .expect("four corners");
+        items.push(text(
+            pos2(corner.x + 2.0, corner.y - 5.0),
+            11.0,
+            false,
+            run(
+                format!(
+                    "{} · {}",
+                    crate::map::explode::plate_name(&zones),
+                    plate.cards.len()
+                ),
+                colour,
+                600,
+            ),
+        ));
+    }
+    for foot in &scene.feet {
+        items.push(Item::Dot {
+            c: at(*foot),
+            r: 2.5,
+            rgb: ink.weak,
+        });
     }
 }
 

@@ -24,17 +24,6 @@ fn tier(z: Zone) -> usize {
         .unwrap_or(TIERS.len() - 1)
 }
 
-/// What a plate is called: the roles on it.
-fn plate_name(zones: &[Zone]) -> String {
-    let mut names: Vec<String> = Vec::new();
-    for z in Zone::ALL {
-        if zones.contains(&z) {
-            names.push(z.name().to_uppercase());
-        }
-    }
-    names.join(" · ")
-}
-
 impl MapView {
     /// The map is drawn opened up (or is on its way there or back).
     pub(super) fn exploded(&self) -> bool {
@@ -202,7 +191,7 @@ impl MapView {
                 p.text(
                     at + vec2(2.0, -3.0),
                     egui::Align2::LEFT_BOTTOM,
-                    format!("{} · {}", plate_name(&zones), plate.cards.len()),
+                    format!("{} · {}", explode::plate_name(&zones), plate.cards.len()),
                     FontId::proportional((11.0 * z).clamp(9.5, 13.0)),
                     c.gamma_multiply(a),
                 );

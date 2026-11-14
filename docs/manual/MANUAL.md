@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.1**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.2**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -852,7 +852,11 @@ What the view leaves out, for now:
 
 - **Cards and boxes don't drag.** A drag pans the map. Cards you moved on the flat map keep their places on their plates.
 - **Site and zone boxes aren't drawn** (the plates stand in for them), so a site can't be folded from here; fold it on the flat map and it stays folded.
-- **Export and the Site report** save the flat map, and a saved map opens flat.
+- **The Site report**, and Export's **draw.io**, **Mermaid**, **Graphviz** and **CSV**, are of the flat map: they describe what connects to what, which doesn't change.
+
+**Saving a picture of it.** **Export ▾ › SVG image** and **PNG image** save the map as the canvas shows it: opened up, with its plates and their names, each line down to its plate, the legend (when shown) and the findings under it. Flat, they save the flat map as before.
+
+**Saved with the map.** **Save** keeps the view with the map: whether it was opened up, how far, turned which way, and how far split. A saved map opens as it was saved; one saved flat, or before this view existed, opens flat. As with pan and zoom, changing only the view of a saved map doesn't count as a change to save.
 
 With **Animate** off the view opens, turns and closes at once.
 

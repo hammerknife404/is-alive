@@ -415,11 +415,7 @@ impl MapView {
             clients,
             note_scope: notes::Scope::Live,
             animate: true,
-            ex: crate::map::explode::Camera {
-                amount: 1.0,
-                yaw: crate::map::explode::SNAP,
-                split: 0.0,
-            },
+            ex: crate::map::explode::Camera::OPEN,
             ..Default::default()
         }
     }
@@ -3207,7 +3203,7 @@ mod tests {
         assert!(rows.windows(2).all(|w| w[1] > w[0] + CARD.y), "{rows:?}");
         // A line for every card with an uplink, drawn like any other.
         assert_eq!(v.lines_now().len(), 7);
-        // The pictures and files Export saves are of the flat map.
+        // The files Export saves for other programs are of the flat map.
         let flat: Vec<Option<Pos2>> = v.lay.pos.clone();
         assert_eq!(v.drawn(|d| d.pos.to_vec()), flat);
         // Back flat, every card is where the layout put it.
@@ -3217,6 +3213,51 @@ mod tests {
         for i in 0..8 {
             assert_eq!(Some(at(&v, i)), v.lay.pos[i], "card {i}");
         }
+    }
+
+    #[test]
+    fn a_picture_exported_from_the_exploded_view_is_what_the_canvas_shows() {
+        use crate::map::export::{Format, Look};
+        let ctx = egui::Context::default();
+        let mut v = opened(&ctx);
+        let look = Look::new(&egui::Visuals::dark(), false);
+        let text = |v: &MapView, f: Format| v.drawn(|d| f.text(d, look)).unwrap();
+        let (svg, drawio, csv) = (
+            text(&v, Format::Svg),
+            text(&v, Format::DrawIo),
+            text(&v, Format::Csv),
+        );
+        // The plates, named as on the canvas, and every card.
+        for plate in [
+            "INTERNET · 1",
+            "GATEWAY / FIREWALL · 1",
+            "SWITCHES · 2",
+            "CLIENTS · 1",
+        ] {
+            assert!(svg.contains(plate), "no {plate:?} in the picture");
+        }
+        assert_eq!(svg.matches("<g>").count(), 8);
+        // The cards are where the view has them: the picture is as tall
+        // as the opened-up map, far taller than the flat one.
+        let height = |svg: &str| -> f32 {
+            let at = svg.find("height=\"").expect("an svg has a height") + 8;
+            svg[at..].split('"').next().unwrap().parse().unwrap()
+        };
+        let tall = v.bounds().height();
+        assert!(
+            height(&svg) > tall,
+            "{} for a map {tall} tall",
+            height(&svg)
+        );
+        // Flat again, the picture is the flat map's; the diagram and the
+        // spreadsheet never changed.
+        v.explode_toggle();
+        settle(&ctx, &mut v);
+        let flat = text(&v, Format::Svg);
+        assert!(!flat.contains("SWITCHES · 2"));
+        assert!(height(&flat) < height(&svg));
+        assert_eq!(text(&v, Format::DrawIo), drawio);
+        assert_eq!(text(&v, Format::Csv), csv);
     }
 
     #[test]

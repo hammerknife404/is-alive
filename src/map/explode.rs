@@ -15,6 +15,7 @@
 //! and gives back where it goes, the order to draw in, the plates and the
 //! lines. The Map tab draws those as it draws any layout.
 
+use super::Zone;
 use super::layout::{CARD, GAP_X, Line, STACK_GAP};
 use eframe::egui::{Pos2, Rect, Vec2, vec2};
 use std::collections::{BTreeMap, HashSet};
@@ -33,6 +34,25 @@ const PLATE_GAP: f32 = 64.0;
 const SPLIT_GAP: f32 = 180.0;
 /// The most the map is spread to keep turned cards off each other.
 const SPREAD_MAX: f32 = 2.0;
+
+/// What a plate holding these roles is called.
+pub fn plate_name(zones: &[Zone]) -> String {
+    let names: Vec<String> = Zone::ALL
+        .into_iter()
+        .filter(|z| zones.contains(z))
+        .map(|z| z.name().to_uppercase())
+        .collect();
+    names.join(" · ")
+}
+
+impl Camera {
+    /// The view as it first opens: all the way apart, from a corner.
+    pub const OPEN: Camera = Camera {
+        amount: 1.0,
+        yaw: SNAP,
+        split: 0.0,
+    };
+}
 
 /// How the map is opened up.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]

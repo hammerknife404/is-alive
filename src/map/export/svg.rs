@@ -196,6 +196,7 @@ mod tests {
                 moved,
                 legend,
                 caption: None,
+                exploded: None,
             },
             Look::new(&eframe::egui::Visuals::dark(), false),
         ))

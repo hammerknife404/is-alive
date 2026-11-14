@@ -33,6 +33,10 @@ pub struct Drawn<'a> {
     /// What a saved map says it is when it isn't what was found (a plan,
     /// a training map): said in the summary line, as above the canvas.
     pub caption: Option<&'a str>,
+    /// The exploded view, when the canvas shows the map opened up: the
+    /// pictures (SVG, PNG) draw it so. Every other format, and `pos`, is
+    /// of the flat map.
+    pub exploded: Option<&'a super::explode::Scene>,
 }
 
 impl Drawn<'_> {
@@ -68,6 +72,50 @@ impl Drawn<'_> {
         all.into_iter()
             .filter(|l| view.keeps(self.map, l, &|k| below[k]))
             .collect()
+    }
+
+    /// Every card shown in a picture, with its top-left corner there, in
+    /// the order to draw them: opened up, a nearer card over a farther.
+    fn picture_cards(&self) -> Vec<(usize, &Node, Pos2)> {
+        match self.exploded {
+            Some(s) => s
+                .order
+                .iter()
+                .filter_map(|&i| Some((i, self.map.nodes.get(i)?, s.pos.get(i).copied()??)))
+                .collect(),
+            None => self.cards().collect(),
+        }
+    }
+
+    /// A picture's lines: opened up, each uplink's way down to its cards'
+    /// plate and across it, weakest links first.
+    fn picture_lines(&self) -> Vec<Line> {
+        let Some(s) = self.exploded else {
+            return self.lines();
+        };
+        let mut all = s.lines.clone();
+        all.sort_by_key(|l| self.map.nodes[l.kids[0]].link().map_or(0, layout::strength));
+        let view = self.lay.links;
+        if view == layout::Links::All {
+            return all;
+        }
+        let below = layout::has_below(self.map);
+        all.into_iter()
+            .filter(|l| view.keeps(self.map, l, &|k| below[k]))
+            .collect()
+    }
+
+    /// What a picture draws: every card and box, or every card and plate.
+    fn picture_bounds(&self) -> Rect {
+        let Some(s) = self.exploded else {
+            return self.bounds();
+        };
+        let b = s.bounds(&|i| layout::card_size(&self.map.nodes[i]));
+        if b.is_positive() {
+            b
+        } else {
+            Rect::from_min_size(Pos2::ZERO, CARD)
+        }
     }
 
     /// A shown card's uplink, when that's shown too.
@@ -347,6 +395,7 @@ pub(crate) mod tests {
             moved: &[false, false],
             legend: true,
             caption: None,
+            exploded: None,
         })
     }
 
@@ -397,6 +446,7 @@ pub(crate) mod tests {
             moved: &moved,
             legend: false,
             caption: None,
+            exploded: None,
         })
     }
 
@@ -454,6 +504,7 @@ pub(crate) mod tests {
             moved: &[false],
             legend: false,
             caption: Some(said),
+            exploded: None,
         };
         let w = scene::draw(&d, look).size.x;
         assert!(w >= 7.0 * said.chars().count() as f32 + 64.0, "{w}");
@@ -500,6 +551,7 @@ pub(crate) mod tests {
                     moved: &moved,
                     legend: false,
                     caption: None,
+                    exploded: None,
                 };
                 let own = d
                     .lines()
@@ -566,6 +618,7 @@ pub(crate) mod tests {
             moved: &moved,
             legend: false,
             caption: None,
+            exploded: None,
         };
         let look = Look::new(&eframe::egui::Visuals::dark(), false);
         for f in [Format::Svg, Format::DrawIo] {
