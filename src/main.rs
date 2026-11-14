@@ -1548,10 +1548,13 @@ mod tests {
 
             // The Map opened up into the exploded view, and split; at one
             // size it stays so while everything goes from under it.
-            app.map.explode_for_shots(Some(1.0));
+            app.map.explode_for_shots(Some(1.0), false);
             all(&mut app, "exploded");
+            // And in 3D, where cards are drawn at sizes of their own.
+            app.map.explode_for_shots(Some(1.0), true);
+            all(&mut app, "in 3D");
             if n != 1 {
-                app.map.explode_for_shots(None);
+                app.map.explode_for_shots(None, false);
             }
 
             // Everything goes, and nothing the tabs hold on to is told.

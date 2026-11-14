@@ -392,7 +392,9 @@ impl MapView {
         let mut pulse = false;
         for i in self.stack() {
             let Some(s) = at(i) else { continue };
-            let r = Rect::from_min_size(s, layout::card_size(&self.map.nodes[i]) * z);
+            // In 3D a nearer card is bigger, its text with it.
+            let cz = z * self.card_scale(i);
+            let r = Rect::from_min_size(s, layout::card_size(&self.map.nodes[i]) * cz);
             if !r.intersects(rect) {
                 continue;
             }
@@ -407,6 +409,7 @@ impl MapView {
                 &p,
                 vis,
                 i,
+                cz,
                 r,
                 fade(i),
                 picked.contains(&i),
@@ -449,6 +452,7 @@ impl MapView {
         p: &Painter,
         vis: &egui::Visuals,
         i: usize,
+        z: f32,
         r: Rect,
         a: f32,
         selected: bool,
@@ -456,7 +460,6 @@ impl MapView {
         ring: Option<f32>,
     ) {
         let n = &self.map.nodes[i];
-        let z = self.zoom;
         let accent = self.accent(n);
         card_frame(p, vis, r, z, accent, a, selected, hovered, n.gone);
         if let Some(m) = self.since_mark_of(i) {

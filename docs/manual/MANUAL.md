@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.2**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.4**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -210,7 +210,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
 
-When every check is done and the sweep found something, the **Map** tab glows for a few seconds (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. While **Animate** (Settings) holds things still, it lights up briefly instead of pulsing.
+When every check is done and the sweep found something, the **Map** tab glows brightly for a few seconds, a halo spreading past its row so it catches the eye from anywhere in the window (its sweep is on the map now), then keeps a small ring until you open it. If the window is in the background, the glow waits until you come back to it. While **Animate** (Settings) holds things still, it lights up briefly instead of pulsing.
 
 ### Site report
 
@@ -860,6 +860,27 @@ What the view leaves out, for now:
 
 With **Animate** off the view opens, turns and closes at once.
 
+#### 3D
+
+**3D** (beside **Explode**, or **3**) turns the opened-up map into a thing in space, seen from a point: nearer cards are drawn bigger and farther ones smaller, each plate floats above the next, and you can look at it from any side and any height. From the flat map it opens the map up first. Press **3D** or **3** again for the exploded drawing; **Explode**, **E** or **Esc** (with nothing selected) for the flat map.
+
+| On screen | What it is |
+|---|---|
+| **A plate** | A lit sheet in its role's colour, ruled with a grid and named at its corner, floating above the plate below it |
+| **A card** | The same card, upright, bigger the nearer it is. What's nearer covers what's farther, whatever plate either is on; you click a card at the size it's drawn |
+| **The circle** | The ground the map stands on, under its lowest plate, in the accent colour |
+| **A line** | As in the exploded view: straight down from each uplink to the plate its cards are on, then across to each |
+
+| To | Do |
+|---|---|
+| Turn it and tip it | **Drag** the map: across turns it, up and down tips it, from nearly edge on to nearly straight down |
+| Move it | **Shift+drag**, or the arrow keys |
+| Zoom | Scroll or pinch, **+** and **−**; **Fit** frames it again |
+| Turn it a step | **⟲ / ⟳**, or **[** and **]** |
+| Let it turn by itself | **Spin**, in the row of controls: once round in about 40 seconds. It holds still once the map has been left alone for half a minute, and needs **Animate** on |
+
+Selecting, the inspector, lit paths, search, **Layers**, **Explode** and **Split** work as in the exploded view. A saved map keeps 3D and the height you looked from. **Export ▾ › SVG** and **PNG** save the exploded drawing from the same side, since a picture's cards are all one size.
+
 ### Boxes
 
 In **Zones** each role has a box (*Switches*, *Access points*, *Servers / NAS*, *Clients* …); in **Sites** each site does.
@@ -1505,6 +1526,7 @@ At the bottom of Settings, **Remove everything is-alive saved…** is for a clie
 | **Enter** | Map search | Select the first match |
 | **Esc** | Map | Clear the selection (pinned cards stay); with none to clear, leave the exploded view; else, on a window under 1100 points wide, shut Layers |
 | **E** | Map | Open the map up into the exploded view, or put it back flat |
+| **3** | Map | 3D: the opened-up map seen from a point (it opens the map up first), or back to the exploded drawing |
 | **[** / **]** | Map, exploded view | Turn the view left / right |
 | **Esc** | The inspector, on a window under 1100 points wide (on the Map, under 1440) | Close it |
 | **N** | Map, one card selected | Write or edit its note |

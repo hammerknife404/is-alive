@@ -26,10 +26,10 @@ impl MapView {
         let sel: HashSet<usize> = picked.into_iter().collect();
         self.stack().into_iter().rev().find(|&i| {
             (sel.contains(&i) || !self.faded(i, &lit))
-                && self
-                    .pos
-                    .get(&self.map.nodes[i].id)
-                    .is_some_and(|p| layout::card_rect(&self.map.nodes[i], *p).contains(w))
+                && self.pos.get(&self.map.nodes[i].id).is_some_and(|p| {
+                    let size = layout::card_size(&self.map.nodes[i]) * self.card_scale(i);
+                    Rect::from_min_size(*p, size).contains(w)
+                })
         })
     }
 
@@ -457,6 +457,9 @@ impl MapView {
                     }
                 }
                 self.follow = false;
+            } else if self.three_d() && !ui.input(|i| i.modifiers.shift) {
+                // In 3D a drag turns and tips the view; Shift+drag moves it.
+                self.orbit(d);
             } else if self.ex_on && ui.input(|i| i.modifiers.alt) {
                 self.ex.yaw += d.x * 0.008;
                 self.ex_now.yaw = self.ex.yaw;

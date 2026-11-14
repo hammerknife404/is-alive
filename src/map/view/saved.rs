@@ -298,9 +298,15 @@ pub fn to_json(s: &Snapshot) -> String {
     let camera = s
         .camera
         .map(|(pan, zoom)| json!({"pan": [pan.x, pan.y], "zoom": zoom}));
-    let exploded = s
-        .exploded
-        .map(|c| json!({"amount": c.amount, "yaw": c.yaw, "split": c.split}));
+    let exploded = s.exploded.map(|c| {
+        json!({
+            "amount": c.amount,
+            "yaw": c.yaw,
+            "split": c.split,
+            "pitch": c.pitch,
+            "three_d": c.depth >= 0.5,
+        })
+    });
     let mut doc = json!({
         "format": FORMAT,
         "version": VERSION,
@@ -603,6 +609,15 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             amount: num("amount")?.clamp(0.05, 1.0),
             yaw: num("yaw")? % std::f32::consts::TAU,
             split: num("split")?.clamp(0.0, 1.0),
+            // Saved before 3D: the exploded drawing, as it was.
+            pitch: num("pitch").unwrap_or(Camera::OPEN.pitch).clamp(
+                crate::map::explode::PITCH_MIN,
+                crate::map::explode::PITCH_MAX,
+            ),
+            depth: match c.get("three_d").and_then(Value::as_bool) {
+                Some(true) => 1.0,
+                _ => 0.0,
+            },
         })
     });
     let faults = faults_of(&doc, stated, &ids)?;
@@ -1109,6 +1124,8 @@ mod tests {
             amount: 0.75,
             yaw: -crate::map::explode::SNAP,
             split: 0.5,
+            pitch: 1.1,
+            depth: 1.0,
         };
         s.exploded = Some(cam);
         let r = from_json(&to_json(&s)).unwrap();
@@ -1148,6 +1165,16 @@ mod tests {
         };
         let c = with(json!({"amount": 9.0, "yaw": 100.0, "split": -3.0})).unwrap();
         assert_eq!((c.amount, c.split), (1.0, 0.0));
+        // Saved before 3D (no pitch, no three_d): the exploded drawing.
+        assert_eq!((c.pitch, c.depth), (Camera::OPEN.pitch, 0.0));
+        let c =
+            with(json!({"amount": 1.0, "yaw": 0.0, "split": 0.0, "pitch": 99.0, "three_d": true}))
+                .unwrap();
+        assert_eq!((c.pitch, c.depth), (crate::map::explode::PITCH_MAX, 1.0));
+        let c =
+            with(json!({"amount": 1.0, "yaw": 0.0, "split": 0.0, "pitch": "up", "three_d": "yes"}))
+                .unwrap();
+        assert_eq!((c.pitch, c.depth), (Camera::OPEN.pitch, 0.0));
         assert!(c.yaw.abs() < std::f32::consts::TAU);
         // Never saved so nearly flat that Explode would seem to do nothing.
         assert_eq!(

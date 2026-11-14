@@ -34,6 +34,23 @@ const PLATE_GAP: f32 = 64.0;
 const SPLIT_GAP: f32 = 180.0;
 /// The most the map is spread to keep turned cards off each other.
 const SPREAD_MAX: f32 = 2.0;
+/// In 3D, how far one plate floats above the next fully exploded: this
+/// much of the map's width across, within these limits, so a big site's
+/// plates stand as clear of each other as a small one's.
+const TIER_GAP: f32 = 0.2;
+const TIER_GAP_MIN: f32 = 300.0;
+const TIER_GAP_MAX: f32 = 1600.0;
+/// In 3D, how low and how high the view looks down from, in radians
+/// above the plates: nearly edge on, to nearly straight down.
+pub const PITCH_MIN: f32 = 0.12;
+pub const PITCH_MAX: f32 = 1.45;
+/// In 3D, how much nearer or farther a card is drawn, at most.
+const SCALE_MIN: f32 = 0.4;
+const SCALE_MAX: f32 = 2.2;
+/// In 3D, the spacing of the lines ruled across a plate, and the most
+/// lines each way.
+const GRID_STEP: f32 = 120.0;
+const GRID_MAX: f32 = 18.0;
 
 /// What a plate holding these roles is called.
 pub fn plate_name(zones: &[Zone]) -> String {
@@ -51,6 +68,8 @@ impl Camera {
         amount: 1.0,
         yaw: SNAP,
         split: 0.0,
+        pitch: 0.6,
+        depth: 0.0,
     };
 }
 
@@ -63,6 +82,12 @@ pub struct Camera {
     pub yaw: f32,
     /// 0 to 1: how far the sub-assemblies are pulled apart sideways.
     pub split: f32,
+    /// In 3D, how far above the plates the view looks from, in radians
+    /// (`PITCH_MIN` to `PITCH_MAX`).
+    pub pitch: f32,
+    /// 0 (the exploded drawing: no perspective, a fixed tilt) to 1 (3D:
+    /// the view from a point, at any height, nearer things drawn bigger).
+    pub depth: f32,
 }
 
 /// One card on the flat map.
@@ -88,6 +113,8 @@ pub struct Plate {
     pub quad: [Pos2; 4],
     /// The cards on it.
     pub cards: Vec<usize>,
+    /// In 3D, the lines ruled across it, each end to end.
+    pub grid: Vec<[Pos2; 2]>,
 }
 
 /// The map opened up.
@@ -105,15 +132,28 @@ pub struct Scene {
     pub lines: Vec<Line>,
     /// Where lines between plates land on the lower one.
     pub feet: Vec<Pos2>,
+    /// How big each card is drawn, of its own size: 1 but in 3D, where a
+    /// nearer card is bigger.
+    pub scale: Vec<f32>,
+    /// In 3D, the circle the map stands on, under its lowest plate.
+    pub ring: Vec<Pos2>,
+    /// In 3D, what the view takes up however it's turned: while it turns
+    /// by itself Fit frames this, so the map doesn't grow and shrink.
+    pub frame: Option<Rect>,
 }
 
 impl Scene {
+    /// How big card `i` is drawn, of its own size.
+    pub fn scale_of(&self, i: usize) -> f32 {
+        self.scale.get(i).copied().unwrap_or(1.0)
+    }
+
     /// Everything drawn: cards (of `size`) and plates.
     pub fn bounds(&self, size: &dyn Fn(usize) -> Vec2) -> Rect {
         let mut r = Rect::NOTHING;
         for (i, p) in self.pos.iter().enumerate() {
             if let Some(p) = p {
-                r = r.union(Rect::from_min_size(*p, size(i)));
+                r = r.union(Rect::from_min_size(*p, size(i) * self.scale_of(i)));
             }
         }
         for plate in &self.plates {
@@ -261,6 +301,15 @@ impl Proj {
 
 /// Open the map up. `parts` is every card by index (None: not shown).
 pub fn build(parts: &[Option<Part>], cam: Camera) -> Scene {
+    // A number that isn't one (a damaged file) is the view's usual.
+    let sane = |v: f32, or: f32| if v.is_finite() { v } else { or };
+    let cam = Camera {
+        amount: sane(cam.amount, 0.0),
+        yaw: sane(cam.yaw, 0.0),
+        split: sane(cam.split, 0.0),
+        pitch: sane(cam.pitch, Camera::OPEN.pitch),
+        depth: sane(cam.depth, 0.0),
+    };
     let amount = cam.amount.clamp(0.0, 1.0);
     let split = cam.split.clamp(0.0, 1.0) * amount.min(1.0);
     // The view turns and tilts over the first third of the way; the
@@ -291,6 +340,7 @@ pub fn build(parts: &[Option<Part>], cam: Camera) -> Scene {
     if !all.is_finite() {
         return Scene {
             pos: vec![None; parts.len()],
+            scale: vec![1.0; parts.len()],
             ..Default::default()
         };
     }
@@ -353,30 +403,86 @@ pub fn build(parts: &[Option<Part>], cam: Camera) -> Scene {
     }
     let lift_of = |tier: usize| lift.get(&tier).copied().unwrap_or(0.0);
 
-    let pos: Vec<Option<Pos2>> = (0..parts.len())
+    // 3D: the plates float one above the next, seen from a point `dist`
+    // away, `pitch` above them. It comes in with the turn, so no explode
+    // is still the flat map.
+    let three = cam.depth.clamp(0.0, 1.0) * turn;
+    let rank: BTreeMap<usize, usize> = extent.keys().enumerate().map(|(k, &t)| (t, k)).collect();
+    let tiers = rank.len().saturating_sub(1) as f32;
+    let (psin, pcos) = cam.pitch.clamp(PITCH_MIN, PITCH_MAX).sin_cos();
+    // A thing in space keeps its shape as it turns and tips: one spread,
+    // the most any turn of the exploded drawing needs.
+    let spread3 = (0..=8)
+        .map(|k| spread(k as f32 * std::f32::consts::FRAC_PI_8 / 2.0, TILT))
+        .fold(1.0, f32::max);
+    let radius = 0.5 * all.size().length() * spread3;
+    let gap = (2.0 * radius * TIER_GAP).clamp(TIER_GAP_MIN, TIER_GAP_MAX) * amount;
+    let stack = tiers * gap;
+    let dist = (2.2 * (radius + stack / 2.0)).max(900.0);
+    // Where a point of the flat map on plate `tier` is drawn, how big
+    // things there are, and how near the viewer it is.
+    let place = |q: Pos2, tier: usize| -> (Pos2, f32, f32) {
+        let ortho = proj.at(q, lift_of(tier));
+        if three <= 0.0 {
+            return (ortho, 1.0, proj.depth(q));
+        }
+        let d = q - proj.about;
+        let across = (d.x * proj.cos - d.y * proj.sin) * spread3;
+        let back = proj.depth(q) * spread3;
+        let up = (tiers / 2.0 - rank.get(&tier).copied().unwrap_or(0) as f32) * gap;
+        let near = back * pcos + up * psin;
+        let s = (1.0 / (1.0 - near / dist)).clamp(SCALE_MIN, SCALE_MAX);
+        let at = proj.about + vec2(across, back * psin - up * pcos) * s;
+        (ortho + (at - ortho) * three, 1.0 + (s - 1.0) * three, near)
+    };
+
+    let placed: Vec<Option<(Pos2, f32, f32)>> = (0..parts.len())
         .map(|i| {
             let (p, r) = (parts[i]?, flat[i]?);
-            Some(proj.at(r.center(), lift_of(p.tier)) - r.size() / 2.0)
+            Some(place(r.center(), p.tier))
         })
         .collect();
-    let drawn = |i: usize| Some(Rect::from_min_size(pos[i]?, flat[i]?.size()));
+    let scale: Vec<f32> = placed.iter().map(|p| p.map_or(1.0, |p| p.1)).collect();
+    let pos: Vec<Option<Pos2>> = (0..parts.len())
+        .map(|i| {
+            let (at, s, _) = placed[i]?;
+            Some(at - flat[i]?.size() * s / 2.0)
+        })
+        .collect();
+    let drawn = |i: usize| Some(Rect::from_min_size(pos[i]?, flat[i]?.size() * scale[i]));
 
     let mut order: Vec<usize> = (0..parts.len()).filter(|&i| pos[i].is_some()).collect();
-    let depth = |i: usize| flat[i].map_or(0.0, |r| proj.depth(r.center()));
-    order.sort_by(|&a, &b| {
-        let (ta, tb) = (parts[a].map(|p| p.tier), parts[b].map(|p| p.tier));
-        tb.cmp(&ta)
-            .then(depth(a).total_cmp(&depth(b)))
-            .then(a.cmp(&b))
-    });
+    if three > 0.5 {
+        // From a point, what's nearer covers what's farther, whatever
+        // plate either is on.
+        let near = |i: usize| placed[i].map_or(0.0, |p| p.2);
+        order.sort_by(|&a, &b| near(a).total_cmp(&near(b)).then(a.cmp(&b)));
+    } else {
+        let depth = |i: usize| flat[i].map_or(0.0, |r| proj.depth(r.center()));
+        order.sort_by(|&a, &b| {
+            let (ta, tb) = (parts[a].map(|p| p.tier), parts[b].map(|p| p.tier));
+            tb.cmp(&ta)
+                .then(depth(a).total_cmp(&depth(b)))
+                .then(a.cmp(&b))
+        });
+    }
 
     let mut plates: Vec<Plate> = on
         .iter()
         .map(|(&(tier, group), cards)| Plate {
             tier,
             group,
-            quad: corners(cards).map(|q| proj.at(q, lift_of(tier))),
+            quad: corners(cards).map(|q| place(q, tier).0),
             cards: cards.clone(),
+            grid: if three > 0.0 {
+                let c = corners(cards);
+                grid(Rect::from_min_max(c[0], c[2]))
+                    .into_iter()
+                    .map(|l| l.map(|q| place(q, tier).0))
+                    .collect()
+            } else {
+                Vec::new()
+            },
         })
         .collect();
     plates.reverse();
@@ -396,7 +502,7 @@ pub fn build(parts: &[Option<Part>], cam: Camera) -> Scene {
         // Straight down from the uplink to this card's plate, then across
         // it. On one plate, or before the plates have parted, straight
         // across.
-        let foot = proj.at(from.center(), lift_of(p.tier));
+        let foot = place(from.center(), p.tier).0;
         let pts = if pa.tier == p.tier || a.expand(6.0).contains(foot) {
             vec![edge(a, b.center()), edge(b, a.center())]
         } else {
@@ -418,13 +524,58 @@ pub fn build(parts: &[Option<Part>], cam: Camera) -> Scene {
             pts,
         });
     }
+    // The circle the map stands on, and what the view takes up whichever
+    // way it's turned.
+    let (ring, frame) = match extent.keys().next_back() {
+        Some(&lowest) if three > 0.0 => {
+            let r = 0.5 * all.size().length() + 2.0 * PLATE_PAD;
+            let ring = (0..=64)
+                .map(|k| {
+                    let a = k as f32 / 64.0 * std::f32::consts::TAU;
+                    place(proj.about + vec2(a.cos(), a.sin()) * r, lowest).0
+                })
+                .collect();
+            let nearest = (radius * pcos + stack / 2.0 * psin) / dist;
+            let s = (1.0 / (1.0 - nearest)).clamp(1.0, SCALE_MAX);
+            let half = vec2(radius + CARD.x, radius * psin + stack / 2.0 * pcos + CARD.y) * s;
+            let frame = (three >= 0.999).then(|| Rect::from_center_size(proj.about, half * 2.0));
+            (ring, frame)
+        }
+        _ => (Vec::new(), None),
+    };
     Scene {
         pos,
         order,
         plates,
         lines,
         feet,
+        scale,
+        ring,
+        frame,
     }
+}
+
+/// The lines ruled across a plate covering `r` of the flat map: every
+/// `GRID_STEP` each way, fewer and farther apart on a big plate.
+fn grid(r: Rect) -> Vec<[Pos2; 2]> {
+    if !r.is_positive() {
+        return Vec::new();
+    }
+    let step = |len: f32| GRID_STEP * (len / GRID_STEP / GRID_MAX).ceil().max(1.0);
+    let mut out = Vec::new();
+    let sx = step(r.width());
+    let mut x = (r.left() / sx).ceil() * sx;
+    while x < r.right() {
+        out.push([Pos2::new(x, r.top()), Pos2::new(x, r.bottom())]);
+        x += sx;
+    }
+    let sy = step(r.height());
+    let mut y = (r.top() / sy).ceil() * sy;
+    while y < r.bottom() {
+        out.push([Pos2::new(r.left(), y), Pos2::new(r.right(), y)]);
+        y += sy;
+    }
+    out
 }
 
 /// The turn a step left (`dir` below 0) or right of `yaw` comes to: the
@@ -449,10 +600,11 @@ mod tests {
         Rect::from_min_size(pos2(x, y), CARD)
     }
 
-    const FULL: Camera = Camera {
-        amount: 1.0,
-        yaw: SNAP,
-        split: 0.0,
+    const FULL: Camera = Camera::OPEN;
+    /// The same view in 3D.
+    const THREE: Camera = Camera {
+        depth: 1.0,
+        ..Camera::OPEN
     };
 
     /// internet – gateway – two switches, each with three clients, laid
@@ -500,6 +652,8 @@ mod tests {
                     amount: 0.0,
                     yaw,
                     split: 1.0,
+                    pitch: 0.3,
+                    depth: 1.0,
                 },
             );
             for (i, p) in parts.iter().enumerate() {
@@ -752,6 +906,132 @@ mod tests {
     }
 
     #[test]
+    fn in_three_d_nearer_cards_are_bigger_and_drawn_over_farther_ones() {
+        let parts = tree();
+        let s = build(&parts, THREE);
+        // Not every card one size any more, and none out of range.
+        let (min, max) = s
+            .scale
+            .iter()
+            .fold((f32::INFINITY, 0.0f32), |(a, b), &k| (a.min(k), b.max(k)));
+        assert!(max > min + 0.05, "{min}..{max}");
+        assert!(min >= SCALE_MIN && max <= SCALE_MAX);
+        // Drawn farthest first: sizes never shrink along the order.
+        let sizes: Vec<f32> = s.order.iter().map(|&i| s.scale[i]).collect();
+        assert!(sizes.windows(2).all(|w| w[1] >= w[0] - 1e-4), "{sizes:?}");
+        // The top plate is nearer the eye than the bottom one, looking
+        // down: the internet's card is bigger than a client's behind it.
+        assert!(s.scale[0] > s.scale[4]);
+        // The exploded drawing is untouched: every card its own size.
+        assert!(build(&parts, FULL).scale.iter().all(|&k| k == 1.0));
+        assert!(build(&parts, FULL).ring.is_empty());
+    }
+
+    #[test]
+    fn three_d_frames_the_same_however_it_is_turned() {
+        let parts = tree();
+        for pitch in [PITCH_MIN, 0.6, 1.0, PITCH_MAX] {
+            let at = |yaw: f32| {
+                build(
+                    &parts,
+                    Camera {
+                        yaw,
+                        pitch,
+                        ..THREE
+                    },
+                )
+            };
+            let frame = at(0.0).frame.expect("3D has a frame");
+            for k in 0..16 {
+                let s = at(k as f32 * 0.4);
+                // Fit doesn't breathe as the view turns...
+                assert_eq!(s.frame, Some(frame), "pitch {pitch}, turn {k}");
+                // ...and nothing is ever outside what it frames.
+                for (i, r) in rects3(&parts, &s).into_iter().enumerate() {
+                    assert!(
+                        frame.expand(1.0).contains_rect(r),
+                        "pitch {pitch} turn {k} card {i}: {r:?} in {frame:?}"
+                    );
+                }
+            }
+        }
+        // On its way in or out, the frame is what's drawn.
+        let half = build(
+            &parts,
+            Camera {
+                depth: 0.5,
+                ..THREE
+            },
+        );
+        assert_eq!(half.frame, None);
+    }
+
+    /// Cards as drawn, each at its own size.
+    fn rects3(parts: &[Option<Part>], s: &Scene) -> Vec<Rect> {
+        (0..parts.len())
+            .map(|i| {
+                Rect::from_min_size(
+                    s.pos[i].unwrap(),
+                    parts[i].unwrap().rect.size() * s.scale[i],
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn looking_from_higher_up_shows_more_of_each_plate() {
+        let parts = tree();
+        let depth_of_clients = |pitch: f32| {
+            let s = build(
+                &parts,
+                Camera {
+                    yaw: 0.0,
+                    pitch,
+                    ..THREE
+                },
+            );
+            let plate = s.plates.iter().find(|p| p.tier == 3).unwrap();
+            let ys = plate.quad.map(|q| q.y);
+            ys.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - ys.iter().copied().fold(f32::INFINITY, f32::min)
+        };
+        let (low, mid, high) = (
+            depth_of_clients(PITCH_MIN),
+            depth_of_clients(0.6),
+            depth_of_clients(PITCH_MAX),
+        );
+        assert!(low < mid && mid < high, "{low} {mid} {high}");
+        // Out of range is brought into it, not drawn inside out.
+        let odd = |pitch: f32| build(&parts, Camera { pitch, ..THREE });
+        assert_eq!(odd(-3.0).pos, odd(PITCH_MIN).pos);
+        assert_eq!(odd(9.0).pos, odd(PITCH_MAX).pos);
+        assert!(odd(f32::NAN).pos.iter().flatten().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn three_d_rules_each_plate_and_draws_lines_to_scaled_cards() {
+        let parts = tree();
+        let s = build(&parts, THREE);
+        assert_eq!(s.ring.len(), 65);
+        for plate in &s.plates {
+            assert!(plate.grid.len() <= 2 * (GRID_MAX as usize + 1));
+            let around = Rect::from_points(&plate.quad).expand(1.0);
+            for l in &plate.grid {
+                assert!(around.contains(l[0]) && around.contains(l[1]));
+            }
+        }
+        assert!(s.plates.iter().any(|p| !p.grid.is_empty()));
+        // Lines still start on the uplink and end on the card, at the
+        // sizes they're drawn.
+        let r = rects3(&parts, &s);
+        assert_eq!(s.lines.len(), 9);
+        for l in &s.lines {
+            assert!(r[l.up].expand(0.5).contains(l.pts[0]));
+            assert!(r[l.kids[0]].expand(0.5).contains(*l.pts.last().unwrap()));
+        }
+    }
+
+    #[test]
     fn links_that_loop_or_lead_nowhere_are_drawn_without_harm() {
         // Each card the other's uplink, one its own, one hanging off a
         // card that isn't there, one off a hidden card.
@@ -873,9 +1153,16 @@ mod tests {
                 group: Some(k % 5),
             }));
         }
-        let cam = Camera { split: 1.0, ..FULL };
         let start = std::time::Instant::now();
-        let s = build(&parts, cam);
+        let s = build(&parts, Camera { split: 1.0, ..FULL });
+        assert_eq!(s.order.len(), 10_000);
+        let s = build(
+            &parts,
+            Camera {
+                split: 1.0,
+                ..THREE
+            },
+        );
         assert_eq!(s.order.len(), 10_000);
         assert!(start.elapsed().as_millis() < 500, "{:?}", start.elapsed());
     }

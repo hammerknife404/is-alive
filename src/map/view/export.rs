@@ -98,6 +98,7 @@ impl MapView {
             .map(|i| self.flat_target(i))
             .collect();
         let moved: Vec<bool> = (0..self.map.nodes.len()).map(|i| self.freed(i)).collect();
+        let scene = self.picture_scene().filter(|_| as_shown);
         f(&Drawn {
             map: &self.map,
             lay: &self.lay,
@@ -105,7 +106,7 @@ impl MapView {
             moved: &moved,
             legend: self.legend,
             caption: self.purpose.caption(),
-            exploded: self.scene().filter(|_| as_shown),
+            exploded: scene.as_deref(),
         })
     }
 
