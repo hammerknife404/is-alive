@@ -1,4 +1,4 @@
-**is-alive** is a native network tester for site visits, written in Rust: one portable `.exe` on Windows, one `.AppImage` on Linux, no installer and no admin rights (the `.exe` carries its C runtime from 0.24.2, so a fresh Windows needs nothing else installed). It pings, scans, traces, sweeps, checks DNS and mail health, tests speed for VoIP, reads UniFi, SonicWall and Meraki configs offline, draws the network, keeps the visit's notes, and bundles it all for Claude's `/unifidump` and `/mapnetwork` skills.
+**is-alive** is a native network tester for site visits, written in Rust: one portable `.exe` on Windows, one `.AppImage` on Linux, no installer and no admin rights (the `.exe` carries its C runtime from 0.24.2, so a fresh Windows needs nothing else installed). It pings, scans, traces, sweeps, checks DNS and mail health, tests speed for VoIP, reads UniFi, SonicWall and Meraki configs offline, draws the network, keeps the visit's notes, and hands it all to Claude's `/unifidump` and `/mapnetwork` skills.
 
 **Download:** [latest release](https://github.com/hammerknife404/is-alive/releases/latest) · **Attending a demo?** [Follow-along guide](https://github.com/hammerknife404/is-alive/blob/main/FOLLOW-ALONG.md)
 
@@ -20,13 +20,13 @@
 | [Domain join](Domain-join) | How this computer is joined (Active Directory, Entra ID, hybrid or workgroup) and to which domain, from `dsregcmd /status`; also in the status bar |
 | [Results](Results) | Every finished run, with Filter and Export to CSV, JSON, Markdown or HTML |
 
-Every tab is laid out the same way: the main input and **Start** in the run bar, the rest of the settings folded under **Options** (their values shown as small chips), a status row with **Copy** and **Save…**, and a short explanation before the first run. **Ctrl+1 … Ctrl+9** and **Ctrl+0** switch tabs. **Help** at the foot of the nav (or **F1**) opens this wiki.
+Every tab is laid out the same way: the main input and **Start** in the run bar, the rest of the settings folded under **Options** (their values shown as small chips), a status row with **Copy** and **Save…**, and a short explanation before the first run. The nav down the left starts with **VISIT** (**Full scan**, **Claude Handoff**, **Report**), then **TOOLS** in six rows (Connectivity, Discover, DNS & mail, Map, Notes & results, Utilities); a row's tools switch in the title bar, and the row opens on the one used last. **Ctrl+1 … Ctrl+9** and **Ctrl+0** go straight to a tab. **Help** at the foot of the nav (or **F1**) opens this wiki.
 
 When a newer release is out, the status bar shows **Update: vX.Y.Z**, a link to its release page (see [[Settings and themes|Settings-and-themes]]).
 
 ## Guides
 
-- [[Site Bundle and Claude|Site-Bundle-and-Claude]]
+- [[Claude Handoff|Site-Bundle-and-Claude]]
 - [[Settings and themes|Settings-and-themes]]
 - [[Privacy and security|Privacy-and-security]]
 - [[Developing|Developing]]

@@ -362,7 +362,34 @@ const SCENES: &[Scene] = &[
     scene(
         "site-bundle",
         Tab::Map,
-        |a, _| a.bundle.open = true,
+        |a, _| {
+            a.bundle.open = true;
+            a.bundle.step_for_shots(0);
+        },
+        at_once,
+    ),
+    scene(
+        "site-bundle-configs",
+        Tab::Map,
+        |a, _| a.bundle.step_for_shots(1),
+        at_once,
+    ),
+    scene(
+        "site-bundle-sweep",
+        Tab::Map,
+        |a, _| a.bundle.step_for_shots(2),
+        at_once,
+    ),
+    scene(
+        "site-bundle-notes",
+        Tab::Map,
+        |a, _| a.bundle.step_for_shots(3),
+        at_once,
+    ),
+    scene(
+        "site-bundle-save",
+        Tab::Map,
+        |a, _| a.bundle.step_for_shots(4),
         at_once,
     ),
     scene(

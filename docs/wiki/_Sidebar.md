@@ -16,7 +16,7 @@
 - [[Results|Results]]
 
 **Guides**
-- [[Site Bundle and Claude|Site-Bundle-and-Claude]]
+- [[Claude Handoff|Site-Bundle-and-Claude]]
 - [[Settings and themes|Settings-and-themes]]
 - [[Privacy and security|Privacy-and-security]]
 - [[Developing|Developing]]

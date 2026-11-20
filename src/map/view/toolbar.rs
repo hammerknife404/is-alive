@@ -685,14 +685,14 @@ impl MapView {
                     ui.add(
                         egui::Label::new(
                             "A quick picture from what this app can see. For an accurate map, \
-                             upload a Site Bundle to Claude or another AI.",
+                             make a Claude Handoff: Claude draws it from everything this visit found.",
                         )
                         .wrap(),
                     );
                 });
                 ui.horizontal(|ui| {
                     if ui
-                        .button("Site Bundle…")
+                        .button("Claude Handoff…")
                         .on_hover_text(
                             "Zip it all up to upload: the skills that draw the map come inside",
                         )

@@ -5,6 +5,7 @@
 //! card, and dragged cards where they were left.
 
 mod csv;
+mod dchtml;
 mod dot;
 mod drawio;
 mod mermaid;
@@ -13,6 +14,7 @@ mod scene;
 mod svg;
 
 pub use csv::vendor;
+pub use dchtml::{CARDS_MAX as DC_HTML_MAX, left_out as dc_html_left_out};
 pub use scene::Look;
 
 use super::layout::{self, CARD, Layout, Line};
@@ -187,6 +189,8 @@ impl Drawn<'_> {
 /// What the Export menu offers.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Format {
+    /// A /mapnetwork page (.dc.html): Claude updates it, is-alive opens it.
+    DcHtml,
     Svg,
     /// At 1× or 2×, on the theme's background or on white.
     Png {
@@ -201,7 +205,8 @@ pub enum Format {
 
 impl Format {
     /// The menu's entries, PNG standing for its sizes.
-    pub const MENU: [Format; 6] = [
+    pub const MENU: [Format; 7] = [
+        Format::DcHtml,
         Format::Svg,
         Format::Png {
             scale: 1,
@@ -215,6 +220,7 @@ impl Format {
 
     pub fn name(self) -> &'static str {
         match self {
+            Format::DcHtml => "/mapnetwork map (.dc.html)",
             Format::Svg => "SVG image",
             Format::Png { .. } => "PNG image",
             Format::DrawIo => "draw.io diagram",
@@ -226,6 +232,10 @@ impl Format {
 
     pub fn hint(self) -> &'static str {
         match self {
+            Format::DcHtml => {
+                "The map as a /mapnetwork page: opens in any browser, goes in the next Claude \
+                 Handoff for Claude to update, and opens back on this Map"
+            }
             Format::Svg => {
                 "A picture that stays sharp at any size, for a ticket or a site document"
             }
@@ -253,6 +263,7 @@ impl Format {
 
     pub fn ext(self) -> &'static str {
         match self {
+            Format::DcHtml => "dc.html",
             Format::Svg => "svg",
             Format::Png { .. } => "png",
             Format::DrawIo => "drawio",
@@ -265,6 +276,7 @@ impl Format {
     /// The text formats; PNG is drawn by `Picture::png`.
     pub fn text(self, d: &Drawn, look: Look) -> Option<String> {
         Some(match self {
+            Format::DcHtml => dchtml::write(d),
             Format::Svg => svg::write(&scene::draw(d, look)),
             Format::Png { .. } => return None,
             Format::DrawIo => drawio::write(d),

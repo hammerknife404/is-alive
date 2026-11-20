@@ -15,12 +15,12 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
-4. Check the version: the bottom right corner of the window says `v0.30.4` (or newer), and so does the title bar.
+4. Check the version: the bottom right corner of the window says `v0.30.5` (or newer), and so does the title bar.
 5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
 
 > **Nothing opens, or the window stays blank?** See [The .exe doesn't open](docs/manual/MANUAL.md#the-exe-doesnt-open) in the manual: what to try, and where the app writes down why.
 
-You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **Sweep**, **Lookup**, **Domains**, **Configs**, **Map**, **Notes**, **Speed**, **Subnet Calc**, **Domain join** and **Results**. On a laptop they're icons only; hover one for its name. **Settings** (theme and the like) and **Help** are at the bottom of that column. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. Across the top are **Full scan** and **Report…** on the right. The bar at the bottom shows your computer's local address, your router (gateway), the domain this computer is joined to (click it for **Domain join**) and your public internet address, with **Refresh** beside them and the version on the right.
+You'll see the tools down the left side, under **TOOLS**, in six rows: **Connectivity** holds **Ping**, **Ports**, **Traceroute** and **Speed**; **Discover** holds **Sweep** and **Configs**; **DNS & mail** holds **Lookup** and **Domains**; then **Map**; **Notes & results** holds **Notes** and **Results**; **Utilities** holds **Subnet Calc** and **Domain join**. Click a row and its tools appear across the top of the window, beside the site name: when this guide says to open a tab (the **Ping** tab, say), click its row, then the tab's name up there. On a laptop the left side is icons only; hover one for its name. Above the rows, under **VISIT**, are **Full scan**, **Claude Handoff** and **Report**. **Settings** (theme and the like) and **Help** are at the bottom of that column. **Help** opens the user manual, built into the app (the **F1** key opens it at the tab you're on), and links to the is-alive wiki online. The bar at the bottom shows your computer's local address, your router (gateway), the domain this computer is joined to (click it for **Domain join**) and your public internet address, with **Refresh** beside them and the version on the right.
 
 > **Please watch, don't run, the Ports and Sweep parts.** They look at other devices on the network, and the company's security software may flag that as suspicious. Everything else in this guide is safe to run yourself.
 
@@ -28,7 +28,7 @@ You'll see the tools down the left side: **Ping**, **Ports**, **Traceroute**, **
 
 ## 2. One-click health check (watch along)
 
-The presenter clicks **Full scan** at the top right. Several checks start at once and the app jumps to the **Results** tab, where each check is listed down the left as it finishes.
+The presenter clicks **Full scan** at the top of the left side. Several checks start at once and the app jumps to the **Results** tab, where each check is listed down the left as it finishes.
 
 | Result | What it tells you |
 |---|---|
@@ -120,7 +120,7 @@ The **Map** tab draws a network as a picture: the internet at the top, then the 
 
 1. Click the **Results** tab. Every check you ran is listed down the left, newest first, with a few words on what it found. Click one to read it in full.
 2. **Copy** puts that run on the clipboard, ready to paste into an email or support ticket; **Save…** writes it to a text file. **All runs ▾** at the top of the list copies or saves all of them.
-3. Click **Report…** at the top right, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
+3. Click **Report** at the top of the left side, then **Save report…**. It saves one web page about the visit: the network map, what's worth fixing, every device found and the notes. Open it in a browser; from there it prints to PDF.
 
 ---
 

@@ -3,7 +3,7 @@
 //! addresses, Refresh, what's running) and Settings. The nav is in nav.rs.
 
 use crate::job::Job;
-use crate::{App, FULL_SCAN_TIP, TABS, VERSION, theme, widgets};
+use crate::{App, TABS, VERSION, theme, widgets};
 use eframe::egui;
 
 /// The title bar's and the status bar's heights. With a tool's run bar
@@ -21,39 +21,12 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new("is-alive").heading().strong());
-                    ui.add_space(6.0);
+                    // The window's own title bar names the app: the chip
+                    // starts the row, then the open row's tools.
                     self.site_chip(ui);
+                    self.tool_strip(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(4.0);
-                        let busy = self.any_running();
-                        let tip = if busy {
-                            "Wait for running tools to finish (or stop them) to run a full scan."
-                        } else {
-                            FULL_SCAN_TIP
-                        };
-                        if ui
-                            .add_enabled(!busy, widgets::primary("Full scan"))
-                            .on_hover_text(tip)
-                            .on_disabled_hover_text(tip)
-                            .clicked()
-                        {
-                            self.full_scan(ui.ctx());
-                        }
-                        if ui
-                            .add(
-                                egui::Button::new("Report…")
-                                    .selected(self.report.open)
-                                    .min_size(egui::vec2(0.0, 28.0)),
-                            )
-                            .on_hover_text(
-                                "One web page documenting the visit: the map, findings, every \
-                             device and the notes. Opens in any browser; prints to PDF",
-                            )
-                            .clicked()
-                        {
-                            self.report.open = !self.report.open;
-                        }
                         if self.look.theme == theme::Theme::Miami
                             && let Some(e) = &self.backdrop.err
                         {
@@ -64,6 +37,38 @@ impl App {
                 });
             });
         theme::top_rule(ui.ctx(), bar.response.rect.bottom(), self.look.moves());
+    }
+
+    /// The open nav row's tools, side by side in the title bar: one click
+    /// between Ping and Ports. Icons only on a window under 1100 wide.
+    fn tool_strip(&mut self, ui: &mut egui::Ui) {
+        let g = &crate::nav::GROUPS[crate::nav::group_of(self.tab)];
+        if g.tabs.len() < 2 {
+            return;
+        }
+        let names = ui.ctx().content_rect().width() >= crate::nav::OPEN_FROM;
+        ui.add_space(10.0);
+        let v = ui.visuals().clone();
+        egui::Frame::new()
+            .fill(v.widgets.inactive.weak_bg_fill.gamma_multiply(0.6))
+            .corner_radius(crate::theme::R_CONTROL)
+            .inner_margin(egui::Margin::same(2))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for tab in g.tabs {
+                    let (_, name, tip) = TABS
+                        .iter()
+                        .find(|t| t.0 == *tab)
+                        .copied()
+                        .unwrap_or((*tab, "", ""));
+                    if strip_button(ui, *tab, name, self.tab == *tab, names)
+                        .on_hover_text(format!("{name}: {tip}"))
+                        .clicked()
+                    {
+                        self.tab = *tab;
+                    }
+                }
+            });
     }
 
     /// How the Map tab calls for attention this frame, asking for the
@@ -190,7 +195,7 @@ impl App {
             .map(|t| t.1)
             .collect();
         if self.bundle.is_running() {
-            names.push("Site Bundle");
+            names.push("Claude Handoff");
         }
         names
     }
@@ -433,7 +438,7 @@ impl crate::App {
             self.save_dir_changed();
         }
         ui.weak(
-            "Save…, Export, Save as, the Site report and the Site Bundle start there; you can \
+            "Save…, Export, Save as, the Site report and the Claude Handoff start there; you can \
              still pick another folder each time.",
         );
     }
@@ -447,6 +452,63 @@ impl crate::App {
 
 /// A button inside a menu drawn as the app's other buttons are: menus make
 /// buttons frameless and see-through, so a real button there reads as text.
+/// One tool in the title bar's switcher: its icon in its colour, and its
+/// name when there's room. 28 high, a trackpad's target.
+fn strip_button(
+    ui: &mut egui::Ui,
+    tab: crate::Tab,
+    name: &str,
+    on: bool,
+    names: bool,
+) -> egui::Response {
+    let font = egui::FontId::proportional(theme::BODY);
+    let text = names.then(|| {
+        ui.painter()
+            .layout_no_wrap(name.to_string(), font.clone(), egui::Color32::WHITE)
+    });
+    let w = 10.0 + 18.0 + text.as_ref().map_or(0.0, |t| 8.0 + t.size().x) + 10.0;
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
+    let v = ui.visuals();
+    let accent = theme::accent();
+    let fill = if on {
+        accent.gamma_multiply(0.2)
+    } else if r.hovered() {
+        v.widgets.hovered.weak_bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, crate::theme::R_CONTROL, fill);
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 10.0 + 9.0, rect.center().y),
+        egui::Vec2::splat(18.0),
+    );
+    crate::icons::paint(
+        p,
+        icon,
+        crate::nav::icon(tab),
+        crate::nav::tint(tab, theme::current()),
+    );
+    if names {
+        let colour = if on {
+            accent
+        } else if r.hovered() {
+            v.strong_text_color()
+        } else {
+            v.text_color()
+        };
+        p.text(
+            egui::pos2(icon.right() + 8.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            font,
+            colour,
+        );
+    }
+    r
+}
+
 fn framed<'a>(ui: &egui::Ui, b: egui::Button<'a>) -> egui::Button<'a> {
     let fill = ui
         .ctx()

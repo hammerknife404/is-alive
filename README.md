@@ -4,7 +4,7 @@
 
 **📖 Documentation**, three ways in, each linking the others:
 
-- **[Wiki](https://github.com/hammerknife404/is-alive/wiki)**: a short page per tab, and guides for the Site Bundle, settings, privacy and development.
+- **[Wiki](https://github.com/hammerknife404/is-alive/wiki)**: a short page per tab, and guides for the Claude Handoff, settings, privacy and development.
 - **[User manual](docs/manual/MANUAL.md)**: one document to read through or print. Every tab and control, worked examples, troubleshooting and a glossary. It's also built into the app: **Help** at the foot of the nav, or **F1** for the tab you're on.
 - **[Follow-along guide](FOLLOW-ALONG.md)**: a 20-minute walk-through for people new to networking.
 
@@ -26,11 +26,11 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Domain join](https://github.com/hammerknife404/is-alive/wiki/Domain-join) | How this computer is joined (Active Directory, Entra ID, hybrid or workgroup) and to which domain, from `dsregcmd /status`; also in the status bar |
 | [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run in a list, each one open beside it with Run again; kept with its site from one visit to the next, with Filter and Export to CSV, JSON, Markdown or HTML |
 
-**Full scan** (top right) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Report…** beside it puts the visit on one web page for the client or the ticket: the map, its findings, what changed since the last visit, every device and the notes, ready to print to PDF. **Settings** is at the foot of the nav on the left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
+**Full scan** (top of the nav, under **VISIT**) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Report** under it puts the visit on one web page for the client or the ticket: the map, its findings, what changed since the last visit, every device and the notes, ready to print to PDF. **Settings** is at the foot of the nav on the left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
 
 ## With Claude
 
-**Site Bundle…** (in the site menu, top left) zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. With **Claude Skills** ticked the bundle carries both skills, so it works even where they aren't installed. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit. The Map's **More › Examples** opens two fictional sites drawn by `/mapnetwork`. See [Site Bundle and Claude](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
+**Claude Handoff** (in the nav under **VISIT**) walks you through five steps (site, configs, sweep, notes, save) and zips the visit's sanitized configs, sweep inventory and, if you choose, notes and results, with a manifest and a kickoff prompt for the `/unifidump` and `/mapnetwork` skills: one attach and one paste. With **Claude Skills** ticked the zip carries both skills, so it works even where they aren't installed. Open the `.dc.html` map Claude makes back in Config Export and the Map redraws it, ready to be updated on the next visit; the Map's **Export › /mapnetwork map (.dc.html)** saves a map is-alive drew in the same form. The Map's **More › Examples** opens two fictional sites drawn by `/mapnetwork`. See [Claude Handoff](https://github.com/hammerknife404/is-alive/wiki/Site-Bundle-and-Claude).
 
 ## Privacy
 
