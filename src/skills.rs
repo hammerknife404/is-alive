@@ -207,7 +207,7 @@ fn home() -> &'static [u8] {
 /// The template with its site data block swapped for `data` (so the page
 /// still opens in a browser, and /mapnetwork can fill it in), or just the
 /// data if the template has lost its markers.
-fn in_template(data: &str) -> Vec<u8> {
+pub(crate) fn in_template(data: &str) -> Vec<u8> {
     let html = file(TEMPLATE)
         .map(|d| String::from_utf8_lossy(d).into_owned())
         .unwrap_or_default();
@@ -290,6 +290,30 @@ mod tests {
             assert!(crate::mapnetwork::parse(d).is_ok());
         }
         assert!(example(Path::new("/tmp/example-Contoso_Health.dc.html")).is_none());
+    }
+
+    /// /mapnetwork maps open in the Dark theme, as is-alive does: the
+    /// template, the examples and every map is-alive writes. (A sync from
+    /// the owner's copy that brings RGB back fails here: restore the
+    /// bundled text from git.)
+    #[test]
+    fn mapnetwork_maps_open_in_the_dark_theme() {
+        let pages = [
+            TEMPLATE,
+            "mapnetwork/assets/example-Acme_Distribution_LLC.dc.html",
+            "mapnetwork/assets/example-Contoso_Health.dc.html",
+        ];
+        for p in pages {
+            let html = String::from_utf8_lossy(file(p).expect(p)).into_owned();
+            assert!(html.contains("props.defaultTheme || 'dark'"), "{p}");
+            assert!(
+                html.contains("&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;")
+                    && !html.contains("&quot;default&quot;:&quot;rgb&quot;"),
+                "{p}"
+            );
+        }
+        let skill = String::from_utf8_lossy(file("mapnetwork/SKILL.md").unwrap()).into_owned();
+        assert!(skill.contains("Default theme is **Dark**"));
     }
 
     #[test]

@@ -25,6 +25,12 @@ pub enum Icon {
     /// The nav's fold button: a panel with a chevron pointing the way it goes.
     Fold,
     Unfold,
+    /// Full scan: a play button in a ring.
+    Scan,
+    /// Site Bundle: a parcel, its lid and a tie.
+    Bundle,
+    /// Report: a page with a folded corner and a small chart.
+    Report,
 }
 
 /// One stroke on the 24-point grid.
@@ -170,6 +176,35 @@ fn parts(icon: Icon) -> &'static [Part] {
             Line(&[(15.0, 5.0), (15.0, 9.0)]),
             Line(&[(9.0, 15.0), (9.0, 19.0)]),
         ],
+        Icon::Scan => &[
+            Circle(12.0, 12.0, 9.0),
+            Line(&[(10.0, 8.0), (16.0, 12.0), (10.0, 16.0), (10.0, 8.0)]),
+        ],
+        Icon::Bundle => &[
+            Line(&[
+                (4.0, 8.0),
+                (20.0, 8.0),
+                (20.0, 20.0),
+                (4.0, 20.0),
+                (4.0, 8.0),
+            ]),
+            Line(&[(3.0, 4.0), (21.0, 4.0), (21.0, 8.0), (3.0, 8.0), (3.0, 4.0)]),
+            Line(&[(10.0, 12.0), (14.0, 12.0)]),
+        ],
+        Icon::Report => &[
+            Line(&[
+                (5.0, 3.0),
+                (14.0, 3.0),
+                (19.0, 8.0),
+                (19.0, 21.0),
+                (5.0, 21.0),
+                (5.0, 3.0),
+            ]),
+            Line(&[(14.0, 3.0), (14.0, 8.0), (19.0, 8.0)]),
+            Line(&[(9.0, 17.0), (9.0, 14.0)]),
+            Line(&[(12.0, 17.0), (12.0, 11.0)]),
+            Line(&[(15.0, 17.0), (15.0, 13.0)]),
+        ],
         Icon::Help => &[
             Circle(12.0, 12.0, 9.0),
             Arc(12.0, 9.5, 2.5, 180.0, 405.0),
@@ -244,7 +279,10 @@ pub fn paint(painter: &egui::Painter, rect: Rect, icon: Icon, colour: Color32) {
 mod tests {
     use super::*;
 
-    const ALL: [Icon; 17] = [
+    const ALL: [Icon; 20] = [
+        Icon::Scan,
+        Icon::Bundle,
+        Icon::Report,
         Icon::Ping,
         Icon::Ports,
         Icon::Trace,

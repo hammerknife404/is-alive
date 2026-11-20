@@ -133,6 +133,8 @@ struct App {
     /// The tab on screen and when it appeared, for the fade-in.
     shown_tab: Tab,
     tab_since: f64,
+    /// The tool each nav row opens on: the one last used in it.
+    group_last: [Tab; 6],
     /// Window size last frame as a normal window, remembered for the next
     /// launch, and whether it's maximised.
     size: Option<egui::Vec2>,
@@ -240,6 +242,7 @@ impl eframe::App for App {
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
         let now = ui.input(|i| i.time);
+        self.group_last[nav::group_of(self.tab)] = self.tab;
         if self.tab != self.shown_tab {
             self.shown_tab = self.tab;
             self.tab_since = now;
@@ -320,6 +323,7 @@ impl App {
             tab: Tab::Ping,
             shown_tab: Tab::Ping,
             tab_since: f64::NEG_INFINITY,
+            group_last: nav::first_tools(),
             size: None,
             maximized: look.maximized,
             fitted: false,
@@ -754,7 +758,7 @@ impl App {
             map,
             ..
         } = self;
-        bundle.window(
+        let ask = bundle.window(
             ctx,
             tools::bundle::Sources {
                 export,
@@ -765,6 +769,11 @@ impl App {
                 map,
             },
         );
+        match ask {
+            Some(tools::bundle::Ask::OpenConfigs) => self.export.open_dialog(ctx),
+            Some(tools::bundle::Ask::Sweep(range)) => self.sweep.run(ctx, &range),
+            None => {}
+        }
     }
 
     fn report_window(&mut self, ctx: &egui::Context) {

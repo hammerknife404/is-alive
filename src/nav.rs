@@ -115,9 +115,64 @@ pub fn icon(tab: Tab) -> Icon {
     }
 }
 
-/// A line above the tabs that start a group (as the tab bar's separators were).
-fn starts_group(tab: Tab) -> bool {
-    matches!(tab, Tab::Dns | Tab::Export | Tab::Notes | Tab::Results)
+/// A row of the nav: the tools it holds, switched between in the title bar.
+pub struct Group {
+    pub name: &'static str,
+    pub tip: &'static str,
+    pub tabs: &'static [Tab],
+}
+
+/// The nav's rows. Every tool is in exactly one; a row with more than one
+/// shows its tools in the title bar, and opens on the one last used.
+pub const GROUPS: &[Group] = &[
+    Group {
+        name: "Connectivity",
+        tip: "Is it up, and is the line good: Ping, Ports, Traceroute and Speed",
+        tabs: &[Tab::Ping, Tab::Ports, Tab::Trace, Tab::Speed],
+    },
+    Group {
+        name: "Discover",
+        tip: "What's on the network: Sweep the LAN, read firewall and controller Configs",
+        tabs: &[Tab::Sweep, Tab::Export],
+    },
+    Group {
+        name: "DNS & mail",
+        tip: "DNS Lookup and WHOIS; mail and domain health",
+        tabs: &[Tab::Dns, Tab::Advanced],
+    },
+    Group {
+        name: "Map",
+        tip: "Network map from the sweep, configs or a /mapnetwork map. Drag to pan, scroll to zoom",
+        tabs: &[Tab::Map],
+    },
+    Group {
+        name: "Notes & results",
+        tip: "The visit's notes, and every finished run",
+        tabs: &[Tab::Notes, Tab::Results],
+    },
+    Group {
+        name: "Utilities",
+        tip: "Subnet calculator, and how this computer is joined to a domain",
+        tabs: &[Tab::Calc, Tab::Join],
+    },
+];
+
+/// The nav row `tab` is in.
+pub fn group_of(tab: Tab) -> usize {
+    GROUPS
+        .iter()
+        .position(|g| g.tabs.contains(&tab))
+        .unwrap_or(0)
+}
+
+/// Each row's tool to open: its first, until another is used.
+pub fn first_tools() -> [Tab; 6] {
+    std::array::from_fn(|i| GROUPS[i].tabs[0])
+}
+
+/// A line above the rows that start a part of the nav.
+fn starts_group(i: usize) -> bool {
+    matches!(GROUPS[i].name, "Map" | "Utilities")
 }
 
 /// Height of one row: taller as a rail, where it's a square button.
@@ -141,6 +196,8 @@ struct Row<'a> {
     /// The Map calling after a full scan: 0–1 glow, and the ring.
     glow: f32,
     ring: bool,
+    /// Can't be used now (Full scan while tools run): drawn faint.
+    dim: bool,
 }
 
 impl App {
@@ -171,6 +228,12 @@ impl App {
                 // for them all (620 × 400 at the least): Settings, Help and
                 // the fold button below stay put.
                 let row = row_height(labels) + 2.0;
+                self.visit_actions(ui, labels);
+                if labels {
+                    heading(ui, "TOOLS");
+                } else {
+                    separator(ui);
+                }
                 let foot = 3.0 * row + 11.0;
                 let room = (ui.available_height() - foot).max(row);
                 egui::ScrollArea::vertical()
@@ -179,30 +242,43 @@ impl App {
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
-                for (n, (tab, name, tip)) in TABS.iter().enumerate() {
-                    if starts_group(*tab) {
+                for (i, g) in GROUPS.iter().enumerate() {
+                    if starts_group(i) {
                         separator(ui);
                     }
+                    let lead = g.tabs[0];
+                    let has_map = g.tabs.contains(&Tab::Map);
                     let (glow, ring) = match call {
-                        Call::Glow { glow, .. } if *tab == Tab::Map => (glow, true),
-                        Call::Ring if *tab == Tab::Map => (0.0, true),
+                        Call::Glow { glow, .. } if has_map => (glow, true),
+                        Call::Ring if has_map => (0.0, true),
                         _ => (0.0, false),
                     };
                     let row = Row {
-                        icon: icon(*tab),
-                        label: name,
-                        tint: Some(tint(*tab, theme::current())),
-                        on: self.tab == *tab,
-                        running: self.tab_running(*tab),
+                        icon: icon(lead),
+                        label: g.name,
+                        tint: Some(tint(lead, theme::current())),
+                        on: g.tabs.contains(&self.tab),
+                        running: g.tabs.iter().any(|t| self.tab_running(*t)),
                         glow,
                         ring,
+                        dim: false,
                     };
-                    let r = nav_row(ui, &row, labels).on_hover_text(match tab_key(n) {
-                        Some(d) => format!("{name}: {tip}\n\nCtrl+{d}"),
-                        None => format!("{name}: {tip}"),
-                    });
+                    let keys: Vec<String> = g
+                        .tabs
+                        .iter()
+                        .filter_map(|t| {
+                            let n = TABS.iter().position(|x| x.0 == *t)?;
+                            let name = TABS[n].1;
+                            Some(match tab_key(n) {
+                                Some(d) => format!("{name}  Ctrl+{d}"),
+                                None => name.to_string(),
+                            })
+                        })
+                        .collect();
+                    let r = nav_row(ui, &row, labels)
+                        .on_hover_text(format!("{}: {}\n\n{}", g.name, g.tip, keys.join("\n")));
                     if r.clicked() {
-                        self.tab = *tab;
+                        self.tab = self.group_last[i];
                     }
                     if row.running {
                         dots.push((r.rect, labels));
@@ -220,6 +296,7 @@ impl App {
                         running: false,
                         glow: 0.0,
                         ring: false,
+                        dim: false,
                     };
                     let fold_tip = if self.look.nav.is_some() {
                         "Fold or open the nav. It stays as you leave it; open or fold it back the way the window \
@@ -240,6 +317,7 @@ impl App {
                         running: false,
                         glow: 0.0,
                         ring: false,
+                        dim: false,
                     };
                     let help = nav_row(ui, &help, labels).on_hover_text(
                         "The manual (built in, works offline), the wiki, release notes and where \
@@ -254,6 +332,7 @@ impl App {
                         running: false,
                         glow: 0.0,
                         ring: false,
+                        dim: false,
                     };
                     let settings = nav_row(ui, &settings, labels)
                         .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
@@ -261,6 +340,71 @@ impl App {
                     separator(ui);
                 });
             });
+    }
+
+    /// The visit's three actions at the top of the nav: Full scan, Site
+    /// Bundle and Report.
+    fn visit_actions(&mut self, ui: &mut egui::Ui, labels: bool) {
+        if labels {
+            heading(ui, "VISIT");
+        }
+        let busy = self.any_running();
+        let scan = Row {
+            icon: Icon::Scan,
+            label: "Full scan",
+            tint: Some(theme::accent()),
+            on: false,
+            running: false,
+            glow: 0.0,
+            ring: false,
+            dim: busy,
+        };
+        let tip = if busy {
+            "Wait for running tools to finish (or stop them) to run a full scan."
+        } else {
+            crate::FULL_SCAN_TIP
+        };
+        if nav_row(ui, &scan, labels).on_hover_text(tip).clicked() && !busy {
+            self.full_scan(ui.ctx());
+        }
+        let bundle = Row {
+            icon: Icon::Bundle,
+            label: "Claude Handoff",
+            tint: None,
+            on: self.bundle.open,
+            running: false,
+            glow: 0.0,
+            ring: false,
+            dim: false,
+        };
+        if nav_row(ui, &bundle, labels)
+            .on_hover_text(
+                "Claude Handoff: step by step, what Claude needs from this visit, in one zip \
+                 for /unifidump and /mapnetwork, with the prompt to paste",
+            )
+            .clicked()
+        {
+            self.bundle.open = !self.bundle.open;
+        }
+        let report = Row {
+            icon: Icon::Report,
+            label: "Report",
+            tint: None,
+            on: self.report.open,
+            running: false,
+            glow: 0.0,
+            ring: false,
+            dim: false,
+        };
+        if nav_row(ui, &report, labels)
+            .on_hover_text(
+                "Report: one web page documenting the visit: the map, findings, every \
+                 device and the notes. Opens in any browser; prints to PDF",
+            )
+            .clicked()
+        {
+            self.report.open = !self.report.open;
+        }
     }
 
     /// Help's menu, opening to the right of its nav row.
@@ -337,11 +481,21 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
         v.text_color()
     };
     let colour = colour.lerp_to_gamma(accent, row.glow);
+    let colour = if row.dim {
+        colour.gamma_multiply(0.45)
+    } else {
+        colour
+    };
     // A tool's icon keeps its colour whether picked, hovered or not; the
     // name and the row's fill say which is picked.
     let ink = row
         .tint
         .map_or(colour, |t| t.lerp_to_gamma(accent, row.glow));
+    let ink = if row.dim {
+        ink.gamma_multiply(0.45)
+    } else {
+        ink
+    };
     let side = ICON;
     let icon_at = if labels {
         Rect::from_center_size(
@@ -365,6 +519,20 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
         map_ring(p, icon_at.expand(3.0));
     }
     r
+}
+
+/// A part's name over its rows, as the site menu names its parts.
+fn heading(ui: &mut egui::Ui, text: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(text)
+                .small()
+                .color(ui.visuals().weak_text_color()),
+        );
+    });
+    ui.add_space(2.0);
 }
 
 /// A hairline between groups.
@@ -460,6 +628,15 @@ mod tests {
             assert_eq!(WHEEL.iter().filter(|t| *t == tab).count(), 1, "{name}");
         }
         assert_eq!(WHEEL.len(), TABS.len());
+    }
+
+    #[test]
+    fn every_tool_is_in_one_nav_row() {
+        for (tab, name, _) in TABS {
+            let n = GROUPS.iter().filter(|g| g.tabs.contains(tab)).count();
+            assert_eq!(n, 1, "{name}");
+        }
+        assert_eq!(first_tools().len(), GROUPS.len());
     }
 
     #[test]

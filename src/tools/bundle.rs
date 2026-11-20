@@ -28,8 +28,23 @@ struct Saved {
     kickoff: String,
 }
 
+/// What the wizard asks the app to do: it only reads the tools.
+pub enum Ask {
+    /// Open Config Export's file dialog.
+    OpenConfigs,
+    /// Sweep this range.
+    Sweep(String),
+}
+
+/// The wizard's steps, in order.
+const STEPS: [&str; 5] = ["Site", "Configs", "Sweep", "Notes", "Save"];
+
 pub struct BundleTool {
     pub open: bool,
+    /// The wizard's step (index into STEPS).
+    step: usize,
+    /// The range step 3 sweeps; filled from this computer's LAN.
+    range: String,
     site: String,
     notes: String,
     clients: Clients,
@@ -57,6 +72,8 @@ impl Default for BundleTool {
     fn default() -> Self {
         Self {
             open: false,
+            step: 0,
+            range: String::new(),
             site: String::new(),
             notes: String::new(),
             clients: Clients::Anonymized,
@@ -118,6 +135,11 @@ impl BundleTool {
         self.job.is_some()
     }
 
+    /// The scene tour's picture of each step.
+    pub(crate) fn step_for_shots(&mut self, step: usize) {
+        self.step = step.min(STEPS.len() - 1);
+    }
+
     fn poll(&mut self, ctx: &egui::Context) -> bool {
         pump(&mut self.job, |r| match r {
             Ok(Some(saved)) => {
@@ -128,7 +150,7 @@ impl BundleTool {
             }
             Ok(None) => {}
             Err(e) => {
-                widgets::toast("Bundle not saved", false);
+                widgets::toast("Not saved", false);
                 self.err = Some(e);
             }
         })
@@ -146,12 +168,13 @@ impl BundleTool {
         self.left_out.clear();
         self.saved = None;
         self.err = None;
+        self.step = 0;
     }
 
-    pub fn window(&mut self, ctx: &egui::Context, src: Sources) {
+    pub fn window(&mut self, ctx: &egui::Context, src: Sources) -> Option<Ask> {
         let running = self.poll(ctx);
         if !self.open {
-            return;
+            return None;
         }
         if self.site.trim().is_empty()
             && let Some((_, r)) = src.export.unifi()
@@ -160,191 +183,487 @@ impl BundleTool {
             // From the backup: cleaned and cut like a typed name.
             self.site = crate::input::line(name, crate::input::Field::Text.max());
         }
+        if self.range.trim().is_empty()
+            && let Some((ip, bits)) = src.info.lan
+        {
+            self.range = crate::net::targets::subnet_cidr(ip, bits);
+        }
         let mut open = self.open;
+        let mut ask = None;
         widgets::compact_title(ctx, || {
-            egui::Window::new("Site Bundle")
+            egui::Window::new("Claude Handoff")
+                .pivot(egui::Align2::CENTER_CENTER)
+                .default_pos(ctx.content_rect().center())
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(560.0)
-                .show(ctx, |ui| self.body(ui, &src, running));
+                .default_width(600.0)
+                .show(ctx, |ui| {
+                    ui.set_width(600.0);
+                    ask = self.wizard(ui, &src, running);
+                });
         });
         self.open = open;
+        ask
     }
 
-    fn body(&mut self, ui: &mut Ui, src: &Sources, running: bool) {
-        ui.weak("One zip of everything so far, for /unifidump and /mapnetwork.");
-        ui.add_space(4.0);
-        egui::Grid::new("bundle_form")
-            .num_columns(2)
-            .spacing([8.0, 6.0])
+    /// The steps across the top: done ones ticked, this one lit; any can
+    /// be clicked.
+    fn steps(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (i, name) in STEPS.iter().enumerate() {
+                if i > 0 {
+                    ui.weak("›");
+                }
+                let text = RichText::new(format!("{}  {name}", i + 1));
+                // Done steps in the OK colour, this one lit, the rest dim.
+                let text = if i == self.step {
+                    text.strong().color(crate::theme::accent())
+                } else if i < self.step {
+                    text.color(widgets::ok())
+                } else {
+                    text.weak()
+                };
+                if ui
+                    .add(
+                        egui::Button::new(text)
+                            .frame(i == self.step)
+                            .min_size(egui::vec2(0.0, ROW_H)),
+                    )
+                    .clicked()
+                {
+                    self.step = i;
+                }
+            }
+        });
+    }
+
+    /// The wizard: the step bar, what this step needs, Back and Next.
+    fn wizard(&mut self, ui: &mut Ui, src: &Sources, running: bool) -> Option<Ask> {
+        self.steps(ui);
+        ui.separator();
+        let mut ask = None;
+        // Each step the same height, so Back and Next don't move.
+        let room = (ui.ctx().content_rect().height() - 230.0).clamp(220.0, 400.0);
+        egui::ScrollArea::vertical()
+            .id_salt("bundle_step")
+            .min_scrolled_height(room)
+            .max_height(room)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.label("Site name");
-                widgets::line(
+                ui.spacing_mut().interact_size.y = ROW_H;
+                match self.step {
+                    0 => self.site_step(ui, src),
+                    1 => ask = self.configs_step(ui, src),
+                    2 => ask = self.sweep_step(ui, src),
+                    3 => self.notes_step(ui, src),
+                    _ => self.save_step(ui, src, running),
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.step > 0,
+                    egui::Button::new("‹ Back").min_size(egui::vec2(72.0, ROW_H)),
+                )
+                .clicked()
+            {
+                self.step -= 1;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.step + 1 < STEPS.len() {
+                    let next = format!("Next: {} ›", STEPS[self.step + 1]);
+                    if ui
+                        .add(widgets::primary(&next).min_size(egui::vec2(0.0, ROW_H)))
+                        .clicked()
+                    {
+                        self.step += 1;
+                    }
+                } else {
+                    self.save_button(ui, src, running);
+                }
+                ui.weak(format!("Step {} of {}", self.step + 1, STEPS.len()));
+            });
+        });
+        ask
+    }
+
+    fn site_step(&mut self, ui: &mut Ui, src: &Sources) {
+        ui.heading("Hand this visit to Claude");
+        ui.label("Claude turns what you gather here into a full network map with findings.");
+        ui.add_space(4.0);
+        egui::Grid::new("handoff_how")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                for (n, line) in [
+                    "Answer these five steps. Skip any you have nothing for.",
+                    "Save: you get one .zip, and a prompt is copied for you.",
+                    "In a Claude chat, attach the .zip and paste the prompt.",
+                    "Claude sends back a map (.dc.html). Drop it on the Map tab to see it here.",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    ui.label(RichText::new(format!("{}.", n + 1)).strong());
+                    ui.label(*line);
+                    ui.end_row();
+                }
+            });
+        ui.add_space(10.0);
+        ui.label("Site name");
+        widgets::line(
+            ui,
+            crate::input::Field::Text,
+            &mut self.site,
+            560.0,
+            "Client and building, e.g. Harbor Dental front office",
+        );
+        ui.add_space(8.0);
+        ui.label("Known problems (optional)");
+        self.problems(ui, src);
+    }
+
+    fn configs_step(&mut self, ui: &mut Ui, src: &Sources) -> Option<Ask> {
+        let mut ask = None;
+        ui.heading("Firewall and controller backups");
+        ui.weak(
+            "These tell Claude how the network is set up: VLANs, rules, ports, Wi-Fi. \
+             Passwords and keys are stripped on this laptop before anything goes in the zip. \
+             Have the map Claude made last visit? Open it here too, so it's updated, not redrawn.",
+        );
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let picking = src.export.picking();
+            if ui
+                .add_enabled(!picking, widgets::primary("Open files…").min_size(egui::vec2(0.0, ROW_H)))
+                .on_hover_text("Pick backups, exports or last visit's map (.dc.html); they open in Configs and on the Map too")
+                .clicked()
+            {
+                ask = Some(Ask::OpenConfigs);
+            }
+            if let Some(f) = src.export.reading() {
+                widgets::spinner(ui);
+                ui.weak(format!("Reading {f}…"));
+            } else if picking {
+                ui.weak("Pick the files in the dialog…");
+            }
+        });
+        ui.add_space(6.0);
+        let configs = configs(src.export);
+        egui::Grid::new("bundle_configs")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                self.config_rows(ui, &configs);
+                let map = src.export.mapnetwork();
+                part_row(
                     ui,
-                    crate::input::Field::Text,
-                    &mut self.site,
-                    380.0,
-                    "Client or site name",
+                    &mut self.use_map,
+                    "Last visit's map",
+                    map.map(|(p, d)| {
+                        format!(
+                            "{} device(s) · {} · updated, not rebuilt",
+                            d.nodes.len(),
+                            export::file_name(p)
+                        )
+                    }),
+                    "Open the site's /mapnetwork .dc.html to have it updated",
                 );
+            });
+        ui.add_space(8.0);
+        ui.label(RichText::new("Where to get them").strong());
+        egui::Grid::new("bundle_where")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("UniFi");
+                ui.weak("Settings › System › Backups › Download (.unf)");
                 ui.end_row();
-                ui.label("Known problems");
-                ui.vertical(|ui| {
-                    let ov = src.notes.overrides().merged(&self.ov);
-                    let id = egui::Id::new(PROBLEMS_ID);
-                    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                        let text = buf.as_str();
-                        let spans: Vec<_> = crate::redact::find_with(text, &ov)
-                            .into_iter()
-                            .map(|h| h.span)
-                            .collect();
-                        let mut job = crate::tools::notes::highlight(
-                            ui,
-                            text,
-                            &spans,
-                            &eframe::egui::FontId::monospace(crate::theme::MONO),
-                        );
-                        job.wrap.max_width = wrap;
-                        ui.fonts_mut(|f| f.layout_job(job))
-                    };
-                    let keep = widgets::selection_before_right_click(ui.ctx(), id);
-                    let edit = egui::TextEdit::multiline(&mut self.notes)
-                        .id(id)
-                        .char_limit(crate::input::Field::Problems.room())
-                        .desired_rows(2)
-                        .desired_width(380.0)
-                        .hint_text("Optional. Goes straight into /mapnetwork's findings.")
-                        .layouter(&mut layouter)
-                        .show(ui);
-                    widgets::tidy(
-                        ui.ctx(),
-                        &edit.response,
-                        crate::input::Field::Problems,
-                        &mut self.notes,
-                    );
-                    widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
-                    edit.response.context_menu(|ui| {
-                        if widgets::text_edit_menu(ui, id, true) {
-                            ui.close();
-                        }
-                    });
-                    let hits = crate::redact::find_with(&self.notes, &ov);
-                    let pick = widgets::text_selection(ui.ctx(), id, &self.notes)
-                        .and_then(|sel| crate::redact::pick(&self.notes, sel, &hits));
-                    let shortcut = edit.response.has_focus()
-                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::R));
-                    ui.horizontal(|ui| {
-                        let label = match &pick {
-                            Some(crate::redact::Pick::Unredact(_)) => "Unredact",
-                            _ => "Redact",
-                        };
-                        let clicked = ui
-                            .add_enabled(pick.is_some(), egui::Button::new(label))
-                            .on_hover_text(
-                                "Hide the selected text (Ctrl+R). Notes' redactions apply here too",
-                            )
-                            .clicked();
-                        if (clicked || shortcut)
-                            && let Some(p) = pick
-                        {
-                            match self.ov.apply(&self.notes, p) {
-                                Ok(m) => widgets::toast(m, true),
-                                Err(m) => widgets::toast(m, false),
-                            }
-                        }
-                        if !hits.is_empty() {
-                            ui.label(
-                                RichText::new(format!(
-                                    "⚠ {} before bundling",
-                                    crate::redact::summary(&hits)
-                                ))
-                                .small()
-                                .color(widgets::warn()),
-                            );
-                        }
-                    });
-                });
+                ui.label("SonicWall");
+                ui.weak("Device › Settings › Firmware & Settings › Export Configuration (.exp)");
+                ui.end_row();
+                ui.label("Meraki");
+                ui.weak("An API export (.json) of the organization");
                 ui.end_row();
             });
+        ask
+    }
+
+    fn sweep_step(&mut self, ui: &mut Ui, src: &Sources) -> Option<Ask> {
+        let mut ask = None;
+        ui.heading("Find what's on the network");
+        ui.weak(
+            "A sweep lists every device that answers: name, MAC, vendor and open \
+             management ports. Your own network is filled in; add others with spaces between.",
+        );
+        ui.label(
+            RichText::new("It probes other devices: tell the site's IT contact before you start.")
+                .color(widgets::warn()),
+        );
+        ui.add_space(8.0);
+        ui.label("Subnets or ranges");
+        ui.horizontal(|ui| {
+            let busy = src.sweep.is_running();
+            let enter = widgets::line(
+                ui,
+                crate::input::Field::Range,
+                &mut self.range,
+                420.0,
+                "192.168.1.0/24 10.0.0.1-50",
+            )
+            .lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let label = if src.sweep.finished().is_some() {
+                "Sweep again"
+            } else {
+                "Sweep"
+            };
+            if (ui
+                .add_enabled(
+                    !busy && !self.range.trim().is_empty(),
+                    widgets::primary(label).min_size(egui::vec2(0.0, ROW_H)),
+                )
+                .clicked()
+                || (enter && !busy))
+                && !self.range.trim().is_empty()
+            {
+                ask = Some(Ask::Sweep(self.range.trim().to_string()));
+            }
+        });
+        if let Some((done, total, since, _)) = src.sweep.progress() {
+            widgets::progress(ui, done, total, since);
+        }
+        ui.add_space(8.0);
+        let runs = src.log.entries.len();
+        let targets = log_targets(src.log);
+        egui::Grid::new("bundle_sweep")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                part_row(
+                    ui,
+                    &mut self.use_inventory,
+                    "Sweep inventory",
+                    src.sweep
+                        .finished()
+                        .map(|(range, n)| format!("{n} live host(s) · {range}")),
+                    "Not swept yet",
+                );
+                part_row(
+                    ui,
+                    &mut self.use_results,
+                    "Results log",
+                    (runs > 0).then(|| match targets.is_empty() {
+                        true => format!("{runs} run(s)"),
+                        false => format!("{runs} run(s): {}", targets.join(", ")),
+                    }),
+                    "Nothing in Results yet (Full scan fills it)",
+                );
+            });
+        ask
+    }
+
+    fn notes_step(&mut self, ui: &mut Ui, src: &Sources) {
+        ui.heading("Your notes");
+        ui.weak(
+            "Notes are sanitized on this laptop: passwords, keys and patient details \
+             become redaction markers.",
+        );
+        ui.add_space(8.0);
+        egui::Grid::new("bundle_notes")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                let (_, hits) = src.notes.sanitized();
+                part_row(
+                    ui,
+                    &mut self.use_notes,
+                    "Tech notes",
+                    (!src.notes.is_empty()).then(|| match hits.len() {
+                        0 => "notes.md · nothing redacted".to_string(),
+                        _ => format!("notes.md · {}", crate::redact::summary(&hits)),
+                    }),
+                    "Nothing in Notes yet",
+                );
+                let card_notes = src.map.bundle_notes(src.notes.overrides());
+                part_row(
+                    ui,
+                    &mut self.use_card_notes,
+                    "Card notes",
+                    card_notes
+                        .as_ref()
+                        .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
+                    "No notes on the live map's cards",
+                );
+            });
+        ui.add_space(10.0);
+        ui.label(RichText::new("Client devices (phones, laptops)").strong());
         ui.horizontal(|ui| {
             export::clients_choice(ui, "bundle_clients", &mut self.clients);
             ui.separator();
-            ui.checkbox(&mut self.map_clients, "Clients on the map")
+            ui.checkbox(&mut self.map_clients, "Draw them on the map")
                 .on_hover_text("Put client devices on the map (off: infrastructure only)");
         });
-        ui.separator();
+    }
 
+    fn save_step(&mut self, ui: &mut Ui, src: &Sources, running: bool) {
+        ui.heading("Check and save");
+        ui.weak("Everything ticked goes in the zip. Untick anything you'd rather leave out.");
+        ui.add_space(6.0);
         let configs = configs(src.export);
-        let map = src.export.mapnetwork();
-        let sweep = src.sweep.finished();
-        let runs = src.log.entries.len();
         let targets = log_targets(src.log);
-        ui.label(RichText::new("Includes").strong());
-        // Every backup and export open is a row: the list scrolls before the
-        // window outgrows a laptop's (at 720 high, about eleven rows show).
-        let room = (ui.ctx().content_rect().height() - 370.0).max(180.0);
-        egui::ScrollArea::vertical()
-            .id_salt("bundle_parts_scroll")
-            .max_height(room)
-            .show(ui, |ui| {
-                // Rows a trackpad can hit.
-                ui.spacing_mut().interact_size.y = ROW_H;
-                egui::Grid::new("bundle_parts")
-                    .num_columns(2)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| self.rows(ui, src, &configs, &targets));
+        egui::Grid::new("bundle_parts")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| self.rows(ui, src, &configs, &targets));
+        widgets::error(ui, &self.err);
+        ui.add_space(8.0);
+        if running {
+            ui.horizontal(|ui| {
+                widgets::spinner(ui);
+                ui.weak("Saving…");
             });
-        // The map alone is enough: Claude reviews and updates it.
-        let chosen = (self.use_map && map.is_some())
+        }
+        if let Some(s) = &self.saved {
+            ui.label(
+                RichText::new(format!(
+                    "Saved {}. The kickoff prompt is on the clipboard.",
+                    export::file_name(&s.path)
+                ))
+                .color(widgets::ok()),
+            )
+            .on_hover_text(s.path.display().to_string());
+            ui.add_space(4.0);
+            ui.label(RichText::new("Now, in Claude").strong());
+            ui.label("1.  Open a new chat at claude.ai (or Claude on the desktop).");
+            ui.label(format!("2.  Attach {}.", export::file_name(&s.path)));
+            ui.label("3.  Paste (Ctrl+V) and send. The prompt tells Claude what to do.");
+            ui.label("4.  Save the map it sends back, then drop it on the Map tab.");
+            if ui
+                .button("Copy the prompt again")
+                .on_hover_text(s.kickoff.as_str())
+                .clicked()
+            {
+                widgets::copy(ui.ctx(), s.kickoff.clone());
+                widgets::toast("Kickoff prompt copied", true);
+            }
+        } else {
+            ui.weak("Save for Claude… writes the zip and copies the prompt to paste with it.");
+        }
+    }
+
+    /// Something is ticked that has something in it.
+    fn chosen(&self, src: &Sources) -> bool {
+        let configs = configs(src.export);
+        (self.use_map && src.export.mapnetwork().is_some())
             || configs
                 .iter()
                 .any(|c| c.files.iter().any(|f| !self.left_out.contains(f.path)))
-            || (self.use_inventory && sweep.is_some())
-            || (self.use_results && runs > 0)
+            || (self.use_inventory && src.sweep.finished().is_some())
+            || (self.use_results && !src.log.entries.is_empty())
             || (self.use_notes && !src.notes.is_empty())
-            || (self.use_card_notes && src.map.bundle_notes(src.notes.overrides()).is_some());
-        widgets::error(ui, &self.err);
-        ui.separator();
-
-        ui.horizontal(|ui| {
-            let save = ui
-                .add_enabled(chosen && !running, egui::Button::new("Save bundle…"))
-                .on_hover_text("Save the zip and copy the prompt")
-                .on_disabled_hover_text("Nothing to bundle yet");
-            if save.clicked() {
-                self.save(ui.ctx(), src);
-            }
-            if running {
-                widgets::spinner(ui);
-            }
-            if let Some(s) = &self.saved {
-                if ui
-                    .button("Copy kickoff prompt")
-                    .on_hover_text(s.kickoff.as_str())
-                    .clicked()
-                {
-                    widgets::copy(ui.ctx(), s.kickoff.clone());
-                    widgets::toast("Kickoff prompt copied", true);
-                }
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "Saved {}; prompt copied",
-                            export::file_name(&s.path)
-                        ))
-                        .color(widgets::ok()),
-                    )
-                    .truncate(),
-                )
-                .on_hover_text(s.path.display().to_string());
-            }
-        });
-        ui.weak("Attach the zip in a Claude chat and paste the prompt.");
+            || (self.use_card_notes && src.map.bundle_notes(src.notes.overrides()).is_some())
     }
 
-    /// The Includes list: a row for each backup and export open (or, with
-    /// none of a kind, what to open), then the rest.
-    fn rows(&mut self, ui: &mut Ui, src: &Sources, configs: &[Configs], targets: &[String]) {
+    fn save_button(&mut self, ui: &mut Ui, src: &Sources, running: bool) {
+        let chosen = self.chosen(src);
+        if ui
+            .add_enabled(
+                chosen && !running,
+                widgets::primary("Save for Claude…").min_size(egui::vec2(0.0, ROW_H)),
+            )
+            .on_hover_text("Save the zip and copy the prompt")
+            .on_disabled_hover_text(
+                "Nothing to hand over yet: open a backup (step 2) or run a sweep (step 3)",
+            )
+            .clicked()
+        {
+            self.save(ui.ctx(), src);
+        }
+    }
+
+    /// Known problems: a box that goes straight into /mapnetwork's
+    /// findings, redacted as the notes are.
+    fn problems(&mut self, ui: &mut Ui, src: &Sources) {
+        let ov = src.notes.overrides().merged(&self.ov);
+        let id = egui::Id::new(PROBLEMS_ID);
+        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+            let text = buf.as_str();
+            let spans: Vec<_> = crate::redact::find_with(text, &ov)
+                .into_iter()
+                .map(|h| h.span)
+                .collect();
+            let mut job = crate::tools::notes::highlight(
+                ui,
+                text,
+                &spans,
+                &eframe::egui::FontId::monospace(crate::theme::MONO),
+            );
+            job.wrap.max_width = wrap;
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
+        let keep = widgets::selection_before_right_click(ui.ctx(), id);
+        let edit = egui::TextEdit::multiline(&mut self.notes)
+            .id(id)
+            .char_limit(crate::input::Field::Problems.room())
+            .desired_rows(4)
+            .desired_width(560.0)
+            .hint_text("Optional. What the client reported, or what you saw. Goes straight into /mapnetwork's findings.")
+            .layouter(&mut layouter)
+            .show(ui);
+        widgets::tidy(
+            ui.ctx(),
+            &edit.response,
+            crate::input::Field::Problems,
+            &mut self.notes,
+        );
+        widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
+        edit.response.context_menu(|ui| {
+            if widgets::text_edit_menu(ui, id, true) {
+                ui.close();
+            }
+        });
+        let hits = crate::redact::find_with(&self.notes, &ov);
+        let pick = widgets::text_selection(ui.ctx(), id, &self.notes)
+            .and_then(|sel| crate::redact::pick(&self.notes, sel, &hits));
+        let shortcut = edit.response.has_focus()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::R));
+        ui.horizontal(|ui| {
+            let label = match &pick {
+                Some(crate::redact::Pick::Unredact(_)) => "Unredact",
+                _ => "Redact",
+            };
+            let clicked = ui
+                .add_enabled(pick.is_some(), egui::Button::new(label))
+                .on_hover_text("Hide the selected text (Ctrl+R). Notes' redactions apply here too")
+                .clicked();
+            if (clicked || shortcut)
+                && let Some(p) = pick
+            {
+                match self.ov.apply(&self.notes, p) {
+                    Ok(m) => widgets::toast(m, true),
+                    Err(m) => widgets::toast(m, false),
+                }
+            }
+            if !hits.is_empty() {
+                ui.label(
+                    RichText::new(format!(
+                        "⚠ {} before bundling",
+                        crate::redact::summary(&hits)
+                    ))
+                    .small()
+                    .color(widgets::warn()),
+                );
+            }
+        });
+    }
+
+    /// A row for each backup and export open (or, with none of a kind,
+    /// what to open).
+    fn config_rows(&mut self, ui: &mut Ui, configs: &[Configs]) {
         for c in configs {
             if c.files.is_empty() {
                 part_row(ui, &mut false, c.name, None, c.missing);
@@ -365,6 +684,12 @@ impl BundleTool {
                 }
             }
         }
+    }
+
+    /// The Includes list: a row for each backup and export open (or, with
+    /// none of a kind, what to open), then the rest.
+    fn rows(&mut self, ui: &mut Ui, src: &Sources, configs: &[Configs], targets: &[String]) {
+        self.config_rows(ui, configs);
         let map = src.export.mapnetwork();
         let sweep = src.sweep.finished();
         let runs = src.log.entries.len();
@@ -662,7 +987,7 @@ fn configs(e: &ExportTool) -> [Configs<'_>; 3] {
         Configs {
             name: "UniFi backup",
             file: bundle::UNIFI,
-            missing: "Open a UniFi backup in Config Export",
+            missing: "None open",
             files: e
                 .unifis()
                 .map(|(path, r)| Config {
@@ -674,7 +999,7 @@ fn configs(e: &ExportTool) -> [Configs<'_>; 3] {
         Configs {
             name: "SonicWall export",
             file: bundle::SONICWALL,
-            missing: "Open a SonicWall .exp or .wri in Config Export",
+            missing: "None open",
             files: e
                 .sonicwalls()
                 .map(|(path, r)| Config {
@@ -686,7 +1011,7 @@ fn configs(e: &ExportTool) -> [Configs<'_>; 3] {
         Configs {
             name: "Meraki export",
             file: bundle::MERAKI,
-            missing: "Open a Meraki API export (.json) in Config Export",
+            missing: "None open",
             files: e
                 .merakis()
                 .map(|(path, r)| Config {

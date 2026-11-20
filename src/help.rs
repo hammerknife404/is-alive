@@ -79,7 +79,7 @@ fn links(tab: Tab, tab_name: &str) -> [(&'static str, Vec<Link>); 2] {
                 },
                 link(
                     "Manual",
-                    "Every tab, the Site Bundle, privacy and a glossary",
+                    "Every tab, the Claude Handoff, privacy and a glossary",
                     Go::Chapter(0),
                 ),
                 link(

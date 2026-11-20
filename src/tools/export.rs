@@ -205,7 +205,7 @@ pub struct ExportTool {
 
 /// What a Site Bundle opened here (one with no /mapnetwork map in it yet)
 /// is, and what to open instead.
-pub const BUNDLE: &str = "that's a Site Bundle (made for Claude). Open the backups and exports it \
+pub const BUNDLE: &str = "that's a Claude Handoff zip. Open the backups and exports it \
 was made from, or the map Claude made from it (a .dc.html)";
 
 /// Largest SonicWall, Meraki or map file read; only a UniFi backup (whose
@@ -436,7 +436,7 @@ impl ExportTool {
                             self.notices.push((
                                 format!(
                                     "{} is open in Config Export. Meraki configs go into the \
-                                     Site Bundle and JSON for Claude; the Map doesn't draw them",
+                                     Claude Handoff and JSON for Claude; the Map doesn't draw them",
                                     file_name(&path)
                                 ),
                                 true,
@@ -726,7 +726,7 @@ impl ExportTool {
                     "Convert a config",
                     "Open or drop a UniFi backup, SonicWall .exp / .wri, Meraki .json, a /mapnetwork \
                      map or a saved map. The result is sanitized JSON for the skills. UniFi, SonicWall \
-                     and /mapnetwork files draw the Map too; Meraki configs go into the Site Bundle \
+                     and /mapnetwork files draw the Map too; Meraki configs go into the Claude Handoff \
                      and JSON for Claude, but aren't drawn on the Map.",
                     &[("Open file…", "Pick one or more files", !self.picking())],
                 )
@@ -793,7 +793,7 @@ impl ExportTool {
             ui.label(egui::RichText::new(r.headline()).strong());
             if let Export::Meraki(_) = r {
                 ui.weak(
-                    "Not drawn on the Map: Meraki configs go into the Site Bundle and Save JSON, \
+                    "Not drawn on the Map: Meraki configs go into the Claude Handoff and Save JSON, \
                      for Claude",
                 );
             }
@@ -897,10 +897,7 @@ mod tests {
             ("unifi.unifidump.json", b"[]"),
         ]);
         let e = convert(z, unifi::Clients::None).err().unwrap();
-        assert!(
-            e.starts_with("that's a Site Bundle (made for Claude)"),
-            "{e}"
-        );
+        assert!(e.starts_with("that's a Claude Handoff zip"), "{e}");
         for what in [
             "backups and exports it was made from",
             "the map Claude made",
