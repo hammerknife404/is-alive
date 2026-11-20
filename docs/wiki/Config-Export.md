@@ -1,11 +1,11 @@
-Decodes a UniFi backup (`.unf` / `.unifi`), SonicWall settings export (`.exp`) or tech support report (`.wri`), or Meraki MX config (Dashboard API `.json`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills; also reads a `/mapnetwork` map (`.dc.html`, or a zip holding one) back in for the Map tab, and hands a saved map (`.json`) to the Map. UniFi backups, SonicWall exports and `/mapnetwork` maps draw the [[Map]]; **Meraki configs go into the Site Bundle and the JSON for Claude, but aren't drawn on the Map** (the sub-tab says so).
+Decodes a UniFi backup (`.unf` / `.unifi`), SonicWall settings export (`.exp`) or tech support report (`.wri`), or Meraki MX config (Dashboard API `.json`) on this machine and saves sanitized JSON for the unifidump / mapnetwork skills; also reads a `/mapnetwork` map (`.dc.html`, or a zip holding one) back in for the Map tab, and hands a saved map (`.json`) to the Map. UniFi backups, SonicWall exports and `/mapnetwork` maps draw the [[Map]]; **Meraki configs go into the Claude Handoff and the JSON for Claude, but aren't drawn on the Map** (the sub-tab says so).
 
 Open files with **Open file…**, from the Map (**More › Open…**, the same dialog; you stay on the Map), by dropping them on the window, or by naming them on the command line (**Open with → is-alive**). Opening from here keeps you here; a saved map opens on the Map.
 
 - **Drops** go where they make sense on the tab they land on, and the overlay says where: on the Map, Config Export reads them and the Map stays on screen and redraws; on Notes, a photo or notes (`.md`, `.txt`) go into Notes and anything else comes here; on any other tab this tab comes on screen to read them. A file that can't be read while you're on another tab says why in a message at the bottom of the window.
 - **While a file is being read**, files opened or dropped (and example maps picked) wait their turn and are read right after it; nothing is thrown away.
 - **Open with** (or the command line) reads the open site's own configs first, then the files named, and the site remembers them all.
-- **A Site Bundle zip** isn't read back: it says *that's a Site Bundle (made for Claude)* and to open the backups and exports it was made from, or the map Claude made from it. A zip holding Claude's `.dc.html` opens as that map.
+- **A Claude Handoff zip** isn't read back: it says *that's a Claude Handoff zip* and to open the backups and exports it was made from, or the map Claude made from it. A zip holding Claude's `.dc.html` opens as that map.
 
 ## UniFi
 
@@ -18,7 +18,7 @@ Open files with **Open file…**, from the Map (**More › Open…**, the same d
 
 **Save JSON…** writes `<name>.unifidump.json`: the mongoexport-style array (`{"__cmd":"select","collection":…}` markers) that the unifidump skill's `extract.py` reads directly, so hand that file to `/unifidump` instead of the backup.
 
-- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; Site Bundle defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client. Client notes, email addresses and phone numbers are dropped in every mode.
+- **Kept:** `site`, `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (clients) only when **UniFi clients** is *anonymized* or *full* (default *none* here; the Claude Handoff defaults to *anonymized*). Client hostnames are often people's names; unifidump uses them only for counts and to spot unadopted gear plugged in as a client. Client notes, email addresses and phone numbers are dropped in every mode.
 - **Left behind:** every other collection: admins and their password hashes, settings, events, alarms, stats, rogue APs, and so on. The console's own config, TLS keys and Postgres database in a `.unifi` are never read.
 - **Removed from what's kept:** any field starting `x_` (UniFi's prefix for stored secrets: WLAN passphrases, device auth keys, WAN/VPN passwords) or named like a password, passphrase, secret, PSK, private key, token, certificate or hash, at any depth.
 
@@ -26,13 +26,13 @@ The summary lists the layers peeled, the collections kept and left behind with c
 
 ## SonicWall
 
-Pick several files at once, or drag them onto the window, at once or one after another. Each file gets its own sub-tab (*kind · name*) with **Save JSON…**, **Copy** and **Clear**; the file opened last is shown, and opening the same file again replaces its tab. Past six tabs the oldest fold into a **n more** menu. The Map and Site Bundle use every UniFi backup and SonicWall export open (the Site Bundle every Meraki export too), and the `/mapnetwork` map opened last; Notes redacts the secrets of every open file. Changing **UniFi clients** reads every open UniFi backup again.
+Pick several files at once, or drag them onto the window, at once or one after another. Each file gets its own sub-tab (*kind · name*) with **Save JSON…**, **Copy** and **Clear**; the file opened last is shown, and opening the same file again replaces its tab. Past six tabs the oldest fold into a **n more** menu. The Map and the Claude Handoff use every UniFi backup and SonicWall export open (the Claude Handoff every Meraki export too), and the `/mapnetwork` map opened last; Notes redacts the secrets of every open file. Changing **UniFi clients** reads every open UniFi backup again.
 
 **Several sites or firewalls:** open all of a visit's files, even several of one kind (a client with two sites, each with its own UniFi backup and SonicWall report, is four files):
 
 - **UniFi backups** all go on the [[Map]]. A device or client in two backups (one controller backed up on two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)*, *Default (south)*.
 - **SonicWall exports**: each firewall is a gateway of its own on the Map. A settings export and a tech support report of the same firewall are one card.
-- In the [[Site Bundle|Site-Bundle-and-Claude]] each file goes in on its own: `unifi.unifidump.json`, `unifi-2.unifidump.json`, `sonicwall.json`, `sonicwall-2.json`, `meraki-2.json` and so on.
+- In the [[Claude Handoff|Site-Bundle-and-Claude]] each file goes in on its own: `unifi.unifidump.json`, `unifi-2.unifidump.json`, `sonicwall.json`, `sonicwall-2.json`, `meraki-2.json` and so on.
 
 The same **Open file…** takes a SonicWall settings export (`.exp`, Gen 6 or 7) or one already decoded to text. The file is only base64 and URL-encoding; it's decoded here and turned into JSON for `/mapnetwork`: interfaces (zone, physical/VLAN with tag and parent, IP/mask, gateway, secondary subnet, port MAC, which management protocols are on, comment), zones, address objects and groups, FQDN objects, service objects and groups, access rules (zones, source, destination, service, action, enabled, comment) and NAT rules.
 
@@ -50,11 +50,11 @@ Meraki keeps no config file on the box: its config is what the Dashboard API ret
 
 Open that file (or a zip of one JSON file per API call, as other backup scripts save it) in Config Export. Tables are recognised by their shape, wherever they sit: organization, networks, devices (MX models, serials and firmware go in the summary), VLANs with their DHCP reservations (or the single LAN), appliance ports, L3 / inbound / cellular firewall rules in order, L7 rules, port forwarding, 1:1 and 1:many NAT, static routes, site-to-site VPN mode, hubs and subnets, third-party VPN peers, WAN uplink settings and status, and MX Wi-Fi SSIDs. A file in a zip folder named after a network is tagged with that network. Pre-shared keys, VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied (Notes redacts them, as with the other configs); rule comments and names that mention a password or key are withheld. The raw export holds those secrets, so share the converted JSON, not the export.
 
-The Map doesn't draw Meraki configs: they go into the [[Site Bundle|Site-Bundle-and-Claude]] (`meraki.json`, `meraki-2.json`, …) and **Save JSON…**, for `/mapnetwork` in Claude. Opened from the Map, a Meraki config is read here all the same, and a message says the Map doesn't draw it.
+The Map doesn't draw Meraki configs: they go into the [[Claude Handoff|Site-Bundle-and-Claude]] (`meraki.json`, `meraki-2.json`, …) and **Save JSON…**, for `/mapnetwork` in Claude. Opened from the Map, a Meraki config is read here all the same, and a message says the Map doesn't draw it.
 
 ## /mapnetwork maps
 
-A `/mapnetwork` map (`.dc.html`, or a zip holding one, such as a site bundle you saved it into) opens here too and becomes the [[Map]]. See [[Site Bundle and Claude|Site-Bundle-and-Claude]] for the round trip.
+A `/mapnetwork` map (`.dc.html`, or a zip holding one, such as a handoff zip you saved it into) opens here too and becomes the [[Map]]. See [[Claude Handoff|Site-Bundle-and-Claude]] for the round trip.
 
 ## Saved maps
 

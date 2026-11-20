@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.4**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.5**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -30,7 +30,7 @@ This manual describes **is-alive 0.30.4**, and is built into the app: **Help** a
 16. [Results](#16-results)
 17. [Settings and themes](#17-settings-and-themes)
 18. [Keyboard and mouse](#18-keyboard-and-mouse)
-19. [Site Bundle and Claude](#19-site-bundle-and-claude)
+19. [Claude Handoff](#19-claude-handoff)
 20. [Privacy and security](#20-privacy-and-security)
 21. [Troubleshooting](#21-troubleshooting)
 22. [Glossary](#22-glossary)
@@ -47,7 +47,7 @@ is-alive answers the questions you have on a site visit, from one small program:
 - **Does the name work?** Look up any DNS record from any resolver, or compare them all.
 - **Is the email set up safely?** Check MX, SPF, DMARC, DKIM, blacklists and a dozen more in one go.
 - **Is the line good enough for calls?** Measure speed, latency, jitter, loss, bufferbloat and a VoIP quality score.
-- **How is it wired?** Read UniFi, SonicWall and Meraki configs offline, and draw the network as a map from the UniFi and SonicWall ones. Meraki configs go into the Site Bundle and JSON for Claude, but aren't drawn on the Map.
+- **How is it wired?** Read UniFi, SonicWall and Meraki configs offline, and draw the network as a map from the UniFi and SonicWall ones. Meraki configs go into the Claude Handoff and JSON for Claude, but aren't drawn on the Map.
 - **What did I find?** Keep notes for the visit, collect every result, and export them for a ticket or report.
 
 It is one file: `is-alive.exe` on Windows, `is-alive-x86_64.AppImage` on Linux. There's no installer, it doesn't need administrator rights, and it doesn't send anything anywhere unless you run something (see [Privacy and security](#20-privacy-and-security)).
@@ -116,8 +116,8 @@ Five parts, the same on every tab:
 
 | Where | What's there |
 |---|---|
-| **Top**: the title bar | **is-alive**, the site you're working on (**● Scratch ▾** until you make one), then **Report…** and **Full scan** on the right |
-| **Left**: the nav | Every tool in its group, a dot on the ones running; **Settings** and **Help** at the foot |
+| **Top**: the title bar | The site you're working on (**● Scratch ▾** until you make one), then the tools of the nav row you're in, to switch between them |
+| **Left**: the nav | **VISIT** (Full scan, Claude Handoff, Report) at the top, then **TOOLS**: six rows of tools, a dot on a row with one running; **Settings** and **Help** at the foot |
 | **Middle** | The tab you're on: its run bar, **Options**, the status row and the results |
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
 | **Bottom**: the status bar | This computer's LAN address, gateway, the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right |
@@ -126,16 +126,30 @@ The first time it opens, is-alive takes 1120 × 720, or the whole screen on a sm
 
 ### The title bar (top)
 
-- **is-alive** at the top left, and **the site** beside it (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Site Bundle…**, which zips the visit's results for Claude. See [Sites](#sites) below and [Site Bundle and Claude](#19-site-bundle-and-claude).
-- **Full scan** (top right) runs a quick health check of this network (below).
-- **Report…** beside it opens the [Site report](#site-report): one web page documenting the visit.
+- **The site** at the top left (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Claude Handoff…**, which gathers the visit for Claude. See [Sites](#sites) below and [Claude Handoff](#19-claude-handoff).
+- **The open row's tools** beside it. A nav row with more than one tool (Connectivity holds Ping, Ports, Traceroute and Speed) shows them here side by side, the one on screen lit: one click from Ping to Ports. Each has its icon and name, or only its icon in a window under 1100 points wide; hover one for its name and what it does. A row with one tool (Map) shows nothing here.
 
 ### The nav (left)
 
-- **The tabs**, in groups: **Ping**, **Ports**, **Traceroute**, **Sweep** | **Lookup**, **Domains** | **Configs**, **Map** | **Notes**, **Speed**, **Subnet Calc**, **Domain join** | **Results**. The labels are short; this manual uses the tools' full names: Ports is Port Check, Sweep is Subnet Sweep, Lookup is DNS Lookup (with WHOIS), Domains is Advanced (mail and domain health), Configs is Config Export and Speed is Speed Test. Hover a tab for what it does and its shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results).
-- **Open or folded.** The nav is open, with each tab's icon and name, in any window 1100 points wide or more, on every tab. In a narrower window it folds to a rail of icons. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tabs scroll.
+- **VISIT**, at the top: the three things a visit ends with.
+  - **Full scan** runs a quick health check of this network ([below](#full-scan)). Faint while a tool is running.
+  - **Claude Handoff** gathers the visit for Claude, step by step ([Claude Handoff](#19-claude-handoff)).
+  - **Report** puts the visit on one web page ([Site report](#site-report)).
+- **TOOLS** under it: thirteen tools in six rows. Click a row for its tools; it opens on the one you used last in it, and its tools switch in the title bar.
+
+  | Row | Its tools |
+  |---|---|
+  | **Connectivity** | Ping, Ports (Port Check), Traceroute, Speed (Speed Test) |
+  | **Discover** | Sweep (Subnet Sweep), Configs (Config Export) |
+  | **DNS & mail** | Lookup (DNS Lookup, with WHOIS), Domains (Advanced: mail and domain health) |
+  | **Map** | Map |
+  | **Notes & results** | Notes, Results |
+  | **Utilities** | Subnet Calc, Domain join |
+
+  The tools' labels are short; this manual uses their full names, as in brackets above. Hover a row for what it holds and each tool's shortcut (**Ctrl+1** … **Ctrl+9** for the first nine, **Ctrl+0** for Results), which goes straight to that tool.
+- **Open or folded.** The nav is open, with each row's icon and name, in any window 1100 points wide or more, on every tab. In a narrower window it folds to a rail of icons, a line in place of the **VISIT** and **TOOLS** headings. Hover an icon for its name. **Fold** / **Open** at the foot of the nav keeps it the way you set it; set it back the way the window would have it and it follows the window's width again. In a very short window the tool rows scroll.
 - **Each tool's icon has a colour of its own**, in every theme: thirteen tools, thirteen colours, as light and as strong as that theme's Map colours, so a tool is quick to spot in the rail and is the same colour wherever you learnt it. Settings, Help and Fold are in the text's colour.
-- **A pulsing dot** on a tab means something is running there. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
+- **A pulsing dot** on a row means one of its tools is running. Runs keep going when you switch tabs, so you can start a sweep, look at the map, and come back.
 - **Settings** at the foot of the nav: theme, network options and where the app keeps its files. See [Settings and themes](#17-settings-and-themes).
 - **Help** below it opens the Help menu. First what's built into the app, so it works with no network: **This tab** (the manual's chapter about the tab you're on; **F1** does the same), the whole **Manual**, **Troubleshooting**, and **Keyboard and mouse**. Then, online in your browser: the **Wiki**, the **Follow-along guide**, **Release notes**, **Report a problem** (a new GitHub issue with the version and system filled in; nothing is sent until you submit it there) and **Source on GitHub**.
 - **The manual** opens in a window of its own: the chapters down the left, **Find** above them to list only the chapters that mention a word. Keep it beside is-alive or on another screen while you work; close it like any window.
@@ -145,10 +159,10 @@ The first time it opens, is-alive takes 1120 × 720, or the whole screen on a sm
 
 ### Sites
 
-A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, its **Results**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Site Bundle** all work on the site that's open, and its name is in the window's title.
+A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, its **Results**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Claude Handoff** all work on the site that's open, and its name is in the window's title.
 
 - **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
-- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Site Bundle's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Site Bundle finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
+- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Claude Handoff's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Claude Handoff finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
 - **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **UniFi clients**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
@@ -195,7 +209,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 ### Full scan
 
-**Full scan** runs these checks at once and opens the **Results** tab to show them:
+**Full scan** (top of the nav) runs these checks at once and opens the **Results** tab to show them:
 
 | Check | What it does |
 |---|---|
@@ -214,7 +228,7 @@ When every check is done and the sweep found something, the **Map** tab glows br
 
 ### Site report
 
-**Report…** (top right, beside **Full scan**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
+**Report** (in the nav, under **VISIT**) puts the visit on one web page: for the client, the ticket or the next technician. It's made from what the other tabs already hold, so a Full scan, a backup opened in Config Export and a few notes are enough for a complete document. It opens in any browser, and the browser's **Print → Save as PDF** makes the PDF.
 
 | Field or row | What it's for |
 |---|---|
@@ -225,7 +239,7 @@ When every check is done and the sweep found something, the **Map** tab glows br
 | **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A role or an uplink that is-alive worked out, not read from a backup or a config, is marked *inferred*; point at the word for what it was worked out from |
 | **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
 | **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
-| **Test results** | Every run in Results. Off by default: like the Site Bundle's, it can hold other clients' hosts, so the row lists its targets for you to check |
+| **Test results** | Every run in Results. Off by default: like the Claude Handoff's, it can hold other clients' hosts, so the row lists its targets for you to check |
 
 At the top of the page, tiles count the devices, the findings by severity and the changes, and say which LAN, gateway and WAN is-alive ran from. A section with nothing in it is left out, and so is a column no device has a value for (no MAC column for a map Claude drew, no Site column for one site). A plan, a training map or an example says so under the title, as it does on the Map tab.
 
@@ -441,7 +455,7 @@ How to read it:
 
 ## 7. Subnet Sweep
 
-**What it's for:** listing every device that's alive on a network, with its name, MAC address and maker. It also feeds the [Map](#11-map) and the Site Bundle's inventory.
+**What it's for:** listing every device that's alive on a network, with its name, MAC address and maker. It also feeds the [Map](#11-map) and the Claude Handoff's sweep inventory.
 
 ### Controls
 
@@ -652,7 +666,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 ## 10. Config Export
 
-**What it's for:** reading a site's network configuration files on this computer, removing every secret, and turning them into clean JSON for Claude's `/unifidump` and `/mapnetwork` skills. The UniFi backups, SonicWall exports and `/mapnetwork` maps it reads also draw the [Map](#11-map). Meraki configs go into the Site Bundle and **Save JSON…** for Claude, but aren't drawn on the Map.
+**What it's for:** reading a site's network configuration files on this computer, removing every secret, and turning them into clean JSON for Claude's `/unifidump` and `/mapnetwork` skills. The UniFi backups, SonicWall exports and `/mapnetwork` maps it reads also draw the [Map](#11-map). Meraki configs go into the Claude Handoff and **Save JSON…** for Claude, but aren't drawn on the Map.
 
 ### What it opens
 
@@ -663,7 +677,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | `db.gz`, or a `.zip` holding one of the above | Older or unpacked UniFi backups | Yes |
 | `.exp` | SonicWall settings export (Gen 6 or 7), or one already decoded to text | Yes |
 | `.wri` | SonicWall tech support report | Yes |
-| `.json` | Meraki MX configuration saved from the Dashboard API (see below) | No: Site Bundle and JSON only |
+| `.json` | Meraki MX configuration saved from the Dashboard API (see below) | No: Claude Handoff and JSON only |
 | `.dc.html`, or a zip holding one | A map made by Claude's `/mapnetwork` | Yes: it becomes the map |
 | `.json` | A saved map (the Map's **Export JSON…**, yours or a colleague's) | Opens on the Map as a saved map, keeping its date |
 
@@ -671,9 +685,9 @@ Open them with **Open file…** (pick several at once if you like), from the Map
 
 **While a file is being read** its name shows beside **Open file…** with a spinner. Files opened or dropped meanwhile wait their turn and are read right after, as are example maps picked on the Map.
 
-**A Site Bundle zip** (`<site>.bundle.zip`) is made for Claude, not read back: opened here it says *that's a Site Bundle (made for Claude)*, and to open the backups and exports it was made from, or the map Claude made from it. A bundle you saved Claude's `.dc.html` map into opens as that map.
+**A Claude Handoff zip** (`<site>.bundle.zip`) is made for Claude, not read back: opened here it says *that's a Claude Handoff zip*, and to open the backups and exports it was made from, or the map Claude made from it. A bundle you saved Claude's `.dc.html` map into opens as that map.
 
-Open everything the visit has, even several of one kind: a client with two sites, each with its own UniFi backup and SonicWall report, is four files. Each gets its own sub-tab, and the Map and Site Bundle use every one (see *Several sites or firewalls* below).
+Open everything the visit has, even several of one kind: a client with two sites, each with its own UniFi backup and SonicWall report, is four files. Each gets its own sub-tab, and the Map and the Claude Handoff use every one (see *Several sites or firewalls* below).
 
 ### Controls
 
@@ -699,13 +713,13 @@ Open everything the visit has, even several of one kind: a client with two sites
 1. In the UniFi Network app, go to **Settings → System → Backups** and download a backup (`.unf`).
 2. Drop it on the is-alive window. Config Export opens with a *UniFi · …* sub-tab.
 3. Read the summary: it should list `site`, `device`, `networkconf`, `portconf`, `wlanconf` as kept, and fields like `x_passphrase` as removed.
-4. Click **Save JSON…**: it suggests `<name>.unifidump.json`. That file, not the backup, is what you give to `/unifidump`. Or simply use [Site Bundle…](#19-site-bundle-and-claude), which includes it for you.
+4. Click **Save JSON…**: it suggests `<name>.unifidump.json`. That file, not the backup, is what you give to `/unifidump`. Or simply use the [Claude Handoff](#19-claude-handoff), which includes it for you.
 
 ### Several sites or firewalls
 
 A visit can cover more than one controller or firewall. Open them all, together or one after another; each kind is used like this:
 
-| Open | On the [Map](#11-map) | In the [Site Bundle](#19-site-bundle-and-claude) |
+| Open | On the [Map](#11-map) | In the [Claude Handoff](#19-claude-handoff) |
 |---|---|---|
 | Several UniFi backups | Every controller's devices and clients on one map. A device or client in two backups (one controller's backups from two days) is drawn once, as the backup opened later has it. Each controller's sites keep their own box; two sites of one name (both *Default*) take the part of their backup's file name that differs: *Default (north)* and *Default (south)* | A file each: `unifi.unifidump.json`, then `unifi-2.unifidump.json` and so on |
 | Several SonicWall exports or reports | Each firewall is a gateway of its own under the internet, with what it heard. A settings export and a report of the same firewall are one card | `sonicwall.json`, `sonicwall-2.json`, … |
@@ -724,12 +738,12 @@ Meraki keeps its config in the cloud, not on the box. The script [`scripts/merak
 
 The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is never written to disk. Open `harbor.meraki.json` in Config Export. The raw export contains secrets, so share the converted JSON, not the export.
 
-**Meraki configs aren't drawn on the Map.** They go into the Site Bundle (and **Save JSON…**) for Claude, whose `/mapnetwork` maps them; its sub-tab says so under the headline. Opened from the Map (or dropped on it), a Meraki config is read here all the same, and a message at the bottom of the window says the Map doesn't draw it.
+**Meraki configs aren't drawn on the Map.** They go into the Claude Handoff (and **Save JSON…**) for Claude, whose `/mapnetwork` maps them; its sub-tab says so under the headline. Opened from the Map (or dropped on it), a Meraki config is read here all the same, and a message at the bottom of the window says the Map doesn't draw it.
 
 ### Common problems
 
 - **"not a UniFi backup …, SonicWall settings export … or /mapnetwork map"**: the file isn't one of the supported kinds, or it's damaged. Check you downloaded the backup itself and not an HTML page.
-- **"that's a Site Bundle (made for Claude)"**: the zip is a bundle is-alive saved for Claude. It holds sanitized JSON, not the backups, so it isn't read back. Open the backups and exports it was made from, or the `.dc.html` map Claude made from it.
+- **"that's a Claude Handoff zip"**: the zip is one is-alive saved for Claude. It holds sanitized JSON, not the backups, so it isn't read back. Open the backups and exports it was made from, or the `.dc.html` map Claude made from it.
 - **Files larger than 2 GB** are refused, as are files that unpack to more than 2 GB: a real backup is never that big.
 
 ---
@@ -750,7 +764,7 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 
 **Measured or inferred.** What is-alive read or measured is shown plain. What it worked out carries one word, *inferred*, wherever it shows: a card's tag, its inspector, the legend, the Site report, a map's CSV export and the bundle's card notes. Two things can be: a device's **role**, when a sweep has only its vendor and open ports to go on, and a card's **uplink**, when it answered on the network but no backup or config says which port it's on. Point at the word (in the app or the report) for which it was.
 
-A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Site Bundle for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
+A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Claude Handoff for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
 
 ### Opening files on the Map
 
@@ -787,7 +801,7 @@ Nothing sits above the map: its controls float over its top edge, so the map has
 | **More ▾** | Everything used less often (below) |
 | **Layers** (top right) | The panel of sites, roles and findings (below). Beside an open inspector on a laptop-sized window, **Layers** and **Legend** are in **More** instead, so the toolbar stays on one row; on the smallest windows **Scan** joins them there |
 | **Legend** (top right) | Show or hide the map's legend (below); also **L**, or the background's right-click menu. Off until you turn it on; your choice is remembered |
-| **Export ▾** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **More** instead |
+| **Export ▾** (top right) | Save the map as it's laid out now (cards where you dragged them, collapsed sites as one card). The file is named after the map. **/mapnetwork map (.dc.html)**: the map as a `/mapnetwork` page, the one Claude makes: it opens in any browser, goes in the next [Claude Handoff](#19-claude-handoff) for Claude to update, and opens back on this Map. It keeps the sites, zones, uplinks and ports, findings and card notes; clients only when the map draws them, and no more than 120 cards in all (a message says how many clients were left out). **SVG image**: a picture with the legend (when shown) and the findings under it, sharp at any size. **PNG image**: the same picture at **1×** or **2×**, on the theme's background or on white. **draw.io diagram**: opens in diagrams.net to keep editing, with site boxes as containers and each card's IP, MAC and vendor under *Edit Data*; diagrams.net can also save it as Visio (.vsdx). **Mermaid flowchart**: text that GitHub, GitLab, Azure DevOps, Notion and Obsidian draw in Markdown. **Graphviz DOT**: `dot` lays it out again, `neato -n2` keeps the map's layout. **CSV inventory**: one row per card (name, role, IP, MAC, vendor, site, uplink, port, flags, findings, note) for a spreadsheet. A card's note goes along, redacted: on hover in SVG, draw.io and DOT, in its own CSV column (Mermaid leaves it out). On a laptop-sized window, or with Layers open, it's in **More** instead |
 
 **More ▾** holds:
 
@@ -852,7 +866,7 @@ What the view leaves out, for now:
 
 - **Cards and boxes don't drag.** A drag pans the map. Cards you moved on the flat map keep their places on their plates.
 - **Site and zone boxes aren't drawn** (the plates stand in for them), so a site can't be folded from here; fold it on the flat map and it stays folded.
-- **The Site report**, and Export's **draw.io**, **Mermaid**, **Graphviz** and **CSV**, are of the flat map: they describe what connects to what, which doesn't change.
+- **The Site report**, and Export's **/mapnetwork map**, **draw.io**, **Mermaid**, **Graphviz** and **CSV**, are of the flat map: they describe what connects to what, which doesn't change.
 
 **Saving a picture of it.** **Export ▾ › SVG image** and **PNG image** save the map as the canvas shows it: opened up, with its plates and their names, each line down to its plate, the legend (when shown) and the findings under it. Flat, they save the flat map as before.
 
@@ -1017,7 +1031,7 @@ Write a few lines on a card: where the spare is, who to call before rebooting it
 
 A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy details** and the exports carry it.
 
-**Redaction works as in Notes**, with the same lists: select a value in the editor and press **Ctrl+R** (or right-click, **Redact**) to hide it wherever it appears, in Notes too; a secret from a backup loaded in Config Export (a Wi-Fi key, an admin password) is caught by itself. What will be hidden is highlighted, with a count (*🔑 1 redacted: by hand*). **Unredact** keeps a value as written, and a value kept in Notes is kept here too. The note is kept as typed only while is-alive runs: saved maps, the notes kept on this computer, copies, exports, the tooltip and the Site Bundle only ever get the redacted text.
+**Redaction works as in Notes**, with the same lists: select a value in the editor and press **Ctrl+R** (or right-click, **Redact**) to hide it wherever it appears, in Notes too; a secret from a backup loaded in Config Export (a Wi-Fi key, an admin password) is caught by itself. What will be hidden is highlighted, with a count (*🔑 1 redacted: by hand*). **Unredact** keeps a value as written, and a value kept in Notes is kept here too. The note is kept as typed only while is-alive runs: saved maps, the notes kept on this computer, copies, exports, the tooltip and the Claude Handoff only ever get the redacted text.
 
 **Where a note is kept**, so it never shows up on another customer's card with the same address (`10.0.0.1` is everywhere):
 
@@ -1025,7 +1039,7 @@ A card with a note has a small folded sheet on its top edge, at every zoom, and 
 - **An example** keeps them on this computer, with that example. **The blank map** doesn't: it's a start for any site, so its notes last only until is-alive closes or another map starts. Save the map to keep them.
 - **The live map** keeps a card's note on this computer by the device's hardware address: its note comes back on any map that shows that device, and on no other card. When a card's address is another device's after a rebuild (another network, or DHCP moved it), the note leaves that card and stays with its own device. A card with no MAC to go by (known only by IP, a randomized address, a shared one such as a router pair's or a firewall HA pair's, a MAC two cards show, this computer) keeps its note only until is-alive closes or another map starts, and a card known only by IP until another sweep starts; its inspector says so. **+ Save current** keeps them all in a saved map.
 
-Notes kept on this computer are in `map-notes.json` beside the settings. The **Site Bundle** can carry the live map's card notes (*Card notes*, `card-notes.json`; not an example's).
+Notes kept on this computer are in `map-notes.json` beside the settings. The **Claude Handoff** can carry the live map's card notes (*Card notes*, `card-notes.json`; not an example's).
 
 ### Layers and findings
 
@@ -1047,7 +1061,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **S
 5. Open **More › Examples** again and pick **Contoso Health: 23 clinics, 81 devices** for a multi-site map in the **Sites** layout. Click a clinic's title to collapse it.
 6. **More › Examples › Close the example** goes back to this network's map.
 
-**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Site Bundle…**: upload the bundle to Claude or another AI for an accurate one (the skills that draw it come inside the bundle). **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
+**The accuracy note.** A map built from a sweep and configs is a quick picture, not a survey: a note under the toolbar says so and offers **Claude Handoff…**: make one and Claude draws an accurate map from everything the visit found (the skills that draw it come inside the zip). **Don't show again** hides it for good; **Settings → Show the accuracy note** brings it back.
 
 **Updating.** The map rebuilds by itself as a sweep finds devices and when a file is loaded in Config Export. Rebuilds keep pins, selections, moved cards and spot-check results. A pinned card that's no longer in the data stays, drawn in red with a dashed outline and marked *Not in the latest data*, so you can check it before unpinning it.
 
@@ -1115,7 +1129,7 @@ Everything is in one row above the notes:
 
 ### Photos
 
-**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**, or dropping it on the Notes tab) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Site Bundle carry it along.
+**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**, or dropping it on the Notes tab) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Claude Handoff carry it along.
 
 - In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
 - Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.
@@ -1129,7 +1143,7 @@ Notes never get scanned and mangled: only what you mark, and the secrets of the 
 - **By hand:** select a password (or anything private) and click **Redact** (**Ctrl+R**). It's hidden there and everywhere else it appears, as a `[🔑 REDACTED: …]` marker. With the cursor on a redacted value, the button becomes **Unredact**. **By hand (n)** in the outline lists them, with × to undo.
 - **From configs:** every password, pre-shared key and secret that Config Export removed from a loaded backup or export is held in memory and hidden wherever it appears in Notes, so the staff Wi-Fi password can't slip into a note you send. They stay hidden until is-alive closes, even after the file is closed or the map cleared.
 
-Autosave, **Copy**, **Save as** and the Site Bundle all get the redacted text. Only **Raw copy** gives the original.
+Autosave, **Copy**, **Save as** and the Claude Handoff all get the redacted text. Only **Raw copy** gives the original.
 
 Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting.
 
@@ -1299,7 +1313,7 @@ The verdict in bold under the controls, then the names it found, then the fields
 
 The fields that matter most when a join is broken: **DeviceAuthStatus** (*SUCCESS* when the device can prove itself to Entra ID), **AzureAdPrt** (*YES* when the user has a Primary Refresh Token, needed for single sign-on to Microsoft 365), **TpmProtected**, **MdmUrl** (set when the device is enrolled in Intune or another MDM), and the diagnostic tests **DRS Discovery Test**, **AD Connectivity Test** and **DC Test**. YES and SUCCESS are shown in green, NO dimmed.
 
-**In Results**, a Domain join run reads like *hybrid · corp.example.com*. It keeps the verdict, the domain and the fields above, not the signed-in account's name, so a Site Bundle or Site report doesn't carry it. **Compare** matches fields by name, so a join that broke since the last visit shows as a change (`AzureAdPrt` YES → NO).
+**In Results**, a Domain join run reads like *hybrid · corp.example.com*. It keeps the verdict, the domain and the fields above, not the signed-in account's name, so a Claude Handoff or Site report doesn't carry it. **Compare** matches fields by name, so a join that broke since the last visit shows as a change (`AzureAdPrt` YES → NO).
 
 **On Linux**, only a join made through realmd (`realm join`, used by sssd) is seen. A computer joined with winbind or set up by hand reads as *Couldn't tell* when realmd isn't installed, or as a workgroup when it is.
 
@@ -1411,7 +1425,7 @@ Click **Settings** at the foot of the nav to open it. Changes apply at once and 
 
 ### Files
 
-Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site report](#site-report) and the Site Bundle open the system's Save dialog; you can always pick another folder there.
+Where saved files go. Every **Save…**, **Export**, **Save as**, the [Site report](#site-report) and the Claude Handoff open the system's Save dialog; you can always pick another folder there.
 
 | Setting | What it does |
 |---|---|
@@ -1521,7 +1535,7 @@ At the bottom of Settings, **Remove everything is-alive saved…** is for a clie
 | **Ctrl+Shift+S** | Notes | Save a copy as Markdown |
 | **Ctrl+S** | Notes | Save the notes now (with Autosave off, the only way they're saved) |
 | **Ctrl+S** | Map | Save the map: a copy of Live, or a saved map's changes (as **Save** by the zoom controls) |
-| **Ctrl+R** | Notes, Site Bundle's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
+| **Ctrl+R** | Notes, the Claude Handoff's Known problems, a card's note | Redact the selection, or unredact the value under the cursor |
 | **Enter** in a list | Notes | Start the next item (on an empty item, end the list) |
 | **Enter** | Map search | Select the first match |
 | **Esc** | Map | Clear the selection (pinned cards stay); with none to clear, leave the exploded view; else, on a window under 1100 points wide, shut Layers |
@@ -1556,37 +1570,39 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 
 ---
 
-## 19. Site Bundle and Claude
+## 19. Claude Handoff
 
 This chapter is about handing the visit to Claude. For a document people read, use the [Site report](#site-report).
 
-is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Site Bundle…** (in the site menu, top left) gathers it all into one zip.
+is-alive works with two Claude skills: **`/unifidump`**, which reads a UniFi export, and **`/mapnetwork`**, which builds an accurate, interactive network map and findings from everything you collected. **Claude Handoff** (in the nav under **VISIT**, or **Claude Handoff…** in the site menu) gathers it all into one zip, in five steps that each say what they're for: no wiki needed.
 
-### The window
+### The steps
 
-| Field | What it's for |
+The steps run across the top of the window: done ones ticked in green, this one lit. Click any to go straight there; **‹ Back** and **Next ›** at the bottom move one at a time. Skip any step you have nothing for.
+
+| Step | What's there |
 |---|---|
-| **Site name** | The client or site; it names the zip (`<site>.bundle.zip`) and the map |
-| **Known problems** | Anything you already know is wrong ("Closet 2 switch flaky"). It goes straight into the map's findings. **Redact** works here as in Notes |
-| **UniFi clients** | How UniFi clients are included: **anonymized** by default here (MAC, vendor and switch port kept, names replaced with tokens), or **none** or **full** |
-| **Clients on the map** | Whether `/mapnetwork` draws end devices (off: infrastructure only) |
-| **Includes** | Tick what goes in; each row says what it is, or what to do to have one. Every backup and export open in Config Export has a row of its own, named after its file, which ends with the name it goes in the zip as (*→ unifi-2.unifidump.json*). With many rows the list scrolls |
+| **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes |
+| **2 Configs** | **Open files…** picks UniFi backups, SonicWall and Meraki exports, and last visit's map (`.dc.html`); they open in Config Export and on the Map too. A row for each file open, to tick or untick, and **Last visit's map**: Claude updates it rather than drawing a new one. **Where to get them** says where each kind is downloaded: UniFi under *Settings › System › Backups*, SonicWall under *Device › Settings › Firmware & Settings › Export Configuration*, Meraki as an API export |
+| **3 Sweep** | **Subnets or ranges**, filled in with this computer's network (add others with spaces between), and **Sweep** to run a Subnet Sweep from here (**Sweep again** once there's one). A warning says to tell the site's IT contact first: a sweep probes their devices. Rows for **Sweep inventory** and the **Results log** |
+| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. **Client devices (phones, laptops)**: how UniFi clients go in (**anonymized** by default: MAC, vendor and switch port kept, names replaced with tokens; or **none** or **full**), and **Draw them on the map** (off: infrastructure only) |
+| **5 Save** | **Check and save**: every row, ticked or not, saying what it is or what to do to have one. **Save for Claude…** writes the zip and copies the kickoff prompt; it's greyed out until something is ticked that has something in it |
 
 **What can be included:**
 
 | Item | From | Default |
 |---|---|---|
-| UniFi backups | Every UniFi backup open in Config Export, each converted again with the bundle's client setting | on when loaded |
+| UniFi backups | Every UniFi backup open in Config Export, each converted again with the handoff's client setting | on when loaded |
 | SonicWall exports | Every SonicWall export or report open in Config Export | on when loaded |
 | Meraki exports | Every Meraki export open in Config Export | on when loaded |
-| Current map | The `/mapnetwork` map open in Config Export, from an earlier visit: Claude updates it rather than starting over | on when loaded |
+| Current map | The `/mapnetwork` map open in Config Export, from an earlier visit (step 2 calls it **Last visit's map**): Claude updates it rather than starting over | on when loaded |
 | Sweep inventory | The last finished Subnet Sweep | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
 | Tech notes | The Notes tab, redacted (the row says how much) | off |
 | Card notes | The notes on the live map's cards, redacted, each with its card's name, role, IP and MAC (`card-notes.json`) | on when there are any |
 | Claude Skills | The two skills themselves (about 650 KB), for a Claude that doesn't have them installed | on |
 
-The bundle also holds `manifest.json` (what each file is, this computer's LAN, gateway and WAN, and the answers to `/mapnetwork`'s questions) and `prompt.txt`, the kickoff prompt.
+The zip also holds `manifest.json` (what each file is, this computer's LAN, gateway and WAN, and the answers to `/mapnetwork`'s questions) and `prompt.txt`, the kickoff prompt.
 
 **Several of a kind** (two sites' UniFi backups and firewall reports, say) each go in as a file of their own, in the order opened: the first under the usual name, the next numbered.
 
@@ -1599,15 +1615,17 @@ The bundle also holds `manifest.json` (what each file is, this computer's LAN, g
 
 `manifest.json` names the file each came from, and the prompt tells Claude to run `/unifidump` on each UniFi export and that each is a separate controller or firewall. Untick a row to leave that file out; the numbers close up, so the first one left in keeps the usual name.
 
-**Save bundle…** saves the zip and copies the kickoff prompt to the clipboard; **Copy kickoff prompt** copies it again. Only sanitized data goes in: raw backups and secrets never do.
+**After saving**, step 5 says the zip's name and lists what to do in Claude, using that name: open a new chat, attach the zip, paste (**Ctrl+V**) and send, then save the map Claude sends back and drop it on the Map tab. **Copy the prompt again** copies it once more. Only sanitized data goes in: raw backups and secrets never do.
 
 ### The round trip
 
-1. **On site:** run a Subnet Sweep, open the site's UniFi backups and SonicWall or Meraki exports in Config Export (every controller and firewall the visit covers), take notes.
-2. **Bundle:** open the site menu (top left) and click **Site Bundle…**, fill in the site name and any known problems, and **Save bundle…**.
+1. **On site:** run a Full scan, open the site's UniFi backups and SonicWall or Meraki exports (every controller and firewall the visit covers), take notes. Or do it all from the handoff's steps.
+2. **Hand off:** click **Claude Handoff** in the nav, go through the steps and **Save for Claude…**.
 3. **In Claude:** start a chat, attach the zip and paste (the prompt is already on the clipboard). It tells Claude to read the manifest, run `/unifidump` on each UniFi export, then `/mapnetwork` with everything else.
-4. **Back in is-alive:** open the `.dc.html` map Claude makes: on the Map with **More › Open…** (or drop it on the Map), or in Config Export. The Map redraws it, and a sweep of the same network marks which devices answer. (The bundle zip itself isn't read back: it says so if you open it.)
-5. **Next visit:** keep that map open when you make the next bundle. Claude updates the existing map, under its original name, instead of starting again.
+4. **Back in is-alive:** open the `.dc.html` map Claude makes: on the Map with **More › Open…** (or drop it on the Map), or in Config Export. The Map redraws it, and a sweep of the same network marks which devices answer. (The zip itself isn't read back: it says so if you open it.)
+5. **Next visit:** open that map in step 2 when you make the next handoff. Claude updates the existing map, under its original name, instead of starting again.
+
+**No map from Claude yet?** The Map's **Export ▾ › /mapnetwork map (.dc.html)** saves the map is-alive drew as a `/mapnetwork` page. Open it in step 2 like one Claude made, and Claude builds on it rather than starting from nothing.
 
 ---
 

@@ -130,6 +130,17 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   firewall config, known problems, existing map, clients on or off). Don't ask
   again; `existing_map` set (the bundle's `map.dc.html`) means the **update
   path**, saved under that name.
+- **A `map.dc.html` is-alive wrote itself** (its SITE DATA starts with the
+  comment *Exported from is-alive's Map*, and `META.subtitle` ends
+  *from is-alive <version>*) is the app's own quick map, not one you drew. It
+  holds sites, zones, uplinks and ports, the app's findings and the
+  technician's card notes, and clients only if the app drew them (it stops at
+  120 cards and says so in the subtitle). A dashed `wired` edge is an uplink
+  the app inferred, not one a backup showed; a device's second link is a line
+  of text in its notes, since a card has one uplink. Treat it as **observed**,
+  not enforced config: take the update path, but redo the topology from the
+  bundle's configs and inventory where they say more, and rewrite its findings
+  in your own words.
 - **Files and their tier** (Step 3's tiers): `unifi.unifidump.json` goes
   through /unifidump first; `sonicwall.json` / `meraki.json` are **enforced
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,

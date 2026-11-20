@@ -233,8 +233,8 @@ impl Format {
     pub fn hint(self) -> &'static str {
         match self {
             Format::DcHtml => {
-                "The map as a /mapnetwork page: opens in any browser, goes in the next Site \
-                 Bundle for Claude to update, and opens back on this Map"
+                "The map as a /mapnetwork page: opens in any browser, goes in the next Claude \
+                 Handoff for Claude to update, and opens back on this Map"
             }
             Format::Svg => {
                 "A picture that stays sharp at any size, for a ticket or a site document"
