@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.5**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -127,7 +127,7 @@ The first time it opens, is-alive takes 1120 × 720, or the whole screen on a sm
 ### The title bar (top)
 
 - **The site** at the top left (**● Scratch ▾** until you make one): the client site you're working on. Its menu switches sites, makes and renames them, and opens **Claude Handoff…**, which gathers the visit for Claude. See [Sites](#sites) below and [Claude Handoff](#19-claude-handoff).
-- **The open row's tools** beside it. A nav row with more than one tool (Connectivity holds Ping, Ports, Traceroute and Speed) shows them here side by side, the one on screen lit: one click from Ping to Ports. Each has its icon and name, or only its icon in a window under 1100 points wide; hover one for its name and what it does. A row with one tool (Map) shows nothing here.
+- **The open row's tools** to its right, starting in line with the tab's content (just right of the nav), so they sit over the run bar they switch; with the nav folded to a rail, just after the site. A nav row with more than one tool (Connectivity holds Ping, Ports, Traceroute and Speed) shows them here side by side, the one on screen lit: one click from Ping to Ports. Each has its icon and name, or only its icon in a window under 1100 points wide; hover one for its name and what it does. A row with one tool (Map) shows nothing here.
 
 ### The nav (left)
 

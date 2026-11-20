@@ -200,17 +200,24 @@ struct Row<'a> {
     dim: bool,
 }
 
+/// The nav's width this frame, gliding as it opens or folds. The title
+/// bar asks too, to line its tool switcher up with the content.
+pub fn width(ctx: &egui::Context, pinned: Option<bool>) -> f32 {
+    let is_open = open(ctx.content_rect().width(), pinned);
+    theme::glide(
+        ctx,
+        egui::Id::new("nav_width"),
+        if is_open { OPEN } else { RAIL },
+        theme::SLOW,
+    )
+}
+
 impl App {
     /// The nav panel, left of everything but the title and status bars.
     pub(crate) fn nav(&mut self, ui: &mut egui::Ui) {
-        let width = ui.ctx().content_rect().width();
-        let is_open = open(width, self.look.nav);
-        let w = theme::glide(
-            ui.ctx(),
-            egui::Id::new("nav_width"),
-            if is_open { OPEN } else { RAIL },
-            theme::SLOW,
-        );
+        let window = ui.ctx().content_rect().width();
+        let is_open = open(window, self.look.nav);
+        let w = width(ui.ctx(), self.look.nav);
         let labels = w > (OPEN + RAIL) / 2.0;
         let visuals = ui.visuals().clone();
         let frame = egui::Frame::side_top_panel(ui.style())
@@ -306,7 +313,7 @@ impl App {
                          folded below that."
                     };
                     if nav_row(ui, &fold, labels).on_hover_text(fold_tip).clicked() {
-                        self.look.nav = toggled(width, self.look.nav);
+                        self.look.nav = toggled(window, self.look.nav);
                         theme::save(&self.look);
                     }
                     let help = Row {

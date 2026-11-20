@@ -12,6 +12,10 @@ use eframe::egui;
 const TITLE_H: f32 = 34.0;
 const STATUS_H: f32 = 28.0;
 
+/// The margin round a tab's content (main.rs's central panel); the
+/// title bar's tool switcher lines up with it.
+pub(crate) const CONTENT_MARGIN: i8 = 8;
+
 impl App {
     /// The title bar: the app's name and the site switcher on the left,
     /// Report and Full scan on the right.
@@ -47,7 +51,14 @@ impl App {
             return;
         }
         let names = ui.ctx().content_rect().width() >= crate::nav::OPEN_FROM;
-        ui.add_space(10.0);
+        // Start where the tab's content starts, right of the nav (its
+        // width and the content's margin), so the tools sit over the run
+        // bar they switch. When the nav is a rail the site chip is wider,
+        // so the switcher keeps a small gap after the chip instead.
+        let content = ui.ctx().content_rect().left()
+            + crate::nav::width(ui.ctx(), self.look.nav)
+            + f32::from(CONTENT_MARGIN);
+        ui.add_space((content - ui.cursor().min.x).max(10.0));
         let v = ui.visuals().clone();
         egui::Frame::new()
             .fill(v.widgets.inactive.weak_bg_fill.gamma_multiply(0.6))
