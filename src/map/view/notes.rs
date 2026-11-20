@@ -904,7 +904,7 @@ fn hits_badge(ui: &mut Ui, hits: &[Hit]) {
         .response
         .on_hover_text(format!(
             "{text}. Hidden in saved maps, the notes kept on this computer, copies, exports \
-             and the Site Bundle"
+             and the Claude Handoff"
         ));
 }
 

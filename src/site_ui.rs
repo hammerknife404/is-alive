@@ -73,7 +73,7 @@ impl App {
             .on_hover_text(if scratch {
                 "No site open: Scratch. Click to open a site or make one, so this visit's notes, maps and configs stay together."
             } else {
-                "The site open now: Configs, Map, Notes, Results and the Site Bundle work on it. Click to switch or make a site."
+                "The site open now: Configs, Map, Notes, Results and the Claude Handoff work on it. Click to switch or make a site."
             });
         if chip.clicked() {
             self.sites = site::list();
@@ -141,7 +141,7 @@ impl App {
                 }
                 ui.separator();
                 if ui
-                    .button("Site Bundle…")
+                    .button("Claude Handoff…")
                     .on_hover_text("Zip this site for /unifidump and /mapnetwork")
                     .clicked()
                 {
@@ -240,7 +240,7 @@ impl App {
                         c[1].strong("Then cleared from memory");
                         c[1].label("• The configs, and their passwords and keys");
                         c[1].label("• The sweep and the live map");
-                        c[1].label("• Results and the Site Bundle's details");
+                        c[1].label("• Results and the Claude Handoff's details");
                     });
                     ui.add_space(4.0);
                     ui.weak(if to.is_some() {
@@ -468,7 +468,7 @@ impl App {
             // What's picked would open in the next site.
             Some("Pick the files to open, or cancel, first.")
         } else if self.bundle.is_running() {
-            Some("Wait for the Site Bundle to be saved.")
+            Some("Wait for the Claude Handoff to be saved.")
         } else {
             None
         }

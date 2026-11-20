@@ -15,7 +15,7 @@ impl MapView {
             ui.menu_button("Export ▾", |ui| self.export_items(ui))
                 .response
                 .on_hover_text(
-                    "Save the map as a picture (SVG, PNG), a diagram to edit (draw.io, which \
+                    "Save the map as a /mapnetwork map (.dc.html) for Claude, a picture (SVG, PNG), a diagram to edit (draw.io, which \
                      also saves to Visio), text for docs (Mermaid, Graphviz) or a spreadsheet \
                      (CSV)",
                 )
@@ -80,6 +80,18 @@ impl MapView {
                 let text = self.drawn(|d| f.text(d, look)).unwrap_or_default();
                 if let Some(w) = f.warning(&text) {
                     widgets::toast(w, false);
+                }
+                if f == Format::DcHtml {
+                    let left = self.drawn(export::dc_html_left_out);
+                    if left > 0 {
+                        widgets::toast(
+                            format!(
+                                "{left} client(s) left out: a /mapnetwork map holds at most {} cards",
+                                export::DC_HTML_MAX
+                            ),
+                            false,
+                        );
+                    }
                 }
                 widgets::save_file(name, f.name(), vec![f.ext()], text);
             }

@@ -247,7 +247,7 @@ falls back to its own dark/light pair, so keep using the standard keys where
 they fit. `defaultTheme` accepts any theme id.
 
 Default UX (engine-level, applies to every map — do not override per map):
-- Default theme is **RGB** (`defaultTheme: 'rgb'`); a theme the viewer already saved in their browser wins.
+- Default theme is **Dark** (`defaultTheme: 'dark'`), to match is-alive; a theme the viewer already saved in their browser wins.
 - The **Findings** band starts **collapsed** on all screen sizes (click its header to open).
 - Every sidebar section (Sites, Zones, VLANs, Action items) has a **hide/show** button in its header.
 - On desktop the left sidebar collapses to a narrow rail (‹ / ›) and the right detail panel collapses to its header (▴ / ▾), so the map can take the full canvas while the selection stays visible.

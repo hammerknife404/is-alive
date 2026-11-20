@@ -1648,10 +1648,10 @@ impl NotesTool {
                 .corner_radius(crate::theme::R_CONTROL),
             )
             .on_hover_text(if self.show_hits {
-                "Hidden in saves, copies and the Site Bundle. Click to stop highlighting them \
+                "Hidden in saves, copies and the Claude Handoff. Click to stop highlighting them \
                  in the editor"
             } else {
-                "Hidden in saves, copies and the Site Bundle. Click to highlight them in the \
+                "Hidden in saves, copies and the Claude Handoff. Click to highlight them in the \
                  editor"
             });
         if r.clicked() {
@@ -1841,7 +1841,7 @@ impl NotesTool {
                         RichText::new(format!("🔑 {}", redact::summary(hits)))
                             .color(widgets::warn()),
                     )
-                    .on_hover_text("Hidden in saves, copies and the Site Bundle");
+                    .on_hover_text("Hidden in saves, copies and the Claude Handoff");
                     ui.checkbox(&mut self.show_hits, "Highlight in the editor");
                 }
                 self.overrides_menu(ui);

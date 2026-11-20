@@ -1790,7 +1790,7 @@ fn empty_state(ui: &mut Ui, src: &Sources) -> Option<Action> {
         "Nothing to map yet",
         "Built from a Subnet Sweep, a UniFi or SonicWall backup, or a /mapnetwork map. A backup \
          gives the real uplinks; a sweep alone can only place devices under the gateway. Meraki \
-         configs aren't drawn: they go into the Site Bundle for Claude.",
+         configs aren't drawn: they go into the Claude Handoff for Claude.",
         &[
             ("Scan this network", &scan_tip, subnet.is_some()),
             ("Open a backup or map…", OPEN_TIP, !src.export.picking()),

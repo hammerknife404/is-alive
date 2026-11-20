@@ -382,7 +382,7 @@ fonts/React from CDN on first open — it's not a fully offline artifact.)
 
 ## Default UX (engine behavior — not authored per map)
 These come from the engine, so every new map inherits them from the template; never hard-code them in map data.
-- **Theme:** RGB by default. A viewer's saved theme (per map, in localStorage) overrides it. Change only via the `defaultTheme` tweak.
+- **Theme:** Dark by default (as is-alive's). A viewer's saved theme (per map, in localStorage) overrides it. Change only via the `defaultTheme` tweak.
 - **Findings band:** collapsed on load; header click toggles. Keep ACTIONS severity-sorted and honest — the band's chips still show the counts while collapsed.
 - **Sidebar sections:** Sites, Zones, VLANs and Action items each have a hide/show button; hidden state is session-only.
 - **Panel collapse (desktop):** left sidebar → 44px rail (‹/›, map refits); right detail panel → header-only (▴/▾). Mobile keeps its drawer/sheet behavior.
