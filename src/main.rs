@@ -611,7 +611,7 @@ impl App {
         // the 130-point budget (chrome.rs).
         let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin {
             top: 6,
-            ..egui::Margin::same(8)
+            ..egui::Margin::same(chrome::CONTENT_MARGIN)
         });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             ui.multiply_opacity(fade);
