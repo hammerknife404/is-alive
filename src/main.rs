@@ -626,10 +626,11 @@ impl App {
             return;
         }
         let mut choice = None;
+        let reason = self.notes.unsaved_reason();
         let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
             ui.set_max_width(340.0);
             ui.strong("Save the notes before closing?");
-            ui.label("Autosave is off, and the notes have changes that aren't saved.");
+            ui.label(reason.as_str());
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
@@ -1142,7 +1143,13 @@ impl App {
     /// off); Scratch's from the last day only.
     pub(crate) fn load_results(&mut self) {
         self.log = match log::site_file().filter(|_| self.look.results_keep) {
-            Some(p) => log::Log::load(&p),
+            Some(p) => {
+                let (log, said) = log::Log::load(&p);
+                if let Some(s) = said {
+                    widgets::toast(s, false);
+                }
+                log
+            }
             None => log::Log::default(),
         };
         // As read: runs that expired make it differ, so the file is written
