@@ -9,17 +9,26 @@ use super::{Check, MxInfo, addrs};
 use rustls::StreamOwned;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CONNECT: Duration = Duration::from_secs(6);
 /// Some servers delay the greeting on purpose (tarpitting); allow for it.
 const READ: Duration = Duration::from_secs(15);
+/// The whole session, banner to QUIT. READ is per read, so without this a
+/// server sending a byte every 14 s would hold the check open for ever.
+const SESSION: Duration = Duration::from_secs(60);
+/// A real EHLO reply is about 20 lines. Without a cap, "250-" sent without
+/// end grows memory until the app aborts.
+const REPLY_LINES: usize = 200;
+const REPLY_BYTES: usize = 256 * 1024;
 const MAX_HOSTS: usize = 3;
 
 /// SMTP replies over any stream, plain or TLS.
 struct Session<S> {
     s: S,
     buf: Vec<u8>,
+    /// When the session gives up, wherever it is.
+    deadline: Instant,
 }
 
 impl<S: Read + Write> Session<S> {
@@ -31,6 +40,14 @@ impl<S: Read + Write> Session<S> {
             }
             if self.buf.len() > 64 * 1024 {
                 return Err(io::Error::other("reply line too long"));
+            }
+            // Not TimedOut: that kind means "no reply", and this server did
+            // reply, just never finished.
+            if Instant::now() >= self.deadline {
+                return Err(io::Error::other(format!(
+                    "the session didn't finish within {}s",
+                    SESSION.as_secs()
+                )));
             }
             let mut chunk = [0u8; 4096];
             let n = self.s.read(&mut chunk)?;
@@ -47,8 +64,16 @@ impl<S: Read + Write> Session<S> {
     /// A full (possibly multi-line "250-...") reply: code and text lines.
     fn reply(&mut self) -> io::Result<(u16, Vec<String>)> {
         let mut lines = Vec::new();
+        let mut bytes = 0;
         loop {
             let l = self.line()?;
+            bytes += l.len();
+            if lines.len() >= REPLY_LINES || bytes > REPLY_BYTES {
+                return Err(io::Error::other(format!(
+                    "reply ran past {REPLY_LINES} lines or {} KiB",
+                    REPLY_BYTES / 1024
+                )));
+            }
             let code = l.get(..3).and_then(|c| c.parse().ok());
             let more = l.as_bytes().get(3) == Some(&b'-');
             lines.push(l.get(4..).unwrap_or("").to_string());
@@ -133,6 +158,7 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     let mut s = Session {
         s: tcp,
         buf: Vec::new(),
+        deadline: Instant::now() + SESSION,
     };
     let mut p = Probe::default();
     let (code, banner) = s.reply()?;
@@ -152,6 +178,7 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     }
 
     let (mut conn, verifier) = tls::client(host)?;
+    let deadline = s.deadline;
     let mut tcp = s.s;
     tls::handshake(&mut conn, &mut tcp)?;
     let (version, cipher) = tls::negotiated(&conn);
@@ -167,6 +194,7 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     let mut s = Session {
         s: StreamOwned::new(conn, tcp),
         buf: Vec::new(),
+        deadline,
     };
     p.relay(relay_test(&mut s, &helo));
     Ok(p)
@@ -339,6 +367,42 @@ mod tests {
             }
         });
         addr
+    }
+
+    fn session(bytes: &[u8], deadline: Instant) -> Session<io::Cursor<Vec<u8>>> {
+        Session {
+            s: io::Cursor::new(bytes.to_vec()),
+            buf: Vec::new(),
+            deadline,
+        }
+    }
+
+    /// "250-" without end: an error after REPLY_LINES, not memory growing
+    /// until the app aborts.
+    #[test]
+    fn a_reply_that_never_ends() {
+        let mut s = session(&b"250-\r\n".repeat(10_000), Instant::now() + SESSION);
+        let e = s.reply().unwrap_err();
+        assert!(e.to_string().contains("200 lines"), "{e}");
+    }
+
+    /// Past the session's deadline nothing more is read, however slowly
+    /// the server keeps sending.
+    #[test]
+    fn a_session_past_its_deadline() {
+        let mut s = session(b"220 slow\r\n", Instant::now());
+        let e = s.reply().unwrap_err();
+        assert!(e.to_string().contains("didn't finish"), "{e}");
+        assert_ne!(e.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn hostile_replies_never_panic() {
+        let good = b"220 mx.test ESMTP\r\n250-mx.test\r\n250-STARTTLS\r\n250 SIZE 1000\r\n";
+        crate::hostile::each(good, |d| {
+            let mut s = session(d, Instant::now() + SESSION);
+            while s.reply().is_ok() {}
+        });
     }
 
     #[test]

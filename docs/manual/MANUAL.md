@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.7**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -624,7 +624,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | **DMARC** | What receivers do with forged mail: missing, `p=none` (monitor only), subdomain policy, `pct`, report addresses |
 | **DKIM** | Signing keys under the common selectors (and yours): key size, revoked keys, Microsoft 365 CNAMEs with no key behind them |
 | **Nameservers** | At least two, each answering for the domain, serial numbers in step, matching the registrar's delegation |
-| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent |
+| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent. A server still talking after a minute, or sending a reply of more than 200 lines, is cut off and says so |
 | **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL |
 
 **Nice-to-haves:** MTA-STS, TLS-RPT, BIMI, DNSSEC, CAA, MX reverse DNS, Autodiscover (for Microsoft 365) and Domain expiry (from the registry, with the registrar and any hold status).

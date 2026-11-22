@@ -63,7 +63,7 @@ pub fn sniff(data: &[u8]) -> bool {
 /// Largest map read: a /mapnetwork map of a big site is a few MB.
 const MAP_MAX: usize = 64 << 20;
 /// Most devices and links a map may hold and still be drawn.
-const NODES_MAX: usize = 10_000;
+pub(crate) const NODES_MAX: usize = 10_000;
 const EDGES_MAX: usize = 50_000;
 
 pub fn parse(data: &[u8]) -> Result<Doc, String> {
