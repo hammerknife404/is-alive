@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.24**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -556,7 +556,7 @@ Type a domain (or an address) and click **Look up** or press **Enter**. is-alive
 
 - WHOIS needs outbound TCP port 43, which some office and guest networks block.
 - Registries often hide contact details, and some no longer answer WHOIS at all.
-- Each server gets 8 seconds, and an answer over 256 KiB is refused.
+- Each server gets 8 seconds a read and 20 seconds in all, and an answer over 256 KiB is refused. **■ Stop** (beside the spinner) lets go of a lookup at once. The answer is shown without control or right-to-left characters, which could hide or rearrange what's on screen.
 
 ### Example 1: where does a domain's email go?
 

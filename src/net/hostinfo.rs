@@ -239,10 +239,18 @@ pub fn wan() -> Option<Ipv4Addr> {
         return None;
     }
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
+    // Connected, so only OpenDNS's answer is read, and with an id no one
+    // off the path can guess: the address feeds the status bar and the
+    // Blacklists check.
+    sock.connect("208.67.222.222:53").ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
-    let id = std::process::id() as u16;
-    sock.send_to(&dns_query(id, "myip.opendns.com"), "208.67.222.222:53")
-        .ok()?;
+    let id = {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u32(std::process::id());
+        h.finish() as u16
+    };
+    sock.send(&dns_query(id, "myip.opendns.com")).ok()?;
     let mut buf = [0u8; 512];
     let n = sock.recv(&mut buf).ok()?;
     parse_a_answer(&buf[..n], id)
