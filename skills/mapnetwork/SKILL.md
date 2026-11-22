@@ -463,15 +463,20 @@ reported error because the map "looks right" in a browser — most of these
 fail silently there. `scripts/test_validate_map.py` is the validator's own
 regression suite; run it after any change to the validator.
 
-If `validate_map.py` is missing from the deployment, fall back to Node.js:
-slice from the start marker's opening `/*` (not from after the marker —
-that hides a splice that commented the data out) up to the END marker, load
-it with
-`new Function(block).call(ctx)` (the block's `this.X =` statements then land
-on `ctx` — don't rewrite them), and walk `ctx.NODES`/`EDGES`/`ACTIONS`/
-`ZONES`/`SITES` for the errors above. Flag the missing script as a
-deployment gap in the reply rather than treating the fallback as
-equivalent long-term.
+If `validate_map.py` is missing from the deployment, check by reading,
+never by running the block: don't load it with Node (`new Function`,
+`eval`, `vm`) or open it in a browser to see what it builds. On the update
+path the map is an uploaded file, and evaluating its SITE DATA runs
+whatever code is in it, next to the client's data. Read from the start
+marker's opening `/*` (not from after the marker — that hides a splice that
+commented the data out) up to the END marker, and go through `NODES`,
+`EDGES`, `ACTIONS`, `ZONES` and `SITES` for the errors above: unique ids
+that resolve, no cycles, zones with both `dark` and `light`, at most 120
+nodes. Anything in the block that isn't a plain literal (a function call,
+a template string, `require`, an extra statement) is itself an error:
+report it and rebuild the data rather than keep it. Flag the missing script
+as a deployment gap in the reply; reading is not a substitute for it
+long-term.
 
 ## Step 4 — output
 

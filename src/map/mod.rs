@@ -1490,12 +1490,21 @@ fn is_unifi_gateway(kind: &str) -> bool {
     matches!(kind, "ugw" | "udm" | "uxg" | "ucg" | "udr")
 }
 
-fn port_names(open: &[u16]) -> String {
+pub(crate) fn port_names(open: &[u16]) -> String {
     open.iter()
-        .map(|p| format!("{p} {}", crate::net::ports::service_name(*p)))
+        .map(|p| match crate::net::ports::service_name(*p) {
+            "" => p.to_string(),
+            name => format!("{p} {name}"),
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// A card's detail line listing its open ports (`port_names`), as the
+/// sweep and a `.dc.html` page write it.
+pub(crate) const OPEN_PORTS: &str = "Open ports: ";
+/// A card's note, as a `.dc.html` page writes it under the card.
+pub(crate) const TECH_NOTE: &str = "Tech note: ";
 
 /// A card for a host the sweep found, not yet hung anywhere. `this`: the
 /// machine the sweep ran from.
@@ -1712,13 +1721,25 @@ impl B {
             n.sub = s.ip.to_string();
         }
         let own = n.ip == Some(s.ip);
+        let also = format!("Also at {}: ", s.ip);
         let at = |line: String| {
-            if own {
-                line
-            } else {
-                format!("Also at {}: {line}", s.ip)
-            }
+            if own { line } else { format!("{also}{line}") }
         };
+        // This sweep's answer replaces what an earlier one (or last visit's
+        // map, read back) said about this address, rather than adding a
+        // line beside it each visit.
+        n.details.retain(|l| {
+            let about = if own {
+                Some(l.as_str())
+            } else {
+                l.strip_prefix(also.as_str())
+            };
+            !about.is_some_and(|l| {
+                l.starts_with("Answered ping in ")
+                    || l.starts_with("Answered ARP, not ping")
+                    || ((s.checked || !s.open.is_empty()) && l.starts_with(OPEN_PORTS))
+            })
+        });
         n.detail(at(match s.rtt {
             Some(r) => format!("Answered ping in {}", crate::widgets::fmt_ms(r)),
             None => "Answered ARP, not ping (firewalled or ICMP off)".into(),
@@ -1742,7 +1763,7 @@ impl B {
             }
         }
         if !s.open.is_empty() {
-            n.detail(at(format!("Open ports: {}", port_names(&s.open))));
+            n.detail(at(format!("{OPEN_PORTS}{}", port_names(&s.open))));
             for p in &s.open {
                 if !n.open.contains(p) {
                     n.open.push(*p);

@@ -43,4 +43,4 @@ The panels follow `/mapnetwork`'s, and neither changes the map's zoom: they lie 
 
 1. Sweep the site, load its UniFi / SonicWall / Meraki configs in Config Export (every controller and firewall the visit covers), and make a [[Claude Handoff|Site-Bundle-and-Claude]] (**Claude Handoff** in the nav).
 2. In Claude, attach the zip and paste the kickoff prompt: `/unifidump` and `/mapnetwork` build the accurate map as a `.dc.html`.
-3. Open that `.dc.html` on the Map (**More › Open…**, or drop it on the Map) or in Config Export: the Map redraws it in this app's style, and a sweep of the same network marks which devices answer. On the next visit, open it in the handoff's Configs step and `/mapnetwork` updates it instead of starting over.
+3. Open that `.dc.html` on the Map (**More › Open…**, or drop it on the Map) or in Config Export: the Map redraws it in this app's style, and a sweep of the same network marks which devices answer (its ping and open ports for an address replace what the map said last visit, rather than adding beside it). On the next visit, open it in the handoff's Configs step and `/mapnetwork` updates it instead of starting over.

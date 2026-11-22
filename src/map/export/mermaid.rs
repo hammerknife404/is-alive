@@ -8,11 +8,14 @@ use std::fmt::Write;
 
 /// A label safe inside Mermaid's `"…"`: quotes, `#`, `&`, angle brackets
 /// and backticks as Mermaid's `#code;` entities, line breaks as spaces.
+/// `%` and braces too: Mermaid looks for a `%%{init: …}%%` directive
+/// anywhere in the text, labels included, so a device named one could
+/// restyle or hide cards wherever the diagram is drawn.
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '"' | '#' | '&' | '<' | '>' | '`' | ';' | '|' | '\\' => {
+            '"' | '#' | '&' | '<' | '>' | '`' | ';' | '|' | '\\' | '%' | '{' | '}' => {
                 let _ = write!(o, "#{};", c as u32);
             }
             c if c.is_control() => o.push(' '),
@@ -62,7 +65,9 @@ pub fn write(d: &Drawn) -> String {
         .filter(|c| !c.is_control())
         .collect::<String>()
         .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+        .replace('"', "\\\"")
+        // As in labels: no `%%{…}%%` directive by way of the title.
+        .replace('%', "\\x25");
     let _ = writeln!(s, "---\ntitle: \"{title}\"\n---");
     s += "flowchart TB\n";
     let node = |s: &mut String, i: usize, indent: &str| {
@@ -141,6 +146,30 @@ mod tests {
         let e = esc("a\"]-->x[\"b #1; <script> `c` |d|\n");
         assert!(!e.contains(['"', '<', '>', '`', '|', '\n']));
         assert!(e.contains("#34;") && e.contains("#35;1#59;"));
+    }
+
+    #[test]
+    fn a_label_cant_carry_a_mermaid_directive() {
+        let name = "%%{init: {'themeCSS': '.node{display:none}'}}%%";
+        let e = esc(name);
+        assert!(!e.contains(['%', '{', '}']), "{e}");
+        assert!(e.starts_with("#37;#37;#123;init"));
+        let mut m = super::super::tests::acme();
+        m.title = name.to_string();
+        m.nodes[1].label = name.to_string();
+        let lay = crate::map::layout::layout_in(&m, &|_| true, Mode::Sites);
+        let moved = vec![false; m.nodes.len()];
+        let s = write(&Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &moved,
+            legend: false,
+            caption: None,
+            exploded: None,
+        });
+        assert!(!s.contains("%%"), "{}", &s[..200]);
+        assert!(s.starts_with("---\ntitle: \"\\x25\\x25{init"));
     }
 
     #[test]

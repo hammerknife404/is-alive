@@ -36,17 +36,48 @@ fn hex(c: [u8; 3]) -> String {
 }
 
 /// "Contoso Health — HQ" → "contoso-health-hq": a key the page can use.
+/// Letters outside ASCII can't go in it, so a name with any ("Москва",
+/// "Zürich", a name in kanji) ends in a hash of the whole name: the same
+/// name gets the same key every visit, and two such names don't both
+/// become "x".
 fn slug(s: &str) -> String {
     let mut out = String::new();
+    let mut lost = false;
     for c in s.chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
             out.push(c);
-        } else if !out.is_empty() && !out.ends_with('-') {
-            out.push('-');
+        } else {
+            lost |= c.is_alphanumeric();
+            if !out.is_empty() && !out.ends_with('-') {
+                out.push('-');
+            }
         }
     }
-    let out = out.trim_end_matches('-').to_string();
-    if out.is_empty() { "x".into() } else { out }
+    let out = out.trim_end_matches('-');
+    match (out.is_empty(), lost) {
+        (true, false) => "x".into(),
+        (true, true) => format!("u{:08x}", fnv(s)),
+        (false, true) => format!("{out}-u{:08x}", fnv(s)),
+        (false, false) => out.to_string(),
+    }
+}
+
+/// FNV-1a: fixed, so a key is the same in every build and on every run.
+fn fnv(s: &str) -> u32 {
+    s.bytes().fold(0x811c_9dc5, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
+}
+
+/// `base`, or `base-2`, `base-3`… the first not yet `taken`.
+fn unique(base: String, taken: &mut HashSet<String>) -> String {
+    let mut key = base.clone();
+    let mut k = 2;
+    while !taken.insert(key.clone()) {
+        key = format!("{base}-{k}");
+        k += 1;
+    }
+    key
 }
 
 /// The cards that go on the page: every card but the +N more stand-ins,
@@ -83,20 +114,25 @@ fn kept(d: &Drawn) -> (Vec<usize>, usize) {
 
 /// What the page shows under a card: its details without the lines
 /// is-alive added when it read a page (they'd pile up visit after visit),
-/// then its open ports and the technician's note.
+/// then its open ports and the technician's note. A port list or note the
+/// card has now replaces the line an earlier page wrote for it; with
+/// neither, that line stays (a note from another tech's page isn't lost).
 fn details(n: &Node) -> Vec<String> {
+    use crate::map::{OPEN_PORTS, TECH_NOTE};
+    let note = n.note.trim();
     let mut v: Vec<String> = n
         .details
         .iter()
         .filter(|l| !l.starts_with("Site: ") && !l.starts_with("Zone on the map: "))
+        .filter(|l| n.open.is_empty() || !l.starts_with(OPEN_PORTS))
+        .filter(|l| note.is_empty() || !l.starts_with(TECH_NOTE))
         .cloned()
         .collect();
     if !n.open.is_empty() {
-        let ports: Vec<String> = n.open.iter().map(u16::to_string).collect();
-        v.push(format!("Open ports: {}", ports.join(", ")));
+        v.push(format!("{OPEN_PORTS}{}", crate::map::port_names(&n.open)));
     }
-    if !n.note.trim().is_empty() {
-        v.push(format!("Tech note: {}", n.note.trim()));
+    if !note.is_empty() {
+        v.push(format!("{TECH_NOTE}{note}"));
     }
     v
 }
@@ -111,23 +147,18 @@ pub fn data(d: &Drawn) -> String {
     let mut ids: HashMap<usize, String> = HashMap::new();
     let mut taken: HashSet<String> = HashSet::new();
     for &i in &keep {
-        let base = slug(&m.nodes[i].id);
-        let mut id = base.clone();
-        let mut k = 2;
-        while !taken.insert(id.clone()) {
-            id = format!("{base}-{k}");
-            k += 1;
-        }
-        ids.insert(i, id);
+        ids.insert(i, unique(slug(&m.nodes[i].id), &mut taken));
     }
 
-    // Sites, by the order first seen.
+    // Sites, by the order first seen; one key each, even for names that
+    // slug alike ("Site A", "site-a").
     let mut sites: Vec<(String, String)> = Vec::new();
+    let mut site_keys: HashSet<String> = HashSet::new();
     for &i in &keep {
         if let Some(s) = &m.nodes[i].site
             && !sites.iter().any(|(_, n)| n == s)
         {
-            sites.push((slug(s), s.clone()));
+            sites.push((unique(slug(s), &mut site_keys), s.clone()));
         }
     }
     let site_key: HashMap<&str, &str> = sites
@@ -178,10 +209,17 @@ pub fn data(d: &Drawn) -> String {
             ));
         }
     };
+    // A page's zones by name, each its own key: two names that slug
+    // alike don't fold into one box under the first one's name.
+    let mut zone_keys: HashSet<String> = HashSet::new();
+    let mut page_keys: HashMap<String, String> = HashMap::new();
     for &i in &keep {
         let n = &m.nodes[i];
         if let Some((name, vlan)) = page_zone(n) {
-            let key = format!("z-{}", slug(&name));
+            let key = page_keys
+                .entry(name.clone())
+                .or_insert_with(|| unique(format!("z-{}", slug(&name)), &mut zone_keys))
+                .clone();
             add_zone(key.clone(), &name, &vlan, n.zone);
             zone_of.insert(i, key);
         }
@@ -401,6 +439,36 @@ mod tests {
         });
     }
 
+    /// A card read from an earlier page: its current ports and note
+    /// replace the lines that page wrote, once each; with neither, the old
+    /// lines stay.
+    #[test]
+    fn a_cards_ports_and_note_are_written_once() {
+        let mut n = Node {
+            details: vec![
+                "Open ports: 22 SSH".into(),
+                "Tech note: old".into(),
+                "Also at 192.0.2.9: Open ports: 80 HTTP".into(),
+            ],
+            open: vec![22, 443],
+            note: "new".into(),
+            ..Default::default()
+        };
+        let d = details(&n);
+        let count = |p: &str| d.iter().filter(|l| l.starts_with(p)).count();
+        assert_eq!(count("Open ports: "), 1, "{d:?}");
+        assert_eq!(count("Tech note: "), 1, "{d:?}");
+        assert!(d.contains(&"Tech note: new".to_string()));
+        assert!(
+            d.iter()
+                .any(|l| l.starts_with("Open ports: 22") && l.contains("443"))
+        );
+        assert!(d.contains(&"Also at 192.0.2.9: Open ports: 80 HTTP".to_string()));
+        n.open.clear();
+        n.note.clear();
+        assert_eq!(details(&n), n.details);
+    }
+
     /// A hostile note can't close the page's script, and comes back whole.
     #[test]
     fn a_hostile_note_stays_text_in_dc_html() {
@@ -425,11 +493,76 @@ mod tests {
         });
     }
 
+    /// Sites and zones whose names slug alike ("Москва" and "Казань" both
+    /// lose every letter) stay apart on the page and when it's read back.
+    #[test]
+    fn sites_and_zones_named_alike_stay_apart() {
+        let mut m = super::super::tests::acme();
+        // Every other card in each site and each zone.
+        for (k, n) in m.nodes.iter_mut().enumerate() {
+            if n.zone == Zone::Internet {
+                continue;
+            }
+            let (site, zone) = [("Москва", "Site A"), ("Казань", "site-a")][k % 2];
+            n.site = Some(site.to_string());
+            n.details.retain(|l| !l.starts_with("Zone on the map: "));
+            n.details.push(format!("Zone on the map: {zone}"));
+        }
+        let lay = crate::map::layout::layout_in(&m, &|_| true, Mode::Sites);
+        let moved = vec![false; m.nodes.len()];
+        let d = Drawn {
+            map: &m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &moved,
+            legend: false,
+            caption: None,
+            exploded: None,
+        };
+        let doc = crate::mapnetwork::parse(write(&d).as_bytes()).unwrap();
+        let mut site_names: Vec<&str> = doc.sites.iter().map(|(_, n)| n.as_str()).collect();
+        site_names.sort();
+        assert_eq!(site_names, ["Казань", "Москва"]);
+        assert_ne!(doc.sites[0].0, doc.sites[1].0);
+        let zone_names: Vec<&str> = doc
+            .zones
+            .values()
+            .filter_map(|v| v["name"].as_str())
+            .collect();
+        assert!(
+            zone_names.contains(&"Site A") && zone_names.contains(&"site-a"),
+            "{zone_names:?}"
+        );
+        let back = crate::map::build(&crate::map::Input {
+            mapnetwork: Some(&doc),
+            ..Default::default()
+        });
+        for n in m.nodes.iter().filter(|n| n.site.is_some() && !n.client) {
+            if let Some(b) = back.nodes.iter().find(|b| b.label == n.label) {
+                assert_eq!(b.site, n.site, "{}", n.label);
+            }
+        }
+    }
+
     /// Ids the page can use, each once.
     #[test]
     fn ids_are_plain_and_unique() {
         assert_eq!(slug("mapnetwork:internet"), "mapnetwork-internet");
         assert_eq!(slug("ip:10.0.0.1"), "ip-10-0-0-1");
         assert_eq!(slug("::"), "x");
+        assert_eq!(slug("Contoso Health — HQ"), "contoso-health-hq");
+        // Names in other scripts: a key of their own, the same each time.
+        let (msk, kzn) = (slug("Москва"), slug("Казань"));
+        assert_ne!(msk, kzn);
+        assert_eq!(msk, slug("Москва"));
+        // Tokyo and Osaka, in kanji.
+        let (tokyo, osaka) = ("\u{6771}\u{4eac}", "\u{5927}\u{962a}");
+        assert_ne!(slug(tokyo), slug(osaka));
+        assert!(slug("Zürich HQ").starts_with("z-rich-hq-u"));
+        assert!(
+            [msk, kzn, slug(tokyo)]
+                .iter()
+                .all(|k| k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+        );
     }
 }

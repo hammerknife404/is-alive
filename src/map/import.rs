@@ -1063,6 +1063,70 @@ mod tests {
         assert_eq!(off.under.get("mapnetwork:not-placed"), Some(&(0, 1)));
     }
 
+    /// Last visit's map read back, this visit's sweep merged: what the
+    /// sweep says now about an address replaces what the page said, so
+    /// the lines don't pile up visit after visit.
+    #[test]
+    fn last_visits_ping_and_ports_give_way_to_this_sweep() {
+        let doc = crate::mapnetwork::parse(
+            r#"
+    this.NODES = [
+      { id:'inet', kind:'WAN', label:'Internet' },
+      { id:'sw', kind:'SWITCH', label:'SW', sub:'192.168.1.2', mac:'02:00:00:00:00:02',
+        details:['Answered ping in 0.36 ms', 'Open ports: 23 Telnet, 80 HTTP',
+                 'Also at 192.168.1.9: Answered ping in 2.0 ms', 'Tech note: spare PSU'] },
+    ];
+    this.EDGES = [{ from:'inet', to:'sw' }];"#
+                .as_bytes(),
+        )
+        .unwrap();
+        let swept = |open: Vec<u16>, checked: bool| {
+            let input = Input {
+                sweep: vec![Seen {
+                    ip: [192, 168, 1, 2].into(),
+                    mac: mac::parse_mac("02:00:00:00:00:02"),
+                    name: None,
+                    rtt: Some(0.41),
+                    open,
+                    checked,
+                    also: vec![],
+                    web: None,
+                }],
+                clients: Clients::All,
+                ..Default::default()
+            };
+            let m = build(&doc, &input);
+            m.nodes
+                .iter()
+                .find(|n| n.label == "SW")
+                .unwrap()
+                .details
+                .clone()
+        };
+        let lines = |d: &[String], start: &str| -> Vec<String> {
+            d.iter().filter(|l| l.starts_with(start)).cloned().collect()
+        };
+        let d = swept(vec![80], true);
+        assert_eq!(
+            lines(&d, "Answered ping in "),
+            ["Answered ping in 0.41 ms"],
+            "{d:?}"
+        );
+        let ports = lines(&d, "Open ports: ");
+        assert_eq!(ports.len(), 1, "{d:?}");
+        assert!(ports[0].starts_with("Open ports: 80") && !ports[0].contains("23"));
+        // Another address's line, and the note, are left as they were.
+        assert!(d.contains(&"Also at 192.168.1.9: Answered ping in 2.0 ms".to_string()));
+        assert!(d.contains(&"Tech note: spare PSU".to_string()));
+        // Checked and nothing open now (Telnet turned off): the old list goes.
+        assert!(lines(&swept(vec![], true), "Open ports: ").is_empty());
+        // Not checked this time: last visit's list is all there is.
+        assert_eq!(
+            lines(&swept(vec![], false), "Open ports: "),
+            ["Open ports: 23 Telnet, 80 HTTP"]
+        );
+    }
+
     /// Two sites on the same 192.168.1.x, each with its firewall; the
     /// branch's switch has the map's own "+3 more", HQ's one that lists
     /// nobody.
