@@ -6,9 +6,9 @@ only inferred (a server seen as a client-table MAC), documentation drift
 (Glue says one WAN IP, the firewall says another), and coverage gaps (live
 gear nobody documented). Cost is 3–4 tool calls per map.
 
-Origin case: Byrnes Mechanical, 2026-10-06. Without this check the map split
-one server into two "possibly different" HPE nodes, missed an expired
-warranty, and missed a wrong Shreveport WAN IP in Glue. With it, all three
+Origin case (names changed): Fabrikam Mechanical. Without this check the map
+split one server into two "possibly different" HPE nodes, missed an expired
+warranty, and missed a wrong branch WAN IP in Glue. With it, all three
 were resolved in four calls.
 
 ## What Beacon does NOT cover
@@ -29,8 +29,8 @@ were resolved in four calls.
    drift finding ("Glue last synced <date>").
 2. **Resolve the client** — `search_graph` with `node_types:["company"]`.
    Take the exact `company_identifier` from the returned node. Never type it
-   from the client's name: identifiers carry typos (Byrnes is stored as
-   `Byrnes Mechnical`) and the match is exact.
+   from the client's name: identifiers carry typos (Fabrikam is stored as
+   `Fabrikam Mechnical`) and the match is exact.
 3. **Learn this client's vocabulary** — `aggregate_nodes`,
    `group_by:"config_kind"`, `source:"authoritative"`, with **no filters**.
    `config_kind` values are lowercase and coarse: firewalls are `router` and
@@ -49,17 +49,17 @@ the reply. Never block a map on Beacon.
 Match in this order, and stop at the first hit:
 
 1. **Serial**, normalized: strip dashes and spaces, uppercase.
-   `2CB8-EDDA-6E30` = `2CB8EDDA6E30`. This is the most reliable key. An iLO
+   `0040-1000-0001` = `004010000001`. This is the most reliable key. An iLO
    hostname often embeds the host's serial (`ILOMXQ0000001` → serial
-   `MXQ0421451`), which ties an out-of-band interface to its server.
+   `MXQ0000001`), which ties an out-of-band interface to its server.
 2. **MAC**, normalized to lowercase colon form. **SonicWall:** Glue usually
    records the WAN-side MAC, which is X0's MAC + 1 in the last octet
-   (`…:6e:31` vs the `…:6e:30` the switches learn). Accept ±1 on the last
+   (`…:00:02` vs the `…:00:01` the switches learn). Accept ±1 on the last
    octet for firewalls only.
 3. **IP, LAN-side only, as a weak hint.** Never match on WAN IP: that is the
    field most likely to have drifted, so using it as a key hides the drift.
 
-**Never match on name.** Glue names (`NetTech SECaaS SonicWALL - Main`)
+**Never match on name.** Glue names (`Managed Firewall SonicWALL - Main`)
 and controller names are written independently.
 
 ## What to do with the results
