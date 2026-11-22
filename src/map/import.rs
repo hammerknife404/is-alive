@@ -356,21 +356,30 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         b.nodes[card[i]].up = Some(up);
     }
     let used: HashSet<usize> = via.iter().flatten().copied().collect();
+    // A few per card: a crafted page can hold 50,000 links between the
+    // same two cards, each line a copy of a label.
+    const ALSO_MAX: usize = 20;
+    let mut also: HashMap<usize, usize> = HashMap::new();
     for (k, &(f, t, e)) in edges.iter().enumerate() {
         if used.contains(&k) {
             continue;
         }
         let tail = label_of(e).map(|l| format!(" ({l})")).unwrap_or_default();
-        let (fl, tl) = (
-            b.nodes[card[f]].label.clone(),
-            b.nodes[card[t]].label.clone(),
-        );
-        b.nodes[card[t]]
-            .details
-            .push(format!("Also linked from {fl}{tail}"));
-        b.nodes[card[f]]
-            .details
-            .push(format!("Also linked to {tl}{tail}"));
+        for (on, other, dir) in [(card[t], card[f], "from"), (card[f], card[t], "to")] {
+            let n = also.entry(on).or_default();
+            *n += 1;
+            if *n <= ALSO_MAX {
+                let line = format!("Also linked {dir} {}{tail}", b.nodes[other].label);
+                b.nodes[on].details.push(line);
+            }
+        }
+    }
+    for (c, n) in also {
+        if n > ALSO_MAX {
+            b.nodes[c]
+                .details
+                .push(format!("Also linked {} more times", n - ALSO_MAX));
+        }
     }
 
     // The map's own "+7 more" cards, one card for each device they list.
@@ -564,6 +573,7 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) {
         .saturating_add(1)
         .min(OVERFLOW_HOSTS);
     let left_out = hosts.len().saturating_sub(room);
+    let notes_left_out = notes.len().saturating_sub(OVERFLOW_NOTES);
     hosts.truncate(room);
     notes.truncate(OVERFLOW_NOTES);
     let label = n.label.clone();
@@ -571,6 +581,7 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) {
         .chips
         .iter()
         .filter(|c| *c != "collapsed" && !c.ends_with(" devices"))
+        .take(8)
         .cloned()
         .collect();
     let devices: Vec<Node> = hosts
@@ -626,6 +637,11 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) {
     if left_out > 0 {
         first.details.push(format!(
             "{left_out} more listed in \"{label}\" aren't drawn"
+        ));
+    }
+    if notes_left_out > 0 {
+        first.details.push(format!(
+            "{notes_left_out} more lines of notes in \"{label}\" aren't copied"
         ));
     }
     b.nodes[c] = first;
@@ -1173,7 +1189,11 @@ mod tests {
         let hosts: Vec<String> = (0..5_000)
             .map(|i| format!("'h{i} · 10.0.{}.{}'", i >> 8, i & 255))
             .collect();
-        let notes: Vec<String> = (0..5_000).map(|i| format!("'note {i}'")).collect();
+        // Three notes of a megabyte first: each card copies its notes.
+        let notes: Vec<String> = (0..3)
+            .map(|_| format!("'{}'", "n".repeat(1 << 20)))
+            .chain((0..5_000).map(|i| format!("'note {i}'")))
+            .collect();
         let page = format!(
             "this.NODES = [ {{ id:'sw', kind:'SWITCH', label:'SW', sub:'10.9.0.2' }},\n\
              {{ id:'more', kind:'ADDITIONAL DEVICES', label:'+5000 more', details:[{}, {}] }} ];\n\
@@ -1197,6 +1217,45 @@ mod tests {
                 .iter()
                 .any(|d| d == "4000 more listed in \"+5000 more\" aren't drawn")
         }));
+        assert!(m.nodes.iter().any(|n| {
+            n.details
+                .iter()
+                .any(|d| d == "4983 more lines of notes in \"+5000 more\" aren't copied")
+        }));
+        // Bytes, not just counts: the megabyte notes are cut when read.
+        let bytes: usize = m
+            .nodes
+            .iter()
+            .flat_map(|n| &n.details)
+            .map(String::len)
+            .sum();
+        assert!(bytes < 8 << 20, "{bytes} bytes of details");
+    }
+
+    /// Thousands of links between the same two cards: a few lines each,
+    /// then a count, not a copy of a label per link.
+    #[test]
+    fn many_links_between_two_cards() {
+        let edges = vec!["{ from:'a', to:'b' }"; 5_000].join(",");
+        let page = format!(
+            "this.NODES = [ {{ id:'a', kind:'SWITCH', label:'A' }}, \
+             {{ id:'b', kind:'SWITCH', label:'B' }} ];\nthis.EDGES = [ {edges} ];"
+        );
+        let doc = crate::mapnetwork::parse(page.as_bytes()).unwrap();
+        let m = build(&doc, &Input::default());
+        for n in m.nodes.iter().filter(|n| n.label == "A" || n.label == "B") {
+            let also = n
+                .details
+                .iter()
+                .filter(|d| d.starts_with("Also linked"))
+                .count();
+            assert!(also <= 21, "{also} lines on {}", n.label);
+        }
+        assert!(
+            m.nodes
+                .iter()
+                .any(|n| n.details.iter().any(|d| d == "Also linked 4979 more times"))
+        );
     }
 
     #[test]

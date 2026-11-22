@@ -18,17 +18,58 @@ const READ: Duration = Duration::from_secs(15);
 /// server sending a byte every 14 s would hold the check open for ever.
 const SESSION: Duration = Duration::from_secs(60);
 /// A real EHLO reply is about 20 lines. Without a cap, "250-" sent without
-/// end grows memory until the app aborts.
+/// end grows memory until the app aborts. (Each line is cut to 255 chars.)
 const REPLY_LINES: usize = 200;
-const REPLY_BYTES: usize = 256 * 1024;
 const MAX_HOSTS: usize = 3;
+
+/// The TCP stream under a whole SMTP session. Every read, TLS's own inside
+/// the handshake and inside a record included, waits only until the
+/// session's deadline: a per-read timeout alone lets a server that sends a
+/// byte every 14 s hold the check open for ever.
+struct Timed {
+    tcp: TcpStream,
+    deadline: Instant,
+}
+
+/// Not TimedOut: that kind means "no reply", and this server did reply, it
+/// just never finished.
+fn late() -> io::Error {
+    io::Error::other(format!(
+        "the session didn't finish within {}s",
+        SESSION.as_secs()
+    ))
+}
+
+impl Read for Timed {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(late());
+        }
+        self.tcp.set_read_timeout(Some(left.min(READ)))?;
+        self.tcp.read(buf).map_err(|e| {
+            if Instant::now() >= self.deadline {
+                late()
+            } else {
+                e
+            }
+        })
+    }
+}
+
+impl Write for Timed {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
 
 /// SMTP replies over any stream, plain or TLS.
 struct Session<S> {
     s: S,
     buf: Vec<u8>,
-    /// When the session gives up, wherever it is.
-    deadline: Instant,
 }
 
 impl<S: Read + Write> Session<S> {
@@ -40,14 +81,6 @@ impl<S: Read + Write> Session<S> {
             }
             if self.buf.len() > 64 * 1024 {
                 return Err(io::Error::other("reply line too long"));
-            }
-            // Not TimedOut: that kind means "no reply", and this server did
-            // reply, just never finished.
-            if Instant::now() >= self.deadline {
-                return Err(io::Error::other(format!(
-                    "the session didn't finish within {}s",
-                    SESSION.as_secs()
-                )));
             }
             let mut chunk = [0u8; 4096];
             let n = self.s.read(&mut chunk)?;
@@ -64,14 +97,11 @@ impl<S: Read + Write> Session<S> {
     /// A full (possibly multi-line "250-...") reply: code and text lines.
     fn reply(&mut self) -> io::Result<(u16, Vec<String>)> {
         let mut lines = Vec::new();
-        let mut bytes = 0;
         loop {
             let l = self.line()?;
-            bytes += l.len();
-            if lines.len() >= REPLY_LINES || bytes > REPLY_BYTES {
+            if lines.len() >= REPLY_LINES {
                 return Err(io::Error::other(format!(
-                    "reply ran past {REPLY_LINES} lines or {} KiB",
-                    REPLY_BYTES / 1024
+                    "reply ran past {REPLY_LINES} lines"
                 )));
             }
             let code = l.get(..3).and_then(|c| c.parse().ok());
@@ -156,9 +186,11 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
         IpAddr::V6(ip) => format!("[IPv6:{ip}]"),
     };
     let mut s = Session {
-        s: tcp,
+        s: Timed {
+            tcp,
+            deadline: Instant::now() + SESSION,
+        },
         buf: Vec::new(),
-        deadline: Instant::now() + SESSION,
     };
     let mut p = Probe::default();
     let (code, banner) = s.reply()?;
@@ -178,9 +210,15 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     }
 
     let (mut conn, verifier) = tls::client(host)?;
-    let deadline = s.deadline;
     let mut tcp = s.s;
-    tls::handshake(&mut conn, &mut tcp)?;
+    let deadline = tcp.deadline;
+    tls::handshake(&mut conn, &mut tcp).map_err(|e| {
+        if Instant::now() >= deadline {
+            late()
+        } else {
+            e
+        }
+    })?;
     let (version, cipher) = tls::negotiated(&conn);
     p.tls = Some(format!("{version}, {cipher}"));
     p.cert_error = verifier.verdict().map(|e| e.to_string());
@@ -194,7 +232,6 @@ fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
     let mut s = Session {
         s: StreamOwned::new(conn, tcp),
         buf: Vec::new(),
-        deadline,
     };
     p.relay(relay_test(&mut s, &helo));
     Ok(p)
@@ -369,11 +406,10 @@ mod tests {
         addr
     }
 
-    fn session(bytes: &[u8], deadline: Instant) -> Session<io::Cursor<Vec<u8>>> {
+    fn session(bytes: &[u8]) -> Session<io::Cursor<Vec<u8>>> {
         Session {
             s: io::Cursor::new(bytes.to_vec()),
             buf: Vec::new(),
-            deadline,
         }
     }
 
@@ -381,26 +417,42 @@ mod tests {
     /// until the app aborts.
     #[test]
     fn a_reply_that_never_ends() {
-        let mut s = session(&b"250-\r\n".repeat(10_000), Instant::now() + SESSION);
+        let mut s = session(&b"250-\r\n".repeat(10_000));
         let e = s.reply().unwrap_err();
         assert!(e.to_string().contains("200 lines"), "{e}");
     }
 
-    /// Past the session's deadline nothing more is read, however slowly
-    /// the server keeps sending.
+    /// A read waits only until the session's deadline, not a full READ,
+    /// and past it nothing more is read: so a server sending slowly, TLS
+    /// handshake included (it reads through the same stream), is cut off.
     #[test]
     fn a_session_past_its_deadline() {
-        let mut s = session(b"220 slow\r\n", Instant::now());
-        let e = s.reply().unwrap_err();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let _quiet = l.accept().unwrap();
+        let start = Instant::now();
+        let mut t = Timed {
+            tcp,
+            deadline: start + Duration::from_millis(300),
+        };
+        let e = t.read(&mut [0; 16]).unwrap_err();
         assert!(e.to_string().contains("didn't finish"), "{e}");
         assert_ne!(e.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < READ, "waited a full READ");
+        // Past it: an error at once, without reading.
+        assert!(t.read(&mut [0; 16]).is_err());
+        let mut s = Session {
+            s: t,
+            buf: Vec::new(),
+        };
+        assert!(s.reply().is_err());
     }
 
     #[test]
     fn hostile_replies_never_panic() {
         let good = b"220 mx.test ESMTP\r\n250-mx.test\r\n250-STARTTLS\r\n250 SIZE 1000\r\n";
         crate::hostile::each(good, |d| {
-            let mut s = session(d, Instant::now() + SESSION);
+            let mut s = session(d);
             while s.reply().is_ok() {}
         });
     }
