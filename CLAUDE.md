@@ -27,7 +27,7 @@ Techs run this on site, on small laptops. Every UI change, and every step of the
   - **Under 1100:** nav folds to the icon rail (56). Inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
 - **Height is the tighter limit.** At 720, the title bar, status bar and run bar together stay under 130 points, so results get most of the window.
 - **The Map keeps its zoom** when a panel opens over it. Panels float over the canvas; they don't shrink it.
-- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC). Anything a row loses still shows in the inspector.
+- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC, then TTL). Anything a row loses still shows in the inspector.
 - **Click targets stay at least 28 points tall**, for a trackpad on a tailgate.
 - **Check every UI change at 1280 × 720 and at 1120 × 720** before asking to merge, and say in the PR that you did.
 

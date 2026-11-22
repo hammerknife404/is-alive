@@ -256,7 +256,9 @@ impl SpeedTool {
     pub fn ui(&mut self, ui: &mut Ui) {
         let running = self.poll();
 
-        ui.horizontal(|ui| {
+        // Wraps on a narrow window: the File and Upload rows need about
+        // 620 points, and Start was off the edge.
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(!running, |ui| {
                 widgets::lead(ui, "Server");
                 egui::ComboBox::from_id_salt("speed_server")

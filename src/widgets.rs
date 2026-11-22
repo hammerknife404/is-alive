@@ -340,14 +340,28 @@ pub fn fold(
     let mut state =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let open = state.is_open();
+    // The whole row is the target, 28 high: the word and arrow alone are
+    // about 17. Laid under the row's own widgets (where the row was last
+    // frame), so the arrow, the word and its tooltip still work on top.
+    let row_at = id.with("fold row");
+    let whole = ui
+        .ctx()
+        .data(|d| d.get_temp::<egui::Rect>(row_at))
+        .map(|r| ui.interact(r, row_at, egui::Sense::click()));
     let row = ui.horizontal(|ui| {
+        ui.set_min_height(crate::theme::TARGET_H);
         state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         header(ui, open)
     });
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(row_at, row.response.rect));
+    let whole_clicked =
+        whole.is_some_and(|w| w.on_hover_cursor(egui::CursorIcon::PointingHand).clicked());
     if row
         .inner
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
+        || whole_clicked
     {
         state.toggle(ui);
     }

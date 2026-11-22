@@ -1215,7 +1215,11 @@ impl NotesTool {
             ui.add_space(2.0);
         }
 
-        let narrow = ui.available_width() < 720.0;
+        // By the window, as every layout is (CLAUDE.md: under 1100 Split
+        // falls back to Edit); and never two panes under 280 each, which a
+        // wide window with the outline open could leave.
+        let narrow =
+            ui.ctx().content_rect().width() < crate::nav::OPEN_FROM || ui.available_width() < 560.0;
         let view = if narrow && self.view == View::Split {
             View::Edit
         } else {

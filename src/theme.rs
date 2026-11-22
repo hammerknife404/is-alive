@@ -105,9 +105,10 @@ pub fn status() -> (Color32, Color32, Color32) {
             Color32::from_rgb(230, 180, 60),
             Color32::from_rgb(235, 90, 90),
         ),
+        // At least 4.5:1 on the panel and on white (WCAG AA for text).
         Theme::Light => (
-            Color32::from_rgb(22, 132, 70),
-            Color32::from_rgb(176, 108, 0),
+            Color32::from_rgb(18, 118, 62),
+            Color32::from_rgb(150, 90, 0),
             Color32::from_rgb(198, 40, 40),
         ),
         Theme::Paper => (
@@ -664,6 +665,9 @@ fn light() -> Visuals {
     };
     v.selection.bg_fill = Color32::from_rgb(196, 222, 246);
     v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(20, 80, 140));
+    // Secondary text (headings in the nav, the inspector's keys, hints):
+    // egui's default is grey at 60% alpha, under 3:1; this is 5.5:1.
+    v.weak_text_color = Some(Color32::from_rgb(96, 100, 108));
     v.hyperlink_color = accent_for(Theme::Light);
     v.widgets.inactive.weak_bg_fill = Color32::from_rgb(228, 231, 236);
     v.widgets.inactive.bg_fill = Color32::from_rgb(228, 231, 236);
@@ -785,8 +789,9 @@ fn tokens(t: Theme) -> Option<Tokens> {
         Theme::Paper => k(
             true,
             [
+                // Muted text 0x6e6453: 5.5:1 on the panel, 4.6 on a button.
                 0xf5f0e6, 0xfbf8f2, 0xfffdf8, 0xf1ebdf, 0xece4d4, 0xddd2bd, 0x3e362a, 0x2a241b,
-                0x8a7f6c, 0x2f5fb3, 0x2f5fb3,
+                0x6e6453, 0x2f5fb3, 0x2f5fb3,
             ],
         ),
         Theme::Light | Theme::Miami => return None,

@@ -1348,6 +1348,44 @@ mod tests {
         assert!(v.side);
     }
 
+    /// With only pinned cards selected, Esc shuts the floating inspector
+    /// (the pins stay); the next Esc goes on to Layers.
+    #[test]
+    fn esc_shuts_the_inspector_over_pinned_cards() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let (export, info, ov) = example();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: false,
+            redact: &ov,
+            animate: false,
+        };
+        let small = vec2(1000.0, 700.0);
+        let mut v = MapView::new(None);
+        for _ in 0..4 {
+            frame_at(&ctx, &mut v, &src, vec![], small);
+        }
+        let i = a_device(&v);
+        v.kept = vec![v.map.nodes[i].id.clone()];
+        v.select(Some(i));
+        frame_at(&ctx, &mut v, &src, vec![], small);
+        assert!(!v.insp_hidden);
+        frame_at(&ctx, &mut v, &src, vec![esc()], small);
+        assert!(v.insp_hidden, "the inspector shut");
+        assert_eq!(v.selection(), vec![i], "the pin stays");
+        // With it shut, Esc goes on to Layers floating over the map.
+        v.side = true;
+        frame_at(&ctx, &mut v, &src, vec![], small);
+        frame_at(&ctx, &mut v, &src, vec![esc()], small);
+        assert!(!v.side, "then Layers");
+        assert!(v.insp_hidden, "and the inspector stays shut");
+    }
+
     /// On a window too small for Layers and the inspector side by side, a
     /// card picked with Layers open shuts Layers and shows the card.
     #[test]
