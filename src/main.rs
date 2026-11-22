@@ -1375,6 +1375,10 @@ fn main() {
     startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
+    // One copy per data folder: a second would write over the first's work.
+    if let Err(why) = theme::claim_data_dir() {
+        startup::already_open(&why);
+    }
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).

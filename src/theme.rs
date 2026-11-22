@@ -1657,6 +1657,57 @@ pub fn profile_dir() -> Option<std::path::PathBuf> {
 
 static REMOVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// This copy's hold on the data folder (see `claim_data_dir`).
+static CLAIM: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+
+/// The lock file in the data folder that one running copy holds.
+const LOCK_FILE: &str = "is-alive.lock";
+
+/// Claim the data folder for this copy of is-alive. Two copies on one
+/// folder each write their whole notes, Results, settings and saved maps
+/// over the other's (the last to write wins) and share the same temp
+/// files. Err, saying so, when another copy holds it. A folder that can't
+/// be made or locked (read-only, a filesystem without locks) isn't a
+/// reason not to start: Ok, unclaimed.
+pub fn claim_data_dir() -> Result<(), String> {
+    let Some(dir) = data_dir() else {
+        return Ok(());
+    };
+    claim_in(&dir).map(|held| {
+        if let Some(f) = held {
+            *CLAIM.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        }
+    })
+}
+
+fn claim_in(dir: &std::path::Path) -> Result<Option<std::fs::File>, String> {
+    let _ = std::fs::create_dir_all(dir);
+    let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))
+    else {
+        return Ok(None);
+    };
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "is-alive is already open on this computer, with the same data folder ({}).\n\n\
+Two copies would write over each other's notes, Results and maps. Use the window that's open, \
+or close it and start is-alive again.",
+            dir.display()
+        )),
+        Err(std::fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
+/// Let go of the data folder: before starting this program again (the
+/// other renderer), and before Remove everything deletes the lock file.
+pub fn release_data_dir() {
+    CLAIM.lock().unwrap_or_else(|e| e.into_inner()).take();
+}
+
 /// Everything was removed (Settings): nothing more is written, so the
 /// app closing doesn't put its settings and notes straight back.
 pub fn removed() -> bool {
@@ -1724,6 +1775,8 @@ pub fn kept_in(dir: &std::path::Path) -> (Vec<String>, usize) {
 /// written (`removed`). An error names what couldn't be removed.
 pub fn remove_everything(dir: &std::path::Path, portable: bool) -> Result<(), String> {
     REMOVED.store(true, Ordering::Relaxed);
+    // Windows won't delete a file that's held open.
+    release_data_dir();
     remove_in(dir, portable)
 }
 
@@ -1814,6 +1867,19 @@ mod tests {
     /// Remove everything says what's there first, then takes all of it:
     /// the folder too in a profile, and only its contents when it's the
     /// portable folder, which has to stay for the app to stay portable.
+    /// One copy per data folder: a second is turned away while the first
+    /// holds it, and gets it once the first lets go (or ends).
+    #[test]
+    fn one_copy_per_data_folder() {
+        let dir = std::env::temp_dir().join(format!("is-alive-claim-{}", std::process::id()));
+        let first = claim_in(&dir).unwrap().expect("locked");
+        let second = claim_in(&dir).unwrap_err();
+        assert!(second.contains("already open"), "{second}");
+        drop(first);
+        assert!(claim_in(&dir).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn remove_everything_lists_it_and_leaves_nothing() {
         for portable in [false, true] {

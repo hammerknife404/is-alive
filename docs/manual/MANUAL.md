@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.20**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -167,6 +167,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
+- **One copy at a time.** Starting is-alive while it's already open (say, with **Open with** on a backup) shows *is-alive is already open* and goes no further: two copies would write over each other's notes, Results and maps. A portable `is-alive-data` folder is its own: a copy using one doesn't stop a copy using the profile.
 
 **Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch keeps its Results for a day (**Keep for a day**, the same setting): a crash, a flat battery or closing by mistake doesn't lose the visit, but runs older than 24 hours are gone the next time it opens, so one client's runs don't follow you to the next.
 
@@ -1129,7 +1130,7 @@ Everything is in one row above the notes:
 
 ### Photos
 
-**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**, or dropping it on the Notes tab) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as PNG, which leaves out its metadata (camera, place, time), and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Claude Handoff carry it along.
+**Insert ▾ › Photo or file…** (or **File ▾ › Open…**, **Ctrl+O**, or dropping it on the Notes tab) takes a photo (PNG, JPEG or WebP, up to 20 MB): a rack, a label, a patch panel. It's added at the end of the notes, and Notes switches to **Preview** to show it. The photo is shrunk to fit 1600 × 1200 and saved as JPEG, which leaves out its metadata (camera, place, time) and keeps a photo to a few hundred KB, and it's kept inside the notes: autosave, **Copy**, **Save as** (Markdown and the web page; plain text says *[Photo]*) and the Claude Handoff carry it along. Photos don't count against the notes' 1,000,000 characters of text; they have 32 MB of their own (dozens of photos), and one that would go past it is refused with a message saying so. Notes from before keep their PNG photos.
 
 - In the editor a photo is one short line, `![Photo 1](attachment:is-alive-photo-1)`. Move the line to move the photo; delete it to take the photo out. **Split** and **Preview** draw the picture.
 - Saved and copied Markdown holds the picture itself (a `data:image/png` link). Most Markdown viewers show it; some block pictures of this kind.

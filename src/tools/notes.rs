@@ -259,10 +259,17 @@ fn read_text(path: &std::path::Path) -> Result<Viewed, String> {
     if !meta.is_file() {
         return Err(format!("{name}: not a file"));
     }
-    if meta.len() > VIEW_MAX {
+    // Notes saved with photos carry them inline: room for them too.
+    let max = if has_ext(path, NOTES_EXTS) {
+        VIEW_MAX + crate::photos::PHOTOS_MAX as u64
+    } else {
+        VIEW_MAX
+    };
+    if meta.len() > max {
         return Err(format!(
-            "{name}: {:.1} MB; the viewer opens files up to 5 MB",
-            meta.len() as f64 / 1048576.0
+            "{name}: {:.1} MB; this opens files up to {} MB",
+            meta.len() as f64 / 1048576.0,
+            max >> 20
         ));
     }
     let data = std::fs::read(path).map_err(|e| format!("{name}: {e}"))?;
@@ -322,8 +329,10 @@ fn path() -> Option<PathBuf> {
 }
 
 /// Most of the autosaved notes and keep-list files read back: four bytes
-/// for each character the editor takes.
-const NOTES_FILE_MAX: u64 = 4 * crate::input::Field::Notes.max() as u64;
+/// for each character the editor takes, and the photos, which the file
+/// holds inline.
+const NOTES_FILE_MAX: u64 =
+    4 * crate::input::Field::Notes.max() as u64 + crate::photos::PHOTOS_MAX as u64;
 
 /// Values the technician said to keep, as a JSON list of strings.
 fn allow_path() -> Option<PathBuf> {
@@ -864,6 +873,42 @@ impl NotesTool {
         }
     }
 
+    /// Put `v` in the notes: in their place (`replace`) or after them. Too
+    /// long, or too many photos, and the notes stay as they are with an
+    /// error saying so: never kept cut short.
+    fn take_in(&mut self, v: Viewed, replace: bool, now: f64) {
+        let name = crate::tools::export::file_name(&v.path);
+        // Cleaned after the length is checked: cleaning cuts at the limit,
+        // so a file too long would be kept cut short.
+        let incoming = self.photos.compact(&v.text);
+        let joined = if replace || self.text.trim().is_empty() {
+            incoming
+        } else {
+            let sep = if self.text.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            format!("{}{sep}{incoming}", self.text)
+        };
+        let notes = crate::input::Field::Notes;
+        if notes.kept_before(&joined, usize::MAX) > notes.max() {
+            self.err = Some(format!(
+                "{name} is too long for the notes; open it Read only."
+            ));
+        } else if self.photos.size_in(&joined) > crate::photos::PHOTOS_MAX {
+            self.err = Some(format!(
+                "{name} would take the notes past {} MB of photos; open it Read only.",
+                crate::photos::PHOTOS_MAX >> 20
+            ));
+        } else {
+            self.text = notes.clean(&joined);
+            self.changed(now);
+            self.on_file = false;
+            widgets::toast(format!("{name} is in Notes"), true);
+        }
+    }
+
     /// A Markdown or text file opened: replace the notes with it, add it at
     /// the end, or just read it.
     fn ask_where(&mut self, ctx: &egui::Context, now: f64) {
@@ -909,27 +954,7 @@ impl NotesTool {
             }
             Some(how) => {
                 let v = self.asking.remove(0);
-                let incoming = crate::input::Field::Notes.clean(&self.photos.compact(&v.text));
-                let joined = if how == 0 || self.text.trim().is_empty() {
-                    incoming
-                } else {
-                    let sep = if self.text.ends_with('\n') {
-                        "\n"
-                    } else {
-                        "\n\n"
-                    };
-                    format!("{}{sep}{incoming}", self.text)
-                };
-                if joined.chars().count() > crate::input::Field::Notes.max() {
-                    self.err = Some(format!(
-                        "{name} is too long for the notes; open it Read only."
-                    ));
-                } else {
-                    self.text = joined;
-                    self.changed(now);
-                    self.on_file = false;
-                    widgets::toast(format!("{name} is in Notes"), true);
-                }
+                self.take_in(v, how == 0, now);
             }
             None if r.should_close() => {
                 self.asking.remove(0);
@@ -1155,12 +1180,17 @@ impl NotesTool {
                 }
                 Ok(Opened::Notes(v)) => self.asking.push(v),
                 Ok(Opened::Photo(markdown)) => {
-                    if self.photos.expand(&self.text).chars().count() + markdown.len()
-                        > crate::input::Field::Notes.max()
-                    {
-                        self.err = Some(
-                            "This photo exceeds the notes capacity. Choose a smaller image.".into(),
-                        );
+                    // Photos are held apart from the text (a marker each),
+                    // with a budget of their own: the text's 1M characters
+                    // would hold no real photo.
+                    let held = self.photos.size_in(&self.text);
+                    if held + markdown.len() > crate::photos::PHOTOS_MAX {
+                        self.err = Some(format!(
+                            "The notes hold {} MB of photos, and this one would take them past \
+{} MB. Take one out, or start a new note.",
+                            held >> 20,
+                            crate::photos::PHOTOS_MAX >> 20
+                        ));
                     } else {
                         self.text.push_str(&self.photos.compact(&markdown));
                         self.changed(now);
@@ -2502,6 +2532,58 @@ mod tests {
         let mut reopened = notes("");
         reopened.text = reopened.photos.compact(&n.sanitized_plain());
         assert_eq!(reopened.sanitized_plain(), n.sanitized_plain());
+    }
+
+    fn opened(text: String) -> Viewed {
+        Viewed {
+            path: "site.md".into(),
+            lines: text.lines().count(),
+            bytes: text.len() as u64,
+            text,
+        }
+    }
+
+    /// A file too long for the notes is refused whole, Replace or Add:
+    /// the notes stay as they were, never swapped for a copy cut short.
+    #[test]
+    fn a_file_too_long_is_refused_not_cut() {
+        let max = crate::input::Field::Notes.max();
+        let mut n = notes("keep me");
+        n.take_in(opened("x".repeat(max + 10)), true, 0.0);
+        assert_eq!(n.text, "keep me");
+        assert!(n.err.as_deref().is_some_and(|e| e.contains("too long")));
+        // Add: fits alone, not after what's there.
+        n.err = None;
+        n.take_in(opened("y".repeat(max - 3)), false, 0.0);
+        assert_eq!(n.text, "keep me");
+        assert!(n.err.is_some());
+        // One that fits replaces them.
+        n.err = None;
+        n.take_in(opened("new notes".into()), true, 0.0);
+        assert_eq!((n.text.as_str(), n.err.is_none()), ("new notes", true));
+    }
+
+    /// Photos don't count against the text's limit, only against their
+    /// own budget: a real photo's worth of data fits.
+    #[test]
+    fn photos_have_a_budget_of_their_own() {
+        let max = crate::input::Field::Notes.max();
+        let photo = |n: usize| format!("![Photo](data:image/jpeg;base64,{})", "A".repeat(n));
+        let mut n = notes("");
+        // 3 MB of photo data: three times the text limit, and fine.
+        n.take_in(opened(format!("rack\n{}\n", photo(3 * max))), true, 0.0);
+        assert!(n.err.is_none(), "{:?}", n.err);
+        assert!(n.text.len() < 100, "held apart, a marker in the text");
+        assert_eq!(n.photos.size_in(&n.text), photo(3 * max).len());
+        // Past the budget: refused.
+        let many: String = (0..4).map(|_| photo(10 * 1024 * 1024) + "\n").collect();
+        n.take_in(opened(many), false, 0.0);
+        assert!(
+            n.err.as_deref().is_some_and(|e| e.contains("MB of photos")),
+            "{:?}",
+            n.err
+        );
+        assert_eq!(n.photos.size_in(&n.text), photo(3 * max).len());
     }
 
     fn notes(text: &str) -> NotesTool {
