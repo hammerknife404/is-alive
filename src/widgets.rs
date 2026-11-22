@@ -24,7 +24,9 @@ fn hash(s: &str) -> u64 {
 
 /// Put `text` on the clipboard. On Windows it's marked to stay out of
 /// clipboard history (Win+V), cloud clipboard sync and clipboard managers,
-/// as password managers do.
+/// as password managers do; when that can't be done (another program is
+/// holding the clipboard), nothing is copied and a message says so, rather
+/// than a copy that would land in history unmarked.
 pub fn copy(ctx: &egui::Context, text: String) {
     if let Ok(mut l) = LAST_COPY.lock() {
         *l = Some(hash(&text));
@@ -32,12 +34,23 @@ pub fn copy(ctx: &egui::Context, text: String) {
     #[cfg(windows)]
     {
         use arboard::SetExtWindows;
-        let done = arboard::Clipboard::new()
-            .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
-        if done.is_ok() {
-            return;
+        // A remote-desktop or clipboard-manager process can hold the
+        // clipboard for a moment: a few tries, ~100 ms in all.
+        for _ in 0..5 {
+            let done = arboard::Clipboard::new()
+                .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
+            if done.is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        let _ = ctx;
+        toast(
+            "Not copied: another program is holding the clipboard. Try again",
+            false,
+        );
     }
+    #[cfg(not(windows))]
     ctx.copy_text(text);
 }
 
