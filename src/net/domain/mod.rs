@@ -785,6 +785,20 @@ mod tests {
             "{clean:?}"
         );
 
+        // The network the check ran from listed (a hotel, a hotspot):
+        // said, but not the client domain's FAIL.
+        let wan = blacklists(
+            &c,
+            "pbl.test",
+            &none,
+            Some(std::net::Ipv4Addr::new(127, 0, 0, 9)),
+        );
+        assert!(
+            has(&wan, Status::Warn, "that's the network this ran from"),
+            "{wan:?}"
+        );
+        assert!(wan.status() < Status::Fail, "{wan:?}");
+
         let ds = dnssec(&c, "bogus.test");
         assert!(has(&ds, Status::Fail, "bogus"), "{ds:?}");
 

@@ -365,9 +365,10 @@ impl BundleTool {
                     "Last visit's map",
                     map.map(|(p, d)| {
                         format!(
-                            "{} device(s) · {} · updated, not rebuilt",
+                            "{}{} device(s) · {} · updated, not rebuilt",
+                            map_check(&d.json, src.notes.overrides()),
                             d.nodes.len(),
-                            export::file_name(p)
+                            export::file_name(p),
                         )
                     }),
                     "Open the site's /mapnetwork .dc.html to have it updated",
@@ -699,9 +700,10 @@ impl BundleTool {
             "Current map",
             map.map(|(p, d)| {
                 format!(
-                    "{} device(s) · {} · updated, not rebuilt",
+                    "{}{} device(s) · {} · updated, not rebuilt",
+                    map_check(&d.json, src.notes.overrides()),
                     d.nodes.len(),
-                    export::file_name(p)
+                    export::file_name(p),
                 )
             }),
             "Open the site's /mapnetwork .dc.html in Config Export to have it updated",
@@ -893,6 +895,42 @@ fn build_and_save(unifi: Vec<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, S
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
     let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
+}
+
+/// What to check before last visit's map goes in: it goes as it was
+/// opened (Claude updates that page), so anything an older or hand-edited
+/// map holds goes too. "Check it: 1 email in it · ", to start its row, when its
+/// data holds a secret from the configs open now, a value marked in Notes,
+/// a key, token, email address, card or patient detail; empty when not.
+/// A password found by the word alone isn't counted: a map's findings say
+/// "password policy" all the time. Cached: read once, not every frame.
+fn map_check(json: &str, ov: &crate::redact::Overrides) -> String {
+    use crate::redact::Kind;
+    use std::hash::{Hash, Hasher};
+    static SEEN: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (json, ov).hash(&mut h);
+    let key = h.finish();
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((k, s)) = seen.as_ref()
+        && *k == key
+    {
+        return s.clone();
+    }
+    // The pattern rules (less the noisy ones), then what the technician
+    // marked and the open configs' secrets.
+    let hits: Vec<_> = crate::redact::find(json)
+        .into_iter()
+        .filter(|h| !matches!(h.kind, Kind::Password | Kind::Address))
+        .chain(crate::redact::find_with(json, ov))
+        .collect();
+    let s = if hits.is_empty() {
+        String::new()
+    } else {
+        format!("Check it: {} in it · ", crate::redact::summary(&hits))
+    };
+    *seen = Some((key, s.clone()));
+    s
 }
 
 /// The `n`th UniFi backup's part (counting from 1), `r` its conversion
@@ -1110,6 +1148,35 @@ pub(crate) fn part_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Last visit's map goes as it was opened: what it holds that Notes
+    /// would redact is pointed out on its row, but not prose about
+    /// passwords.
+    #[test]
+    fn a_map_holding_a_secret_says_so() {
+        let ov = crate::redact::Overrides::default();
+        assert_eq!(map_check(r#"{"nodes":[{"label":"Core switch"}]}"#, &ov), "");
+        let prose = r#"{"actions":[{"text":"scope the password replication policy tightly"}]}"#;
+        assert_eq!(map_check(prose, &ov), "");
+        let s = map_check(
+            r#"{"nodes":[{"details":["NOC: jane.doe@clinic-mail.com"]}]}"#,
+            &ov,
+        );
+        assert!(s.starts_with("Check it: ") && s.contains("email"), "{s}");
+        // A secret from a config open now, wherever it sits.
+        let known = crate::redact::Overrides {
+            known: vec!["Harbor2024!".into()],
+            ..Default::default()
+        };
+        let s = map_check(r#"{"meta":{"subtitle":"wifi Harbor2024!"}}"#, &known);
+        assert!(s.starts_with("Check it: "), "{s}");
+        // Both bundled examples are clean.
+        for i in 0..2 {
+            let p = crate::skills::example_path(i);
+            let d = crate::mapnetwork::parse(crate::skills::example(&p).unwrap()).unwrap();
+            assert_eq!(map_check(&d.json, &ov), "", "example {i}");
+        }
+    }
     use crate::log::{Entry, Table};
 
     fn run(tool: &'static str, first: &'static str, target: &str) -> Entry {

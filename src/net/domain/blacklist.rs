@@ -151,6 +151,9 @@ fn lookup(
     }
 }
 
+/// Why the network the check runs from is checked: its public address.
+const WAN: &str = "this network's WAN";
+
 fn reversed(ip: Ipv4Addr) -> String {
     let o = ip.octets();
     format!("{}.{}.{}.{}", o[3], o[2], o[1], o[0])
@@ -190,7 +193,7 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
         }
         // Before the SPF list, so the cap below can't drop it.
         if let Some(w) = wan {
-            add(w, "this network's WAN");
+            add(w, WAN);
         }
         let spf = txt_with(c, d, "v=spf1").unwrap_or_default();
         for ip in spf.first().map(|r| spf_ip4(r)).unwrap_or_default() {
@@ -248,7 +251,15 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                         listed = true;
                         hits.push(l.name);
                         let msg = format!("{label} is listed on {} (code {code})", l.name);
-                        if l.major {
+                        // Only the network the check ran from (a hotel, a
+                        // hotspot, the MSP's office): not the domain's own
+                        // mail unless MX or SPF says it sends it.
+                        if l.major && why[..] == [WAN] {
+                            k.warn(format!(
+                                "{msg}: that's the network this ran from, not one of {d}'s mail \
+servers; it matters only if mail for {d} is sent from here"
+                            ));
+                        } else if l.major {
                             k.fail(format!("{msg}: mail from it is likely rejected"));
                         } else {
                             k.warn(format!("{msg}: some receivers use this list"));
