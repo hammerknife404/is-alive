@@ -127,6 +127,15 @@ const MAX_ZOOM: f32 = 2.5;
 /// Seconds without input after which the flowing packets hold still.
 const FLOW_IDLE_SECS: f64 = 30.0;
 
+/// The search's answer per card, for one search, map and set of notes.
+#[derive(Default)]
+struct MatchMemo {
+    search: String,
+    built: u64,
+    stamped: u64,
+    hits: HashMap<String, bool>,
+}
+
 #[derive(Default)]
 pub struct MapView {
     map: Map,
@@ -265,6 +274,8 @@ pub struct MapView {
     /// A saved map: drawn from this (every site open) rather than from the
     /// sweep and files.
     frozen: Option<Box<Map>>,
+    /// Which cards match the search, worked out once (see `matches`).
+    match_memo: std::cell::RefCell<MatchMemo>,
     /// What a saved map is (as found, a plan, a training map); the live
     /// map is always as found.
     purpose: saved::Purpose,
@@ -1144,13 +1155,32 @@ impl MapView {
     }
 
     fn matches(&self, n: &Node) -> bool {
-        let q = self.search.trim().to_lowercase();
-        q.is_empty()
-            || [&n.label, &n.sub, &n.kind]
-                .iter()
-                .any(|s| s.to_lowercase().contains(&q))
+        let q = self.search.trim();
+        if q.is_empty() {
+            return true;
+        }
+        // Asked several times a frame for every card (fading, lines, the
+        // count): worked out once per search, map and set of notes.
+        let mut memo = self.match_memo.borrow_mut();
+        if memo.search != q || memo.built != self.built || memo.stamped != self.stamped {
+            *memo = MatchMemo {
+                search: q.to_string(),
+                built: self.built,
+                stamped: self.stamped,
+                hits: HashMap::new(),
+            };
+        }
+        if let Some(&m) = memo.hits.get(&n.id) {
+            return m;
+        }
+        let q = q.to_lowercase();
+        let m = [&n.label, &n.sub, &n.kind]
+            .iter()
+            .any(|s| s.to_lowercase().contains(&q))
             || n.details.iter().any(|d| d.to_lowercase().contains(&q))
-            || n.note.to_lowercase().contains(&q)
+            || n.note.to_lowercase().contains(&q);
+        memo.hits.insert(n.id.clone(), m);
+        m
     }
 
     /// Bounds of the laid-out map, with cards dragged elsewhere.
@@ -2442,6 +2472,42 @@ mod tests {
         v.toggle(2);
         assert_eq!(v.ordered(), [2, 1, 0]);
         v
+    }
+
+    #[test]
+    fn a_big_pick_draws_the_top_twenty_and_says_how_many_more() {
+        let mut v = view(30);
+        v.select(Some(0));
+        for i in 1..30 {
+            v.toggle(i);
+        }
+        let ctx = egui::Context::default();
+        let shown = frame(&ctx, &mut v, Vec::new());
+        // A ⋯ button per section drawn: the 20 picked last.
+        assert_eq!(shown.buttons.len(), 20);
+        assert!(shown.buttons.contains_key(&29) && !shown.buttons.contains_key(&9));
+        // Nothing hidden without saying so: the line is under the stack.
+        let mut v = view(30);
+        v.select(Some(0));
+        for i in 1..30 {
+            v.toggle(i);
+        }
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let (mut pick, mut ev, mut menus, mut edit) = (None, None, Vec::new(), None);
+            let stack = v.ordered();
+            v.detail(ui, stack, false, &mut pick, &mut ev, &mut menus, &mut edit);
+        });
+        let text: String = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                Shape::Text(t) => Some(format!("{}\n", t.galley.text())),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        assert!(text.contains("10 more cards picked"), "{text}");
     }
 
     #[test]

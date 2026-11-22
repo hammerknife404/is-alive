@@ -105,6 +105,12 @@ impl Attachments {
         }
         out
     }
+    /// How many photos are held.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn expand(&self, text: &str) -> String {
         let mut out = text.to_string();
         for (marker, image) in &self.0 {

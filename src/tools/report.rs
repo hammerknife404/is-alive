@@ -127,7 +127,7 @@ impl ReportTool {
         const NO_MAP: &str = "Nothing on the map yet: run a Full scan or a Subnet Sweep";
         let runs = src.log.entries.len();
         let targets = log_targets(src.log);
-        let (_, hits) = src.notes.sanitized();
+        let hits = src.notes.hits();
         ui.label(RichText::new("Includes").strong());
         egui::Grid::new("report_parts")
             .num_columns(2)
