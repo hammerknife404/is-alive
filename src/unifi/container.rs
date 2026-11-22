@@ -336,13 +336,14 @@ pub fn zip_all(
     b: &[u8],
     pick: impl Fn(&str) -> bool,
     max: usize,
+    budget: usize,
 ) -> Result<Vec<(String, Vec<u8>)>, String> {
     if !b.starts_with(ZIP_LOCAL) {
         return Ok(Vec::new());
     }
     // A budget for them all, so many small entries that each inflate a
     // long way can't add up to all the memory.
-    let mut left = ALL_MAX;
+    let mut left = budget.min(ALL_MAX);
     zip_entries(b)?
         .into_iter()
         .filter(|e| pick(&e.name))

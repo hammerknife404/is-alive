@@ -60,8 +60,11 @@ pub fn sniff(data: &[u8]) -> bool {
     text.contains("this.NODES") && (text.contains(START) || text.contains("<html"))
 }
 
-/// Largest map read: a /mapnetwork map of a big site is a few MB.
-const MAP_MAX: usize = 64 << 20;
+/// Largest map read: a /mapnetwork map of a big site is a few MB (the
+/// page's own engine is a fraction of one). Its data is parsed whole, at
+/// many times its size, so this stays well short of the memory a laptop
+/// has to spare.
+const MAP_MAX: usize = 16 << 20;
 /// Most devices and links a map may hold and still be drawn.
 const NODES_MAX: usize = 10_000;
 const EDGES_MAX: usize = 50_000;

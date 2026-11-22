@@ -16,6 +16,11 @@ const FORMAT: &str = "Meraki Dashboard API JSON";
 
 /// Most files read from one zip.
 const MAX_FILES: usize = 2000;
+/// Largest JSON file read, and most read from one zip in all. Parsed JSON
+/// takes many times its size in memory (`[0,0,0,…]` about 16 times), so
+/// the cap is on what's parsed; a whole organisation's export is a few MB.
+const FILE_MAX: usize = 32 << 20;
+const ALL_MAX: usize = 64 << 20;
 
 pub struct Report {
     pub files: usize,
@@ -67,54 +72,99 @@ unless they mention a password, key or similar.\n",
 }
 
 /// The JSON documents in `data`: the file itself, or each .json in a zip,
-/// with the folder it sat in (often the network's name).
-fn documents(data: &[u8]) -> Vec<(Option<String>, String, Value)> {
+/// with the folder it sat in (often the network's name). Err when there's
+/// more than this reads (`FILE_MAX`, `ALL_MAX`).
+type Docs = Vec<(Option<String>, String, Value)>;
+
+fn documents(data: &[u8]) -> Result<Docs, String> {
     // Windows PowerShell 5.1 writes UTF-8 with a BOM.
     let bom = |b: &[u8]| b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b).to_vec();
     let parse = |b: &[u8]| serde_json::from_slice::<Value>(&bom(b)).ok();
+    let too_big = |n: usize| {
+        format!(
+            "{} MB of JSON: more than a Meraki export this reads ({} MB)",
+            n >> 20,
+            FILE_MAX >> 20
+        )
+    };
     let data = &bom(data)[..];
     let first = data.iter().find(|b| !b.is_ascii_whitespace());
     if matches!(first, Some(b'{' | b'[')) {
-        return parse(data)
+        if data.len() > FILE_MAX {
+            return Err(too_big(data.len()));
+        }
+        return Ok(parse(data)
             .map(|v| vec![(None, String::new(), v)])
-            .unwrap_or_default();
+            .unwrap_or_default());
     }
-    crate::unifi::zip_all(
+    let files = crate::unifi::zip_all(
         data,
         |n| n.to_ascii_lowercase().ends_with(".json"),
         MAX_FILES,
+        ALL_MAX,
     )
-    .unwrap_or_default()
-    .into_iter()
-    .filter_map(|(name, b)| {
-        let mut parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
-        let file = parts.pop()?;
-        let stem = file.rsplit_once('.').map_or(file, |s| s.0).to_string();
-        Some((parts.last().map(|d| d.to_string()), stem, parse(&b)?))
-    })
-    .collect()
+    .unwrap_or_default();
+    if let Some((_, b)) = files.iter().find(|(_, b)| b.len() > FILE_MAX) {
+        return Err(too_big(b.len()));
+    }
+    Ok(files
+        .into_iter()
+        .filter_map(|(name, b)| {
+            let mut parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
+            let file = parts.pop()?;
+            let stem = file.rsplit_once('.').map_or(file, |s| s.0).to_string();
+            Some((parts.last().map(|d| d.to_string()), stem, parse(&b)?))
+        })
+        .collect())
 }
 
-/// True when `data` is Meraki API JSON (or a zip of it) with MX config in it.
-pub fn sniff(data: &[u8]) -> bool {
+/// Whether `data` might be Meraki API JSON or a zip of it: worth parsing.
+fn might_be(data: &[u8]) -> bool {
     let first = data
         .strip_prefix(b"\xEF\xBB\xBF")
         .unwrap_or(data)
         .iter()
         .find(|b| !b.is_ascii_whitespace());
-    if !matches!(first, Some(b'{' | b'[' | b'P')) {
-        return false;
-    }
-    let w = read(&documents(data));
-    w.found()
+    matches!(first, Some(b'{' | b'[' | b'P'))
 }
 
+/// Read `data` once as a Meraki export: None when it isn't Meraki API
+/// JSON (or a zip of it) with MX config in it, else what converting it
+/// gave. One too big to read is a Meraki export's error only when it says
+/// it's one near the top.
+pub fn open(data: &[u8]) -> Option<Result<Report, String>> {
+    if !might_be(data) {
+        return None;
+    }
+    let docs = match documents(data) {
+        Ok(d) => d,
+        Err(e) => {
+            let head = String::from_utf8_lossy(&data[..data.len().min(64 << 10)]).to_lowercase();
+            return head.contains("meraki").then_some(Err(e));
+        }
+    };
+    let w = read(&docs);
+    w.found().then(|| convert_docs(docs, w))
+}
+
+/// True when `data` is Meraki API JSON (or a zip of it) with MX config in it.
+#[cfg(test)]
+pub fn sniff(data: &[u8]) -> bool {
+    matches!(open(data), Some(Ok(_)))
+}
+
+/// `data` as a Meraki export, or why not (tests; the app reads with `open`).
+#[cfg(test)]
 pub fn convert(data: &[u8]) -> Result<Report, String> {
-    let docs = documents(data);
+    let docs = documents(data)?;
     if docs.is_empty() {
         return Err("no JSON found: is this a Meraki Dashboard API export?".into());
     }
-    let mut w = read(&docs);
+    let w = read(&docs);
+    convert_docs(docs, w)
+}
+
+fn convert_docs(docs: Docs, mut w: Walk) -> Result<Report, String> {
     if !w.found() {
         return Err(
             "no Meraki MX config found (VLANs, firewall rules, ports, uplinks or MX devices)"
@@ -763,6 +813,24 @@ mod tests {
       "thirdPartyVPNPeers": {"peers": [{"name": "Lab peer", "publicIp": "198.51.100.7", "privateSubnets": ["172.16.0.0/16"], "secret": "IkeSecret#77", "ikeVersion": "2"}]},
       "uplinkStatuses": [{"networkId": "L_1", "serial": "Q2XX-AAAA-0001", "model": "MX68", "uplinks": [{"interface": "wan1", "status": "active", "ip": "203.0.113.42", "publicIp": "203.0.113.42"}]}]
     }"#;
+
+    /// Past what's parsed, a file is refused before it's parsed (JSON can
+    /// take 16 times its size in memory): as a Meraki export's error when
+    /// it says it's one, else as not Meraki at all.
+    #[test]
+    fn too_much_json_is_refused_unparsed() {
+        let pad = " ".repeat(FILE_MAX);
+        let meraki = format!("{{\"source\": \"meraki-export.ps1\", \"x\": [0]{pad}}}");
+        let Some(Err(e)) = open(meraki.as_bytes()) else {
+            panic!("not refused as a Meraki export");
+        };
+        assert!(e.contains("more than a Meraki export this reads"), "{e}");
+        let other = format!("[0{pad}]");
+        assert!(open(other.as_bytes()).is_none());
+        // The real thing reads, once.
+        assert!(open(EXPORT.as_bytes()).is_some_and(|r| r.is_ok()));
+        assert!(open(b"just text").is_none());
+    }
 
     #[test]
     fn hostile_exports_never_panic() {

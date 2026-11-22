@@ -263,8 +263,8 @@ file this reads",
     }
     if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
-    } else if meraki::sniff(&data) {
-        meraki::convert(&data).map(Export::Meraki)
+    } else if let Some(r) = meraki::open(&data) {
+        r.map(Export::Meraki)
     } else {
         unifi::convert(data, clients)
             .map(Export::Unifi)

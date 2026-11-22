@@ -137,7 +137,10 @@ fn client_with(
 }
 
 /// Run the handshake to the end over `tcp`.
-pub fn handshake(conn: &mut ClientConnection, tcp: &mut TcpStream) -> io::Result<()> {
+pub fn handshake<S: io::Read + io::Write>(
+    conn: &mut ClientConnection,
+    tcp: &mut S,
+) -> io::Result<()> {
     while conn.is_handshaking() {
         conn.complete_io(tcp).map_err(|e| {
             if matches!(
@@ -509,9 +512,10 @@ fn probe_with(
     timeout: Duration,
     roots: Option<Arc<dyn ServerCertVerifier>>,
 ) -> io::Result<Info> {
-    let mut tcp = TcpStream::connect_timeout(&addr, timeout)?;
-    tcp.set_read_timeout(Some(timeout))?;
-    tcp.set_write_timeout(Some(timeout))?;
+    let tcp = TcpStream::connect_timeout(&addr, timeout)?;
+    // The handshake as a whole within three timeouts: a server that
+    // dribbles it out byte by byte can't hold a Port Check worker.
+    let mut tcp = super::Timed::new(tcp, timeout, timeout * 3);
     let (mut conn, verifier) = client_with(name, roots)?;
     handshake(&mut conn, &mut tcp)?;
     let (version, cipher) = negotiated(&conn);

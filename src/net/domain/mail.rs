@@ -576,6 +576,11 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
     })
 }
 
+/// Largest MTA-STS policy read as one, and most lines: real ones are a few
+/// lines and well under 1 KB.
+const STS_POLICY_MAX: usize = 64 * 1024;
+const STS_LINES_MAX: usize = 100;
+
 /// MX host `h` matches an MTA-STS `mx:` pattern (exact, or `*.` one label).
 fn sts_match(pattern: &str, h: &str) -> bool {
     let p = pattern.trim_end_matches('.').to_ascii_lowercase();
@@ -617,44 +622,67 @@ pub(super) fn mta_sts(c: &Client, d: &str, mx: &MxInfo) -> Check {
                 return Ok(());
             }
         };
-        let mut mode = None;
-        let mut max_age = None;
-        let mut patterns = Vec::new();
-        for line in policy.lines() {
-            k.rec(format!("  {}", line.trim()));
-            let Some((key, v)) = line.split_once(':') else {
-                continue;
-            };
-            let v = v.trim().to_string();
-            match key.trim() {
-                "mode" => mode = Some(v),
-                "max_age" => max_age = v.parse::<u64>().ok(),
-                "mx" => patterns.push(v),
-                _ => {}
-            }
-        }
-        match mode.as_deref() {
-            Some("enforce") => k.pass("mode enforce: senders refuse to deliver without valid TLS"),
-            Some("testing") => k.warn("mode testing: failures are only reported, not enforced"),
-            Some("none") => k.warn("mode none: policy disabled"),
-            _ => k.fail("policy has no valid mode"),
-        }
-        match max_age {
-            Some(a) if a < 86_400 => k.warn(format!(
-                "max_age {a}s is short; 1-2 weeks (604800+) is typical"
-            )),
-            None => k.fail("policy has no max_age"),
-            _ => {}
-        }
-        for h in &mx.hosts {
-            if !patterns.iter().any(|p| sts_match(p, h)) {
-                k.fail(format!(
-                    "MX {h} isn't listed in the policy: senders in enforce mode won't deliver to it"
-                ));
-            }
-        }
+        sts_policy(k, &url, &policy, &mx.hosts);
         Ok(())
     })
+}
+
+/// What an MTA-STS policy fetched from `url` says, for MX hosts `mx_hosts`.
+fn sts_policy(k: &mut Check, url: &str, policy: &str, mx_hosts: &[String]) {
+    // A policy is a few lines (RFC 8461 §3.2). Megabytes of them would
+    // be a record each, drawn every frame: past this it isn't one.
+    let lines = policy.lines().count();
+    if policy.len() > STS_POLICY_MAX || lines > STS_LINES_MAX {
+        for line in policy.lines().take(10) {
+            k.rec(format!("  {}", line.trim()));
+        }
+        k.fail(format!(
+            "{url} is {} KB in {lines} lines: not an MTA-STS policy (a few lines), so senders ignore it",
+            policy.len().div_ceil(1024)
+        ));
+        return;
+    }
+    let mut version = None;
+    let mut mode = None;
+    let mut max_age = None;
+    let mut patterns = Vec::new();
+    for line in policy.lines() {
+        k.rec(format!("  {}", line.trim()));
+        let Some((key, v)) = line.split_once(':') else {
+            continue;
+        };
+        let v = v.trim().to_string();
+        match key.trim() {
+            "version" => version = Some(v),
+            "mode" => mode = Some(v),
+            "max_age" => max_age = v.parse::<u64>().ok(),
+            "mx" => patterns.push(v),
+            _ => {}
+        }
+    }
+    if version.as_deref() != Some("STSv1") {
+        k.fail("policy has no \"version: STSv1\" line: senders ignore it");
+    }
+    match mode.as_deref() {
+        Some("enforce") => k.pass("mode enforce: senders refuse to deliver without valid TLS"),
+        Some("testing") => k.warn("mode testing: failures are only reported, not enforced"),
+        Some("none") => k.warn("mode none: policy disabled"),
+        _ => k.fail("policy has no valid mode"),
+    }
+    match max_age {
+        Some(a) if a < 86_400 => k.warn(format!(
+            "max_age {a}s is short; 1-2 weeks (604800+) is typical"
+        )),
+        None => k.fail("policy has no max_age"),
+        _ => {}
+    }
+    for h in mx_hosts {
+        if !patterns.iter().any(|p| sts_match(p, h)) {
+            k.fail(format!(
+                "MX {h} isn't listed in the policy: senders in enforce mode won't deliver to it"
+            ));
+        }
+    }
 }
 
 pub(super) fn tls_rpt(c: &Client, d: &str) -> Check {
@@ -863,6 +891,37 @@ mod tests {
     fn decodes_base64() {
         assert_eq!(base64("aGVsbG8=").unwrap(), b"hello");
         assert_eq!(base64("aGVs bG8").unwrap(), b"hello");
+    }
+
+    /// A policy is judged by what's in it; one that's megabytes of lines
+    /// is refused whole rather than made a record per line (which froze
+    /// the window), and one without its version line fails.
+    #[test]
+    fn sts_policies() {
+        let mx = vec!["mx1.example.com".to_string()];
+        let url = "https://mta-sts.example.com/.well-known/mta-sts.txt";
+        let judge = |p: &str| {
+            let mut k = Check::default();
+            sts_policy(&mut k, url, p, &mx);
+            k
+        };
+        let good = judge("version: STSv1\nmode: enforce\nmx: *.example.com\nmax_age: 604800\n");
+        assert_eq!(
+            good.status(),
+            super::super::Status::Pass,
+            "{:?}",
+            good.findings
+        );
+        let unversioned = judge("mode: enforce\nmx: *.example.com\nmax_age: 604800\n");
+        assert_eq!(unversioned.status(), super::super::Status::Fail);
+        assert!(unversioned.findings.iter().any(|f| f.1.contains("STSv1")));
+        let flood = "version: STSv1\n".to_string() + &"mx: x\n".repeat(500_000);
+        let t = std::time::Instant::now();
+        let big = judge(&flood);
+        assert!(t.elapsed().as_secs() < 2);
+        assert_eq!(big.status(), super::super::Status::Fail);
+        assert!(big.records.len() <= 10, "{} records", big.records.len());
+        assert!(big.findings[0].1.contains("not an MTA-STS policy"));
     }
 
     #[test]

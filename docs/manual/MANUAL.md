@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.19**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -744,7 +744,7 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 
 - **"not a UniFi backup …, SonicWall settings export … or /mapnetwork map"**: the file isn't one of the supported kinds, or it's damaged. Check you downloaded the backup itself and not an HTML page.
 - **"that's a Claude Handoff zip"**: the zip is one is-alive saved for Claude. It holds sanitized JSON, not the backups, so it isn't read back. Open the backups and exports it was made from, or the `.dc.html` map Claude made from it.
-- **Files larger than 2 GB** are refused, as are files that unpack to more than 2 GB: a real backup is never that big.
+- **Files larger than 2 GB** are refused, as are files that unpack to more than 2 GB: a real backup is never that big. What gets parsed is capped lower, since parsed data takes many times its size in memory: a Meraki export at 32 MB of JSON per file (64 MB from one zip), a `/mapnetwork` map at 16 MB, a UniFi backup's kept collections at 256 MB (its events and stats, the big part, are left behind) and any one record in it at MongoDB's own 16 MB. Real files are a small fraction of that.
 
 ---
 
@@ -1638,7 +1638,8 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
 - **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results go in `results.json` in the profile folder, readable only by your user account, and each run is dropped 24 hours after it started.
-- **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
+- **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking and what's parsed are capped, and the readers are tested against damaged and random input.
+- **The network is treated as slow or hostile:** a device's web page (Subnet Sweep's web titles) and a TLS handshake (Port Check's certificates) each have a deadline for the whole exchange, not only for each read, so a device that sends a byte at a time can't hold a run or its Stop. An MTA-STS policy longer than a policy can be is refused rather than listed line by line.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.
 
