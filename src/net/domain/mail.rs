@@ -42,7 +42,19 @@ pub(super) fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
                 bad += 1;
                 continue;
             }
-            let (ips, cname) = addrs(c, host)?;
+            // One host that won't look up is that host's failure; the
+            // rest are still checked, and the checks after this one (MTA-STS,
+            // Blacklists, SMTP) still see every host there is.
+            let (ips, cname) = match addrs(c, host) {
+                Ok(a) => a,
+                Err(e) => {
+                    k.rec(format!("{pref:>3} {host}  ✖ {e}"));
+                    k.fail(format!("{host}: lookup failed: {e}"));
+                    bad += 1;
+                    info.hosts.push(host.clone());
+                    continue;
+                }
+            };
             let list: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
             k.rec(format!("{pref:>3} {host}  ➡ {}", list.join(", ")));
             if let Some(t) = cname {
@@ -285,15 +297,43 @@ fn dmarc_record(c: &Client, d: &str) -> io::Result<Option<(String, String)>> {
             return Ok(Some((r, name.to_string())));
         }
         match parent(name) {
-            // Stop before the TLD.
-            Some(p) if p.contains('.') => name = p,
+            // Up to the organizational domain, never a public suffix
+            // (_dmarc.co.uk is no one's policy).
+            Some(p) if p.contains('.') && !public_suffix(p) => name = p,
             _ => return Ok(None),
         }
     }
 }
 
+/// A public suffix of the common two-label kind (co.uk, com.au, org.nz,
+/// gov.br): a generic second-level label under a country code. Without
+/// the full Public Suffix List this covers the ones mail domains sit under.
+fn public_suffix(name: &str) -> bool {
+    const SECOND: &[&str] = &[
+        "co", "com", "net", "org", "gov", "edu", "ac", "mil", "ltd", "plc", "sch", "nhs", "gob",
+        "ne", "or", "go", "nom", "biz", "info",
+    ];
+    let labels: Vec<&str> = name.trim_end_matches('.').split('.').collect();
+    matches!(labels[..], [second, tld] if tld.len() == 2 && SECOND.contains(&second.to_ascii_lowercase().as_str()))
+}
+
+/// A name's organizational domain: the label under its public suffix
+/// (example.com, example.co.uk).
+fn org_domain(name: &str) -> String {
+    let n = name.trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = n.split('.').collect();
+    let keep = if labels.len() >= 3 && public_suffix(&labels[labels.len() - 2..].join(".")) {
+        3
+    } else {
+        2
+    };
+    labels[labels.len().saturating_sub(keep)..].join(".")
+}
+
+/// Whether two names belong to one organization (RFC 7489 §3.2): reports
+/// to reports.example.com for a record at sub.example.com need no consent.
 fn same_org(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
+    org_domain(a) == org_domain(b)
 }
 
 pub(super) fn dmarc(c: &Client, d: &str) -> Check {
@@ -334,6 +374,9 @@ pub(super) fn dmarc(c: &Client, d: &str) -> Check {
             k.warn("sp=none: subdomains can be spoofed even though the domain is protected");
         }
         match tag(&t, "pct").map(|p| p.parse::<u32>()) {
+            Some(Ok(p)) if p > 100 => k.warn(format!(
+                "pct={p} isn't a percentage (0-100): receivers may ignore it"
+            )),
             Some(Ok(p)) if p < 100 => k.warn(format!(
                 "pct={p}: policy applies to only {p}% of failing mail"
             )),
@@ -881,5 +924,10 @@ mod tests {
         assert!(same_org("example.com", "example.com"));
         assert!(same_org("reports.example.com", "example.com"));
         assert!(!same_org("dmarc.vendor.net", "example.com"));
+        // Siblings are one organization; two companies under co.uk aren't.
+        assert!(same_org("reports.example.com", "sub.example.com"));
+        assert!(same_org("dmarc.example.co.uk", "mail.example.co.uk"));
+        assert!(!same_org("a.co.uk", "b.co.uk"));
+        assert!(public_suffix("co.uk") && public_suffix("com.au") && !public_suffix("example.com"));
     }
 }

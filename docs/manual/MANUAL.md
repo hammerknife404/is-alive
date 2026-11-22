@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.23**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -219,7 +219,7 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | Traceroute | The route to `1.1.1.1`, to show the way out to the internet |
 | DNS Lookup | `cloudflare.com` through this computer's own DNS settings |
 | Subnet Sweep | Every address on this computer's subnet, then the management ports of likely gear (**Mgmt ports** in Subnet Sweep's **Options**: **Smart** unless you change it), then the web page of each device with a web port open, for what it calls itself |
-| Network checks | **HTTPS inspection**: whether a firewall or security software decrypts HTTPS and re-signs it, from the certificates three well-known sites present here (a known inspection product as their issuer, or one issuer on unrelated sites). A warning when it does; a failure when this computer doesn't trust the issuer, since browsers then show certificate errors. **Clock**: how far this computer's clock is off, from a time server (or, where that's blocked, an HTTPS site's date): within 30 seconds is fine, past 5 minutes Active Directory sign-in fails |
+| Network checks | **HTTPS inspection**: whether a firewall or security software decrypts HTTPS and re-signs it, from the certificates three well-known sites present here (a known inspection product as their issuer, or one issuer on unrelated sites). A warning when it does; a failure when this computer doesn't trust the issuer, since browsers then show certificate errors. **Clock**: how far this computer's clock is off, from a time server (or, where that's blocked, an HTTPS site's date): within 30 seconds is fine, past 5 minutes Active Directory sign-in fails. Only an answer to this request from a server that says it's synchronized counts, and it reads right past 2036 |
 | Domain join | How this computer is joined (Active Directory, Entra ID, hybrid or a workgroup) and to which domain, from `dsregcmd /status` or `realm list`: see [Domain join](#15-domain-join) |
 
 In under a minute you know whether a problem is this computer, the local network, the router or the internet beyond it. Full scan is greyed out while another test is running; stop it or wait. The Speed Test isn't part of it: run that from its own tab.
@@ -619,9 +619,9 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 
 | Check | What it looks at |
 |---|---|
-| **MX** | Where mail is delivered: missing, broken or unresolvable mail servers; a null MX (the domain takes no mail); Microsoft 365 or Google detected |
+| **MX** | Where mail is delivered: missing, broken or unresolvable mail servers; a null MX (the domain takes no mail); Microsoft 365 or Google detected. One server whose lookup fails is its own failure; the others are still checked and passed on to MTA-STS, Blacklists and SMTP |
 | **SPF** | Which servers may send for the domain: missing or duplicate records, the 10-lookup limit, loops, `+all`/`?all`/`~all`/`-all` |
-| **DMARC** | What receivers do with forged mail: missing, `p=none` (monitor only), subdomain policy, `pct`, report addresses |
+| **DMARC** | What receivers do with forged mail: missing, `p=none` (monitor only), subdomain policy, `pct` (and one over 100), report addresses. A subdomain without its own record falls back to the organization's (never a public suffix such as `co.uk`), and reports to another part of the same organization need no consent |
 | **DKIM** | Signing keys under the common selectors (and yours): key size, revoked keys, Microsoft 365 CNAMEs with no key behind them |
 | **Nameservers** | At least two, each answering for the domain, serial numbers in step, matching the registrar's delegation |
 | **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent |
@@ -652,7 +652,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | DKIM **WARN** *1024-bit key* | Weaker than today's standard | Rotate to a 2048-bit key in the mail provider's admin |
 | DKIM **FAIL** under 1024 bits | Gmail and others ignore the key: the mail isn't signed as far as they're concerned | Rotate to a 2048-bit key in the mail provider's admin |
 | Blacklists **FAIL** | Mail from that address goes to junk or bounces | Find out why it's listed (a compromised account, an open relay), fix it, then ask the list to remove it |
-| SMTP **INFO** *probably blocks outbound port 25* | This network can't reach mail servers on port 25: common on office and home lines | Not a problem with the domain. Run it from another network to test SMTP |
+| SMTP **INFO** *probably blocks outbound port 25* | This network can't reach mail servers on port 25 (every one timed out, or every one was refused or unreachable, as a firewall that rejects rather than drops looks): common on office and home lines | Not a problem with the domain. Run it from another network to test SMTP |
 | Domain expiry **WARN/FAIL** | The domain is close to expiring, or on hold | Renew it, or check auto-renew and the registrar's contact details |
 
 ### Common problems

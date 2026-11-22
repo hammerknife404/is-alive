@@ -628,17 +628,26 @@ impl Stream<'_> {
                 continue;
             }
             let mut body = resp.body_mut().as_reader();
+            let (mut got, mut broke) = (0u64, false);
             while !self.stopped() {
                 match body.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        got += n as u64;
                         self.bytes.fetch_add(n as u64, Ordering::Relaxed);
                     }
                     Err(e) => {
                         self.failed(e);
+                        broke = true;
                         break;
                     }
                 }
+            }
+            // An answer with nothing in it (a misconfigured File URL) is a
+            // failure with a reason, and a pause before asking again: not
+            // a tight loop of requests ending in "no data arrived".
+            if got == 0 && !broke && !self.stopped() {
+                self.failed("the server answered with an empty file");
             }
         }
     }
@@ -1020,10 +1029,12 @@ pub(crate) mod tests {
         assert_eq!(t.bytes(), 0);
         assert!(t.error().is_some_and(|e| e.contains("404")));
         t.stop(Duration::from_secs(1));
-        // A page behind a bot check, and a page where a file should be.
+        // A page behind a bot check, a page where a file should be, and a
+        // file with nothing in it (which looped on requests, no reason).
         for (path, says) in [
             ("/challenge", "bot check"),
             ("/page", "web page, not a file"),
+            ("/__down?bytes=0", "empty file"),
         ] {
             let t = Transfer::start(&agent(1), &format!("{base}{path}"), Dir::Down, 1);
             let end = Instant::now() + Duration::from_secs(5);
