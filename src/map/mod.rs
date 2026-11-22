@@ -396,8 +396,9 @@ impl Map {
     /// it, else `default`.
     pub fn fill_sites(&mut self, default: &str) {
         let kids = self.children();
+        let depth = self.depths();
         let mut order: Vec<usize> = (0..self.nodes.len()).collect();
-        order.sort_by_key(|&i| self.path(i).len());
+        order.sort_by_key(|&i| depth[i]);
         for i in order {
             let n = &self.nodes[i];
             if n.zone == Zone::Internet || n.site.is_some() {
@@ -459,10 +460,11 @@ impl Map {
             member[i] = true;
         }
         // It hangs where the site's top card does.
+        let depth = self.depths();
         let up = inside
             .iter()
             .filter(|&&i| self.nodes[i].parent().is_none_or(|p| !member[p]))
-            .min_by_key(|&&i| self.path(i).len())
+            .min_by_key(|&&i| depth[i])
             .and_then(|&i| self.nodes[i].up.clone())
             .filter(|u| !member[u.0])
             .unwrap_or((0, Link::Assumed, None));
@@ -569,8 +571,9 @@ impl Map {
     /// Path from the internet down to `i`.
     pub fn path(&self, mut i: usize) -> Vec<usize> {
         let mut p = vec![i];
+        let mut seen = HashSet::from([i]);
         while let Some(u) = self.nodes.get(i).and_then(Node::parent) {
-            if p.contains(&u) {
+            if !seen.insert(u) {
                 break;
             }
             p.push(u);
@@ -579,7 +582,118 @@ impl Map {
         p.reverse();
         p
     }
+
+    /// `path(i).len()` for every card at once, in one pass: what sorting
+    /// or grouping by depth needs, without walking a long chain once per
+    /// card. Also each loop of uplinks, by the card whose uplink closes it.
+    fn depths_and_loops(&self) -> (Vec<usize>, Vec<usize>) {
+        let n = self.nodes.len();
+        let mut depth = vec![0usize; n];
+        // 0 not yet, 1 on the walk now, 2 done.
+        let mut state = vec![0u8; n];
+        let mut loops = Vec::new();
+        let mut walk = Vec::new();
+        for start in 0..n {
+            if state[start] != 0 {
+                continue;
+            }
+            walk.clear();
+            let mut at = start;
+            let base = loop {
+                state[at] = 1;
+                walk.push(at);
+                match self.nodes[at].parent().filter(|&p| p < n) {
+                    None => break 0,
+                    Some(p) if state[p] == 2 => break depth[p],
+                    Some(p) if state[p] == 1 => {
+                        // A loop: each card on it sees the whole loop.
+                        let from = walk.iter().position(|&w| w == p).unwrap_or(0);
+                        let len = walk.len() - from;
+                        for &w in &walk[from..] {
+                            depth[w] = len;
+                            state[w] = 2;
+                        }
+                        loops.push(at);
+                        walk.truncate(from);
+                        break len;
+                    }
+                    Some(p) => at = p,
+                }
+            };
+            let mut d = base;
+            for &w in walk.iter().rev() {
+                d += 1;
+                depth[w] = d;
+                state[w] = 2;
+            }
+        }
+        (depth, loops)
+    }
+
+    /// `path(i).len()` for every card.
+    pub fn depths(&self) -> Vec<usize> {
+        self.depths_and_loops().0
+    }
+
+    /// Keep every card within `DEPTH_MAX` links of the top, so laying the
+    /// map out (which goes down one level at a time) stays quick and
+    /// shallow on the stack whatever a file says. No real network is that
+    /// deep: a chain that long is a damaged or made-up file. A loop that
+    /// long is cut where it closes; then each card deeper than the limit
+    /// hangs from its ancestor at the last level, as an assumed link.
+    /// Returns how many cards were moved.
+    pub fn cap_depth(&mut self) -> usize {
+        let (depth, loops) = self.depths_and_loops();
+        let mut moved = 0;
+        for c in loops {
+            if depth[c] > DEPTH_MAX {
+                self.nodes[c].up = None;
+                moved += 1;
+            }
+        }
+        let depth = self.depths();
+        if depth.iter().all(|&d| d <= DEPTH_MAX) {
+            return moved;
+        }
+        let mut order: Vec<usize> = (0..self.nodes.len()).collect();
+        order.sort_by_key(|&i| depth[i]);
+        let mut anchor: Vec<Option<usize>> = vec![None; self.nodes.len()];
+        // The ancestor at the level above the last: a card hung from it is
+        // at the last level.
+        for &i in &order {
+            anchor[i] = match depth[i] {
+                d if d + 1 < DEPTH_MAX => None,
+                d if d + 1 == DEPTH_MAX => Some(i),
+                _ => self.nodes[i].parent().and_then(|p| anchor[p]),
+            };
+        }
+        for &i in &order {
+            if depth[i] > DEPTH_MAX
+                && let Some(a) = self.nodes[i].parent().and_then(|p| anchor[p])
+                && self.nodes[i].parent() != Some(a)
+            {
+                self.nodes[i].up = Some((a, Link::Assumed, None));
+                moved += 1;
+            }
+        }
+        moved
+    }
+
+    /// `cap_depth`, and a line in the summary when it moved anything.
+    pub fn cap_depth_noted(&mut self) {
+        let moved = self.cap_depth();
+        if moved > 0 {
+            self.summary += &format!(
+                " · {moved} card{} more than {DEPTH_MAX} links down hung at that level: no network is \
+that deep, so check the file",
+                if moved == 1 { "" } else { "s" }
+            );
+        }
+    }
 }
+
+/// How many links below the top a card can be drawn (see `cap_depth`).
+pub const DEPTH_MAX: usize = 64;
 
 /// The site of the first card below `i` that has one.
 fn site_below(nodes: &[Node], kids: &[Vec<usize>], i: usize) -> Option<String> {
@@ -2660,6 +2774,7 @@ pub fn build(input: &Input) -> Map {
     }
     let mut map = limit(b, input);
     map.summary = summary;
+    map.cap_depth_noted();
     map.sweep_apart = !local && had_sweep;
     // One site unless a multi-site controller says otherwise: the
     // controller's site, the firewall's name, or this network.
@@ -3279,6 +3394,86 @@ mod tests {
             "{}",
             f.text
         );
+    }
+
+    /// `depths` is `path(i).len()` for every card, loops included.
+    #[test]
+    fn depths_match_paths() {
+        let up = |p: Option<usize>| Node {
+            up: p.map(|p| (p, Link::Wired, None)),
+            ..Default::default()
+        };
+        // 0 ← 1 ← 2; 3 ⇄ 4 (a loop) ← 5; 6 alone.
+        let m = Map {
+            nodes: vec![
+                up(None),
+                up(Some(0)),
+                up(Some(1)),
+                up(Some(4)),
+                up(Some(3)),
+                up(Some(4)),
+                up(None),
+            ],
+            ..Default::default()
+        };
+        let want: Vec<usize> = (0..m.nodes.len()).map(|i| m.path(i).len()).collect();
+        assert_eq!(m.depths(), want);
+        assert_eq!(want, [1, 2, 3, 2, 2, 3, 1]);
+    }
+
+    /// A file can say a chain is 10,000 cards deep. The map keeps every
+    /// card but hangs the deep ones at `DEPTH_MAX`, says so, and lays out
+    /// at once: no hang, and nothing recursing 10,000 levels.
+    #[test]
+    fn a_chain_too_deep_is_cut_back() {
+        let n = 10_000;
+        let mut m = Map {
+            nodes: (0..n)
+                .map(|i| Node {
+                    id: format!("n{i}"),
+                    up: (i > 0).then(|| (i - 1, Link::Wired, None)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let t = std::time::Instant::now();
+        m.cap_depth_noted();
+        assert_eq!(m.nodes.len(), n);
+        assert!(m.depths().iter().all(|&d| d <= DEPTH_MAX));
+        // Card DEPTH_MAX - 1 is DEPTH_MAX deep: the last level, left alone.
+        assert_eq!(m.nodes[DEPTH_MAX - 1].parent(), Some(DEPTH_MAX - 2));
+        assert_eq!(m.nodes[DEPTH_MAX].parent(), Some(DEPTH_MAX - 2));
+        assert_eq!(m.nodes[n - 1].parent(), Some(DEPTH_MAX - 2));
+        assert_eq!(m.nodes[n - 1].link(), Some(Link::Assumed));
+        assert!(
+            m.summary.contains("more than 64 links down"),
+            "{}",
+            m.summary
+        );
+        m.fill_sites("Here");
+        let _ = layout::layout_in(&m, &|_| true, layout::Mode::Cluster);
+        assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+
+        // A loop that long is cut where it closes, then hung the same way.
+        let mut ring = Map {
+            nodes: (0..n)
+                .map(|i| Node {
+                    up: Some(((i + 1) % n, Link::Wired, None)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        assert!(ring.cap_depth() > 0);
+        assert!(ring.depths().iter().all(|&d| d <= DEPTH_MAX));
+        // A real map is left alone.
+        let mut small = Map {
+            nodes: m.nodes[..10].to_vec(),
+            ..Default::default()
+        };
+        small.nodes[9].up = Some((8, Link::Wired, None));
+        assert_eq!(small.cap_depth(), 0);
     }
 
     #[test]
