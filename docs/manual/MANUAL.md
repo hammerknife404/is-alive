@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.6**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.13**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -282,7 +282,7 @@ Files dropped while Config Export is still reading others wait their turn and ar
 
 - **The status row** shows the address being pinged, **Sent** and **Received**, **Loss** (green at 0%, amber for some loss, red for 100%) and **Min / Avg / Max** round-trip time.
 - **The graph** draws each reply as a point on a green line; a red tick is a reply that never came back. The scale in the top left corner is the highest reply time on screen.
-- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
+- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*. A router's *redirect* along the way isn't counted against the ping: the reply after it is.
 
 ### Example: is the internet connection healthy?
 
@@ -376,7 +376,7 @@ With **Certificates** ticked, each open port that speaks TLS gets a **Certificat
 | ⚠ **Self-signed: not trusted** (amber) | Issued by itself, as on most switches, APs, printers and firewalls out of the box. Normal on a LAN device; wrong on anything the public reaches |
 | ⚠ **Not trusted: an issuer this computer doesn't know…** (amber) | A private CA (an internal one, or a firewall inspecting TLS), or the server doesn't send its intermediate certificate |
 | ⚠ **Not valid for** *name* (amber) | The certificate is for another name. Scanning by IP usually shows this: type the name users type (`vpn.example.com`) to check that |
-| ✖ **Expired** *N days* **ago**, **Not valid yet**, **Revoked** (red) | Browsers and VPN clients refuse it |
+| ✖ **Expired** *N days* **ago**, **Not valid yet**, **Revoked** (red) | Browsers and VPN clients refuse it. **Expired: a certificate in the chain** means the server's own is in date but one above it (an intermediate) isn't: the server needs to send the current one |
 | **No TLS reply** (grey) | An HTTPS-type port that didn't complete a TLS handshake; hover for why. A server that only offers TLS 1.0 or 1.1 ends up here |
 
 **Click a certificate** for its details: the full status, the names it's valid for, the issuer, the dates, the TLS version and cipher, and the chain the server sent (server first). **Copy** copies them. Trust is checked against this computer's own certificate store, as its browser would, so a CA your company pushes by Group Policy counts as trusted here too. Only the handshake is made: nothing else is sent, and nothing is stored.
@@ -425,7 +425,7 @@ A device you expect to see with nothing open and every port *filtered* (tick **S
 | **Resolve names** | Look up each router's name (on by default; off is quicker) |
 | **Prefer IPv6** | Trace over IPv6 when the destination has both |
 
-Three probes go to each hop. The table shows **Hop**, **RTT 1–3** (the three round-trip times), **Address** and **Name**. The status row says **Tracing** *address*, then **✔ destination reached** or **destination not reached**.
+Three probes go to each hop. The table shows **Hop**, **RTT 1–3** (the three round-trip times), **Address** and **Name**. The status row says **Tracing** *address*, then **✔ destination reached** or **destination not reached**. When probes can't be sent at all (no `ping` program, a send this computer's firewall refuses), it stops at that hop and says so, rather than listing 30 hops of *request timed out* that look like the network's fault.
 
 ### Example: where is the delay?
 
@@ -486,7 +486,7 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 | **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. Fewer probes for intrusion detection to notice |
 | **All hosts** | Every live device, phones and laptops too |
 
-Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open. Full scan uses the same choice: set **Off** where you mustn't port-scan.
+Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open (while the ports are being tried it says *checking…*). A sweep stopped part way says so in its report and in the Inventory (`complete: false`), and hosts whose ports it hadn't finished say *not checked*. Full scan uses the same choice: set **Off** where you mustn't port-scan.
 
 ### A device's details
 
@@ -1225,7 +1225,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ### Common problems
 
-- **A direction fails with a 403, or the test is blocked**: web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a nearby server from **Servers**, or wait a minute.
+- **A direction fails with a 403, or the test is blocked** (an upload the server refused every time is a failure with the server's answer, not a speed): web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a nearby server from **Servers**, or wait a minute.
 - **"ICMP got no replies, so latency was measured with TCP connects to port 443"**: ping is blocked on the way; the test carried on with TCP, where loss is less reliable.
 - **"IPv6 to … didn't connect, so the test ran over IPv4"**: this network's IPv6 looks broken: it hands out IPv6 addresses but can't route IPv6. Worth fixing (devices will be slow to connect elsewhere too), and the test carries on over IPv4.
 - **A link to a download page rather than the file**: the test says so. Use the file's direct link.

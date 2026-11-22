@@ -42,8 +42,9 @@ struct Host {
     mac_from: Option<&'static str>,
     /// Open ports from `ports::INFRA`, ascending.
     open: Vec<u16>,
-    /// Its management ports were tried. Smart skips phones and laptops; a
-    /// host left out keeps everything the sweep found, with no ports.
+    /// All its management ports were tried. Smart skips phones and
+    /// laptops; a host left out, or one a stopped run didn't finish, keeps
+    /// everything the sweep found and says its ports weren't checked.
     checked: bool,
     /// Other MACs this address answered from during the sweep (the ARP
     /// table confirmed each): a duplicate IP, or a failover mid-sweep.
@@ -145,6 +146,8 @@ enum Ev {
     Mac(Ipv4Addr, Mac),
     /// Port phase starting on these hosts.
     PortTargets(Vec<Ipv4Addr>),
+    /// Every management port of this host has been tried.
+    PortDone(Ipv4Addr),
     /// This address answered from all these MACs.
     Conflict(Ipv4Addr, Vec<Mac>),
     /// This many more steps for the progress bar.
@@ -177,6 +180,11 @@ pub struct SweepTool {
     local: HostInfo,
     /// How the last run checked management ports.
     ran_ports: PortCheck,
+    /// Hosts the port pass is on (shown as being checked until done).
+    port_queue: HashSet<Ipv4Addr>,
+    /// The last run was stopped before it finished: hosts it hadn't
+    /// reached aren't listed, and ports it hadn't checked aren't "none".
+    stopped: bool,
     err: Option<String>,
     /// Bumped whenever the host list changes, so the map knows to rebuild.
     revision: u64,
@@ -205,6 +213,8 @@ impl Default for SweepTool {
             alive: Vec::new(),
             local: HostInfo::default(),
             ran_ports: PortCheck::Off,
+            port_queue: HashSet::new(),
+            stopped: false,
             err: None,
             revision: 0,
             runs: 0,
@@ -280,10 +290,15 @@ impl SweepTool {
                 }
                 Ev::PortTargets(ips) => {
                     self.total += ips.len() * ports::INFRA.len();
-                    for h in self.alive.iter_mut().filter(|h| ips.contains(&h.ip)) {
-                        h.checked = true;
-                    }
+                    self.port_queue.extend(ips);
                     changed = true;
+                }
+                Ev::PortDone(ip) => {
+                    self.port_queue.remove(&ip);
+                    if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                        h.checked = true;
+                        changed = true;
+                    }
                 }
                 Ev::Open(ip, port) => {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
@@ -337,7 +352,12 @@ impl SweepTool {
             enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             match widgets::run_button(ui, running, enter) {
                 Action::Start => self.start(ui.ctx()),
-                Action::Stop => self.job.as_ref().map_or((), Job::stop),
+                Action::Stop => {
+                    if let Some(j) = &self.job {
+                        j.stop();
+                        self.stopped = true;
+                    }
+                }
                 Action::None => {}
             }
             self.plan_label(ui);
@@ -509,6 +529,13 @@ impl SweepTool {
                             ),
                             Col::Vendor => (self.vendor(h), &font, text),
                             Col::Name => (h.name.clone().unwrap_or_default(), &font, text),
+                            Col::Ports
+                                if !h.checked
+                                    && self.job.is_some()
+                                    && self.port_queue.contains(&h.ip) =>
+                            {
+                                ("checking…".into(), &font, weak)
+                            }
                             Col::Ports if !h.checked => ("not checked".into(), &font, weak),
                             Col::Ports => (port_list(&h.open), &mono, text),
                         };
@@ -738,6 +765,10 @@ impl SweepTool {
                  failover during the sweep\n"
             );
         }
+        if self.stopped {
+            s += "Stopped before it finished: hosts it hadn't reached aren't listed, and ports \
+                  it hadn't checked say not checked\n";
+        }
         let checked = self.alive.iter().filter(|h| h.checked).count();
         match self.ran_ports {
             // Nothing alive: nothing to say about ports.
@@ -851,6 +882,7 @@ impl SweepTool {
                 "wan": info.wan.map(|w| w.to_string()),
             },
             "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
+            "complete": !self.stopped,
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
@@ -859,7 +891,8 @@ impl SweepTool {
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
-                "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung). Null is not \"none open\"; an empty list is.",
+                "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
+                "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
             ],
             "hosts": hosts,
         });
@@ -968,6 +1001,8 @@ impl SweepTool {
         self.alive.clear();
         self.local = HostInfo::default();
         self.ran_ports = PortCheck::Off;
+        self.port_queue.clear();
+        self.stopped = false;
         self.err = None;
         self.revision += 1;
         self.picked = None;
@@ -980,6 +1015,8 @@ impl SweepTool {
 
     fn start(&mut self, ctx: &egui::Context) {
         self.err = None;
+        self.stopped = false;
+        self.port_queue.clear();
         self.revision += 1;
         self.runs += 1;
         self.alive.clear();
@@ -1139,6 +1176,10 @@ impl SweepTool {
             for &ip in &targets {
                 probes.extend(ports::INFRA.iter().map(|&p| (ip, p)));
             }
+            // Each host counts as checked once all its ports are: a stop
+            // part way leaves the rest "not checked", not "none open".
+            let left: Mutex<HashMap<Ipv4Addr, usize>> =
+                Mutex::new(targets.iter().map(|&ip| (ip, ports::INFRA.len())).collect());
             tx.send(Ev::PortTargets(targets));
             let wait = Duration::from_millis(timeout as u64);
             let opened: Mutex<HashMap<Ipv4Addr, Vec<u16>>> = Mutex::new(HashMap::new());
@@ -1149,6 +1190,14 @@ impl SweepTool {
                     opened.lock().unwrap().entry(ip).or_default().push(port);
                 }
                 tx.send(Ev::Probed);
+                let done = left.lock().ok().and_then(|mut l| {
+                    let n = l.get_mut(&ip)?;
+                    *n -= 1;
+                    (*n == 0).then_some(())
+                });
+                if done.is_some() {
+                    tx.send(Ev::PortDone(ip));
+                }
             });
 
             // What each device with a web page open calls itself: one GET
@@ -1495,6 +1544,7 @@ mod tests {
             Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 443),
             Ev::Open(Ipv4Addr::new(10, 0, 0, 20), 22),
             Ev::PortTargets(vec![Ipv4Addr::new(10, 0, 0, 20)]),
+            Ev::PortDone(Ipv4Addr::new(10, 0, 0, 20)),
         ]);
         assert!(changed);
         let ips: Vec<String> = s.alive.iter().map(|h| h.ip.to_string()).collect();
@@ -1753,8 +1803,11 @@ mod tests {
                 Ipv4Addr::new(10, 0, 0, 40),
             ]),
             Ev::Open(Ipv4Addr::new(10, 0, 0, 1), 443),
+            // The gateway's ports all tried; the NAS's not, when it stopped.
+            Ev::PortDone(Ipv4Addr::new(10, 0, 0, 1)),
         ]);
-        s.job = None; // stopped mid-pass
+        s.job = None;
+        s.stopped = true;
         let got: Vec<(String, Option<&str>, bool, Vec<u16>)> = s
             .alive
             .iter()
@@ -1772,13 +1825,22 @@ mod tests {
             [
                 ("10.0.0.1".to_string(), Some("gw"), true, vec![443]),
                 ("10.0.0.30".to_string(), Some("laptop"), false, vec![]),
-                ("10.0.0.40".to_string(), Some("nas"), true, vec![]),
+                // Not finished: "not checked", never "none open".
+                ("10.0.0.40".to_string(), Some("nas"), false, vec![]),
             ]
         );
         assert!(s.alive.iter().all(|h| h.mac.is_some()));
         assert_eq!(s.seen().len(), 3, "the map gets all three");
         let r = s.report();
-        assert!(r.contains("Mgmt ports checked on 2 of 3"), "{r}");
+        assert!(r.contains("Mgmt ports checked on 1 of 3"), "{r}");
+        assert!(r.contains("Stopped before it finished"), "{r}");
+        let inv: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        assert_eq!(inv["complete"], false);
+        assert!(
+            inv["hosts"][2]["open_ports"].is_null(),
+            "the NAS wasn't finished"
+        );
         let none = SweepTool {
             ran_ports: PortCheck::Smart,
             ..Default::default()
