@@ -450,7 +450,14 @@ silently drop, or render wrong:
   uplinks" rule in Step 3);
   actions without a unique id, with `sev` other than high/med/low, or with
   unresolved node refs; zone or site refs that aren't defined; more than
-  120 nodes.
+  120 nodes; `</script`, `<script` or `<!--` anywhere in the block (any
+  case).
+- **Text from the network is hostile.** Names, `web_title`, banners and
+  notes come from devices anyone on the client's network can name, and the
+  block sits inside the page's `<script>` element: a device called
+  `</script><img src=x onerror=…>` would end it and run. Write every `<`
+  inside a string as `\u003c` (it displays the same). is-alive's own pages
+  already do.
 - **Warnings (exit 0):** `kind` over 18 characters; a node with no `site` on
   a map that declares SITES; edge `cls` other than backbone/wired/wifi; more
   than 90 nodes.
