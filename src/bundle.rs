@@ -328,6 +328,16 @@ pub fn slug(site: &str) -> String {
 
 /// Minimal deflate zip writer (UTF-8 names, no zip64; bundles are small).
 pub(crate) fn zip(files: &[(&str, &[u8])]) -> std::io::Result<Vec<u8>> {
+    // No zip64: every size and offset has to fit 32 bits, or the zip says
+    // something else than it holds. A bundle is JSON, notes and a page or
+    // two, nowhere near; refused rather than written wrong.
+    let total: usize = files.iter().map(|(n, d)| n.len() + d.len() + 128).sum();
+    if total > u32::MAX as usize || files.len() > u16::MAX as usize {
+        return Err(std::io::Error::other(format!(
+            "{} MB is more than a Claude Handoff can hold (4 GB)",
+            total >> 20
+        )));
+    }
     let (time, date) = dos_now();
     let mut out = Vec::new();
     let mut central = Vec::new();

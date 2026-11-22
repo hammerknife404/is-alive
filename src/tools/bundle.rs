@@ -890,9 +890,29 @@ fn build_and_save(unifi: Vec<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, S
     let path = widgets::safe_path(path, &["zip"]);
     let name = export::file_name(&path);
     let zip = b.zip(&name).map_err(|e| e.to_string())?;
-    std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
+    write_whole(&path, &zip).map_err(|e| format!("{}: {e}", path.display()))?;
     let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
+}
+
+/// Write `data` to `path` whole or not at all: to a file beside it, then
+/// renamed over it. A full disk part-way leaves no half-written zip that
+/// looks like a handoff (and an older one of that name as it was).
+fn write_whole(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let r = (|| {
+        let mut f = std::fs::File::create(&part)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        std::fs::rename(&part, path)
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    r
 }
 
 /// The `n`th UniFi backup's part (counting from 1), `r` its conversion
@@ -1110,6 +1130,24 @@ pub(crate) fn part_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A handoff is written whole or not at all: a good write replaces
+    /// the old zip, a failed one leaves no part file and the old one as
+    /// it was.
+    #[test]
+    fn the_zip_is_written_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("is-alive-whole-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("site.bundle.zip");
+        std::fs::write(&p, b"old").unwrap();
+        write_whole(&p, b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert!(!dir.join("site.bundle.zip.part").exists());
+        let gone = dir.join("no-such-folder").join("x.zip");
+        assert!(write_whole(&gone, b"x").is_err());
+        assert!(!dir.join("no-such-folder").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use crate::log::{Entry, Table};
 
     fn run(tool: &'static str, first: &'static str, target: &str) -> Entry {
