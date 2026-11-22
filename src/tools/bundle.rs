@@ -97,7 +97,8 @@ const UNIFI_WHAT: &str = "UniFi controller export: sites, devices, networks, swi
 WLANs (plus clients as the manifest says), secrets removed. mongoexport-style array for /unifidump's extract.py.";
 const SONICWALL_WHAT: &str = "SonicWall config: interfaces (zone, VLAN, IP, MAC, management), zones, \
 address and service objects, access and NAT rules. Enforced config, not observation.";
-const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs, \
+const MERAKI_WHAT: &str = "Meraki MX config from the Dashboard API: networks, devices, VLANs (with \
+DHCP reservations: the names of phones', laptops' and PCs' follow client_names in its summary), \
 appliance ports, firewall, port forwarding and NAT rules, static routes, VPN and uplinks. Enforced config, \
 not observation.";
 // The second and later of a kind (`unifi-2.unifidump.json`, …).
@@ -111,7 +112,8 @@ const MERAKI_MORE_WHAT: &str = "Another Meraki export from this visit, in the sa
 meraki.json: its own networks and MX appliances, each a gateway of its own. Enforced config, not \
 observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). Observed state.";
+with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). \
+Names of phones, laptops and PCs follow client_names (in its summary and the file). Observed state.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
@@ -778,7 +780,7 @@ impl BundleTool {
         }
         let merakis = src.export.merakis().filter(|(p, _)| included(p));
         for (n, (p, r)) in merakis.enumerate() {
-            parts.push(meraki_part(n + 1, p, r));
+            parts.push(meraki_part(n + 1, p, r, self.clients));
         }
         if self.use_map
             && let Some((p, d)) = src.export.mapnetwork()
@@ -809,8 +811,9 @@ impl BundleTool {
                     "range": range,
                     "live_hosts": n,
                     "ports_checked": src.sweep.checked_ports(),
+                    "client_names": self.clients.label(),
                 }),
-                data: src.sweep.inventory(src.info),
+                data: src.sweep.inventory(src.info, self.clients),
             });
         }
         if self.use_results && !src.log.entries.is_empty() {
@@ -940,7 +943,7 @@ fn sonicwall_part(n: usize, path: &Path, r: &sonicwall::Report) -> Part {
 }
 
 /// The `n`th Meraki export's part, counting from 1.
-fn meraki_part(n: usize, path: &Path, r: &meraki::Report) -> Part {
+fn meraki_part(n: usize, path: &Path, r: &meraki::Report, clients: Clients) -> Part {
     Part {
         file: bundle::numbered(bundle::MERAKI, n),
         source: export::file_name(path),
@@ -957,8 +960,9 @@ fn meraki_part(n: usize, path: &Path, r: &meraki::Report) -> Part {
             "vlans": r.count("VLANs"),
             "firewall_rules": r.count("firewall rules"),
             "port_forwards": r.count("port forwards"),
+            "client_names": clients.label(),
         }),
-        data: r.json.clone(),
+        data: r.json_for(clients),
     }
 }
 

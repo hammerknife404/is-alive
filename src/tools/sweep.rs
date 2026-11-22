@@ -6,6 +6,7 @@ use crate::net::icmp;
 use crate::net::mac::{self, Mac};
 use crate::net::{self, TcpState, names, ports, subnet, targets};
 use crate::theme;
+use crate::unifi::Clients;
 use crate::widgets::{self, Action};
 use eframe::egui::{self, FontId, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::json;
@@ -405,7 +406,8 @@ impl SweepTool {
                             "is-alive-inventory.json".into(),
                             "JSON",
                             vec!["json"],
-                            self.inventory(info),
+                            // The tech's own copy, as the table shows it.
+                            self.inventory(info, Clients::Full),
                         );
                     }
                 });
@@ -810,19 +812,26 @@ impl SweepTool {
     }
 
     /// Site inventory for /mapnetwork: facts only, no role guesses.
-    pub fn inventory(&self, info: &HostInfo) -> String {
+    /// The live hosts as JSON for /mapnetwork. `clients` says what
+    /// becomes of the names of hosts that look like a phone, laptop or PC
+    /// (the Site Bundle's setting; Full for the tech's own save).
+    pub fn inventory(&self, info: &HostInfo, clients: Clients) -> String {
         // The segment the scanner sat on when the run started.
         let lan = self.local.lan.or(info.lan);
         let hosts: Vec<_> = self
             .alive
             .iter()
             .map(|h| {
+                let open: &[u16] = if h.checked { &h.open } else { &[] };
+                let client = self.local.gateway != Some(h.ip)
+                    && crate::map::looks_like_client(h.mac.as_ref(), open, h.web.as_deref());
+                let key = h.mac.as_ref().map_or_else(|| h.ip.to_string(), mac::fmt);
                 json!({
                     "ip": h.ip.to_string(),
                     "mac": h.mac.as_ref().map(mac::fmt),
                     "vendor": h.mac.as_ref().and_then(mac::vendor),
                     "private_mac": h.mac.as_ref().map(mac::local_admin),
-                    "name": h.name,
+                    "name": clients.device_name(h.name.as_deref(), &key, client),
                     "name_from": h.name_from,
                     "mac_from": h.mac_from,
                     "found_by": found_by(h),
@@ -851,10 +860,12 @@ impl SweepTool {
                 "wan": info.wan.map(|w| w.to_string()),
             },
             "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
+            "client_names": clients.label(),
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
+                "client_names says what became of the names of hosts that look like a phone, laptop or PC (not the gateway, and no maker, port or web page that says network gear, NAS, printer or camera), names that are often people's: full keeps them; anonymized replaces each with a client-xxxxxxxx token made from its MAC (else its IP), the same token the UniFi export's client table uses for that MAC; none leaves name null. name_from still says where the real name came from. Other hosts keep their names.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
@@ -1347,6 +1358,60 @@ mod tests {
         [0x00, 0x11, 0x32, 0x00, 0x00, last]
     }
 
+    /// The Site Bundle's Clients setting reaches the inventory: a phone,
+    /// laptop or PC's name (often a person's) becomes the UniFi export's
+    /// token for its MAC, or goes; the gateway, gear and NAS keep theirs.
+    #[test]
+    fn inventory_names_follow_the_clients_setting() {
+        let named = |ip: [u8; 4], m: Option<Mac>, name: &str| {
+            let mut h = host(ip, Some(1.0));
+            (h.name, h.name_from) = (Some(name.into()), Some("netbios"));
+            (h.mac, h.mac_from) = (m, m.map(|_| "arp"));
+            h
+        };
+        let intel: Mac = [0x00, 0x12, 0xF0, 0, 0, 9];
+        let phone: Mac = [0x02, 0, 0, 0, 0, 8];
+        let mut s = swept(vec![
+            named([10, 0, 0, 1], Some(intel), "EDGE-GW"),
+            named([10, 0, 0, 20], Some(mac(2)), "BACKUP-NAS"),
+            named([10, 0, 0, 30], Some(intel), "DR-SMITH-PC"),
+            named([10, 0, 0, 31], Some(phone), "Janes-iPhone"),
+            named([10, 0, 0, 32], None, "front-desk"),
+        ]);
+        s.local.gateway = Some(Ipv4Addr::new(10, 0, 0, 1));
+        let names = |c: Clients| {
+            let v: serde_json::Value =
+                serde_json::from_str(&s.inventory(&HostInfo::default(), c)).unwrap();
+            assert_eq!(v["client_names"], c.label());
+            v["hosts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| {
+                    assert_eq!(h["name_from"], "netbios", "still says where it came from");
+                    h["name"].clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        let full = names(Clients::Full);
+        assert_eq!(full[2], "DR-SMITH-PC");
+        let anon = names(Clients::Anonymized);
+        assert_eq!(anon[0], "EDGE-GW", "the gateway");
+        assert_eq!(anon[1], "BACKUP-NAS", "a Synology: a NAS");
+        assert_eq!(anon[2], json!(crate::unifi::token(&mac::fmt(&intel))));
+        assert_eq!(anon[3], json!(crate::unifi::token("02:00:00:00:00:08")));
+        assert_eq!(
+            anon[4],
+            json!(crate::unifi::token("10.0.0.32")),
+            "no MAC: by address"
+        );
+        let none = names(Clients::None);
+        assert_eq!(
+            (&none[1], &none[2], &none[3]),
+            (&json!("BACKUP-NAS"), &json!(null), &json!(null))
+        );
+    }
+
     fn swept(hosts: Vec<Host>) -> SweepTool {
         let mut s = SweepTool {
             range: "10.0.0.0/24".into(),
@@ -1548,7 +1613,7 @@ mod tests {
             ..Default::default()
         };
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         let hosts = v["hosts"].as_array().unwrap();
         assert_eq!(hosts[0]["is_gateway"], true);
         assert_eq!(hosts[1]["is_this_machine"], true);
@@ -1565,7 +1630,7 @@ mod tests {
         s.range = "10.0.0.0/24, 172.20.5.0 - 20".into();
         s.alive.push(host([172, 20, 5, 9], Some(4.0)));
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(v["ranges"], json!(["10.0.0.0/24", "172.20.5.0-20"]));
         assert_eq!(v["hosts"][2]["on_scanner_lan"], false);
         assert!(v["hosts"][2]["mac"].is_null() && v["hosts"][2]["mac_from"].is_null());
@@ -1575,7 +1640,7 @@ mod tests {
         (win.mac, win.mac_from) = (Some(mac(7)), Some("netbios"));
         s.alive.push(win);
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         let w = &v["hosts"][3];
         assert_eq!(
             (&w["name"], &w["name_from"], &w["mac"], &w["mac_from"]),
@@ -1619,7 +1684,7 @@ mod tests {
         s.alive[0].checked = true;
         s.alive[2].checked = true;
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(v["hosts"][0]["open_ports"][0]["port"], 443);
         assert!(v["hosts"][1]["open_ports"].is_null());
         assert_eq!(v["hosts"][2]["open_ports"], json!([]));
@@ -1712,7 +1777,7 @@ mod tests {
         );
         assert!(r.contains("also from 00:11:32:00:00:09"), "{r}");
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(v["hosts"][1]["other_macs"], json!(["00:11:32:00:00:09"]));
         assert_eq!(v["hosts"][0]["other_macs"], json!([]));
         assert_eq!(s.seen()[1].also, [mac(9)]);
@@ -1722,7 +1787,7 @@ mod tests {
         assert_eq!(s.alive[0].web.as_deref(), Some("UniFi OS"));
         assert!(s.report().contains("\"UniFi OS\""));
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(v["hosts"][0]["web_title"], "UniFi OS");
         assert!(v["hosts"][1]["web_title"].is_null());
         assert_eq!(s.seen()[0].web.as_deref(), Some("UniFi OS"));
