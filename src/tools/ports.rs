@@ -37,6 +37,9 @@ const TLS_WAIT: Duration = Duration::from_secs(5);
 
 pub struct PortTool {
     host: String,
+    /// The host the last run checked, as typed then: what its report and
+    /// table name.
+    ran_host: String,
     ports: String,
     timeout_ms: u32,
     threads: usize,
@@ -62,6 +65,7 @@ impl Default for PortTool {
     fn default() -> Self {
         Self {
             host: String::new(),
+            ran_host: String::new(),
             ports: PRESETS[0].1.into(),
             timeout_ms: 1500,
             threads: widgets::SPEEDS[widgets::DEFAULT_SPEED].1,
@@ -359,7 +363,7 @@ impl PortTool {
 
     fn report(&self) -> String {
         let host = self.target.map(|i| i.to_string()).unwrap_or_default();
-        let mut s = format!("Port scan of {} ({host})\n", self.host.trim());
+        let mut s = format!("Port scan of {} ({host})\n", self.ran_host);
         let now = chrono::Utc::now();
         for (port, state, _) in &self.results {
             if self.show_closed || !matches!(state, TcpState::Closed | TcpState::Filtered) {
@@ -395,7 +399,7 @@ impl PortTool {
                     s => (state_label(s).0, ""),
                 };
                 vec![
-                    self.host.trim().to_string(),
+                    self.ran_host.clone(),
                     ip.clone(),
                     port.to_string(),
                     st.to_string(),
@@ -435,12 +439,7 @@ impl PortTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
-        self.err = None;
-        self.target = None;
-        self.results.clear();
-        self.tls.clear();
-        self.cert_view = None;
-        self.total = 0;
+        // What won't read leaves the last run's results as they were.
         let host = match crate::input::host(&self.host) {
             Ok(t) => {
                 // A port typed with the host (nas:5001, a link) is the one checked.
@@ -455,6 +454,13 @@ impl PortTool {
             Ok(p) => p,
             Err(e) => return self.err = Some(e),
         };
+        self.err = None;
+        self.target = None;
+        self.results.clear();
+        self.tls.clear();
+        self.cert_view = None;
+        self.total = 0;
+        self.ran_host = self.host.trim().to_string();
         let timeout = Duration::from_millis(self.timeout_ms as u64);
         let (threads, rate, v6, certs) = (self.threads, self.rate, self.prefer_v6, self.certs);
 
@@ -570,5 +576,27 @@ fn state_label(s: &TcpState) -> (&'static str, egui::Color32) {
         TcpState::Closed => ("closed", widgets::bad()),
         TcpState::Filtered => ("filtered", widgets::warn()),
         TcpState::Error(_) => ("error", widgets::bad()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host that won't read leaves the last results; the report names
+    /// the host that ran, not what the box says now.
+    #[test]
+    fn a_bad_host_keeps_the_last_run() {
+        let mut t = PortTool {
+            ran_host: "nas.local".into(),
+            results: vec![(22, TcpState::Open, 1.0)],
+            ..Default::default()
+        };
+        t.host = "not a host!".into();
+        t.start(&egui::Context::default());
+        assert!(t.err.is_some() && t.job.is_none());
+        assert_eq!(t.results.len(), 1);
+        assert!(t.report().starts_with("Port scan of nas.local"));
+        assert_eq!(t.table().unwrap().rows[0][0], "nas.local");
     }
 }

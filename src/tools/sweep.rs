@@ -159,6 +159,9 @@ type Plan = Result<(usize, usize), String>;
 
 pub struct SweepTool {
     range: String,
+    /// The range the last run swept, as typed then: what its report,
+    /// table, inventory and handoff name, whatever the box says now.
+    ran: String,
     /// `range` as last read for the box's count: (text, targets and addresses).
     plan: Option<(String, Plan)>,
     detected: bool,
@@ -190,6 +193,7 @@ impl Default for SweepTool {
     fn default() -> Self {
         Self {
             range: "192.168.1.0/24".into(),
+            ran: String::new(),
             plan: None,
             detected: false,
             timeout_ms: 750,
@@ -726,7 +730,7 @@ impl SweepTool {
     }
 
     fn report(&self) -> String {
-        let mut s = format!("Sweep of {}: {} alive", self.range.trim(), self.alive.len());
+        let mut s = format!("Sweep of {}: {} alive", self.ran, self.alive.len());
         match self.arp_only() {
             0 => s += "\n",
             n => s += &format!(" ({n} found by ARP only, no ping reply)\n"),
@@ -787,7 +791,7 @@ impl SweepTool {
             .iter()
             .map(|h| {
                 vec![
-                    self.range.trim().to_string(),
+                    self.ran.clone(),
                     h.ip.to_string(),
                     h.rtt.map(log::ms).unwrap_or_default(),
                     log::cell(h.ttl),
@@ -843,8 +847,8 @@ impl SweepTool {
         let v = json!({
             "source": format!("is-alive {} subnet sweep", crate::VERSION),
             "scanned_at": self.run_started.clone().unwrap_or_else(log::now),
-            "range": self.range.trim(),
-            "ranges": targets::list(&self.range),
+            "range": self.ran,
+            "ranges": targets::list(&self.ran),
             "scanner": {
                 "lan": self.local.lan.or(info.lan).map(|(ip, bits)| format!("{ip}/{bits}")),
                 "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
@@ -922,13 +926,12 @@ impl SweepTool {
     pub fn progress(&self) -> Option<(usize, usize, Instant, &str)> {
         self.job
             .is_some()
-            .then(|| (self.probed, self.total, self.started_at, self.range.trim()))
+            .then_some((self.probed, self.total, self.started_at, self.ran.as_str()))
     }
 
     /// Range and live-host count of a finished run, if there is one.
     pub fn finished(&self) -> Option<(String, usize)> {
-        (self.total > 0 && self.job.is_none())
-            .then(|| (self.range.trim().to_string(), self.alive.len()))
+        (self.total > 0 && self.job.is_none()).then(|| (self.ran.clone(), self.alive.len()))
     }
 
     /// Whether the last run checked management ports.
@@ -962,6 +965,7 @@ impl SweepTool {
     /// and options stay as set.
     pub fn clear_results(&mut self) {
         self.job = None;
+        self.ran.clear();
         self.run_started = None;
         self.total = 0;
         self.probed = 0;
@@ -979,15 +983,18 @@ impl SweepTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
+        // A range that won't read leaves the last sweep as it was: a typo
+        // doesn't wipe 40 hosts.
+        let ips = match targets::parse_range(&self.range) {
+            Ok(v) => v,
+            Err(e) => return self.err = Some(e),
+        };
         self.err = None;
         self.revision += 1;
         self.runs += 1;
         self.alive.clear();
         self.probed = 0;
-        let ips = match targets::parse_range(&self.range) {
-            Ok(v) => v,
-            Err(e) => return self.err = Some(e),
-        };
+        self.ran = self.range.trim().to_string();
         self.total = ips.len();
         self.local = HostInfo::local();
         self.ran_ports = self.ports;
@@ -1350,6 +1357,7 @@ mod tests {
     fn swept(hosts: Vec<Host>) -> SweepTool {
         let mut s = SweepTool {
             range: "10.0.0.0/24".into(),
+            ran: "10.0.0.0/24".into(),
             total: 254,
             ..Default::default()
         };
@@ -1537,6 +1545,39 @@ mod tests {
         assert_eq!(t.rows[0][7], "22 443");
     }
 
+    /// A typo in the box and Enter: the last sweep stays, whole. And what
+    /// a finished sweep says it swept is what it swept, whatever the box
+    /// says later.
+    #[test]
+    fn a_typo_keeps_the_last_sweep_and_reports_name_what_ran() {
+        let mut s = swept(vec![
+            host([10, 0, 0, 1], Some(1.0)),
+            host([10, 0, 0, 9], Some(2.0)),
+        ]);
+        let before = (s.alive.len(), s.total, s.revision, s.runs);
+        s.range = "10.0.1.0/2x".into();
+        s.start(&egui::Context::default());
+        assert!(s.err.is_some() && s.job.is_none());
+        assert_eq!((s.alive.len(), s.total, s.revision, s.runs), before);
+        // The next network typed in, not yet swept.
+        s.range = "192.168.9.0/24".into();
+        assert!(s.report().starts_with("Sweep of 10.0.0.0/24"));
+        assert_eq!(s.finished(), Some(("10.0.0.0/24".to_string(), 2)));
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+        assert_eq!(
+            (&v["range"], &v["ranges"]),
+            (&json!("10.0.0.0/24"), &json!(["10.0.0.0/24"]))
+        );
+        assert!(
+            s.table()
+                .unwrap()
+                .rows
+                .iter()
+                .all(|r| r[0] == "10.0.0.0/24")
+        );
+    }
+
     #[test]
     fn inventory_marks_the_gateway_and_this_machine_and_ports_only_if_checked() {
         let mut gw = host([10, 0, 0, 1], Some(1.0));
@@ -1562,7 +1603,7 @@ mod tests {
 
         // Several networks: a routed host is marked so its missing MAC
         // isn't read as an unknown device.
-        s.range = "10.0.0.0/24, 172.20.5.0 - 20".into();
+        s.ran = "10.0.0.0/24, 172.20.5.0 - 20".into();
         s.alive.push(host([172, 20, 5, 9], Some(4.0)));
         let v: serde_json::Value =
             serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();

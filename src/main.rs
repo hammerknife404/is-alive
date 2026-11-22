@@ -280,6 +280,7 @@ impl eframe::App for App {
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
         widgets::route_copies(ui.ctx());
+        widgets::note_esc_owners(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1066,6 +1067,11 @@ impl App {
             || self.dns.is_running()
             || self.advanced.is_running()
             || self.netcheck.running_since().is_some()
+            // A logged check (not the quiet one on start) and other
+            // computers: their answers go to Results when they end, so a
+            // site switch waits for them like any run.
+            || self.join.running_since().is_some()
+            || self.join.others_running_since().is_some()
     }
 
     /// Run every tool against this machine's network and switch to Results.
