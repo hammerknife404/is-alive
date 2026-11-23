@@ -135,7 +135,11 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   *from is-alive <version>*) is the app's own quick map, not one you drew. It
   holds sites, zones, uplinks and ports, the app's findings and the
   technician's card notes, and clients only if the app drew them (it stops at
-  120 cards and says so in the subtitle). A dashed `wired` edge is an uplink
+  120 cards, leaving out clients first and then the cards furthest from the
+  internet, and says how many of each in the subtitle). A subtitle that starts
+  *Plan —* or *Training map —* is not what was found on site: those cards were
+  drawn by hand. A `drawn` chip marks such a card (its link dashed): keep the
+  chip, and never report a drawn card as discovered. A dashed `wired` edge is an uplink
   the app inferred, not one a backup showed; a device's second link is a line
   of text in its notes, since a card has one uplink. Treat it as **observed**,
   not enforced config: take the update path, but redo the topology from the
@@ -146,6 +150,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
   `card-notes.json` and the manifest's `known_problems` are the technician's
   word: context, findings and device notes, never topology on their own.
+  They're redacted only where the technician marked a value (and the loaded
+  configs' passwords and keys), not scanned: anything in them that still
+  looks like a credential or a person's or patient's details may be real, so
+  never repeat it in the map, its findings or your reply.
   `results.json` (test runs) becomes a finding only where a run shows a problem
   (loss, a closed port that should be open, a failing mail check). A site
   keeps its runs from one visit to the next, so they can span visits: judge
@@ -187,6 +195,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
+  `complete: false` (top level) means the sweep was stopped before it
+  finished: hosts it hadn't reached are missing and some ports weren't
+  checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
   else its `Server` header), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
@@ -207,6 +218,16 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `netbios` (a Windows host past a router reported it). `netbios` and `mdns`
   are the device's own claim: use them as labels and role hints (a
   `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
+- **`client_names`** (in `inventory.json`, and in the inventory's and each
+  Meraki file's `summary` in `manifest.json`) says what became of the names
+  of phones, laptops and PCs: anything not the gateway that no maker, port
+  or web page marks as network gear, a NAS, a printer or a camera. Their
+  names are often people's. `full` keeps them; `anonymized` makes each a
+  `client-xxxxxxxx` token from its MAC (else its IP), the **same token** the
+  UniFi client table uses for that MAC, so match devices across files by it
+  or by MAC; `none` leaves `name` null (in Meraki's `fixed_ips`, no `name`).
+  `name_from` still says where the real name came from. A token is not a
+  name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
   `open_ports`, `other_macs`, `web_title`, `is_gateway`, `is_this_machine`,
@@ -450,7 +471,14 @@ silently drop, or render wrong:
   uplinks" rule in Step 3);
   actions without a unique id, with `sev` other than high/med/low, or with
   unresolved node refs; zone or site refs that aren't defined; more than
-  120 nodes.
+  120 nodes; `</script`, `<script` or `<!--` anywhere in the block (any
+  case).
+- **Text from the network is hostile.** Names, `web_title`, banners and
+  notes come from devices anyone on the client's network can name, and the
+  block sits inside the page's `<script>` element: a device called
+  `</script><img src=x onerror=…>` would end it and run. Write every `<`
+  inside a string as `\u003c` (it displays the same). is-alive's own pages
+  already do.
 - **Warnings (exit 0):** `kind` over 18 characters; a node with no `site` on
   a map that declares SITES; edge `cls` other than backbone/wired/wifi; more
   than 90 nodes.

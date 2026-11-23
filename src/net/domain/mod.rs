@@ -582,11 +582,21 @@ mod tests {
                 vec![127, 0, 0, 7],
             ),
             ("bogus.test", dnsq::SOA, soa("ns.bogus.test")),
+            // Signed: a DS at its apex (tag 12345, alg 13, SHA-256).
+            (
+                "bogus.test",
+                dnsq::DS,
+                [vec![0x30, 0x39, 13, 2], vec![0xAB; 32]].concat(),
+            ),
+            // SERVFAIL without CD too, but no DS anywhere: flaky, not DNSSEC.
+            ("bogus.flaky.test", dnsq::SOA, soa("ns.flaky.test")),
             // example.test's MX IP (127.0.0.9) is on Spamhaus ZEN.
             ("9.0.0.127.zen.spamhaus.org", dnsq::A, vec![127, 0, 0, 2]),
             // A Spamhaus PBL entry for an SPF-authorized address.
             ("5.2.0.192.zen.spamhaus.org", dnsq::A, vec![127, 0, 0, 11]),
             ("pbl.test", dnsq::TXT, txt("v=spf1 ip4:192.0.2.5 -all")),
+            // A stray space after ip4: (a common typo): permerror at receivers.
+            ("typo.test", dnsq::TXT, txt("v=spf1 ip4: 192.0.2.10 -all")),
             (
                 "default._bimi.bimi.test",
                 dnsq::TXT,
@@ -798,9 +808,15 @@ mod tests {
             "{wan:?}"
         );
         assert!(wan.status() < Status::Fail, "{wan:?}");
+        let typo = spf(&c, "typo.test");
+        assert!(has(&typo, Status::Fail, "permerror"), "{typo:?}");
 
         let ds = dnssec(&c, "bogus.test");
-        assert!(has(&ds, Status::Fail, "bogus"), "{ds:?}");
+        assert!(has(&ds, Status::Fail, "DNSSEC is broken (bogus)"), "{ds:?}");
+        // An unsigned zone can't be bogus: its nameservers are the problem.
+        let ds = dnssec(&c, "bogus.flaky.test");
+        assert!(has(&ds, Status::Fail, "isn't signed (no DS)"), "{ds:?}");
+        assert!(!has(&ds, Status::Fail, "DNSSEC is broken"), "{ds:?}");
 
         let ad = autodiscover(&c, d, &info);
         assert_eq!(ad.status(), Status::Info, "{ad:?}");

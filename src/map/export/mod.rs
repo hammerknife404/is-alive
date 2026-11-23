@@ -14,7 +14,7 @@ mod scene;
 mod svg;
 
 pub use csv::vendor;
-pub use dchtml::{CARDS_MAX as DC_HTML_MAX, left_out as dc_html_left_out};
+pub use dchtml::{DRAWN as DC_HTML_DRAWN, left_out as dc_html_left_out};
 pub use scene::Look;
 
 use super::layout::{self, CARD, Layout, Line};

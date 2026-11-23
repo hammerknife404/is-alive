@@ -135,11 +135,15 @@ fn interfaces(t: &str, withheld: &Cell<usize>) -> Vec<Value> {
             "Network Mask" if v4 => first(&mut i.mask, ip(v)),
             "Gateway IP" if v4 => first(&mut i.gateway, ip(v)),
             "Port Shutdown" if v4 => i.disabled = v == "1",
-            _ if v4 && k.starts_with("Interface ") && k.ends_with(" Management") => {
-                let proto = &k["Interface ".len()..k.len() - " Management".len()];
+            // "Interface HTTPS Management : Yes". Stripped, not sliced by
+            // length: in "Interface Management" the two ends overlap.
+            _ if v4 => {
+                let proto = k
+                    .strip_prefix("Interface ")
+                    .and_then(|r| r.strip_suffix(" Management"));
                 let known = ["http", "https", "ssh", "ping", "snmp"]
                     .into_iter()
-                    .find(|p| p.eq_ignore_ascii_case(proto));
+                    .find(|p| proto.is_some_and(|proto| p.eq_ignore_ascii_case(proto)));
                 if let Some(p) = known
                     && v == "Yes"
                     && !i.mgmt.contains(&p)
@@ -577,6 +581,22 @@ Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:
             let _ = sniff(d);
             let _ = convert(d);
         });
+        crate::hostile::each_text(REPORT, |t| {
+            let _ = convert(t.as_bytes());
+        });
+    }
+
+    /// "Interface Management" both starts with "Interface " and ends with
+    /// " Management", and the two overlap: slicing by their lengths
+    /// panicked on it. It's a key, not a protocol, so nothing is added.
+    #[test]
+    fn a_management_key_with_no_protocol() {
+        let wri = "#Network : Interfaces_START\nInterface Name : X0\n\n[IPv4 Settings]\n\
+            IP Address : 192.0.2.1\nInterface Management : Yes\nInterface HTTPS Management : Yes\n\
+            #Network : Interfaces_END\n";
+        let r = convert(wri.as_bytes()).unwrap();
+        let v: Value = serde_json::from_str(&r.json).unwrap();
+        assert_eq!(v["interfaces"][0]["management"], json!(["https"]));
     }
 
     #[test]

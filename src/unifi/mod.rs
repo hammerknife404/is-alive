@@ -12,6 +12,11 @@ mod container;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Most JSON the kept collections may come to. A big controller's devices,
+/// networks and clients are tens of MB; the events and stats that make a
+/// backup large are left behind, not kept.
+const KEPT_MAX: usize = 256 << 20;
+
 /// Sites, devices, networks, switch port profiles, WLANs.
 /// Largest file Config Export will read.
 pub const MAX_INPUT: usize = container::MAX_UNPACKED;
@@ -55,16 +60,36 @@ impl Clients {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Clients::None => "Leave the client table out.",
+            Clients::None => {
+                "Leave the UniFi client table out, and leave phones', laptops' and PCs' names out \
+of the sweep inventory and a Meraki export's DHCP reservations (their MAC and address stay)."
+            }
             Clients::Anonymized => {
-                "Keep each client's MAC, vendor and switch port (what unifidump needs to spot \
-unadopted gear) but replace device names, which are often people's names, with a token \
-like client-1a2b3c4d. Notes and email addresses are dropped."
+                "Replace device names, which are often people's names, with a token like \
+client-1a2b3c4d made from the MAC, so a device reads the same in every file: every name in the \
+UniFi client table, and phones', laptops' and PCs' in the sweep inventory and Meraki DHCP \
+reservations. MAC, vendor and switch port stay (what the skills need to spot unadopted gear); \
+notes and email addresses are dropped."
             }
             Clients::Full => {
-                "Keep the client table with device names. Notes, email addresses and phone \
-numbers are still dropped: nothing reads them."
+                "Keep device names everywhere. Notes, email addresses and phone numbers are still \
+dropped: nothing reads them."
             }
+        }
+    }
+
+    /// What a device's `name` becomes under this setting where a file
+    /// mixes clients with gear (the sweep inventory, Meraki DHCP
+    /// reservations): a name on anything that doesn't `look like a client`
+    /// stays, as do all with Full; otherwise it's the `token` of `key`
+    /// (its MAC as `aa:bb:cc:dd:ee:ff`, else its address) or nothing.
+    pub fn device_name(self, name: Option<&str>, key: &str, client: bool) -> Option<String> {
+        let name = name?;
+        match self {
+            Clients::Full => Some(name.to_string()),
+            _ if !client => Some(name.to_string()),
+            Clients::Anonymized => Some(token(key)),
+            Clients::None => None,
         }
     }
 }
@@ -84,16 +109,23 @@ fn drop_details(doc: &mut Map<String, Value>) -> bool {
     doc.len() != before
 }
 
-/// Replace a client's names with a stable token from its MAC (the MAC is
-/// kept anyway, so the token reveals nothing new). Returns whether
-/// anything changed.
-fn anonymize(doc: &mut Map<String, Value>) -> bool {
-    let mac = doc.get("mac").and_then(Value::as_str).unwrap_or_default();
-    let token = format!(
+/// The name a client goes by when names are anonymized: `client-` and a
+/// hash of its MAC as UniFi writes it (`aa:bb:cc:dd:ee:ff`). The MAC is
+/// kept anyway, so the token reveals nothing new, and the sweep inventory
+/// uses the same one, so a device reads the same in both files.
+pub fn token(mac: &str) -> String {
+    format!(
         "client-{:08x}",
         mac.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32)
             .wrapping_mul(0x0100_0193))
-    );
+    )
+}
+
+/// Replace a client's names with its `token`. Returns whether anything
+/// changed.
+fn anonymize(doc: &mut Map<String, Value>) -> bool {
+    let mac = doc.get("mac").and_then(Value::as_str).unwrap_or_default();
+    let token = token(mac);
     let mut changed = false;
     for k in PERSONAL_NAMES {
         if let Some(v) = doc.get_mut(*k)
@@ -140,12 +172,56 @@ fn is_secret(key: &str) -> bool {
         || SECRET.iter().any(|s| k.contains(s))
 }
 
-/// Key or certificate material in a value whatever the field is called,
-/// e.g. an OpenVPN client config pasted into a network's settings.
+/// Marks of key material inside a value, matched without case: PEM
+/// blocks, an OpenVPN config's inline key blocks, and a WireGuard
+/// config's `PrivateKey =` / `PresharedKey =` lines.
+const KEY_MARKS: &[&str] = &[
+    "-----begin",
+    "private key",
+    "private_key",
+    "privatekey",
+    "presharedkey",
+    "<key>",
+    "<secret>",
+    "<tls-auth>",
+    "<tls-crypt>",
+];
+
+/// Key or certificate material in a value whatever the field is called:
+/// an OpenVPN or WireGuard config pasted or uploaded into a network's
+/// settings (as text or base64), or a bare 32-byte key in base64 (how
+/// WireGuard writes its keys). The decision firmware fields don't get to
+/// make by being named something new.
 fn holds_secret(v: &Value) -> bool {
-    v.as_str().is_some_and(|s| {
-        s.contains("-----BEGIN") || s.contains("<key>") || s.contains("PRIVATE KEY")
-    })
+    v.as_str().is_some_and(text_holds_secret)
+}
+
+fn text_holds_secret(s: &str) -> bool {
+    use base64::Engine;
+    let marked = |t: &str| {
+        let t = t.to_ascii_lowercase();
+        KEY_MARKS.iter().any(|m| t.contains(m))
+    };
+    if marked(s) {
+        return true;
+    }
+    let b64: String = s.split_whitespace().collect();
+    if b64.len() < 44
+        || !b64
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'-' | b'_'))
+    {
+        return false;
+    }
+    let engines = [
+        base64::engine::general_purpose::STANDARD,
+        base64::engine::general_purpose::URL_SAFE,
+    ];
+    let Some(raw) = engines.iter().find_map(|e| e.decode(&b64).ok()) else {
+        return false;
+    };
+    // A bare key: 32 bytes is a WireGuard private or preshared key.
+    raw.len() == 32 || std::str::from_utf8(&raw).is_ok_and(marked)
 }
 
 /// Drop secret fields at any depth; count each by `collection.path.field`,
@@ -171,7 +247,19 @@ fn redact(
                 redact(child, &format!("{path}.{k}"), removed, secrets);
             }
         }
-        Value::Array(a) => a.iter_mut().for_each(|c| redact(c, path, removed, secrets)),
+        Value::Array(a) => {
+            // A list of strings (certificates, peer configs) is checked
+            // item by item, like a field's value.
+            a.retain(|c| {
+                let keep = !holds_secret(c);
+                if !keep {
+                    *removed.entry(format!("{path}[]")).or_default() += 1;
+                    strings(c, secrets);
+                }
+                keep
+            });
+            a.iter_mut().for_each(|c| redact(c, path, removed, secrets));
+        }
         _ => {}
     }
 }
@@ -271,6 +359,7 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
     let mut secrets = BTreeSet::new();
     let mut sites = Vec::new();
     let mut current: Option<String> = None;
+    let mut kept_bytes = 0usize;
 
     for raw in bson::documents(&dump.bson) {
         let raw = raw?;
@@ -303,7 +392,16 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
                 }
                 let mut v = Value::Object(std::mem::take(&mut doc));
                 redact(&mut v, c, &mut redacted, &mut secrets);
-                out.push(v.to_string());
+                let line = v.to_string();
+                kept_bytes += line.len();
+                if kept_bytes > KEPT_MAX {
+                    return Err(format!(
+                        "the collections kept come to more than {} MB: far more than a controller's \
+devices, networks and clients, so this isn't a backup this reads",
+                        KEPT_MAX >> 20
+                    ));
+                }
+                out.push(line);
                 // A document before any collection marker (a damaged or
                 // hand-made dump) is still kept; it just isn't counted.
                 if let Some(k) = kept.last_mut() {
@@ -384,6 +482,90 @@ mod tests {
             json!({"msg": "x"}),
             json!({"msg": "y"}),
         ])
+    }
+
+    /// Key material is found by what it is, not only by the field's
+    /// name: a WireGuard config as text or base64 under a name no list
+    /// knows, lower-case PEM, a bare base64 key, and certificates in a
+    /// list. Ordinary long values stay.
+    #[test]
+    fn finds_keys_whatever_the_field_is_called() {
+        use base64::Engine;
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+        let conf = "[Interface]\nPrivateKey = cGxhY2Vob2xkZXIta2V5LW5vdC1yZWFsLTAwMDAwMDA=\nAddress = 10.8.0.2/32\n";
+        let sel = |c: &str| json!({"__cmd": "select", "collection": c});
+        let r = convert(
+            backup(&[
+                sel("site"),
+                json!({"_id": "s1", "name": "default"}),
+                sel("networkconf"),
+                json!({"name": "Branch VPN", "purpose": "wireguard-client",
+                       "wireguard_client_configuration_file": conf,
+                       "uploaded_profile": b64(conf.as_bytes()),
+                       "peer_blob": b64(&[7u8; 32]),
+                       "ca_list": ["-----begin certificate-----\nMIIB\n-----end certificate-----", "keep-me"],
+                       "description": "Main-Office-Building-Second-Floor-Network-Closet-A",
+                       "site_id": "5f0c6b2e8a1d4c0012345678"}),
+            ]),
+            Clients::None,
+        )
+        .unwrap();
+        for (i, gone) in [
+            "PrivateKey",
+            "cGxhY2Vob2xkZXIta2V5",
+            "uploaded_profile",
+            "peer_blob",
+            "begin certificate",
+            "wireguard_client_configuration_file",
+        ]
+        .iter()
+        .enumerate()
+        {
+            // By number: a failing test never prints a secret.
+            assert!(!r.json.contains(*gone), "fixture secret #{i} leaked");
+        }
+        for kept in [
+            "Branch VPN",
+            "keep-me",
+            "Network-Closet-A",
+            "5f0c6b2e8a1d4c0012345678",
+        ] {
+            assert!(r.json.contains(kept), "{kept} should stay");
+        }
+        assert_eq!(r.redacted.get("networkconf.ca_list[]"), Some(&1));
+    }
+
+    #[test]
+    fn device_names_by_setting() {
+        let mac = "00:12:f0:00:00:01";
+        for c in Clients::ALL {
+            assert_eq!(
+                c.device_name(None, mac, true),
+                None,
+                "no name, nothing to keep"
+            );
+            assert_eq!(
+                c.device_name(Some("SW-1"), mac, false).as_deref(),
+                Some("SW-1")
+            );
+        }
+        assert_eq!(
+            Clients::Full
+                .device_name(Some("Jane"), mac, true)
+                .as_deref(),
+            Some("Jane")
+        );
+        assert_eq!(
+            Clients::Anonymized.device_name(Some("Jane"), mac, true),
+            Some(token(mac))
+        );
+        assert_eq!(Clients::None.device_name(Some("Jane"), mac, true), None);
+        // The UniFi table's token for the same MAC.
+        let mut doc = Map::new();
+        doc.insert("mac".into(), json!(mac));
+        doc.insert("name".into(), json!("Jane"));
+        anonymize(&mut doc);
+        assert_eq!(doc["name"], json!(token(mac)));
     }
 
     #[test]

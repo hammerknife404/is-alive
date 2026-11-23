@@ -31,6 +31,9 @@ enum Ev {
 
 pub struct TraceTool {
     host: String,
+    /// The host the last run traced, as typed then: what its report and
+    /// table name.
+    ran_host: String,
     max_hops: u8,
     timeout_ms: u32,
     resolve_names: bool,
@@ -47,6 +50,7 @@ impl Default for TraceTool {
     fn default() -> Self {
         Self {
             host: String::new(),
+            ran_host: String::new(),
             max_hops: 30,
             timeout_ms: 1000,
             resolve_names: true,
@@ -199,7 +203,7 @@ impl TraceTool {
     }
 
     fn report(&self) -> String {
-        let mut s = format!("Traceroute to {}\n", self.host.trim());
+        let mut s = format!("Traceroute to {}\n", self.ran_host);
         for h in &self.hops {
             let rtts: Vec<String> = h
                 .rtts
@@ -222,7 +226,7 @@ impl TraceTool {
             .iter()
             .map(|h| {
                 let mut row = vec![
-                    self.host.trim().to_string(),
+                    self.ran_host.clone(),
                     log::cell(self.target),
                     h.ttl.to_string(),
                     log::cell(h.addr),
@@ -250,14 +254,16 @@ impl TraceTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
-        self.err = None;
-        self.target = None;
-        self.reached = None;
-        self.hops.clear();
+        // A host that won't read leaves the last trace as it was.
         let host = match crate::input::host(&self.host) {
             Ok(t) => t.host,
             Err(e) => return self.err = Some(e),
         };
+        self.err = None;
+        self.target = None;
+        self.reached = None;
+        self.hops.clear();
+        self.ran_host = self.host.trim().to_string();
         let (max, timeout, names, v6) = (
             self.max_hops,
             self.timeout_ms,
@@ -281,6 +287,10 @@ impl TraceTool {
                     note: String::new(),
                 };
                 let mut reached = false;
+                // An error with no router behind it is this computer's (no
+                // ping program, a send refused): every hop would just time
+                // out, which reads as the network's fault.
+                let mut local = None;
                 for slot in hop.rtts.iter_mut() {
                     if tx.cancelled() {
                         return;
@@ -293,8 +303,15 @@ impl TraceTool {
                     match r.status {
                         EchoStatus::Reply => reached = true,
                         EchoStatus::Unreachable(m) => hop.note = m,
+                        EchoStatus::Error(m) if r.from.is_none() => local = Some(m),
                         _ => {}
                     }
+                }
+                if let Some(m) = local.filter(|_| hop.addr.is_none()) {
+                    tx.send(Ev::Hop(hop));
+                    return tx.send(Ev::Error(format!(
+                        "stopped at hop {ttl}: {m}. That's this computer, not the network"
+                    )));
                 }
                 if names {
                     hop.name = hop.addr.and_then(net::reverse);
@@ -307,5 +324,33 @@ impl TraceTool {
             }
             tx.send(Ev::Done(false));
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A host that won't read leaves the last trace; the report names the
+    /// host traced, not what the box says now.
+    #[test]
+    fn a_bad_host_keeps_the_last_trace() {
+        let mut t = TraceTool {
+            ran_host: "gw.example".into(),
+            hops: vec![Hop {
+                ttl: 1,
+                rtts: [Some(1.0); PROBES],
+                addr: None,
+                name: None,
+                note: String::new(),
+            }],
+            ..Default::default()
+        };
+        t.host = "not a host!".into();
+        t.start(&egui::Context::default());
+        assert!(t.err.is_some() && t.job.is_none());
+        assert_eq!(t.hops.len(), 1);
+        assert!(t.report().starts_with("Traceroute to gw.example"));
+        assert_eq!(t.table().unwrap().rows[0][0], "gw.example");
     }
 }

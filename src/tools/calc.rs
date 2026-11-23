@@ -182,9 +182,11 @@ impl CalcTool {
             let nice = if b.v6() { 64 } else { 24 };
             self.split = if (lo..=hi).contains(&nice) { nice } else { lo };
         }
-        let n_bits = b.split_bits(self.split);
-        let n = 1u128 << n_bits;
         let mut copy = false;
+        // The split is read once the box has had its say this frame: a count
+        // from before a drag would list rows past the block (and in a debug
+        // build overflow the shift).
+        let mut n = 1u128 << b.split_bits(self.split);
         ui.horizontal(|ui| {
             let h = ui.spacing().interact_size.y;
             cell(ui, KEY_W, h, RichText::new("Split into").strong());
@@ -193,6 +195,8 @@ impl CalcTool {
                     .range(lo..=hi)
                     .prefix("/"),
             );
+            self.split = self.split.clamp(lo, hi);
+            n = 1u128 << b.split_bits(self.split);
             let each = b.sub(self.split, 0).info();
             let size = subnet::count(each.host_bits, 1u128.checked_shl(each.host_bits));
             ui.label(if b.v6() {

@@ -6,7 +6,7 @@ use super::{Clients, Link, Map, MapView, NOTHING_YET, Sources, Zone, notes};
 use crate::report;
 use crate::widgets;
 use eframe::egui::{self, Pos2, Ui};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl MapView {
     /// "Export ▾" on the toolbar.
@@ -77,17 +77,29 @@ impl MapView {
                 });
             }
             _ => {
-                let text = self.drawn(|d| f.text(d, look)).unwrap_or_default();
+                // A /mapnetwork page is read back as a map: every site open.
+                let text = if f == Format::DcHtml {
+                    self.drawn_open(|d| f.text(d, look))
+                } else {
+                    self.drawn(|d| f.text(d, look))
+                }
+                .unwrap_or_default();
                 if let Some(w) = f.warning(&text) {
                     widgets::toast(w, false);
                 }
                 if f == Format::DcHtml {
-                    let left = self.drawn(export::dc_html_left_out);
-                    if left > 0 {
+                    let left = self.drawn_open(export::dc_html_left_out);
+                    if left.total() > 0 {
                         widgets::toast(
                             format!(
-                                "{left} client(s) left out: a /mapnetwork map holds at most {} cards",
-                                export::DC_HTML_MAX
+                                "{} (a /mapnetwork map's limit){}",
+                                left.line(),
+                                if left.infra > 0 {
+                                    ". The cards furthest from the internet went first, so \
+                                     each card kept keeps its uplink"
+                                } else {
+                                    ""
+                                }
                             ),
                             false,
                         );
@@ -102,6 +114,60 @@ impl MapView {
     /// shows it, opened up when it is.
     pub(super) fn drawn<R>(&self, f: impl FnOnce(&Drawn) -> R) -> R {
         self.drawn_as(true, f)
+    }
+
+    /// As `drawn`, with every collapsed site open again: a file that's read
+    /// back as a map (the /mapnetwork page) holds the cards inside, not
+    /// the site's one card. A card inside counts as shown unless the map
+    /// leaves it out anyway (a client past the Clients level); each
+    /// carries its note.
+    pub(super) fn drawn_open<R>(&self, f: impl FnOnce(&Drawn) -> R) -> R {
+        let full = match (&self.frozen, &self.unfolded) {
+            _ if self.map.closed.is_empty() => None,
+            (Some(m), _) | (None, Some(m)) => Some(m.as_ref()),
+            (None, None) => None,
+        };
+        let Some(full) = full else {
+            return self.drawn(f);
+        };
+        let mut open = super::saved::copy_map(full);
+        for n in &mut open.nodes {
+            n.note = self
+                .notes
+                .get(&n.id)
+                .map(|t| notes::clean(t, &self.ov))
+                .unwrap_or_default();
+        }
+        let inside: HashSet<&str> = self
+            .map
+            .closed
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        let shown: HashSet<&str> = (0..self.map.nodes.len())
+            .filter(|&i| self.flat_target(i).is_some())
+            .map(|i| self.map.nodes[i].id.as_str())
+            .collect();
+        let pos: Vec<Option<Pos2>> = open
+            .nodes
+            .iter()
+            .map(|n| {
+                let id = n.id.as_str();
+                (shown.contains(id) || (inside.contains(id) && !open.folded.contains(id)))
+                    .then_some(Pos2::ZERO)
+            })
+            .collect();
+        let moved = vec![false; open.nodes.len()];
+        f(&Drawn {
+            map: &open,
+            lay: &self.lay,
+            pos: &pos,
+            moved: &moved,
+            legend: self.legend,
+            caption: self.purpose.caption(),
+            exploded: None,
+        })
     }
 
     /// As `drawn`; without `as_shown`, flat whatever the canvas shows.
@@ -271,6 +337,72 @@ impl MapView {
 mod tests {
     use super::*;
     use crate::report::{Parts, Report};
+
+    /// A collapsed site goes into the /mapnetwork page whole: its cards,
+    /// their notes and links, not the one card the canvas shows. Read
+    /// back, the page has the same cards as with the site open.
+    #[test]
+    fn a_collapsed_site_goes_into_the_dc_html_whole() {
+        let ctx = egui::Context::default();
+        let sweep = crate::tools::sweep::SweepTool::default();
+        let export = crate::tools::export::ExportTool::with_example(0);
+        let info = crate::net::hostinfo::HostInfo::default();
+        let ov = crate::redact::Overrides::default();
+        let src = Sources {
+            sweep: &sweep,
+            export: &export,
+            info: &info,
+            busy: false,
+            note: false,
+            legend: true,
+            redact: &ov,
+            animate: false,
+        };
+        let mut v = MapView::new(None);
+        v.refresh(&ctx, &src);
+        let site = v.map.sites().into_iter().next().expect("a site");
+        let inside = v
+            .map
+            .nodes
+            .iter()
+            .find(|n| n.site.as_ref() == Some(&site) && n.zone != Zone::Internet)
+            .expect("a card inside")
+            .id
+            .clone();
+        v.notes.insert(inside, "Spare PSU on the shelf".into());
+        // As each frame does.
+        v.stamp_notes();
+        let look = Look::new(&egui::Visuals::dark(), false);
+        let page = |v: &MapView, open: bool| {
+            let text = if open {
+                v.drawn_open(|d| Format::DcHtml.text(d, look))
+            } else {
+                v.drawn(|d| Format::DcHtml.text(d, look))
+            };
+            let doc = crate::mapnetwork::parse(text.unwrap().as_bytes()).unwrap();
+            let mut labels: Vec<String> = doc
+                .nodes
+                .iter()
+                .map(|n| n["label"].as_str().unwrap_or("").to_string())
+                .collect();
+            labels.sort();
+            (
+                labels,
+                doc.edges.len(),
+                doc.html.contains("Spare PSU on the shelf"),
+            )
+        };
+        let as_open = page(&v, true);
+        assert!(as_open.2, "the note is on its card");
+        v.closed.insert(site.clone());
+        v.stale = true;
+        v.refresh(&ctx, &src);
+        assert!(v.map.closed.contains_key(&site), "collapsed on the canvas");
+        assert_eq!(page(&v, true), as_open, "the page has every card inside");
+        // What the canvas shows would have lost them: one SITE card.
+        let shown = page(&v, false);
+        assert!(shown.0.contains(&site) && shown.0.len() < as_open.0.len());
+    }
 
     /// A report of example `i` as the Map tab first shows it. With
     /// IS_ALIVE_REPORT_OUT set to a folder, the page is written there to
