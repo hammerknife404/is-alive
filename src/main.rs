@@ -1429,6 +1429,10 @@ fn main() {
     close_inherited_fds_on_exec();
     // Owner-only before anything is written into it.
     theme::secure_data_dir();
+    // One copy per data folder: a second would write over the first's work.
+    if let Err(why) = theme::claim_data_dir() {
+        startup::already_open(&why);
+    }
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).

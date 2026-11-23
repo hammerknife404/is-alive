@@ -425,6 +425,13 @@ pub fn failed(err: &eframe::Error) -> ! {
     std::process::exit(1);
 }
 
+/// Another copy has the data folder: say so and exit, before a window.
+pub fn already_open(why: &str) -> ! {
+    log("not started: another copy has the data folder");
+    tell("is-alive is already open", why);
+    std::process::exit(0);
+}
+
 /// The command line or IS_ALIVE_RENDERER names no renderer: say so and exit.
 pub fn bad_arguments(error: &str) -> ! {
     log(error);
@@ -447,6 +454,8 @@ fn try_other(renderer: Renderer, error: &str) {
         std::env::var_os("APPIMAGE"),
         appdir,
     );
+    // The next one claims the data folder for itself.
+    crate::theme::release_data_dir();
     let started = exe.is_some_and(|exe| {
         std::process::Command::new(exe)
             .args(std::env::args_os().skip(1))
