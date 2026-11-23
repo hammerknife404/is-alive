@@ -478,7 +478,7 @@ fn try_other(renderer: Renderer, error: &str) {
 /// goes away when it exits, so the AppImage itself. APPIMAGE is handed down
 /// to everything an AppImage starts (a terminal, a file manager), so it's
 /// only this program's when this program is inside APPDIR.
-fn relaunch_path(
+pub(crate) fn relaunch_path(
     exe: Option<PathBuf>,
     appimage: Option<OsString>,
     appdir: Option<PathBuf>,
@@ -637,11 +637,16 @@ fn tell(title: &str, text: &str) {
         if std::io::stderr().is_terminal() || std::env::var_os("IS_ALIVE_SHOTS").is_some() {
             return;
         }
-        let zenity = std::process::Command::new("zenity")
-            .args(["--error", "--title", title, "--text", &markup_escape(text)])
-            .status();
-        if zenity.is_err() {
-            let _ = std::process::Command::new("kdialog")
+        // From the system's own folders, not whatever is first on PATH.
+        let zenity = crate::net::system_tool("zenity").map(|z| {
+            std::process::Command::new(z)
+                .args(["--error", "--title", title, "--text", &markup_escape(text)])
+                .status()
+        });
+        if !matches!(zenity, Some(Ok(_)))
+            && let Some(k) = crate::net::system_tool("kdialog")
+        {
+            let _ = std::process::Command::new(k)
                 .args(["--title", title, "--error", text])
                 .status();
         }

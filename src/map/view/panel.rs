@@ -218,7 +218,7 @@ impl MapView {
                     menu = Some(b);
                     let pin = RichText::new("📌")
                         .color(crate::theme::emoji_colour('📌', ui.visuals().text_color()));
-                    if ui
+                    let pin = ui
                         .add(
                             egui::Button::new(pin)
                                 .frame(kept)
@@ -229,9 +229,11 @@ impl MapView {
                             "Pinned: stays selected and keeps its place here. Click to unpin"
                         } else {
                             "Pin: keep it selected and in this place in the panel"
-                        })
-                        .clicked()
-                    {
+                        });
+                    pin.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, kept, "Pin")
+                    });
+                    if pin.clicked() {
                         *ev = Some(PanelEv::Keep(i));
                     }
                     if self.note_of(i).is_some() {

@@ -303,7 +303,14 @@ fn rdap_services(bootstrap: &str) -> Option<HashMap<String, String>> {
     let j: serde_json::Value = serde_json::from_str(bootstrap).ok()?;
     let mut m = HashMap::new();
     for s in j["services"].as_array()? {
-        let (Some(tlds), Some(url)) = (s[0].as_array(), s[1][0].as_str()) else {
+        // The HTTPS one of the service's URLs: some list an http:// one
+        // first, and only HTTPS is fetched.
+        let https = s[1].as_array().and_then(|u| {
+            u.iter()
+                .filter_map(|u| u.as_str())
+                .find(|u| u.starts_with("https://"))
+        });
+        let (Some(tlds), Some(url)) = (s[0].as_array(), https) else {
             continue;
         };
         for t in tlds.iter().filter_map(|t| t.as_str()) {
@@ -470,6 +477,17 @@ mod tests {
         assert_eq!(m.get("org"), None);
         assert!(rdap_services("<html>captive portal</html>").is_none());
         assert!(rdap_services(r#"{"services":[]}"#).is_none());
+        // An http:// URL listed first: the HTTPS one is taken; a service
+        // with no HTTPS URL is left out.
+        let mixed = r#"{"services":[
+            [["example"],["http://rdap.example/","https://rdap.example/"]],
+            [["plain"],["http://rdap.plain/"]]]}"#;
+        let m = rdap_services(mixed).unwrap();
+        assert_eq!(
+            m.get("example").map(String::as_str),
+            Some("https://rdap.example/")
+        );
+        assert_eq!(m.get("plain"), None);
         let body = r#"{"status":["client transfer prohibited"],
             "events":[{"eventAction":"registration","eventDate":"1997-09-15T04:00:00Z"},
                       {"eventAction":"expiration","eventDate":"2028-09-14T04:00:00Z"}],

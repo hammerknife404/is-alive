@@ -419,7 +419,7 @@ impl BundleTool {
                     map.map(|(p, d)| {
                         format!(
                             "{}{} device(s) · {} · updated, not rebuilt",
-                            map_check(&d.json, src.notes.overrides()),
+                            map_check(&d.json, src.notes.overrides(), self.clients),
                             d.nodes.len(),
                             export::file_name(p),
                         )
@@ -770,7 +770,7 @@ impl BundleTool {
             map.map(|(p, d)| {
                 format!(
                     "{}{} device(s) · {} · updated, not rebuilt",
-                    map_check(&d.json, src.notes.overrides()),
+                    map_check(&d.json, src.notes.overrides(), self.clients),
                     d.nodes.len(),
                     export::file_name(p),
                 )
@@ -971,12 +971,19 @@ fn build_and_save(unifi: Vec<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, S
         .add_filter("Zip", &["zip"])
         .save_file()
     else {
+        widgets::tidy_save_folder();
         return Ok(None);
     };
     let path = widgets::safe_path(path, &["zip"]);
     let name = export::file_name(&path);
-    let zip = b.zip(&name).map_err(|e| e.to_string())?;
-    write_whole(&path, &zip).map_err(|e| format!("{}: {e}", path.display()))?;
+    let written = b
+        .zip(&name)
+        .map_err(|e| e.to_string())
+        .and_then(|zip| write_whole(&path, &zip).map_err(|e| format!("{}: {e}", path.display())));
+    // Saved elsewhere, or not at all: the site folder made for the dialog
+    // goes if it's still empty.
+    widgets::tidy_save_folder();
+    written?;
     let kickoff = b.kickoff(&name);
     Ok(Some(Saved { path, kickoff }))
 }
@@ -988,12 +995,12 @@ fn build_and_save(unifi: Vec<PathBuf>, mut b: Bundle) -> Result<Option<Saved>, S
 /// a key, token, email address, card or patient detail; empty when not.
 /// A password found by the word alone isn't counted: a map's findings say
 /// "password policy" all the time. Cached: read once, not every frame.
-fn map_check(json: &str, ov: &crate::redact::Overrides) -> String {
+fn map_check(json: &str, ov: &crate::redact::Overrides, clients: Clients) -> String {
     use crate::redact::Kind;
     use std::hash::{Hash, Hasher};
     static SEEN: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (json, ov).hash(&mut h);
+    (json, ov, clients.label()).hash(&mut h);
     let key = h.finish();
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((k, s)) = seen.as_ref()
@@ -1008,13 +1015,62 @@ fn map_check(json: &str, ov: &crate::redact::Overrides) -> String {
         .filter(|h| !matches!(h.kind, Kind::Password | Kind::Address))
         .chain(crate::redact::find_with(json, ov))
         .collect();
-    let s = if hits.is_empty() {
+    // Client devices named as they were (people's names, often), where
+    // Client names says they shouldn't go: the map goes as it was opened,
+    // so it would carry them anyway.
+    let named = if clients == Clients::Full {
+        0
+    } else {
+        named_clients(json)
+    };
+    let mut what = Vec::new();
+    if !hits.is_empty() {
+        what.push(crate::redact::summary(&hits));
+    }
+    if named > 0 {
+        what.push(format!(
+            "{named} client device name{} (Client names is {})",
+            if named == 1 { "" } else { "s" },
+            clients.label()
+        ));
+    }
+    let s = if what.is_empty() {
         String::new()
     } else {
-        format!("Check it: {} in it · ", crate::redact::summary(&hits))
+        format!("Check it: {} in it · ", what.join(", "))
     };
     *seen = Some((key, s.clone()));
     s
+}
+
+/// How many cards of a /mapnetwork page's data are client devices (a
+/// client zone, or a phone, laptop or workstation) named other than by a
+/// token (`client-1a2b3c4d`) or an address.
+fn named_clients(json: &str) -> usize {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return 0;
+    };
+    let Some(nodes) = v["nodes"].as_array() else {
+        return 0;
+    };
+    nodes
+        .iter()
+        .filter(|n| {
+            let zone = n["zone"].as_str().unwrap_or("").to_ascii_lowercase();
+            let kind = n["kind"].as_str().unwrap_or("").to_ascii_uppercase();
+            zone.contains("client")
+                || ["PHONE", "LAPTOP", "WORKSTATION", "TABLET"]
+                    .iter()
+                    .any(|k| kind.contains(k))
+        })
+        .filter(|n| {
+            let label = n["label"].as_str().unwrap_or("").trim();
+            !label.is_empty()
+                && !label.starts_with("client-")
+                && label.parse::<std::net::IpAddr>().is_err()
+                && crate::net::mac::parse_mac(label).is_none()
+        })
+        .count()
 }
 
 /// Write `data` to `path` whole or not at all: to a file beside it, then
@@ -1270,18 +1326,44 @@ pub(crate) fn part_row(
 mod tests {
     use super::*;
 
+    /// Client devices named in last visit's map are pointed out when
+    /// Client names says names don't go; tokens, addresses and
+    /// infrastructure aren't counted, and Full asks nothing.
+    #[test]
+    fn a_map_naming_client_devices_says_so() {
+        let ov = crate::redact::Overrides::default();
+        let map = r#"{"nodes":[
+            {"label":"Core switch","zone":"switch","kind":"SWITCH"},
+            {"label":"Dana's iPhone","zone":"client","kind":"PHONE"},
+            {"label":"RECEPTION-PC","zone":"clients","kind":"WORKSTATION"},
+            {"label":"client-1a2b3c4d","zone":"client"},
+            {"label":"10.0.0.50","zone":"client"}]}"#;
+        let s = map_check(map, &ov, Clients::Anonymized);
+        assert!(s.contains("2 client device names"), "{s}");
+        assert!(s.contains("anonymized"), "{s}");
+        assert_eq!(map_check(map, &ov, Clients::Full), "");
+    }
+
     /// Last visit's map goes as it was opened: what it holds that Notes
     /// would redact is pointed out on its row, but not prose about
     /// passwords.
     #[test]
     fn a_map_holding_a_secret_says_so() {
         let ov = crate::redact::Overrides::default();
-        assert_eq!(map_check(r#"{"nodes":[{"label":"Core switch"}]}"#, &ov), "");
+        assert_eq!(
+            map_check(
+                r#"{"nodes":[{"label":"Core switch"}]}"#,
+                &ov,
+                Clients::Anonymized
+            ),
+            ""
+        );
         let prose = r#"{"actions":[{"text":"scope the password replication policy tightly"}]}"#;
-        assert_eq!(map_check(prose, &ov), "");
+        assert_eq!(map_check(prose, &ov, Clients::Anonymized), "");
         let s = map_check(
             r#"{"nodes":[{"details":["NOC: jane.doe@clinic-mail.com"]}]}"#,
             &ov,
+            Clients::Anonymized,
         );
         assert!(s.starts_with("Check it: ") && s.contains("email"), "{s}");
         // A secret from a config open now, wherever it sits.
@@ -1289,13 +1371,18 @@ mod tests {
             known: vec!["Harbor2024!".into()],
             ..Default::default()
         };
-        let s = map_check(r#"{"meta":{"subtitle":"wifi Harbor2024!"}}"#, &known);
+        let s = map_check(
+            r#"{"meta":{"subtitle":"wifi Harbor2024!"}}"#,
+            &known,
+            Clients::Anonymized,
+        );
         assert!(s.starts_with("Check it: "), "{s}");
         // Both bundled examples are clean.
         for i in 0..2 {
             let p = crate::skills::example_path(i);
             let d = crate::mapnetwork::parse(crate::skills::example(&p).unwrap()).unwrap();
-            assert_eq!(map_check(&d.json, &ov), "", "example {i}");
+            // No secrets in them (their client names are fictional).
+            assert_eq!(map_check(&d.json, &ov, Clients::Full), "", "example {i}");
         }
     }
 
