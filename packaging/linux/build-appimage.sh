@@ -51,22 +51,58 @@ fetch() {
     mv "$1.part" "$1"
 }
 
+# The tool and the runtime are pinned by SHA-256. The runtime becomes the
+# first bytes of every AppImage released, and runs on every user's machine,
+# so it's held to what was reviewed, like the actions in build.yml are
+# pinned by commit. A file whose hash differs is refused, even one already
+# downloaded. appimagetool is a numbered release; type2-runtime only
+# publishes `continuous`, so when upstream rebuilds it this stops the build
+# until someone reviews the new runtime and updates RUNTIME_SHA256 here.
+# Set APPIMAGETOOL or APPIMAGE_RUNTIME to use a file of your own instead.
+APPIMAGETOOL_VERSION=1.9.1
+case "$arch" in
+x86_64)
+    APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+    RUNTIME_SHA256=617aa77314d57c8b8e4fae9c3f0b35af7b30d5529cb69e98f64f92510ed98a46
+    ;;
+*)
+    APPIMAGETOOL_SHA256=
+    RUNTIME_SHA256=
+    ;;
+esac
+
+# check FILE SHA256 WHAT: refuse FILE unless it has that hash.
+check() {
+    if [ -z "$2" ]; then
+        echo "No pinned hash for $3 on $arch: set APPIMAGETOOL and APPIMAGE_RUNTIME to files you've checked" >&2
+        exit 1
+    fi
+    got=$(sha256sum "$1" | cut -d' ' -f1)
+    if [ "$got" != "$2" ]; then
+        echo "$3: $1 has SHA-256 $got, not the pinned $2." >&2
+        echo "If upstream published a new build, review it and update the hash in $0." >&2
+        rm -f "$1"
+        exit 1
+    fi
+}
+
 tool=${APPIMAGETOOL:-}
 if [ -z "$tool" ]; then
-    tool="$out/appimagetool-$arch.AppImage"
-    if [ ! -x "$tool" ]; then
-        fetch "$tool" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
-        chmod 755 "$tool"
-    fi
+    tool="$out/appimagetool-$APPIMAGETOOL_VERSION-$arch.AppImage"
+    [ -s "$tool" ] || fetch "$tool" \
+        "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$arch.AppImage"
+    check "$tool" "$APPIMAGETOOL_SHA256" "appimagetool $APPIMAGETOOL_VERSION"
+    chmod 755 "$tool"
 fi
 
-# The runtime appimagetool would fetch itself, without retrying: fetched
-# here instead, and handed to it.
-runtime=${APPIMAGE_RUNTIME:-$out/runtime-$arch}
-if [ ! -s "$runtime" ]; then
-    fetch "$runtime" \
+# The runtime appimagetool would fetch itself, without retrying or
+# checking: fetched here instead, checked, and handed to it.
+runtime=${APPIMAGE_RUNTIME:-}
+if [ -z "$runtime" ]; then
+    runtime="$out/runtime-$arch"
+    [ -s "$runtime" ] || fetch "$runtime" \
         "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$arch"
+    check "$runtime" "$RUNTIME_SHA256" "type2-runtime"
 fi
 
 # Extract-and-run: works without FUSE (containers, CI).

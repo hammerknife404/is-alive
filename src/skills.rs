@@ -383,4 +383,69 @@ mod tests {
         assert_eq!(doc.sites.len(), 1);
         assert!(doc.actions.is_empty());
     }
+
+    /// The vendor names /unifidump's extract.py puts on uplinks it can't
+    /// place are the IEEE registry's, as is-alive's own are: a wrong one
+    /// reads as a conflict with the sweep's vendor for the same MAC on a
+    /// client's map. A prefix the registry doesn't list, or gives to
+    /// another maker, fails here.
+    #[test]
+    fn the_unifidump_vendor_table_matches_ieee() {
+        let text = std::str::from_utf8(file("unifidump/scripts/extract.py").unwrap()).unwrap();
+        let start = text.find("_OUI_VENDORS = {").expect("the table");
+        let table = &text[start..start + text[start..].find('}').unwrap()];
+        // "D-Link" / "D-LINK" alike; a brand under another company name.
+        let flat = |s: &str| -> String {
+            s.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect()
+        };
+        fn alias(w: &str) -> &str {
+            match w {
+                "mikrotik" => "routerboard",
+                w => w,
+            }
+        }
+        let mut n = 0;
+        let mut bad = Vec::new();
+        for line in table.lines() {
+            let mut rest = line;
+            while let Some(a) = rest.find('"') {
+                let after = &rest[a + 1..];
+                let Some(b) = after.find('"') else { break };
+                let prefix = &after[..b];
+                let tail = &after[b + 1..];
+                let Some(v) = tail.trim_start().strip_prefix(':').map(str::trim_start) else {
+                    break;
+                };
+                let v = v.strip_prefix('"').unwrap_or(v);
+                let name = &v[..v.find('"').unwrap_or(v.len())];
+                rest = &v[name.len() + 1..];
+                let bytes: Vec<u8> = (0..3)
+                    .filter_map(|k| u8::from_str_radix(prefix.get(k * 2..k * 2 + 2)?, 16).ok())
+                    .collect();
+                assert_eq!(
+                    (prefix.len(), bytes.len()),
+                    (6, 3),
+                    "{prefix}: not a prefix"
+                );
+                let ieee = crate::net::mac::vendor(&[bytes[0], bytes[1], bytes[2], 0, 0, 0]);
+                let word = flat(name)
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !ieee.is_some_and(|v| flat(v).contains(alias(&word))) {
+                    bad.push(format!("{prefix} says {name}, the IEEE registry {ieee:?}"));
+                }
+                n += 1;
+            }
+        }
+        assert!(
+            n >= 20,
+            "only {n} entries read: did the table's shape change?"
+        );
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
 }

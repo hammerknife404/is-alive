@@ -241,18 +241,23 @@ def _find_db_gz_bytes(zf):
 
 def load_export_documents(input_path):
     """Return a flat list of dicts (mongoexport-JSON shape) regardless of
-    whether input_path is JSON, a raw db.gz, or a .unf/.zip container."""
+    whether input_path is JSON, a raw db.gz, or a zip holding one (a
+    decrypted .unf). An encrypted .unf / .unifi is refused with a message
+    saying how to convert it."""
     with open(input_path, "rb") as f:
         head = f.read(4)
 
-    # zip container: native .unf (autobackup) or a .zip wrapping one.
+    # zip container: a decrypted .unf (autobackup), or a .zip wrapping one.
     if zipfile.is_zipfile(input_path):
         with zipfile.ZipFile(input_path) as zf:
+            names = zf.namelist()
             bson_bytes = _find_db_gz_bytes(zf)
         if bson_bytes is None:
+            if any(n.lower().endswith((".unf", ".unifi")) for n in names):
+                raise ValueError(_ENCRYPTED.format(path=f"The backup inside {input_path}"))
             raise ValueError(
-                f"{input_path} is a zip but no db.gz (or nested .unf "
-                "containing one) was found inside it"
+                f"{input_path} is a zip but no db.gz (or nested decrypted "
+                ".unf containing one) was found inside it"
             )
         print(f"  detected zip/.unf container, decoded db.gz "
               f"({len(bson_bytes)} bytes BSON)", file=sys.stderr)
@@ -267,48 +272,73 @@ def load_export_documents(input_path):
               file=sys.stderr)
         return decode_bson_stream(bson_bytes)
 
-    # otherwise assume mongoexport-style JSON (the original expected format)
-    with open(input_path, "r", encoding="utf-8") as f:
+    # An encrypted UniFi backup: a native .unf (AES-128) or a UniFi OS
+    # .unifi (AES-256). It isn't a zip until it's decrypted, and it holds
+    # every secret on the controller (admin password hashes, Wi-Fi and VPN
+    # keys), so it isn't decrypted here.
+    with open(input_path, "rb") as f:
+        start = f.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
+    if input_path.lower().endswith((".unf", ".unifi")) or start[:1] not in (b"[", b"{"):
+        raise ValueError(_ENCRYPTED.format(path=input_path))
+
+    # otherwise mongoexport-style JSON (the original expected format); a
+    # BOM, as Windows tools write one, is skipped
+    with open(input_path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
+
+
+_ENCRYPTED = (
+    "{path} isn't a zip, gzip or JSON file: it looks like an encrypted UniFi "
+    "backup (.unf, or .unifi from UniFi OS). This script doesn't decrypt "
+    "those: a raw backup holds every secret on the controller. Convert it "
+    "with is-alive's Config Export, which decrypts it and strips the secrets "
+    "on the technician's machine, and use the .unifidump.json it saves (a "
+    "Claude Handoff zip carries it as unifi.unifidump.json)."
+)
 
 
 # ---------------------------------------------------------------------------
 # Minimal OUI (first-3-octet) -> vendor lookup for discovered_devices' vendor
 # guess. Deliberately small and static — no network lookup, no third-party
-# OUI database bundled. This covers common network/security/infra vendors
+# OUI database bundled. It covers common network/security/infra vendors
 # likely to show up as an unresolved uplink; anything not in here just gets
-# vendor: null rather than a wrong guess. Extend as you actually encounter
-# new OUIs in the field — don't try to make this exhaustive up front.
+# vendor: null rather than a wrong guess.
+#
+# Every entry is checked against the IEEE registry: is-alive's test
+# `the_unifidump_vendor_table_matches_ieee` fails on a prefix the registry
+# gives to someone else, or doesn't list. Add one only after looking it up
+# at https://standards-oui.ieee.org/ (a wrong vendor here becomes a false
+# "conflict" with a sweep's IEEE vendor for the same MAC).
 # ---------------------------------------------------------------------------
 _OUI_VENDORS = {
-    "04d6aa": "Fortinet", "00098b": "Fortinet", "0090fb": "Fortinet",
-    "70728c": "Cisco", "001b0c": "Cisco", "0021d8": "Cisco", "6c9c42": "Cisco",
-    "88157e": "Meraki (Cisco)", "0018ce": "Meraki (Cisco)",
-    "00179a": "SonicWall", "0017c5": "SonicWall",
-    "0009de": "Palo Alto Networks", "50609d": "Palo Alto Networks",
-    "241b8f": "Palo Alto Networks",
-    "d8b370": "Aruba (HPE)", "24de91": "Aruba (HPE)",
-    "cc2d21": "MikroTik", "48a98a": "MikroTik", "6c3b6b": "MikroTik",
-    "4c5e0c": "Ubiquiti", "24a43c": "Ubiquiti", "fcecda": "Ubiquiti",
-    "dc9fdb": "Synology", "0011d9": "Synology",
-    "b827eb": "Raspberry Pi Foundation", "dca632": "Raspberry Pi Foundation",
+    # Firewalls and gateways
+    "00090f": "Fortinet", "000ce6": "Fortinet", "0401a1": "Fortinet",
+    "04d590": "Fortinet",
+    "001b17": "Palo Alto Networks", "00869c": "Palo Alto Networks",
+    "04472a": "Palo Alto Networks", "080342": "Palo Alto Networks",
+    "0006b1": "SonicWall", "0017c5": "SonicWall", "18b169": "SonicWall",
+    "18c241": "SonicWall", "2cb8ed": "SonicWall", "c0eae4": "SonicWall",
+    "00180a": "Meraki (Cisco)", "00841e": "Meraki (Cisco)",
+    "08f1b3": "Meraki (Cisco)", "0c7bc8": "Meraki (Cisco)",
+    "001b0c": "Cisco", "0021d8": "Cisco",
+    "000585": "Juniper Networks", "0010db": "Juniper Networks",
+    "00121e": "Juniper Networks", "0014f6": "Juniper Networks",
+    # Switches, access points, routers
+    "00156d": "Ubiquiti", "002722": "Ubiquiti", "24a43c": "Ubiquiti",
+    "fcecda": "Ubiquiti", "d8b370": "Ubiquiti", "dc9fdb": "Ubiquiti",
+    "000c42": "MikroTik", "4c5e0c": "MikroTik", "48a98a": "MikroTik",
+    "6c3b6b": "MikroTik",
+    "001a1e": "Hewlett Packard Enterprise",
+    "9c8e99": "Hewlett Packard", "3ca82a": "Hewlett Packard",
+    "204e7f": "Netgear", "c46e1f": "TP-Link", "b0be76": "TP-Link",
+    "00179a": "D-Link", "845b12": "Huawei", "cc2d21": "Tenda",
+    # Servers, NAS, cameras and the rest
+    "b8ca3a": "Dell", "509a4c": "Dell", "005056": "VMware",
+    "0050f2": "Microsoft", "001132": "Synology",
+    "b827eb": "Raspberry Pi", "dca632": "Raspberry Pi",
     "00408c": "Axis Communications", "accc8e": "Axis Communications",
-    "9c8e99": "HP / Aruba networking", "3ca82a": "HP Inc.",
-    "001a1e": "Dell", "b8ca3a": "Dell",
-    "005056": "VMware",
-    "0050f2": "Microsoft",
-    "d8cb8a": "Apple", "3c0754": "Apple",
-    "e4382f": "Fortinet",
-    "845b12": "Netgear", "204e7f": "Netgear",
-    "c46e1f": "TP-Link", "b0be76": "TP-Link",
-    "509a4c": "Juniper Networks", "8c6266": "Juniper Networks",
+    "3c0754": "Apple",
 }
-# NOTE: this table was hand-assembled from memory, not cross-checked against
-# the IEEE OUI registry. Treat every vendor string it returns as a *lead*,
-# not ground truth — verify against https://standards-oui.ieee.org/ (or
-# `arp-scan`'s bundled OUI database, which is authoritative and free) before
-# trusting it on a real site. Wrong OUIs here are worse than no lookup at
-# all, since they'd masquerade as fact in a client-facing map.
 
 
 def _vendor_from_mac(mac):
