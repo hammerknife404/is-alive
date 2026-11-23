@@ -1092,8 +1092,11 @@ fn transfer(
     }
     let (end, total) = (Instant::now(), t.bytes());
     let err = t.error();
+    // An upload's bytes count as they leave: refused every time, they
+    // aren't a speed.
+    let refused = t.only_refused();
     t.stop(Duration::from_secs(2));
-    if total == 0 {
+    if total == 0 || refused {
         let why = match err {
             // The error already says why: no guessing at web filters.
             Some(e) if e.contains("bot check") || e.contains("web page") => {

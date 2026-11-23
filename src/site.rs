@@ -147,9 +147,7 @@ fn read_meta(folder: &Path) -> Option<Meta> {
 
 fn write_meta(folder: &Path, m: &Meta) -> std::io::Result<()> {
     std::fs::create_dir_all(folder)?;
-    let tmp = folder.join("site.json.tmp");
-    crate::theme::write_private(&tmp, m.to_json())?;
-    std::fs::rename(tmp, folder.join(META))
+    crate::theme::replace_private(&folder.join(META), m.to_json())
 }
 
 fn now() -> String {

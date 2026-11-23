@@ -9,7 +9,7 @@ use crate::unifi::{self, Clients};
 use crate::{meraki, sonicwall, widgets};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// What the bundle can draw on, borrowed from the other tabs each frame.
@@ -66,6 +66,10 @@ pub struct BundleTool {
     job: Option<Job<Result<Option<Saved>, String>>>,
     saved: Option<Saved>,
     err: Option<String>,
+    /// The last look for unredacted secrets in each part: (hash of its
+    /// texts, kinds found). The rules run over up to a million
+    /// characters, so not every frame.
+    looked: std::cell::RefCell<HashMap<&'static str, (u64, Option<String>)>>,
 }
 
 impl Default for BundleTool {
@@ -89,6 +93,7 @@ impl Default for BundleTool {
             job: None,
             saved: None,
             err: None,
+            looked: Default::default(),
         }
     }
 }
@@ -111,7 +116,8 @@ const MERAKI_MORE_WHAT: &str = "Another Meraki export from this visit, in the sa
 meraki.json: its own networks and MX appliances, each a gateway of its own. Enforced config, not \
 observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). Observed state.";
+with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). Observed state; complete false \
+when the sweep was stopped before it finished.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
@@ -124,13 +130,57 @@ const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was ope
 Update it rather than starting over: keep what still holds, change what the other files show.";
 const CARD_NOTES_WHAT: &str = "The technician's notes on cards of the Map tab's live map: each \
 card's name, role, IP and MAC with its note, and an `inferred` list naming what is-alive worked out \
-and didn't read or measure (role, uplink; empty when neither). Sanitized on their machine like notes.md. Observations \
+and didn't read or measure (role, uplink; empty when neither). Redacted like notes.md. Observations \
 about those devices; carry what bears on the map into its device notes and findings.";
-const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Sanitized on their \
-machine: passwords, keys, tokens and patient details are [🔑 REDACTED: …] markers. Context and \
-observations; use what bears on the map and its findings.";
+const NOTES_WHAT: &str = "The technician's notes from the Notes tab (Markdown). Redacted on their \
+machine where they chose: values they marked and the passwords and keys of the configs they loaded \
+are [🔑 REDACTED: …] markers. Nothing else is taken out, so anything that still looks like a \
+credential, or a person's or patient's details, may be real: don't repeat it in the map or its \
+findings. Context and observations; use what bears on the map and its findings.";
 
 impl BundleTool {
+    /// What the pattern rules would still redact in text the technician
+    /// wrote, after their own redaction ("2 passwords, 1 email"), or None.
+    /// Notes redact only what's marked, by design; this says what may be
+    /// left before it goes to Claude. Nothing is changed.
+    fn looks_unredacted(&self, part: &'static str, texts: &[&str]) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        texts.hash(&mut h);
+        let h = h.finish();
+        let mut looked = self.looked.borrow_mut();
+        match looked.get(part) {
+            Some((seen, kinds)) if *seen == h => kinds.clone(),
+            _ => {
+                let kinds = unredacted(texts);
+                looked.insert(part, (h, kinds.clone()));
+                kinds
+            }
+        }
+    }
+
+    /// The ticked parts the technician wrote that still look like they hold
+    /// secrets: (part, kinds).
+    fn still_there(&self, src: &Sources) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if self.use_notes && !src.notes.is_empty() {
+            let text = src.notes.sanitized().0;
+            if let Some(k) = self.looks_unredacted("Tech notes", &[&text]) {
+                out.push(("Tech notes", k));
+            }
+        }
+        if self.use_card_notes
+            && let Some((_, json)) = src.map.bundle_notes(src.notes.overrides())
+        {
+            let notes = card_note_texts(&json);
+            let notes: Vec<&str> = notes.iter().map(String::as_str).collect();
+            if let Some(k) = self.looks_unredacted("Card notes", &notes) {
+                out.push(("Card notes", k));
+            }
+        }
+        out
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
     }
@@ -469,8 +519,8 @@ impl BundleTool {
     fn notes_step(&mut self, ui: &mut Ui, src: &Sources) {
         ui.heading("Your notes");
         ui.weak(
-            "Notes are sanitized on this laptop: passwords, keys and patient details \
-             become redaction markers.",
+            "Notes go in as Notes redacts them: what you marked with Redact, and the \
+             passwords and keys of the configs you loaded. Nothing else is taken out.",
         );
         ui.add_space(8.0);
         egui::Grid::new("bundle_notes")
@@ -499,6 +549,15 @@ impl BundleTool {
                     "No notes on the live map's cards",
                 );
             });
+        for (part, kinds) in self.still_there(src) {
+            ui.colored_label(
+                widgets::warn(),
+                format!(
+                    "{part} still hold what looks like {kinds}. Notes redacts only what you mark: \
+                     select each one there and press Redact, or untick {part}."
+                ),
+            );
+        }
         ui.add_space(10.0);
         ui.label(RichText::new("Client devices (phones, laptops)").strong());
         ui.horizontal(|ui| {
@@ -626,6 +685,13 @@ impl BundleTool {
                 ui.close();
             }
         });
+        let clean = crate::redact::sanitize_with(&self.notes, &ov).0;
+        if let Some(kinds) = self.looks_unredacted("Known problems", &[&clean]) {
+            ui.colored_label(
+                widgets::warn(),
+                format!("This looks like it holds {kinds}: select it and press Redact."),
+            );
+        }
         let hits = crate::redact::find_with(&self.notes, &ov);
         let pick = widgets::text_selection(ui.ctx(), id, &self.notes)
             .and_then(|sel| crate::redact::pick(&self.notes, sel, &hits));
@@ -726,13 +792,24 @@ impl BundleTool {
             "Nothing in Results yet",
         );
         let (_, hits) = src.notes.sanitized();
+        // What still looks secret in a ticked part, said on its row too: the
+        // last look before the zip is made.
+        let left: HashMap<_, _> = self.still_there(src).into_iter().collect();
+        let check = |part: &str| {
+            left.get(part)
+                .map(|k| format!(" · check: looks like {k}"))
+                .unwrap_or_default()
+        };
         part_row(
             ui,
             &mut self.use_notes,
             "Tech notes",
-            (!src.notes.is_empty()).then(|| match hits.len() {
-                0 => "notes.md · nothing redacted".to_string(),
-                _ => format!("notes.md · {}", crate::redact::summary(&hits)),
+            (!src.notes.is_empty()).then(|| {
+                let done = match hits.len() {
+                    0 => "notes.md · nothing redacted".to_string(),
+                    _ => format!("notes.md · {}", crate::redact::summary(&hits)),
+                };
+                done + &check("Tech notes")
             }),
             "Nothing in Notes yet",
         );
@@ -741,9 +818,12 @@ impl BundleTool {
             ui,
             &mut self.use_card_notes,
             "Card notes",
-            card_notes
-                .as_ref()
-                .map(|(n, _)| format!("{n} card(s) on the live map · redacted")),
+            card_notes.as_ref().map(|(n, _)| {
+                format!(
+                    "{n} card(s) on the live map · redacted{}",
+                    check("Card notes")
+                )
+            }),
             "No notes on the live map's cards",
         );
         part_row(
@@ -1086,6 +1166,22 @@ pub(crate) fn log_targets(log: &Log) -> Vec<String> {
 
 /// Checkbox, name and what's loaded; greyed out with a hint when there's
 /// nothing to include.
+/// The pattern rules over `texts` (already redacted as the technician
+/// chose): "2 passwords, 1 email", or None when nothing looks secret.
+fn unredacted(texts: &[&str]) -> Option<String> {
+    let hits: Vec<_> = texts.iter().flat_map(|t| crate::redact::find(t)).collect();
+    (!hits.is_empty()).then(|| crate::redact::kinds(&hits))
+}
+
+/// Each card's note from `card-notes.json`.
+fn card_note_texts(json: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<serde_json::Value>>(json)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| r["note"].as_str().map(String::from))
+        .collect()
+}
+
 pub(crate) fn part_row(
     ui: &mut Ui,
     on: &mut bool,
@@ -1111,6 +1207,110 @@ pub(crate) fn part_row(
 mod tests {
     use super::*;
     use crate::log::{Entry, Table};
+
+    /// The Handoff says what's left in the technician's text after their own
+    /// redaction, by the pattern rules, and changes nothing: notes are
+    /// redacted only where marked, so the warning is the one safety net.
+    #[test]
+    fn what_still_looks_secret_is_said_not_removed() {
+        let text = "Front desk PC, admin password: hunter2!\nAsk bob@clinic.example";
+        assert_eq!(unredacted(&[text]).as_deref(), Some("1 password, 1 email"));
+        let marked = "admin password: [🔑 REDACTED: password]\nall fine";
+        assert_eq!(unredacted(&[marked]), None);
+        assert_eq!(unredacted(&[]), None);
+        let tool = BundleTool::default();
+        // Cached per part, and a new text is looked at again.
+        assert_eq!(
+            tool.looks_unredacted("Tech notes", &[text]).as_deref(),
+            Some("1 password, 1 email")
+        );
+        assert_eq!(tool.looks_unredacted("Tech notes", &[marked]), None);
+        assert_eq!(
+            tool.looks_unredacted("Card notes", &[text]).as_deref(),
+            Some("1 password, 1 email")
+        );
+    }
+
+    /// Known problems holding a password says so, and the warning fits a
+    /// field laptop's window at both sizes.
+    #[test]
+    fn the_known_problems_warning_shows_and_fits() {
+        let export = ExportTool::default();
+        let sweep = SweepTool::default();
+        let log = Log::default();
+        let info = HostInfo::default();
+        let notes = NotesTool::default();
+        let map = crate::map::view::MapTabs::new(Default::default());
+        for size in [(1280.0, 720.0), (1120.0, 720.0)] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(crate::fonts::definitions());
+            let mut tool = BundleTool {
+                open: true,
+                notes: "The front desk PC's admin password: hunter2! (client said)".into(),
+                ..Default::default()
+            };
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    let src = Sources {
+                        export: &export,
+                        sweep: &sweep,
+                        log: &log,
+                        info: &info,
+                        notes: &notes,
+                        map: &map,
+                    };
+                    tool.window(ui.ctx(), src);
+                });
+                out.textures_delta.clear();
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|c| match &c.shape {
+                        egui::Shape::Text(t) => {
+                            Some((t.galley.text().to_string(), t.visual_bounding_rect()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
+            assert!(
+                texts
+                    .iter()
+                    .any(|(t, _)| t.contains("looks like it holds 1 password")),
+                "{size:?}: {texts:?}"
+            );
+            // (An empty galley has no bounds to check.)
+            for (t, r) in texts.iter().filter(|(t, _)| !t.trim().is_empty()) {
+                assert!(
+                    screen.contains_rect(*r),
+                    "{t:?} at {r:?} is outside {size:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn card_notes_are_read_from_their_json() {
+        let json = r#"[{"card":"gw","note":"psk is Spring2026!"},{"card":"sw","note":"fine"},{"card":"x"}]"#;
+        assert_eq!(card_note_texts(json), ["psk is Spring2026!", "fine"]);
+        assert!(card_note_texts("not json").is_empty());
+    }
+
+    /// The manifest tells Claude what was done to the notes, no more: they
+    /// were never pattern-scrubbed, and Claude is told not to repeat what
+    /// may be left.
+    #[test]
+    fn the_manifest_doesnt_overstate_the_notes_redaction() {
+        assert!(NOTES_WHAT.contains("Nothing else is taken out"));
+        assert!(!NOTES_WHAT.contains("patient details are"));
+        assert!(!CARD_NOTES_WHAT.contains("Sanitized"));
+    }
 
     fn run(tool: &'static str, first: &'static str, target: &str) -> Entry {
         Entry {
