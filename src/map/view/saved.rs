@@ -512,7 +512,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .collect(),
         _ => Vec::new(),
     };
-    let map = Map {
+    let mut map = Map {
         title: text(m, "title", TEXT_MAX),
         summary: text(m, "summary", TEXT_MAX),
         hidden: m.get("hidden").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -527,6 +527,8 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         cap: 0,
         sweep_apart: false,
     };
+    // A file can say anything: a chain no layout should walk is cut back.
+    map.cap_depth_noted();
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
     let placed = match view.get("placed") {
@@ -892,6 +894,60 @@ pub fn list(dir: &Path) -> (Vec<(PathBuf, Snapshot)>, Vec<String>) {
     (out, errs)
 }
 
+/// What a menu lists of a saved map: its name, when it was made, and
+/// whether it's as found, a plan or a training map.
+#[derive(Clone)]
+pub struct Summary {
+    pub name: String,
+    pub created: String,
+    pub purpose: Purpose,
+}
+
+/// Every saved map in `dir` as `Summary`s, oldest first, each file read and
+/// parsed once until it changes (by its time and size): Compare › Other
+/// sites lists every site's maps while its menu is open, and parsing them
+/// all again every few seconds on the window's thread stalled it.
+pub fn list_summaries(dir: &Path) -> Vec<(PathBuf, Summary)> {
+    type Stamp = (Option<std::time::SystemTime>, u64);
+    type Seen = HashMap<PathBuf, (Stamp, Option<Summary>)>;
+    static SEEN: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = rd
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    paths.truncate(FILES_MAX);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = seen.get_or_insert_with(HashMap::new);
+    let mut out = Vec::new();
+    for p in paths {
+        let Ok(meta) = std::fs::metadata(&p) else {
+            continue;
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        let summary = match seen.get(&p) {
+            Some((s, sum)) if *s == stamp => sum.clone(),
+            _ => {
+                let sum = read(&p).ok().map(|s| Summary {
+                    name: s.name,
+                    created: s.created,
+                    purpose: s.purpose,
+                });
+                seen.insert(p.clone(), (stamp, sum.clone()));
+                sum
+            }
+        };
+        if let Some(s) = summary {
+            out.push((p, s));
+        }
+    }
+    out.sort_by(|a, b| a.1.created.cmp(&b.1.created).then(a.0.cmp(&b.0)));
+    out
+}
+
 /// A file name from a map's name: lower-case letters, digits and dashes.
 pub fn slug(name: &str) -> String {
     let mut s = String::new();
@@ -927,12 +983,7 @@ pub fn write(path: &Path, s: &Snapshot) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, to_json(s)).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    crate::theme::replace_private(path, to_json(s)).map_err(|e| e.to_string())
 }
 
 impl MapView {
@@ -1012,9 +1063,7 @@ pub(super) fn live_clients(dir: &Path) -> Clients {
 }
 pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join("map-clients.tmp");
-    std::fs::write(&tmp, clients.name())?;
-    std::fs::rename(tmp, dir.join("map-clients.txt"))
+    crate::theme::replace_private(&dir.join("map-clients.txt"), clients.name())
 }
 
 /// internet - gateway - {switch - ap, server}, at two sites.

@@ -259,18 +259,30 @@ fn now() -> f64 {
 }
 
 /// An NTP timestamp (bytes 0..8: seconds since 1900, then the fraction)
-/// as seconds since 1970.
+/// as seconds since 1970. The seconds wrap on 7 Feb 2036: a value from
+/// the first half of the range is read as the next era (2036 on), since
+/// nothing this computer asks about is from before 1968.
 fn ntp_time(b: &[u8]) -> f64 {
-    let s = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f64;
+    let mut s = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f64;
+    if s < 2_147_483_648.0 {
+        s += 4_294_967_296.0;
+    }
     let f = u32::from_be_bytes([b[4], b[5], b[6], b[7]]) as f64 / 4_294_967_296.0;
     s + f - NTP_EPOCH
 }
 
-/// The offset from a server's reply sent at `t1` and read at `t4`
-/// (seconds since 1970): + when this computer is fast.
-pub fn sntp_offset(reply: &[u8], t1: f64, t4: f64) -> Option<f64> {
+/// The offset from a server's reply to a request carrying `origin` in its
+/// transmit timestamp, sent at `t1` and read at `t4` (seconds since 1970),
+/// positive when this computer is fast. A reply that doesn't echo `origin`
+/// isn't an answer to this request; a server that says it isn't
+/// synchronized (leap indicator 3, stratum 16 or more) has no time worth
+/// comparing.
+pub fn sntp_offset(reply: &[u8], origin: &[u8; 8], t1: f64, t4: f64) -> Option<f64> {
     if reply.len() < 48 || reply[0] & 0x07 != 4 || reply[1] == 0 {
         // Not a server's answer, or a "kiss of death" (stratum 0).
+        return None;
+    }
+    if reply[0] >> 6 == 3 || reply[1] >= 16 || reply[24..32] != origin[..] {
         return None;
     }
     let t2 = ntp_time(&reply[32..40]);
@@ -286,15 +298,27 @@ fn sntp(server: &str, timeout: Duration) -> io::Result<f64> {
         .find(SocketAddr::is_ipv4)
         .ok_or_else(|| io::Error::other("no IPv4 address"))?;
     let sock = UdpSocket::bind("0.0.0.0:0")?;
+    // Connected: datagrams from anywhere else are dropped by the system.
+    sock.connect(addr)?;
     sock.set_read_timeout(Some(timeout))?;
     let mut req = [0u8; 48];
     req[0] = 0x23; // version 4, client
+    // A transmit timestamp no one else can guess, echoed back by the server
+    // as its originate timestamp (RFC 4330 §5).
+    let origin = {
+        use std::hash::{BuildHasher, Hasher};
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(now().to_bits());
+        h.finish().to_be_bytes()
+    };
+    req[40..48].copy_from_slice(&origin);
     let t1 = now();
-    sock.send_to(&req, addr)?;
+    sock.send(&req)?;
     let mut buf = [0u8; 68];
-    let (n, _) = sock.recv_from(&mut buf)?;
+    let n = sock.recv(&mut buf)?;
     let t4 = now();
-    sntp_offset(&buf[..n], t1, t4).ok_or_else(|| io::Error::other("not an NTP answer"))
+    sntp_offset(&buf[..n], &origin, t1, t4)
+        .ok_or_else(|| io::Error::other("not an answer from a synchronized NTP server"))
 }
 
 /// How far off this computer's clock is: from an NTP server, else (UDP 123
@@ -448,7 +472,7 @@ mod tests {
         let mut good = vec![0x24, 1, 0, 0xec];
         good.extend(std::iter::repeat_n(0x5a, 44));
         crate::hostile::each(&good, |r| {
-            let _ = sntp_offset(r, 1_800_000_000.0, 1_800_000_000.1);
+            let _ = sntp_offset(r, &[0; 8], 1_800_000_000.0, 1_800_000_000.1);
         });
     }
 
@@ -464,15 +488,43 @@ mod tests {
         };
         let t1 = 1_800_000_000.0;
         let t4 = t1 + 0.1;
+        let origin = [7, 1, 2, 3, 4, 5, 6, 8];
         let mut reply = vec![0u8; 48];
         reply[0] = 0x24; // version 4, server
         reply[1] = 2; // stratum
+        reply[24..32].copy_from_slice(&origin);
         reply[32..40].copy_from_slice(&ts(t1 + 2.05));
         reply[40..48].copy_from_slice(&ts(t1 + 2.05));
-        let o = sntp_offset(&reply, t1, t4).unwrap();
+        let o = sntp_offset(&reply, &origin, t1, t4).unwrap();
         assert!((o + 2.0).abs() < 0.01, "{o}: this computer is 2 s slow");
+        // Not this request's answer: someone else's, or a guess.
+        assert_eq!(sntp_offset(&reply, &[0; 8], t1, t4), None);
+        // Unsynchronized: leap indicator 3, or stratum 16.
+        let mut unsynced = reply.clone();
+        unsynced[0] |= 0xC0;
+        assert_eq!(sntp_offset(&unsynced, &origin, t1, t4), None);
+        unsynced = reply.clone();
+        unsynced[1] = 16;
+        assert_eq!(sntp_offset(&unsynced, &origin, t1, t4), None);
         reply[1] = 0;
-        assert_eq!(sntp_offset(&reply, t1, t4), None, "kiss of death");
-        assert_eq!(sntp_offset(&reply[..20], t1, t4), None);
+        assert_eq!(sntp_offset(&reply, &origin, t1, t4), None, "kiss of death");
+        assert_eq!(sntp_offset(&reply[..20], &origin, t1, t4), None);
+    }
+
+    /// Past 7 Feb 2036 NTP's seconds wrap to 0: read as the next era, not
+    /// 136 years back.
+    #[test]
+    fn ntp_time_after_2036() {
+        // 2040-01-01 00:00:00 UTC, as NTP sends it (seconds wrapped).
+        let unix = 2_208_988_800.0_f64;
+        let ntp_secs = ((unix + NTP_EPOCH) as u64 % (1u64 << 32)) as u32;
+        let mut b = ntp_secs.to_be_bytes().to_vec();
+        b.extend([0; 4]);
+        assert_eq!(ntp_time(&b), unix);
+        // And today's stays today's.
+        let now = 1_800_000_000.0_f64;
+        let mut b = ((now + NTP_EPOCH) as u32).to_be_bytes().to_vec();
+        b.extend([0; 4]);
+        assert_eq!(ntp_time(&b), now);
     }
 }

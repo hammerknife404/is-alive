@@ -86,7 +86,8 @@ fn spec(tool: &str) -> Option<Spec> {
             ],
         ),
         "Traceroute" => s(&["hop"], &["address", "name"]),
-        "DNS Lookup" => s(&["lookup", "source", "type", "value"], &[]),
+        // As Results logs it (log.rs TOOLS).
+        "Lookup" => s(&["lookup", "source", "type", "value"], &[]),
         "Domain Health" => s(&["section", "check", "kind"], &["status", "text"]),
         "Network checks" => s(&["check"], &["status"]),
         "Domain join" => s(&["section", "field"], &["value"]),
@@ -320,6 +321,23 @@ fn lines(a: &str, b: &str) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tool Results logs is matched row by row, named as it's
+    /// logged: a rule under another name never applies (Lookup's was
+    /// "DNS Lookup", so its runs fell back to a line-by-line diff).
+    #[test]
+    fn every_logged_tool_has_a_rule() {
+        // Ping is compared by its figures; Host info line by line.
+        for (tool, columns) in crate::log::TOOLS
+            .iter()
+            .filter(|(t, _)| !["Ping", "Host info"].contains(t))
+        {
+            let rule = spec(tool).unwrap_or_else(|| panic!("no compare rule for {tool}"));
+            for k in rule.key.iter().chain(rule.fields) {
+                assert!(columns.contains(k), "{tool}: {k} isn't one of its columns");
+            }
+        }
+    }
 
     fn entry(tool: &'static str, columns: &'static [&'static str], rows: &[&[&str]]) -> Entry {
         Entry {

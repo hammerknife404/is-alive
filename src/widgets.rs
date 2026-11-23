@@ -24,7 +24,9 @@ fn hash(s: &str) -> u64 {
 
 /// Put `text` on the clipboard. On Windows it's marked to stay out of
 /// clipboard history (Win+V), cloud clipboard sync and clipboard managers,
-/// as password managers do.
+/// as password managers do; when that can't be done (another program is
+/// holding the clipboard), nothing is copied and a message says so, rather
+/// than a copy that would land in history unmarked.
 pub fn copy(ctx: &egui::Context, text: String) {
     if let Ok(mut l) = LAST_COPY.lock() {
         *l = Some(hash(&text));
@@ -32,12 +34,23 @@ pub fn copy(ctx: &egui::Context, text: String) {
     #[cfg(windows)]
     {
         use arboard::SetExtWindows;
-        let done = arboard::Clipboard::new()
-            .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
-        if done.is_ok() {
-            return;
+        // A remote-desktop or clipboard-manager process can hold the
+        // clipboard for a moment: a few tries, ~100 ms in all.
+        for _ in 0..5 {
+            let done = arboard::Clipboard::new()
+                .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
+            if done.is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
+        let _ = ctx;
+        toast(
+            "Not copied: another program is holding the clipboard. Try again",
+            false,
+        );
     }
+    #[cfg(not(windows))]
     ctx.copy_text(text);
 }
 
@@ -192,12 +205,56 @@ pub enum Action {
     Stop,
 }
 
+// One Esc, one job. It leaves a text box or closes a menu first, then
+// closes a floating panel, and only then stops a run. egui drops a text
+// box's focus and closes its menus before anything is drawn, and a run bar
+// is drawn before the panel floating over the page, so who Esc was for is
+// read from the frame before.
+fn esc_id(what: &str) -> egui::Id {
+    egui::Id::new(("esc owner", what))
+}
+
+/// Call once, at the end of every frame: whether a text box or menu has
+/// Esc now.
+pub fn note_esc_owners(ctx: &egui::Context) {
+    let busy = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
+    ctx.data_mut(|d| d.insert_temp(esc_id("text or menu"), busy));
+}
+
+/// A panel that Esc closes is floating open this frame.
+pub fn floating_open(ctx: &egui::Context) {
+    let n = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(esc_id("floating"), n));
+}
+
+/// Esc was pressed now to leave a text box or close a menu (as of the
+/// frame before).
+pub fn esc_for_text_or_menu(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        && ctx
+            .data(|d| d.get_temp::<bool>(esc_id("text or menu")))
+            .unwrap_or(false)
+}
+
+/// Esc was pressed now and nothing before a run wants it.
+pub fn esc_stops_run(ctx: &egui::Context) -> bool {
+    let n = ctx.cumulative_pass_nr();
+    let floating = ctx
+        .data(|d| d.get_temp::<u64>(esc_id("floating")))
+        .is_some_and(|f| f + 1 >= n);
+    ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        && !esc_for_text_or_menu(ctx)
+        && !floating
+        && !egui::Popup::is_any_open(ctx)
+}
+
 /// Start/Stop button pair. `enter` lets a text field's Enter key start the run;
-/// Esc stops it.
+/// Esc stops it, unless it's leaving a text box, closing a menu or closing a
+/// floating panel.
 pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
     if running {
         spinner(ui);
-        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let esc = esc_stops_run(ui.ctx());
         if ui.button("■ Stop").on_hover_text("Stop (Esc)").clicked() || esc {
             return Action::Stop;
         }
@@ -340,14 +397,28 @@ pub fn fold(
     let mut state =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let open = state.is_open();
+    // The whole row is the target, 28 high: the word and arrow alone are
+    // about 17. Laid under the row's own widgets (where the row was last
+    // frame), so the arrow, the word and its tooltip still work on top.
+    let row_at = id.with("fold row");
+    let whole = ui
+        .ctx()
+        .data(|d| d.get_temp::<egui::Rect>(row_at))
+        .map(|r| ui.interact(r, row_at, egui::Sense::click()));
     let row = ui.horizontal(|ui| {
+        ui.set_min_height(crate::theme::TARGET_H);
         state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
         header(ui, open)
     });
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(row_at, row.response.rect));
+    let whole_clicked =
+        whole.is_some_and(|w| w.on_hover_cursor(egui::CursorIcon::PointingHand).clicked());
     if row
         .inner
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
+        || whole_clicked
     {
         state.toggle(ui);
     }
@@ -1353,6 +1424,59 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One Esc, one job: leaving a text box (as of the frame before, since
+    /// egui drops the focus first) or closing a floating panel doesn't
+    /// stop a run; an Esc with neither does.
+    #[test]
+    fn esc_leaves_a_text_box_or_closes_a_panel_before_it_stops_a_run() {
+        let ctx = egui::Context::default();
+        let esc = || egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let mut text = String::new();
+        let mut stops = Vec::new();
+        let frame = |mut out: egui::FullOutput| out.textures_delta.clear();
+        // Frame 1: typing in a box.
+        frame(ctx.run_ui(Default::default(), |ui| {
+            let r = ui.text_edit_singleline(&mut text);
+            r.request_focus();
+            note_esc_owners(ui.ctx());
+        }));
+        frame(ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut text);
+            note_esc_owners(ui.ctx());
+        }));
+        // Frame 3: Esc leaves the box.
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            ui.text_edit_singleline(&mut text);
+            note_esc_owners(ui.ctx());
+        }));
+        // A panel floating open, then Esc: it's the panel's.
+        frame(ctx.run_ui(Default::default(), |ui| {
+            floating_open(ui.ctx());
+            note_esc_owners(ui.ctx());
+        }));
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            note_esc_owners(ui.ctx());
+        }));
+        // Nothing else open: Esc stops the run.
+        frame(ctx.run_ui(Default::default(), |ui| note_esc_owners(ui.ctx())));
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            note_esc_owners(ui.ctx());
+        }));
+        assert_eq!(stops, [false, false, true]);
+    }
 
     /// A named menu's button is a comfortable click target and says what
     /// it holds.

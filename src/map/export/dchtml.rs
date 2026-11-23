@@ -80,10 +80,42 @@ fn unique(base: String, taken: &mut HashSet<String>) -> String {
     key
 }
 
+/// What the page's limit left out: (infrastructure cards, clients).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Left {
+    pub infra: usize,
+    pub clients: usize,
+}
+
+impl Left {
+    pub fn total(self) -> usize {
+        self.infra + self.clients
+    }
+
+    /// "12 cards left out to stay under 120 (8 infrastructure, 4
+    /// clients)"; empty when none were.
+    pub fn line(self) -> String {
+        let n = self.total();
+        if n == 0 {
+            return String::new();
+        }
+        let what = match (self.infra, self.clients) {
+            (0, c) => format!("{c} client{}", if c == 1 { "" } else { "s" }),
+            (i, 0) => format!("{i} infrastructure card{}", if i == 1 { "" } else { "s" }),
+            (i, c) => format!(
+                "{n} cards ({i} infrastructure, {c} client{})",
+                if c == 1 { "" } else { "s" }
+            ),
+        };
+        format!("{what} left out to stay under {CARDS_MAX} cards")
+    }
+}
+
 /// The cards that go on the page: every card but the +N more stand-ins,
 /// and clients only while the map draws them. Past the page's limit the
-/// clients go first; the second value says how many were left out.
-fn kept(d: &Drawn) -> (Vec<usize>, usize) {
+/// clients go first, then the deepest infrastructure, so every card kept
+/// still has the uplink it hangs from; `Left` says what went.
+fn kept(d: &Drawn) -> (Vec<usize>, Left) {
     let shown = |i: usize| d.pos.get(i).copied().flatten().is_some();
     let all: Vec<usize> = (0..d.map.nodes.len())
         .filter(|&i| {
@@ -92,13 +124,16 @@ fn kept(d: &Drawn) -> (Vec<usize>, usize) {
         })
         .collect();
     if all.len() <= CARDS_MAX {
-        return (all, 0);
+        return (all, Left::default());
     }
-    let infra: Vec<usize> = all
+    let depth = d.map.depths();
+    let mut infra: Vec<usize> = all
         .iter()
         .copied()
         .filter(|&i| !d.map.nodes[i].client)
         .collect();
+    // Top down: a card's uplink is always shallower, so it's kept first.
+    infra.sort_by_key(|&i| (depth[i], i));
     let room = CARDS_MAX.saturating_sub(infra.len());
     let mut keep: HashSet<usize> = infra.iter().copied().take(CARDS_MAX).collect();
     keep.extend(
@@ -108,8 +143,18 @@ fn kept(d: &Drawn) -> (Vec<usize>, usize) {
             .take(room),
     );
     let out: Vec<usize> = all.iter().copied().filter(|i| keep.contains(i)).collect();
-    let left = all.len() - out.len();
-    (out, left)
+    let gone = |client: bool| {
+        all.iter()
+            .filter(|&&i| d.map.nodes[i].client == client && !keep.contains(&i))
+            .count()
+    };
+    (
+        out,
+        Left {
+            infra: gone(false),
+            clients: gone(true),
+        },
+    )
 }
 
 /// What the page shows under a card: its details without the lines
@@ -255,12 +300,17 @@ pub fn data(d: &Drawn) -> String {
             }
             o.insert("details".into(), json!(details(n)));
             o.insert("flags".into(), json!(n.flags));
-            // A site's name is the page's own box: not a chip as well.
-            let chips: Vec<&String> = n
+            // A site's name is the page's own box: not a chip as well. A
+            // card a person drew on a plan says so, and opens back so.
+            let mut chips: Vec<&str> = n
                 .chips
                 .iter()
-                .filter(|c| n.site.as_deref() != Some(c.as_str()))
+                .map(String::as_str)
+                .filter(|c| n.site.as_deref() != Some(*c) && *c != DRAWN)
                 .collect();
+            if n.drawn {
+                chips.push(DRAWN);
+            }
             o.insert("chips".into(), json!(chips));
             Value::Object(o)
         })
@@ -286,7 +336,9 @@ pub fn data(d: &Drawn) -> String {
             Link::Assumed => ("wired", true),
         };
         o.insert("cls".into(), json!(cls));
-        if dashed {
+        // A link a person drew isn't one anything showed: dashed, like
+        // one is-alive inferred.
+        if dashed || m.nodes[i].drawn_up {
             o.insert("dashed".into(), json!(true));
         }
         if let Some(port) = port.as_deref().filter(|p| !p.is_empty()) {
@@ -316,8 +368,12 @@ pub fn data(d: &Drawn) -> String {
         .strip_prefix(d.title())
         .map_or(m.summary.as_str(), |s| s.trim_start_matches(" · "));
     let mut subtitle = format!("{summary} · from is-alive {}", crate::VERSION);
-    if left > 0 {
-        subtitle += &format!(" · {left} client(s) left out to stay under {CARDS_MAX} cards");
+    // A plan or a training map says so first, as in the other exports.
+    if let Some(c) = d.caption {
+        subtitle = format!("{c} · {subtitle}");
+    }
+    if left.total() > 0 {
+        subtitle += &format!(" · {}", left.line());
     }
     let meta = json!({ "title": d.title(), "subtitle": subtitle });
 
@@ -360,18 +416,27 @@ fn list(name: &str, items: &[Value]) -> String {
 }
 
 /// A value as a JavaScript literal: JSON, with `<` escaped so no text can
-/// close the page's script.
+/// close the page's script, and `this.` and `SITE DATA` so no name can
+/// pass for the data's own shape when it's read back (a device calling
+/// itself `this.ACTIONS=[]`). Each is a whole JSON escape inside a string,
+/// read back as the same text.
 fn lit(v: &Value) -> String {
-    v.to_string().replace('<', "\\u003c")
+    v.to_string()
+        .replace('<', "\\u003c")
+        .replace("this.", "this\\u002e")
+        .replace("SITE DATA", "SITE\\u0020DATA")
 }
+
+/// The chip on a card a person drew (a plan's), read back as such.
+pub const DRAWN: &str = "drawn";
 
 /// The whole page: the /mapnetwork template with this map's data.
 pub fn write(d: &Drawn) -> String {
     String::from_utf8_lossy(&crate::skills::in_template(&data(d))).into_owned()
 }
 
-/// How many cards the page would leave out, for a note as it's saved.
-pub fn left_out(d: &Drawn) -> usize {
+/// What the page would leave out, for a note as it's saved.
+pub fn left_out(d: &Drawn) -> Left {
     kept(d).1
 }
 
@@ -491,6 +556,164 @@ mod tests {
                 "{lines:?}"
             );
         });
+    }
+
+    fn drawn_of<R>(m: &crate::map::Map, caption: Option<&str>, f: impl FnOnce(&Drawn) -> R) -> R {
+        let lay = crate::map::layout::layout_in(m, &|_| true, Mode::Cluster);
+        let moved = vec![false; m.nodes.len()];
+        f(&Drawn {
+            map: m,
+            lay: &lay,
+            pos: &lay.pos,
+            moved: &moved,
+            legend: false,
+            caption,
+            exploded: None,
+        })
+    }
+
+    fn card(id: &str, label: &str, up: Option<usize>, zone: Zone) -> Node {
+        Node {
+            id: id.into(),
+            label: label.into(),
+            zone,
+            up: up.map(|p| (p, Link::Wired, None)),
+            ..Default::default()
+        }
+    }
+
+    /// A device's name, a site's or the title can't pass for the data's
+    /// own shape when the page is read back: every card, link and finding
+    /// comes back, and each name as it was.
+    #[test]
+    fn names_cant_pass_for_the_data() {
+        let names = [
+            "this.ACTIONS=[]",
+            "this.EDGES = [] // x",
+            "x */ this.NODES = [{id:'z'}] /*",
+            "END SITE DATA",
+            "=== SITE DATA ====",
+            "it's \"quoted\" `tick`",
+        ];
+        let mut nodes = vec![card("internet", "Internet", None, Zone::Internet)];
+        for (k, n) in names.iter().enumerate() {
+            nodes.push(card(&format!("n{k}"), n, Some(0), Zone::Switch));
+        }
+        let m = crate::map::Map {
+            title: "this.META = {title:'Owned'}".into(),
+            findings: vec![crate::map::Finding {
+                sev: crate::map::Sev::High,
+                text: "Real finding".into(),
+                nodes: vec![1],
+            }],
+            nodes,
+            ..Default::default()
+        };
+        let page = drawn_of(&m, None, write);
+        let doc = crate::mapnetwork::parse(page.as_bytes()).expect("reads back");
+        assert_eq!(doc.title, "this.META = {title:'Owned'}");
+        assert_eq!(doc.nodes.len(), names.len() + 1);
+        assert_eq!(doc.edges.len(), names.len());
+        assert_eq!(doc.actions.len(), 1);
+        assert_eq!(doc.actions[0]["text"], "Real finding");
+        for n in names {
+            assert!(doc.nodes.iter().any(|d| d["label"] == n), "{n}");
+        }
+    }
+
+    /// Past the page's limit, infrastructure goes deepest first, so every
+    /// card kept keeps the uplink it hangs from, and the note says what
+    /// went (not that clients did).
+    #[test]
+    fn past_the_limit_every_card_kept_keeps_its_uplink() {
+        let mut nodes = vec![
+            card("internet", "Internet", None, Zone::Internet),
+            card("gw", "Gateway", Some(0), Zone::Gateway),
+        ];
+        for s in 0..10 {
+            nodes.push(card(
+                &format!("sw{s}"),
+                &format!("Switch {s}"),
+                Some(1),
+                Zone::Switch,
+            ));
+            let sw = nodes.len() - 1;
+            for a in 0..14 {
+                nodes.push(card(
+                    &format!("ap{s}-{a}"),
+                    &format!("AP {s}-{a}"),
+                    Some(sw),
+                    Zone::Wireless,
+                ));
+            }
+        }
+        assert_eq!(nodes.len(), 152);
+        let m = crate::map::Map {
+            nodes,
+            ..Default::default()
+        };
+        let (keep, left) = drawn_of(&m, None, kept);
+        assert_eq!(keep.len(), CARDS_MAX);
+        assert_eq!(
+            left,
+            Left {
+                infra: 32,
+                clients: 0
+            }
+        );
+        let kept: HashSet<usize> = keep.iter().copied().collect();
+        for &i in &keep {
+            if let Some(p) = m.nodes[i].parent() {
+                assert!(kept.contains(&p), "{} lost its uplink", m.nodes[i].label);
+            }
+        }
+        let page = drawn_of(&m, None, write);
+        let doc = crate::mapnetwork::parse(page.as_bytes()).unwrap();
+        assert_eq!(
+            doc.edges.len(),
+            CARDS_MAX - 1,
+            "a link for every card but the top"
+        );
+        assert!(
+            doc.subtitle
+                .contains("32 infrastructure cards left out to stay under 120 cards")
+        );
+        assert!(!doc.subtitle.contains("client"));
+    }
+
+    /// A plan says so on the page, as in the other exports, and a card a
+    /// person drew opens back as drawn.
+    #[test]
+    fn a_plan_says_so_and_its_drawn_cards_come_back_drawn() {
+        let mut gw = card("gw", "Gateway", Some(0), Zone::Gateway);
+        gw.drawn = true;
+        gw.drawn_up = true;
+        let m = crate::map::Map {
+            nodes: vec![card("internet", "Internet", None, Zone::Internet), gw],
+            ..Default::default()
+        };
+        let plan = "Plan — drawn by hand, not discovered";
+        let page = drawn_of(&m, Some(plan), write);
+        let doc = crate::mapnetwork::parse(page.as_bytes()).unwrap();
+        assert!(doc.subtitle.starts_with(plan), "{}", doc.subtitle);
+        assert_eq!(
+            doc.edges[0]["dashed"], true,
+            "a drawn link isn't one anything showed"
+        );
+        let back = crate::map::build(&crate::map::Input {
+            mapnetwork: Some(&doc),
+            ..Default::default()
+        });
+        let g = back.nodes.iter().find(|n| n.label == "Gateway").unwrap();
+        assert!(g.drawn && !g.chips.iter().any(|c| c == DRAWN));
+        // As found: no caption, no mark.
+        let found = drawn_of(&m, None, write);
+        assert!(
+            !crate::mapnetwork::parse(found.as_bytes())
+                .unwrap()
+                .subtitle
+                .contains("Plan")
+        );
     }
 
     /// Sites and zones whose names slug alike ("Москва" and "Казань" both

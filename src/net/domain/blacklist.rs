@@ -89,6 +89,9 @@ enum Answer {
     Listed(Ipv4Addr),
     /// Spamhaus PBL: an end-user/dynamic range, not evidence of spam.
     Policy,
+    /// URIBL grey only: a bulk or opt-in sender, used for scoring, not
+    /// a block.
+    Grey(Ipv4Addr),
     /// The list declined the query (public or high-volume resolver).
     Refused,
     /// A non-127/8 answer: a resolver rewriting NXDOMAIN, not a listing.
@@ -121,6 +124,16 @@ fn classify(list: &List, ips: &[IpAddr]) -> Answer {
     if codes.iter().any(refused) {
         return Answer::Refused;
     }
+    // URIBL's last octet is a mask: 2 black, 4 grey, 8 red. Grey alone
+    // isn't a listing that blocks.
+    if list.zone == "multi.uribl.com" {
+        let mask = codes.iter().fold(0u8, |m, ip| m | ip.octets()[3]);
+        return match codes.first() {
+            Some(&ip) if mask & (2 | 8) == 0 && mask & 4 != 0 => Answer::Grey(ip),
+            Some(&ip) => Answer::Listed(ip),
+            None => Answer::Clean,
+        };
+    }
     let policy =
         |ip: &&Ipv4Addr| list.zone == "zen.spamhaus.org" && matches!(ip.octets()[3], 10 | 11);
     match codes.iter().find(|ip| !policy(ip)) {
@@ -150,6 +163,9 @@ fn lookup(
         _ => Ok(a),
     }
 }
+
+/// Why the network the check runs from is checked: its public address.
+const WAN: &str = "this network's WAN";
 
 fn reversed(ip: Ipv4Addr) -> String {
     let o = ip.octets();
@@ -190,11 +206,30 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
         }
         // Before the SPF list, so the cap below can't drop it.
         if let Some(w) = wan {
-            add(w, "this network's WAN");
+            add(w, WAN);
         }
         let spf = txt_with(c, d, "v=spf1").unwrap_or_default();
         for ip in spf.first().map(|r| spf_ip4(r)).unwrap_or_default() {
             add(ip, "SPF");
+        }
+        // The lists are asked about IPv4 addresses: say what that leaves
+        // out, rather than a PASS that reads as covering it.
+        let v6 = if mx.hosted() {
+            0
+        } else {
+            mx.ips.iter().filter(|i| i.is_ipv6()).count()
+        } + spf.first().map_or(0, |r| {
+            r.split_whitespace()
+                .filter(|t| {
+                    t.trim_start_matches(['+', '-', '~', '?'])
+                        .starts_with("ip6:")
+                })
+                .count()
+        });
+        if v6 > 0 {
+            k.info(format!(
+                "{v6} IPv6 address(es) (MX or SPF ip6:) not checked: these lists are asked about IPv4"
+            ));
         }
         ips.truncate(12);
         let fallback = dnsq::system_servers()
@@ -248,7 +283,15 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                         listed = true;
                         hits.push(l.name);
                         let msg = format!("{label} is listed on {} (code {code})", l.name);
-                        if l.major {
+                        // Only the network the check ran from (a hotel, a
+                        // hotspot, the MSP's office): not the domain's own
+                        // mail unless MX or SPF says it sends it.
+                        if l.major && why[..] == [WAN] {
+                            k.warn(format!(
+                                "{msg}: that's the network this ran from, not one of {d}'s mail \
+servers; it matters only if mail for {d} is sent from here"
+                            ));
+                        } else if l.major {
                             k.fail(format!("{msg}: mail from it is likely rejected"));
                         } else {
                             k.warn(format!("{msg}: some receivers use this list"));
@@ -268,7 +311,8 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                     }
                     Ok(Answer::Refused) => refused.push(l.name),
                     Ok(Answer::Bogus) | Err(_) => unanswered.push(l.name),
-                    Ok(Answer::Clean) => {}
+                    // Grey is URIBL's, a domain list: never an IP's answer.
+                    Ok(Answer::Clean | Answer::Grey(_)) => {}
                 }
             }
             if !listed {
@@ -290,6 +334,10 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
                         l.name
                     ));
                 }
+                Ok(Answer::Grey(code)) => k.warn(format!(
+                    "{d} is on {} grey (code {code}): a bulk or opt-in sender. Some filters score it; it isn't a block",
+                    l.name
+                )),
                 Ok(Answer::Refused) => refused.push(l.name),
                 Ok(Answer::Bogus) | Err(_) => unanswered.push(l.name),
                 Ok(Answer::Clean | Answer::Policy) => {}
@@ -331,6 +379,22 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// URIBL's answer is a mask: black (2) or red (8) is a listing; grey
+    /// (4) alone is a bulk sender, scored, not blocked; 127.0.0.1 refused.
+    #[test]
+    fn uribl_grey_isnt_a_listing() {
+        let uribl = LISTS.iter().find(|l| l.zone == "multi.uribl.com").unwrap();
+        let ans = |o: u8| classify(uribl, &[IpAddr::V4(Ipv4Addr::new(127, 0, 0, o))]);
+        assert_eq!(ans(4), Answer::Grey(Ipv4Addr::new(127, 0, 0, 4)));
+        assert!(matches!(ans(2), Answer::Listed(_)));
+        assert!(matches!(ans(8), Answer::Listed(_)));
+        assert!(
+            matches!(ans(6), Answer::Listed(_)),
+            "black and grey: black wins"
+        );
+        assert_eq!(ans(1), Answer::Refused);
+    }
 
     fn ip(s: &str) -> Vec<IpAddr> {
         vec![s.parse().unwrap()]

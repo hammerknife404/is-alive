@@ -147,6 +147,23 @@ static LOADED: Mutex<Option<String>> = Mutex::new(None);
 
 /// The family to draw `name` in, loading it from disk the first time.
 /// Anything that can't be loaded falls back to Mono.
+/// Fonts that wouldn't load, by name: Mono instead, without trying again.
+static BAD: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// `path`'s bytes when they're a font egui can load: a file, not a device or
+/// a pipe, not absurdly big, and one the font reader takes. egui panics on
+/// a font it can't read (a 0-byte or cut-short file with a known name),
+/// and the chosen font is saved, so Notes would crash at every start.
+fn readable_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    let font_file = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 64 << 20);
+    let bytes = font_file.then(|| std::fs::read(path).ok()).flatten()?;
+    // What egui itself asks of it, face 0 as FontData has it.
+    skrifa::FontRef::from_index(&bytes, 0)
+        .is_ok()
+        .then_some(bytes)
+}
+
 pub fn family(ctx: &egui::Context, name: &str) -> FontFamily {
     match name {
         SANS => return FontFamily::Proportional,
@@ -170,9 +187,13 @@ pub fn family(ctx: &egui::Context, name: &str) -> FontFamily {
     let Some((_, path)) = installed().iter().find(|(n, _)| *n == name) else {
         return FontFamily::Monospace;
     };
-    // A font, not a device or a pipe, and not absurdly big.
-    let font_file = std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= 64 << 20);
-    let Some(bytes) = font_file.then(|| std::fs::read(path).ok()).flatten() else {
+    // One that wouldn't load isn't read again every frame.
+    let mut bad = BAD.lock().unwrap_or_else(|e| e.into_inner());
+    if bad.contains(name) {
+        return FontFamily::Monospace;
+    }
+    let Some(bytes) = readable_font(path) else {
+        bad.insert(name.to_string());
         return FontFamily::Monospace;
     };
     let mut defs = definitions();
@@ -206,6 +227,31 @@ mod tests {
         assert!(names.contains(&"DejaVu Sans Mono") && names.contains(&"Consolas"));
         assert_eq!(names.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file with a font's name that isn't a font (empty, cut short) is
+    /// refused before egui sees it: egui would panic, every frame Notes is
+    /// open. A real font passes.
+    #[test]
+    fn a_broken_font_file_is_refused() {
+        let dir = std::env::temp_dir().join(format!("is-alive-badfont-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, data) in [
+            ("empty.ttf", &b""[..]),
+            ("cut.ttf", &b"\0\x01\0\0\0\x0c"[..]),
+        ] {
+            let p = dir.join(name);
+            std::fs::write(&p, data).unwrap();
+            assert!(readable_font(&p).is_none(), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        // egui's own font, written out, reads.
+        let defs = egui::FontDefinitions::default();
+        let (_, data) = defs.font_data.iter().next().unwrap();
+        let p = std::env::temp_dir().join(format!("is-alive-goodfont-{}.ttf", std::process::id()));
+        std::fs::write(&p, &*data.font).unwrap();
+        assert!(readable_font(&p).is_some());
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

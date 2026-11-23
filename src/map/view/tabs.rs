@@ -414,7 +414,9 @@ impl MapTabs {
     /// bar, and Live stays on show; a saved map gets its changes written.
     fn save(&mut self, src: &Sources) {
         match (self.save_state(), self.shown) {
-            (SaveState::Changed, Some(i)) => self.update(i),
+            (SaveState::Changed, Some(i)) => {
+                self.update(i);
+            }
             (SaveState::Saved, _) => widgets::toast("Already saved: nothing has changed", true),
             _ => {
                 let name = self.default_name();
@@ -661,7 +663,7 @@ impl MapTabs {
             .into_iter()
             .filter(|s| s.folder != here && s.maps > 0)
             .filter_map(|s| {
-                let (found, _) = saved::list(&s.path.join("maps"));
+                let found = saved::list_summaries(&s.path.join("maps"));
                 let mut maps: Vec<(String, String, PathBuf)> = found
                     .into_iter()
                     .filter(|(_, m)| m.purpose == Purpose::AsFound)
@@ -748,7 +750,9 @@ impl MapTabs {
         });
         match ev {
             Some(TabEv::Rename(i)) => self.renaming = Some((i, self.saved[i].name.clone())),
-            Some(TabEv::Update(i)) => self.update(i),
+            Some(TabEv::Update(i)) => {
+                self.update(i);
+            }
             Some(TabEv::Replace(i)) => self.asking = Some(Ask::Replace(i)),
             Some(TabEv::Duplicate(i)) => {
                 let t = &self.saved[i];
@@ -936,21 +940,35 @@ impl MapTabs {
 
     /// Update with current: saved map `i` keeps the changes made to it
     /// since it was saved, shown or not. Its view (and its undo) carries
-    /// on.
-    fn update(&mut self, i: usize) {
+    /// on. False if its file couldn't be written (said in a toast).
+    fn update(&mut self, i: usize) -> bool {
         let t = &self.saved[i];
         let Some(full) = t.view.frozen.as_deref().map(saved::copy_map) else {
-            return;
+            return true;
         };
         let s = t.view.snapshot(&t.name, t.created.clone(), full);
         if let Err(e) = saved::write(&t.path, &s) {
-            widgets::toast(format!("Couldn't save the map: {e}"), false);
-            return;
+            widgets::toast(format!("Couldn't save \"{}\": {e}", t.name), false);
+            return false;
         }
         let t = &mut self.saved[i];
         // As the view has them (its notes as typed; the file's redacted).
         t.saved = t.view.edits();
         widgets::toast(format!("Updated \"{}\"", t.name), true);
+        true
+    }
+
+    /// Update every saved map with changes not written (closing the
+    /// window): the names of those that couldn't be, which then show.
+    pub fn update_all(&mut self) -> Vec<String> {
+        let mut failed = Vec::new();
+        for i in 0..self.saved.len() {
+            if self.saved[i].view.edits_differ(&self.saved[i].saved) && !self.update(i) {
+                failed.push(self.saved[i].name.clone());
+                self.shown = Some(i);
+            }
+        }
+        failed
     }
 
     /// Replace with the map showing (asked first): saved map `i` becomes
@@ -1495,6 +1513,35 @@ mod tests {
         t.update(0);
         assert!(!t.saved[0].view.edits_differ(&t.saved[0].saved));
         let back = saved::read(&t.saved[0].path).unwrap();
+        assert_eq!(back.edits.placed.get("gw"), Some(&pos2(5.0, 5.0)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Closing the window with saved maps changed: Save writes each one,
+    /// and names any it couldn't (which then shows, its changes kept).
+    #[test]
+    fn update_all_writes_every_changed_saved_map() {
+        let dir = temp("update-all");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        t.keep_new(sample("A", "2026-01-01T00:00:00Z")).unwrap();
+        t.keep_new(sample("B", "2026-01-02T00:00:00Z")).unwrap();
+        t.keep_new(sample("C", "2026-01-03T00:00:00Z")).unwrap();
+        for i in [0, 1] {
+            let v = &mut t.saved[i].view;
+            v.refresh_saved(&egui::Context::default());
+            v.placed.insert("gw".into(), pos2(5.0, 5.0));
+        }
+        t.shown = None;
+        assert_eq!(t.unsaved().len(), 2);
+        // B's file can't be written: its path is a folder.
+        let b = t.saved.iter().position(|s| s.name == "B").unwrap();
+        let _ = std::fs::remove_file(&t.saved[b].path);
+        std::fs::create_dir_all(&t.saved[b].path).unwrap();
+        assert_eq!(t.update_all(), ["B"]);
+        assert_eq!(t.unsaved(), ["B"], "B keeps its changes");
+        assert_eq!(t.shown, Some(b), "and shows");
+        let a = t.saved.iter().position(|s| s.name == "A").unwrap();
+        let back = saved::read(&t.saved[a].path).unwrap();
         assert_eq!(back.edits.placed.get("gw"), Some(&pos2(5.0, 5.0)));
         let _ = std::fs::remove_dir_all(&dir);
     }

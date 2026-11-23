@@ -263,12 +263,17 @@ impl MapView {
                                         }
                                         for (site, n, closed) in &sites {
                                             let row = ui.horizontal(|ui| {
+                                                // 28 high: the whole row is the target.
+                                                ui.set_min_height(crate::theme::TARGET_H);
                                                 let (d, _) = ui.allocate_exact_size(
                                                     vec2(14.0, 14.0),
                                                     Sense::hover(),
                                                 );
                                                 let toggle = ui.interact(
-                                                    d.expand(2.0),
+                                                    egui::Rect::from_center_size(
+                                                        d.center(),
+                                                        vec2(22.0, crate::theme::TARGET_H),
+                                                    ),
                                                     ui.id().with(("site_flip", site)),
                                                     Sense::click(),
                                                 );
@@ -349,6 +354,8 @@ impl MapView {
                                         let c = zone_colour(*zone);
                                         let r = ui
                                             .horizontal(|ui| {
+                                                // 28 high: the whole row is the target.
+                                                ui.set_min_height(crate::theme::TARGET_H);
                                                 let (d, _) = ui.allocate_exact_size(
                                                     vec2(12.0, 12.0),
                                                     Sense::hover(),
@@ -409,6 +416,9 @@ impl MapView {
                                             };
                                             let r = ui
                                                 .horizontal_top(|ui| {
+                                                    // At least 28 high (a long
+                                                    // finding wraps taller).
+                                                    ui.set_min_height(crate::theme::TARGET_H);
                                                     let (d, _) = ui.allocate_exact_size(
                                                         vec2(10.0, 16.0),
                                                         Sense::hover(),

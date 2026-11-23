@@ -47,16 +47,13 @@ fn compare(body: &str, current: &str) -> Found {
     if latest <= now {
         return Found::UpToDate;
     }
-    // Only a link on GitHub's own site is shown.
-    let url = v
-        .get("html_url")
-        .and_then(|u| u.as_str())
-        .filter(|u| u.starts_with("https://github.com/hammerknife404/is-alive/"))
-        .unwrap_or(RELEASES)
-        .to_string();
+    // The link and the version shown are built from the numbers read, not
+    // taken as sent: nothing in the answer reaches the system's launcher
+    // or the screen beyond three numbers.
+    let (a, b, c) = latest;
     Found::Newer(Release {
-        version: tag.trim_start_matches('v').to_string(),
-        url,
+        version: format!("{a}.{b}.{c}"),
+        url: format!("{RELEASES}/tag/v{a}.{b}.{c}"),
     })
 }
 
@@ -101,15 +98,25 @@ mod tests {
         assert_eq!(compare(&body("0.22.1", url), "0.23.0"), Found::UpToDate);
     }
 
+    /// The link is the project's own release page for the numbers read,
+    /// whatever the answer sends: another site, or a link on the project's
+    /// own with something tacked on for the launcher to read.
     #[test]
-    fn a_link_off_the_project_falls_back_to_the_releases_page() {
-        let r = compare(&body("v1.0.0", "https://evil.example/x"), "0.23.0");
+    fn the_link_is_built_not_taken() {
+        let ours = Found::Newer(Release {
+            version: "1.0.0".into(),
+            url: format!("{RELEASES}/tag/v1.0.0"),
+        });
+        for sent in [
+            "https://evil.example/x",
+            "https://github.com/hammerknife404/is-alive/x,/root,\\\\203.0.113.5\\s\\a.exe",
+        ] {
+            assert_eq!(compare(&body("v1.0.0", sent), "0.23.0"), ours, "{sent}");
+        }
+        // A tag with more than the numbers shows only the numbers.
         assert_eq!(
-            r,
-            Found::Newer(Release {
-                version: "1.0.0".into(),
-                url: RELEASES.into()
-            })
+            compare(&body("v1.0.0-rc1 and then some", ""), "0.23.0"),
+            ours
         );
     }
 

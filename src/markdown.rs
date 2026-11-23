@@ -141,6 +141,23 @@ pub(crate) fn inline_links(
     let mut bold = false;
     let mut italic = false;
     let mut strike = false;
+    // Where the next "](" and the next ")" are on the line, searched for
+    // forward from where the scan is only once it has passed them: a long
+    // line of "[" without a link (pasted JSON) stays one pass, not one
+    // search to the end per bracket.
+    let mut next_mid: Option<Option<usize>> = None;
+    let mut next_close: Option<Option<usize>> = None;
+    let ahead = |memo: &mut Option<Option<usize>>, from: usize, pat: &str| -> Option<usize> {
+        match *memo {
+            Some(Some(at)) if at >= from => Some(at),
+            Some(None) => None,
+            _ => {
+                let found = text[from..].find(pat).map(|i| from + i);
+                *memo = Some(found);
+                found
+            }
+        }
+    };
     let push = |job: &mut LayoutJob, s: &str, bold: bool, italic: bool, strike: bool| {
         if s.is_empty() {
             return;
@@ -193,8 +210,9 @@ pub(crate) fn inline_links(
             job.append(&rest[..=end], 0.0, f);
             rest = &rest[end + 1..];
         } else if rest.starts_with('[')
-            && let Some(mid) = rest.find("](")
-            && let Some(end) = rest[mid..].find(')')
+            && let here = text.len() - rest.len()
+            && let Some(mid) = ahead(&mut next_mid, here, "](").map(|m| m - here)
+            && let Some(end) = ahead(&mut next_close, here + mid, ")").map(|c| c - here - mid)
         {
             let mut f = base.clone();
             f.color = vis.hyperlink_color;
@@ -705,6 +723,37 @@ mod tests {
         emoji.dedup();
         assert_eq!(emoji.len(), n, "an emoji is in the picker twice");
         assert_eq!(shortcode(":wireless:"), Some(("🛜", 10)));
+    }
+
+    /// A long line of "[" with no link (pasted minified JSON) is one pass,
+    /// not a search to the end of the line per bracket; links still read.
+    #[test]
+    fn a_long_line_of_brackets_is_linear() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let fam = FontFamily::Proportional;
+            let line = "[".repeat(200_000);
+            let t = std::time::Instant::now();
+            let _ = inline_links(ui, &line, 14.0, false, &fam);
+            assert!(
+                t.elapsed() < std::time::Duration::from_secs(3),
+                "{:?}",
+                t.elapsed()
+            );
+            let (job, links) = inline_links(
+                ui,
+                "see [the wiki](https://x.test/w) and [a] (b)",
+                14.0,
+                false,
+                &fam,
+            );
+            assert_eq!(job.text, "see the wiki and [a] (b)");
+            assert_eq!(links.len(), 1);
+            assert_eq!(links[0].1, "https://x.test/w");
+            let (_, two) = inline_links(ui, "[a](u1) [b](u2)", 14.0, false, &fam);
+            assert_eq!(two.len(), 2);
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

@@ -1,8 +1,16 @@
-//! Portable note photos: resized PNGs embedded in Markdown, without EXIF metadata.
+//! Portable note photos: resized JPEGs embedded in Markdown, without EXIF
+//! metadata (the encoder writes none). PNG ones from before still read.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use eframe::egui;
 use std::io::Cursor;
-const PREFIX: &str = "![Photo](data:image/png;base64,";
+const PREFIX: &str = "![Photo](data:image/jpeg;base64,";
+const PREFIXES: [&str; 2] = [PREFIX, "![Photo](data:image/png;base64,"];
+/// Most photo data the notes hold, all photos together (base64 bytes):
+/// about forty at full size. Kept apart from the text's own limit.
+pub const PHOTOS_MAX: usize = 32 * 1024 * 1024;
+/// A photo's JPEG quality: a rack or a label stays readable at a tenth of
+/// a PNG's size.
+const QUALITY: u8 = 85;
 pub fn import(path: &std::path::Path) -> Result<String, String> {
     if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > 20 * 1024 * 1024 {
         return Err("Choose a photo smaller than 20 MB".into());
@@ -22,21 +30,25 @@ pub fn import(path: &std::path::Path) -> Result<String, String> {
     } else {
         image
     };
-    let mut png = Cursor::new(Vec::new());
-    image
-        .write_to(&mut png, image::ImageFormat::Png)
+    let mut jpeg = Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, QUALITY)
+        .encode_image(&image.to_rgb8())
         .map_err(|e| e.to_string())?;
     Ok(format!(
         "\n{PREFIX}{})\n",
-        STANDARD.encode(png.into_inner())
+        STANDARD.encode(jpeg.into_inner())
     ))
 }
 pub fn payload(line: &str) -> Option<&str> {
-    line.strip_prefix(PREFIX)?.strip_suffix(')').filter(|s| {
-        s.len() <= 12 * 1024 * 1024
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
-    })
+    PREFIXES
+        .iter()
+        .find_map(|p| line.strip_prefix(p))?
+        .strip_suffix(')')
+        .filter(|s| {
+            s.len() <= 12 * 1024 * 1024
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+        })
 }
 pub fn render(ui: &mut egui::Ui, line: &str) -> bool {
     let Some(encoded) = payload(line) else {
@@ -105,6 +117,21 @@ impl Attachments {
         }
         out
     }
+    /// How many photos are held.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// How much photo data is held for `text`: the photos its markers name.
+    pub fn size_in(&self, text: &str) -> usize {
+        self.0
+            .iter()
+            .filter(|(marker, _)| text.contains(marker.as_str()))
+            .map(|(_, image)| image.len())
+            .sum()
+    }
+
     pub fn expand(&self, text: &str) -> String {
         let mut out = text.to_string();
         for (marker, image) in &self.0 {
@@ -117,6 +144,29 @@ impl Attachments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A camera-sized picture comes in as a 1600 × 1200 JPEG, a fraction
+    /// of what the PNG was, that reads back.
+    #[test]
+    fn a_photo_comes_in_small_enough() {
+        let dir = std::env::temp_dir().join(format!("is-alive-photo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rack.png");
+        let img = image::RgbImage::from_fn(2400, 1800, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8])
+        });
+        img.save(&path).unwrap();
+        let md = import(&path).unwrap();
+        let data = payload(md.trim()).expect("a photo line");
+        assert!(md.trim().starts_with(PREFIX));
+        let jpeg = STANDARD.decode(data).unwrap();
+        let back = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!((back.width(), back.height()), (1600, 1200));
+        assert!(data.len() < 3 * 1024 * 1024, "{} bytes", data.len());
+        // An older PNG one still reads.
+        assert!(payload("![Photo](data:image/png;base64,AAAA)").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn attachment_edits_and_reopen_preserve_photo_bytes() {
         let raw = "before\n![Photo](data:image/png;base64,AAAA)\nafter";

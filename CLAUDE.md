@@ -27,7 +27,7 @@ Techs run this on site, on small laptops. Every UI change, and every step of the
   - **Under 1100:** nav folds to the icon rail (56). Inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
 - **Height is the tighter limit.** At 720, the title bar, status bar and run bar together stay under 130 points, so results get most of the window.
 - **The Map keeps its zoom** when a panel opens over it. Panels float over the canvas; they don't shrink it.
-- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC). Anything a row loses still shows in the inspector.
+- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC, then TTL). Anything a row loses still shows in the inspector.
 - **Click targets stay at least 28 points tall**, for a trackpad on a tailgate.
 - **Check every UI change at 1280 × 720 and at 1120 × 720** before asking to merge, and say in the PR that you did.
 
@@ -38,4 +38,4 @@ Techs run this on site, on small laptops. Every UI change, and every step of the
 - **Same PR.** A change to what a bundle carries or means updates `skills/` in that PR: a file in the zip, a manifest key, an `inventory.json` field or what one now holds (a MAC that can come from somewhere new), what `results.json` spans, or what is-alive reads back from a `/mapnetwork` map. Also update the matching `*_WHAT` text in `src/tools/bundle.rs` (the manifest's description of each file) and the inventory's `notes` in `src/tools/sweep.rs`.
 - **Tests hold the line.** `the_bundled_mapnetwork_skill_knows_every_file` (src/bundle.rs) fails when a bundle file or manifest key isn't named in `skills/mapnetwork/SKILL.md`, and the inventory test in src/tools/sweep.rs fails when a host field isn't. Explain new things there; don't loosen the tests. `skills/mapnetwork/scripts/test_engine_contract.py` (CI) covers the map engine.
 - **The bundled copies are Claude's to keep current; the owner keeps the source.** `skills/` is a scrubbed copy that `scripts/sync-skills.py` makes from the owner's own skills. The owner patches their source copy themselves; don't hand them patches for it unless they ask. If a sync brings older text back into `skills/`, the tests above fail: restore the bundled text from git (and point it out), don't loosen the tests.
-- **Scrub.** Text added to `skills/` is public: no real site, client or person names, no full MACs (fictional names and documentation addresses only).
+- **Scrub.** Text added to `skills/` is public: no real site, client or person names, no full MACs in any form: colon or dash pairs, dotted quads, a serial that is a MAC, or bare in an id (fictional names and documentation addresses only). `the_bundled_skills_carry_no_full_macs` (src/skills.rs) and `scripts/sync-skills.py` both check every form.
