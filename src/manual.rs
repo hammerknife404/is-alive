@@ -457,9 +457,9 @@ fn place(to: &str) -> Option<Place> {
     let file = to.strip_prefix("../../")?;
     (!file.is_empty() && !file.contains("..")).then(|| {
         Place::Web(format!(
-            "{}/blob/v{}/{file}",
+            "{}/blob/{}/{file}",
             crate::help::REPO,
-            crate::VERSION
+            crate::help::DOCS_REF
         ))
     })
 }
@@ -710,9 +710,9 @@ mod tests {
         assert_eq!(
             place("../../FOLLOW-ALONG.md"),
             Some(Place::Web(format!(
-                "{}/blob/v{}/FOLLOW-ALONG.md",
+                "{}/blob/{}/FOLLOW-ALONG.md",
                 crate::help::REPO,
-                crate::VERSION
+                crate::help::DOCS_REF
             )))
         );
         assert_eq!(place("#no-such-heading"), None);

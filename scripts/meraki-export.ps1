@@ -64,6 +64,37 @@ function Get-Meraki([string]$Path) {
     }
 }
 
+# Every page of a list. The API sends at most perPage items and a Link
+# header naming the next page; one GET would cut an organization with more
+# devices or networks than that short, with no word. Same retries as
+# Get-Meraki; at most 100 pages.
+function Get-MerakiAll([string]$Path) {
+    $all = @()
+    $url = "$base$Path"
+    for ($page = 1; $url -and $page -le 100; $page++) {
+        $r = $null
+        for ($try = 1; $try -le 6; $try++) {
+            try {
+                $r = Invoke-WebRequest -Uri $url -Headers $headers -Method Get -TimeoutSec 60 -UseBasicParsing
+                break
+            } catch {
+                $code = 0
+                if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+                if ($code -eq 400 -or $code -eq 404) { return , $all }
+                if ($code -eq 401 -or $code -eq 403) { throw "Meraki refused the key for $Path ($code)" }
+                if ($try -eq 6) { throw }
+                Start-Sleep -Seconds ([math]::Pow(2, $try - 1))
+            }
+        }
+        $all += @($r.Content | ConvertFrom-Json)
+        $url = $null
+        $link = "$($r.Headers['Link'])"
+        if ($link -match '<([^>]+)>;\s*rel="?next"?') { $url = $Matches[1] }
+    }
+    if ($url) { Write-Warning "$Path has more than 100 pages: the rest left out" }
+    return , $all
+}
+
 $orgs = Get-Meraki "/organizations"
 if (-not $Org) {
     Write-Host "Organizations this key can read:"
@@ -76,8 +107,8 @@ if (-not $o) { throw "No organization named or numbered '$Org' for this key" }
 $oid = $o.id
 Write-Host "Organization: $($o.name)"
 
-$devices = Get-Meraki "/organizations/$oid/devices?perPage=1000"
-$networks = Get-Meraki "/organizations/$oid/networks?perPage=1000"
+$devices = Get-MerakiAll "/organizations/$oid/devices?perPage=1000"
+$networks = Get-MerakiAll "/organizations/$oid/networks?perPage=1000"
 if ($Network) { $networks = @($networks | Where-Object { $_.name -like "*$Network*" }) }
 
 $calls = [ordered]@{
@@ -123,7 +154,7 @@ $export = [ordered]@{
     organization       = $o
     devices            = @($devices)
     networks           = @($nets)
-    uplinkStatuses     = Get-Meraki "/organizations/$oid/appliance/uplink/statuses"
+    uplinkStatuses     = Get-MerakiAll "/organizations/$oid/appliance/uplink/statuses?perPage=1000"
     thirdPartyVPNPeers = Get-Meraki "/organizations/$oid/appliance/vpn/thirdPartyVPNPeers"
 }
 $export | ConvertTo-Json -Depth 30 | Set-Content -Path $Out -Encoding UTF8

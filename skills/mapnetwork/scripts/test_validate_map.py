@@ -101,6 +101,13 @@ CASES = [
     ("mismatched close",  site("[ { id:'a', chips:['x' } ]"), 1, "closes a `[`"),
     ("unterminated str",  site(two("'oops")), 1, "string"),
     ("undefined literal", site("[ { id:'a', zone:'core', flags:undefined } ]"), 1, "not a literal"),
+    # A list or an object where an id, zone or site goes: an error line,
+    # not a traceback.
+    ("list as zone",      site("[ { id:'a', zone:['core'] }, { id:'b', zone:'core' } ]"), 1, "zone must be a string"),
+    ("list as id",        site("[ { id:['a'], zone:'core' }, { id:'b', zone:'core' } ]"), 1, "id must be a string"),
+    ("object as site",    site(two(), sites="{ hq:{ name:'HQ' } }").replace("zone:'core', kind:'X', label:'A'", "zone:'core', site:{x:1}, kind:'X', label:'A'"), 1, "site must be a string"),
+    ("list in action",    site(two(), actions="[ { id:'x', sev:'low', text:'t', nodes:[['a']] } ]"), 1, "must be a node id"),
+    ("list as edge end",  site(two(), edges="[ { id:'e1', from:['a'], to:'b', cls:'wired' } ]"), 1, "must be node ids"),
     ("template literal",  site(two("`x`")), 1, "template"),
     ("no markers",        "<html>nothing here</html>", 1, "marker"),
     # Seen on a real map: data spliced after the banner's first

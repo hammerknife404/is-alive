@@ -6,6 +6,10 @@ use crate::{Tab, VERSION};
 use eframe::egui;
 
 pub(crate) const REPO: &str = "https://github.com/hammerknife404/is-alive";
+/// The git ref the app's links to repository files name: `v<version>` in a
+/// release (tagged as it's published), `main` in any other build, whose
+/// version has no tag yet (see build.rs).
+pub(crate) const DOCS_REF: &str = env!("IS_ALIVE_DOCS_REF");
 /// The wiki's front page.
 pub const WIKI: &str = "https://github.com/hammerknife404/is-alive/wiki";
 
@@ -105,7 +109,7 @@ fn links(tab: Tab, tab_name: &str) -> [(&'static str, Vec<Link>); 2] {
                 web(
                     "Follow-along guide",
                     "A 20-minute walk-through for people new to networking",
-                    format!("{REPO}/blob/v{VERSION}/FOLLOW-ALONG.md"),
+                    format!("{REPO}/blob/{DOCS_REF}/FOLLOW-ALONG.md"),
                 ),
                 web(
                     "Release notes",
@@ -190,6 +194,18 @@ pub fn menu(ui: &mut egui::Ui, tab: Tab, tab_name: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    /// Links to repository files name this release's tag, or main in a
+    /// build that isn't a release (its tag doesn't exist yet).
+    #[test]
+    fn file_links_name_a_ref_that_exists() {
+        let release = format!("v{}", crate::VERSION);
+        assert!(
+            super::DOCS_REF == "main" || super::DOCS_REF == release,
+            "{}",
+            super::DOCS_REF
+        );
+    }
+
     use super::*;
 
     #[test]

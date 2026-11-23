@@ -33,8 +33,13 @@ SUFFIX = re.compile(
 )
 
 
+# What a vendor name can't hold: control and Unicode format (bidi,
+# zero-width) characters, and markup. The table is downloaded each week.
+BAD = re.compile(r"[\x00-\x1f\x7f-\x9f<>\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+
+
 def short(name):
-    name = " ".join(name.split())
+    name = " ".join(BAD.sub("", name).split())[:80]
     while True:
         trimmed = SUFFIX.sub("", name).rstrip(" ,.")
         if trimmed == name or not trimmed:
@@ -71,7 +76,15 @@ def main():
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     with open(DATE, "w", encoding="ascii") as f:
         f.write(today + "\n")
-    print(f"{OUT}: {len(rows)} prefixes, changed; {DATE}: {today}")
+    # What changed, for the pull request a reviewer reads before merging.
+    before = dict(
+        line.split("\t", 1) for line in old.decode("utf-8", "replace").splitlines() if "\t" in line
+    )
+    added = sum(1 for p in rows if p not in before)
+    removed = sum(1 for p in before if p not in rows)
+    renamed = sum(1 for p, v in rows.items() if p in before and before[p] != v)
+    print(f"{OUT}: {len(rows)} prefixes, changed ({added} added, {renamed} renamed, "
+          f"{removed} removed); {DATE}: {today}")
 
 
 if __name__ == "__main__":
