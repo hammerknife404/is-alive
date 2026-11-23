@@ -55,7 +55,13 @@ impl App {
             egui::FontSelection::Default,
             egui::Align::Center,
         );
-        RichText::new(format!("{} ▾", self.site_name))
+        // A long site name (up to 80 characters) is cut to about a third of
+        // the title bar, so the tools beside it keep their room; the whole
+        // name is on hover.
+        let room = (ui.ctx().content_rect().width() * 0.3).max(120.0);
+        let shown = short_name(&self.site_name, (room / 8.0) as usize);
+        let cut = shown != self.site_name;
+        RichText::new(format!("{shown} ▾"))
             .color(ui.visuals().strong_text_color())
             .append_to(
                 &mut job,
@@ -71,9 +77,14 @@ impl App {
                     .corner_radius(crate::theme::R_CONTROL),
             )
             .on_hover_text(if scratch {
-                "No site open: Scratch. Click to open a site or make one, so this visit's notes, maps and configs stay together."
+                "No site open: Scratch. Click to open a site or make one, so this visit's notes, maps and configs stay together.".to_string()
+            } else if cut {
+                format!(
+                    "{}\n\nThe site open now: Configs, Map, Notes, Results and the Claude Handoff work on it. Click to switch or make a site.",
+                    self.site_name
+                )
             } else {
-                "The site open now: Configs, Map, Notes, Results and the Claude Handoff work on it. Click to switch or make a site."
+                "The site open now: Configs, Map, Notes, Results and the Claude Handoff work on it. Click to switch or make a site.".to_string()
             });
         if chip.clicked() {
             self.sites = site::list();
@@ -603,6 +614,19 @@ fn renamed(ctx: &egui::Context) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A long site name is cut with "…" to fit the title bar; a short one
+    /// is shown whole.
+    #[test]
+    fn a_long_site_name_is_cut() {
+        use super::short_name;
+        assert_eq!(short_name("Acme HQ", 30), "Acme HQ");
+        let long = "Contoso Health — Northern District Outpatient Clinic and Lab";
+        let s = short_name(long, 30);
+        assert!(s.chars().count() <= 30 && s.ends_with('…'));
+        assert!(long.starts_with(s.trim_end_matches('…')));
+        assert_eq!(short_name("abcdefgh", 1), "abc…");
+    }
+
     #[test]
     fn plurals() {
         assert_eq!(super::plural(1), "");
@@ -695,4 +719,16 @@ mod scratch_and_share_tests {
         assert!(scratch.join("settings").exists(), "only what was carried");
         let _ = std::fs::remove_dir_all(&base);
     }
+}
+
+/// `name`, or its first `max` characters less one and "…".
+fn short_name(name: &str, max: usize) -> String {
+    let max = max.max(4);
+    if name.chars().count() <= max {
+        return name.to_string();
+    }
+    let mut s: String = name.chars().take(max - 1).collect();
+    s = s.trim_end().to_string();
+    s.push('…');
+    s
 }

@@ -218,17 +218,29 @@ impl App {
                         ui.weak(format!("v{VERSION}"));
                         if let Some(crate::update::Found::Newer(r)) = &self.update {
                             ui.separator();
-                            ui.hyperlink_to(
-                                egui::RichText::new(format!("Update: v{}", r.version))
-                                    .color(widgets::ok())
-                                    .small(),
-                                &r.url,
-                            )
-                            .on_hover_text(format!(
-                                "Version {} is out (this is v{VERSION}). Opens its release page; \
-                             nothing is downloaded.",
-                                r.version
-                            ));
+                            let link = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("Update: v{}", r.version))
+                                        .color(widgets::ok())
+                                        .underline()
+                                        .small(),
+                                )
+                                .selectable(false),
+                            );
+                            // The bar's whole height is the target, as for
+                            // Domain: the small text alone is a sliver.
+                            let hit = egui::Rect::from_x_y_ranges(link.rect.x_range(), bar.y_range());
+                            let update = ui
+                                .interact(hit, ui.id().with("status update"), egui::Sense::click())
+                                .on_hover_text(format!(
+                                    "Version {} is out (this is v{VERSION}). Opens its release page; \
+                                 nothing is downloaded.",
+                                    r.version
+                                ))
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if update.clicked() {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&r.url));
+                            }
                         }
                         if !running.is_empty() {
                             ui.separator();

@@ -1319,7 +1319,7 @@ impl NotesTool {
         self.read_queued(&ctx);
         // The outline down the left, top to bottom: open on a wide window
         // until closed, shut on a laptop until opened.
-        let wide = ui.ctx().content_rect().width() >= 1440.0;
+        let wide = ui.ctx().content_rect().width() >= crate::nav::WIDE_FROM;
         let outline = !(self.on_file && self.file.is_some()) && self.outline.unwrap_or(wide);
         if outline {
             egui::Panel::left("notes_outline_panel")
@@ -1961,13 +1961,14 @@ impl NotesTool {
                 let top = heads.iter().map(|h| h.0).min().unwrap_or(1);
                 for (level, title, at) in heads {
                     ui.horizontal(|ui| {
+                        ui.set_min_height(crate::theme::TARGET_H);
                         ui.add_space(12.0 * (*level - top) as f32);
-                        if ui
-                            .add(
-                                egui::Label::new(RichText::new(title.as_str()))
-                                    .truncate()
-                                    .sense(egui::Sense::click()),
-                            )
+                        let label = ui.add(
+                            egui::Label::new(RichText::new(title.as_str()))
+                                .truncate()
+                                .selectable(false),
+                        );
+                        if widgets::tall_hit(ui, &label, ("outline heading", at.start))
                             .on_hover_text("Go to it in the editor")
                             .clicked()
                         {

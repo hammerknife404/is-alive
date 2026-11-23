@@ -157,7 +157,7 @@ impl MapView {
         }
         let canvas = ui.available_rect_before_wrap();
         let w = SIDE_W.min(canvas.width() - 100.0).max(160.0);
-        let flush = ui.ctx().content_rect().width() >= 1440.0;
+        let flush = ui.ctx().content_rect().width() >= crate::nav::WIDE_FROM;
         let v = ui.visuals().clone();
         let sites = self.site_counts();
         let mut flip_all: Option<bool> = None;

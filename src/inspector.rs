@@ -19,9 +19,9 @@ pub enum Dock {
 /// 360 docked from 1440 points wide, 320 docked from 1100, and over the
 /// content below that (a small laptop, half a screen).
 pub fn dock(width: f32) -> Dock {
-    if width >= 1440.0 {
+    if width >= crate::nav::WIDE_FROM {
         Dock::Docked(360.0)
-    } else if width >= 1100.0 {
+    } else if width >= crate::nav::OPEN_FROM {
         Dock::Docked(320.0)
     } else {
         Dock::Over(320.0_f32.min(width - 140.0).max(240.0))
@@ -33,7 +33,7 @@ pub fn dock(width: f32) -> Dock {
 /// width too.
 pub fn map_dock(width: f32) -> Dock {
     match dock(width) {
-        Dock::Docked(_) if width < 1440.0 => Dock::Over(320.0),
+        Dock::Docked(_) if width < crate::nav::WIDE_FROM => Dock::Over(320.0),
         d => d,
     }
 }
@@ -216,8 +216,14 @@ pub fn address(ui: &mut Ui, a: &str) {
 
 /// A header button: frameless, `ICON` square.
 pub fn icon_button(ui: &mut Ui, text: &str, tip: &str) -> egui::Response {
-    ui.add(egui::Button::new(text).frame(false).min_size(ICON))
-        .on_hover_text(tip)
+    let r = ui
+        .add(egui::Button::new(text).frame(false).min_size(ICON))
+        .on_hover_text(tip);
+    // A screen reader says what it does, not "×" or "⟲": the tip's first
+    // words ("Close", "Clear this result").
+    let name = tip.split(" (").next().unwrap_or(tip).to_string();
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.clone()));
+    r
 }
 
 /// One button in the inspector's action row.

@@ -252,7 +252,8 @@ impl PortTool {
         });
         let now = chrono::Utc::now();
         let mut view = None;
-        let row_h = 18.0 + ui.spacing().item_spacing.y;
+        // As tall as a click target: the certificate cell opens its details.
+        let row_h = crate::theme::TARGET_H + ui.spacing().item_spacing.y;
         egui::ScrollArea::vertical().auto_shrink(false).show_rows(
             ui,
             row_h,
@@ -268,14 +269,16 @@ impl PortTool {
                     if i % 2 == 1 {
                         // Painted first so it sits behind the row: matches the striped grids.
                         let top = ui.cursor().top();
-                        let rect =
-                            egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=top + 18.0);
+                        let rect = egui::Rect::from_x_y_ranges(
+                            ui.max_rect().x_range(),
+                            top..=top + crate::theme::TARGET_H,
+                        );
                         ui.painter()
                             .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
                     }
                     ui.horizontal(|ui| {
                         let cell = |ui: &mut Ui, w: f32, t: RichText| {
-                            ui.add_sized([w, 18.0], egui::Label::new(t));
+                            ui.add_sized([w, crate::theme::TARGET_H], egui::Label::new(t));
                         };
                         cell(ui, cols[0], RichText::new(port.to_string()).monospace());
                         cell(ui, cols[1], RichText::new(txt).color(c));

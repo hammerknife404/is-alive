@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.28**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.29**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -116,11 +116,11 @@ Five parts, the same on every tab:
 
 | Where | What's there |
 |---|---|
-| **Top**: the title bar | The site you're working on (**● Scratch ▾** until you make one), then the tools of the nav row you're in, to switch between them |
-| **Left**: the nav | **VISIT** (Full scan, Claude Handoff, Report) at the top, then **TOOLS**: six rows of tools, a dot on a row with one running; **Settings** and **Help** at the foot |
+| **Top**: the title bar | The site you're working on (**● Scratch ▾** until you make one; a long name is cut with …, whole on hover), then the tools of the nav row you're in, to switch between them |
+| **Left**: the nav | **VISIT** (Full scan, Claude Handoff, Report) at the top, then **TOOLS**: six rows of tools, a dot on a row with one running (on a short window they scroll, and a fade at the bottom says there are more); **Settings** and **Help** at the foot. **Tab** moves through the rows, ringed as it goes |
 | **Middle** | The tab you're on: its run bar, **Options**, the status row and the results |
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
-| **Bottom**: the status bar | This computer's LAN address, gateway, the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right |
+| **Bottom**: the status bar | This computer's LAN address, gateway, the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right, with **Update: v…** beside it when a newer release is out |
 
 The first time it opens, is-alive takes 1120 × 720, or the whole screen on a small one (a 1080p laptop at 150%, or 1366 × 768), so the status bar isn't left under the taskbar. After that it opens at the size you left it, maximised if it was.
 

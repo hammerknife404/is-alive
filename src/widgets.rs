@@ -1421,6 +1421,19 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
     (!keep.is_empty()).then(|| keep.join(":"))
 }
 
+/// A click target at least 28 points tall around `label` (a line of
+/// text is about 18): its row's height, centred on it, as wide as it.
+pub fn tall_hit(
+    ui: &Ui,
+    label: &egui::Response,
+    id: impl std::hash::Hash + std::fmt::Debug,
+) -> egui::Response {
+    let extra = ((crate::theme::TARGET_H - label.rect.height()) / 2.0).max(0.0);
+    let hit = label.rect.expand2(egui::vec2(0.0, extra));
+    ui.interact(hit, ui.id().with(id), egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
