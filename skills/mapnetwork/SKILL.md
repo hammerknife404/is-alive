@@ -146,6 +146,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
   `card-notes.json` and the manifest's `known_problems` are the technician's
   word: context, findings and device notes, never topology on their own.
+  They're redacted only where the technician marked a value (and the loaded
+  configs' passwords and keys), not scanned: anything in them that still
+  looks like a credential or a person's or patient's details may be real, so
+  never repeat it in the map, its findings or your reply.
   `results.json` (test runs) becomes a finding only where a run shows a problem
   (loss, a closed port that should be open, a failing mail check). A site
   keeps its runs from one visit to the next, so they can span visits: judge
@@ -187,6 +191,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
+  `complete: false` (top level) means the sweep was stopped before it
+  finished: hosts it hadn't reached are missing and some ports weren't
+  checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
   else its `Server` header), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
