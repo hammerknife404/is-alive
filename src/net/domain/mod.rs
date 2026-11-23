@@ -348,6 +348,17 @@ pub(crate) fn http_get(url: &str, follow: bool) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A TXT record's tags, damaged any way, read without a panic.
+    #[test]
+    fn damaged_tag_records_never_panic() {
+        crate::hostile::each_text(
+            "v=DMARC1; p=reject; sp=none; pct=50; rua=mailto:dmarc@example.com",
+            |t| {
+                let _ = tags(t);
+            },
+        );
+    }
+
     #[test]
     fn normalizes_input() {
         assert_eq!(normalize(" User@Example.COM "), "example.com");

@@ -1102,6 +1102,34 @@ mod tests {
         assert_eq!(rsa_bits("AAAA"), None);
     }
 
+    /// A DKIM key is DER read by hand: every length in it, damaged, gives
+    /// a size or None, never a panic; so does a damaged MTA-STS policy.
+    #[test]
+    fn damaged_keys_and_policies_never_panic() {
+        use base64::Engine;
+        let k = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsyI2421XCbXzxvX4+DhVzaIE0lEdP3TqPuvPfybCvFAXUJJk+ubpjTF+IVm7sgK/IPWjxViNQjso/mamLKHFIoQQR204HvGO1fKhzbIoWaNmYZNomx6sqrXLdHYGonb/Oig0iBmQUm5oroBdqyjrfNpc1GblNDyokWLNzBruZFRoK1KRksYcYrJR1wZ3ZX2rmtfVVNzaFrQKxNI7xsxZXwjuYOde8Igv+Scy8v4ysClsBibksTmQoFjS479xJtY0F/+M+cE9Ymi3k/qLKf2+1JMXQKLaIhJgurtgltnpmqVlr6/5c1+HjAYSdIrdL7QKg8nbCNUsV4tTnIRiSZyTeQIDAQAB";
+        let der = base64(k).unwrap();
+        crate::hostile::each(&der, |d| {
+            let _ = rsa_bits(&base64::engine::general_purpose::STANDARD.encode(d));
+        });
+        crate::hostile::each_text(k, |t| {
+            let _ = rsa_bits(t);
+        });
+        let mx = vec!["mx1.example.com".to_string()];
+        crate::hostile::each_text(
+            "version: STSv1\nmode: enforce\nmx: *.example.com\nmax_age: 604800\n",
+            |p| {
+                let mut c = Check::default();
+                sts_policy(
+                    &mut c,
+                    "https://mta-sts.example.com/.well-known/mta-sts.txt",
+                    p,
+                    &mx,
+                );
+            },
+        );
+    }
+
     #[test]
     fn decodes_base64() {
         assert_eq!(base64("aGVsbG8=").unwrap(), b"hello");

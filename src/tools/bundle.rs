@@ -166,7 +166,8 @@ impl BundleTool {
     fn still_there(&self, src: &Sources) -> Vec<(&'static str, String)> {
         let mut out = Vec::new();
         if self.use_notes && !src.notes.is_empty() {
-            let text = src.notes.sanitized().0;
+            // The words, not the photos: they're what a secret could be in.
+            let text = src.notes.sanitized_words();
             if let Some(k) = self.looks_unredacted("Tech notes", &[&text]) {
                 out.push(("Tech notes", k));
             }
