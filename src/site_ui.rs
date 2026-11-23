@@ -263,7 +263,7 @@ impl App {
                     if unsaved_notes {
                         ui.colored_label(
                             widgets::warn(),
-                            format!("The notes have changes not saved (Autosave is off). Save them in {here} first?"),
+                            format!("The notes have changes not saved. Save them in {here} first?"),
                         );
                     }
                     if let Some(why) = busy {
@@ -322,7 +322,7 @@ impl App {
                         ui.colored_label(widgets::warn(), format!("{why} Or start with what's open."));
                     }
                     if !*carry && unsaved_notes {
-                        ui.weak(format!("The notes' changes not saved (Autosave is off) are saved in {here} first."));
+                        ui.weak(format!("The notes' changes not saved are saved in {here} first."));
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -417,6 +417,16 @@ impl App {
             self.notes.save_now();
         } else {
             self.notes.flush();
+        }
+        // Notes that couldn't be saved here would be dropped by the switch
+        // (carried ones go along): stay, and show them with the error.
+        if !carry && self.notes.save_failed() {
+            self.tab = crate::Tab::Notes;
+            widgets::toast(
+                format!("{} stays open: its notes couldn't be saved", self.site_name),
+                false,
+            );
+            return;
         }
         self.remember_site_configs();
         self.keep_results();
