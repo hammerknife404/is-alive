@@ -90,18 +90,34 @@ impl Bundle {
             .collect()
     }
 
-    /// What the bundle's client table is, for the prompt; None without a
-    /// UniFi export, which is the only source of one.
-    fn client_table(&self) -> Option<&'static str> {
+    /// What became of client devices' names, for the prompt: the UniFi
+    /// client table, and the sweep inventory's and Meraki reservations'
+    /// phones, laptops and PCs. None when no file holds any.
+    fn client_names(&self) -> Option<String> {
         use crate::unifi::Clients;
-        (!self.all_of(UNIFI).is_empty()).then_some(match self.clients {
+        let table = (!self.all_of(UNIFI).is_empty()).then_some(match self.clients {
             Clients::None => "Client table: not included.",
             Clients::Anonymized => {
                 "Client table: included, anonymized. Device names are client-xxxxxxxx tokens, stable \
 per MAC; MAC, vendor and switch port are real. Use it for client counts and to spot unadopted gear."
             }
             Clients::Full => "Client table: included, with the controller's real device names (client notes, email and phone dropped).",
-        })
+        });
+        let mixed = self.has(INVENTORY) || !self.all_of(MERAKI).is_empty();
+        let others = mixed.then_some(match self.clients {
+            Clients::None => {
+                "Phones', laptops' and PCs' names were left out of the sweep inventory and Meraki \
+DHCP reservations (client_names none); their MAC, vendor and address are real."
+            }
+            Clients::Anonymized => {
+                "Phones', laptops' and PCs' names in the sweep inventory and Meraki DHCP reservations \
+are client-xxxxxxxx tokens too (client_names anonymized), the same token for the same MAC as in the \
+client table; gear, NAS, printers and cameras keep their names."
+            }
+            Clients::Full => "Device names in the sweep inventory and Meraki DHCP reservations are real (client_names full).",
+        });
+        let all: Vec<&str> = table.into_iter().chain(others).collect();
+        (!all.is_empty()).then(|| all.join(" "))
     }
 
     fn notes(&self) -> Option<&str> {
@@ -140,10 +156,11 @@ per MAC; MAC, vendor and switch port are real. Use it for client counts and to s
             "site": self.site.trim(),
             "notes": self.notes(),
             "clients": match self.clients {
-                crate::unifi::Clients::None => "not included",
+                crate::unifi::Clients::None =>
+                    "none: UniFi client table not included; phones', laptops' and PCs' names left out of the sweep inventory and Meraki DHCP reservations",
                 crate::unifi::Clients::Anonymized =>
-                    "anonymized: MAC, vendor and switch port kept; device names replaced with client-<hash> tokens; notes and email dropped",
-                crate::unifi::Clients::Full => "included with device names; notes, email and phone dropped",
+                    "anonymized: MAC, vendor and switch port kept; device names replaced with client-<hash> tokens (every UniFi client; phones, laptops and PCs in the sweep inventory and Meraki DHCP reservations); notes and email dropped",
+                crate::unifi::Clients::Full => "full: device names kept; notes, email and phone dropped",
             },
             "scanner": {
                 "lan": self.scanner.lan.map(|(ip, bits)| format!("{ip}/{bits}")),
@@ -261,7 +278,7 @@ Don't ask it again.\n",
                 apart.join("; ")
             );
         }
-        if let Some(t) = self.client_table() {
+        if let Some(t) = self.client_names() {
             s += &format!("\n{t}\n");
         }
         if let Some(n) = self.notes() {
@@ -606,7 +623,10 @@ manifest.json first.\n\n\
 meraki.json and inventory.json. manifest.json's mapnetwork_preflight answers your pre-build question: \
 infrastructure only, clients off the map, no extra inputs coming. Don't ask it again.\n\
 \nClient table: included, anonymized. Device names are client-xxxxxxxx tokens, stable per MAC; MAC, \
-vendor and switch port are real. Use it for client counts and to spot unadopted gear.\n\
+vendor and switch port are real. Use it for client counts and to spot unadopted gear. Phones', \
+laptops' and PCs' names in the sweep inventory and Meraki DHCP reservations are client-xxxxxxxx \
+tokens too (client_names anonymized), the same token for the same MAC as in the client table; gear, \
+NAS, printers and cameras keep their names.\n\
 \nKnown problems from the technician: Closet 2 switch flaky\n"
         );
         let m = b.manifest();

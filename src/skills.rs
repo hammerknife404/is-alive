@@ -292,6 +292,52 @@ mod tests {
         assert!(example(Path::new("/tmp/example-Contoso_Health.dc.html")).is_none());
     }
 
+    /// The bundled skills are public: every release and Site Bundle carries
+    /// them. No MAC in them may keep its device half (the last three bytes
+    /// are 00:00:nn, as scripts/sync-skills.py leaves them), however it's
+    /// written: colon or dash pairs, dotted or dashed quads (a SonicWall
+    /// serial is its MAC), or bare in an id. The same rule as the script's,
+    /// so a hand edit can't put one back either. Twelve bare digits are a
+    /// date or a number, not counted.
+    #[test]
+    fn the_bundled_skills_carry_no_full_macs() {
+        let run = regex::Regex::new(r"[0-9A-Fa-f:.\-]+").unwrap();
+        let shape = regex::Regex::new(
+            r"^(?:(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{4}[.\-][0-9A-Fa-f]{4}[.\-][0-9A-Fa-f]{4}|[0-9A-Fa-f]{12})$",
+        )
+        .unwrap();
+        let mut full = Vec::new();
+        for (path, data) in FILES {
+            let Ok(text) = std::str::from_utf8(data) else {
+                continue;
+            };
+            for m in run.find_iter(text) {
+                let core = m.as_str().trim_matches([':', '.', '-']);
+                if !shape.is_match(core) {
+                    continue;
+                }
+                let hex = core
+                    .chars()
+                    .filter(char::is_ascii_hexdigit)
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                let bare = !core.contains([':', '.', '-']);
+                if bare && hex.bytes().all(|b| b.is_ascii_digit()) {
+                    continue;
+                }
+                // The format example in validate_map.py's warning.
+                if &hex[6..10] != "0000" && hex != "aabbccddeeff" {
+                    full.push(format!("{path}: {core}"));
+                }
+            }
+        }
+        assert!(
+            full.is_empty(),
+            "full MACs in skills/, which is public:\n{}",
+            full.join("\n")
+        );
+    }
+
     /// /mapnetwork maps open in the Dark theme, as is-alive does: the
     /// template, the examples and every map is-alive writes. (A sync from
     /// the owner's copy that brings RGB back fails here: restore the

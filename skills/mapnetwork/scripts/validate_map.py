@@ -96,7 +96,7 @@ _APOS_IN_WORD = re.compile(r"[A-Za-z]'[A-Za-z]")
 
 def _hint(line_text):
     """Most hand-edit parse failures in practice are a possessive or
-    contraction inside a single-quoted string ('Elaine's Office'). When the
+    contraction inside a single-quoted string ('Dana's Office'). When the
     failing line has that shape, say so."""
     if line_text and _APOS_IN_WORD.search(line_text):
         return (" — this line has an apostrophe inside a word; if it sits in "
