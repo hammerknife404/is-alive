@@ -16,6 +16,8 @@ struct Reader<'a> {
 
 /// Far deeper than any controller document.
 const MAX_DEPTH: u32 = 64;
+/// MongoDB's own limit on one document, with room to spare.
+const DOC_MAX: usize = 17 << 20;
 
 impl<'a> Reader<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
@@ -161,7 +163,9 @@ pub fn documents(buf: &[u8]) -> impl Iterator<Item = Result<&[u8], String>> {
         };
         // Negative or oversized lengths must not wrap the bounds check.
         let n = usize::try_from(i32::from_le_bytes(head.try_into().unwrap())).unwrap_or(0);
-        if n < 5 || n > buf.len() - pos {
+        // MongoDB stores nothing bigger: one that says it is was made up,
+        // and decoding it whole would take many times that in memory.
+        if n < 5 || n > buf.len() - pos || n > DOC_MAX {
             let at = pos;
             pos = buf.len();
             return Some(Err(format!("BSON bad document length at byte {at}")));
@@ -190,6 +194,17 @@ pub fn has_cmd(doc: &[u8]) -> bool {
 #[cfg(test)]
 pub mod tests {
     use serde_json::Value;
+
+    /// A document bigger than MongoDB stores is refused before it's
+    /// decoded, however much of the stream there is.
+    #[test]
+    fn a_document_past_mongodbs_limit_is_refused() {
+        let n = super::DOC_MAX + 1;
+        let mut buf = vec![0u8; n];
+        buf[..4].copy_from_slice(&(n as i32).to_le_bytes());
+        let first = super::documents(&buf).next().unwrap();
+        assert!(first.unwrap_err().contains("bad document length"));
+    }
 
     /// Tiny BSON writer for test fixtures.
     pub fn encode(v: &Value) -> Vec<u8> {

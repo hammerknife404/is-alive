@@ -12,6 +12,11 @@ mod container;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Most JSON the kept collections may come to. A big controller's devices,
+/// networks and clients are tens of MB; the events and stats that make a
+/// backup large are left behind, not kept.
+const KEPT_MAX: usize = 256 << 20;
+
 /// Sites, devices, networks, switch port profiles, WLANs.
 /// Largest file Config Export will read.
 pub const MAX_INPUT: usize = container::MAX_UNPACKED;
@@ -351,6 +356,7 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
     let mut secrets = BTreeSet::new();
     let mut sites = Vec::new();
     let mut current: Option<String> = None;
+    let mut kept_bytes = 0usize;
 
     for raw in bson::documents(&dump.bson) {
         let raw = raw?;
@@ -383,7 +389,16 @@ pub fn convert(data: Vec<u8>, clients: Clients) -> Result<Report, String> {
                 }
                 let mut v = Value::Object(std::mem::take(&mut doc));
                 redact(&mut v, c, &mut redacted, &mut secrets);
-                out.push(v.to_string());
+                let line = v.to_string();
+                kept_bytes += line.len();
+                if kept_bytes > KEPT_MAX {
+                    return Err(format!(
+                        "the collections kept come to more than {} MB: far more than a controller's \
+devices, networks and clients, so this isn't a backup this reads",
+                        KEPT_MAX >> 20
+                    ));
+                }
+                out.push(line);
                 // A document before any collection marker (a damaged or
                 // hand-made dump) is still kept; it just isn't counted.
                 if let Some(k) = kept.last_mut() {
