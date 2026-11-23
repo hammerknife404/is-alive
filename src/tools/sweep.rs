@@ -1679,7 +1679,7 @@ mod tests {
         assert!(s.report().starts_with("Sweep of 10.0.0.0/24"));
         assert_eq!(s.finished(), Some(("10.0.0.0/24".to_string(), 2)));
         let v: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(
             (&v["range"], &v["ranges"]),
             (&json!("10.0.0.0/24"), &json!(["10.0.0.0/24"]))
