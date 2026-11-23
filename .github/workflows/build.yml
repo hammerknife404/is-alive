@@ -69,6 +69,7 @@ jobs:
       - run: python3 skills/mapnetwork/scripts/test_engine_contract.py
       - run: python3 skills/mapnetwork/scripts/test_validate_map.py
       - run: python3 scripts/test_skill_scripts.py
+      - run: python3 scripts/test_extract_bson.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       # Bundled into the AppImage; see build-appimage.sh.

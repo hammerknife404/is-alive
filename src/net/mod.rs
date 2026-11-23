@@ -37,7 +37,26 @@ pub fn system_tool(name: &str) -> Option<std::path::PathBuf> {
 /// Resolve a host name or IP literal. Prefers IPv4 unless `prefer_v6`.
 pub fn resolve(host: &str, prefer_v6: bool) -> io::Result<IpAddr> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    // A zone (fe80::1%eth0) names the interface, and the tests send to a
+    // bare address: the system would refuse with "Invalid argument". Said
+    // plainly instead, as is a multicast address, which no test answers.
+    if let Some((addr, zone)) = host.split_once('%')
+        && addr.parse::<std::net::Ipv6Addr>().is_ok()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{addr}%{zone} is a link-local address with a zone, which this can't send to: use the device's IPv4 address or a global IPv6 one"
+            ),
+        ));
+    }
     if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_multicast() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{ip} is a multicast address: test one device's address"),
+            ));
+        }
         return Ok(ip);
     }
     let addrs: Vec<IpAddr> = (host, 0).to_socket_addrs()?.map(|a| a.ip()).collect();
@@ -67,6 +86,19 @@ pub fn reverse(ip: IpAddr) -> Option<String> {
 
 pub(crate) fn sanitize(s: &str) -> String {
     clean(s, 255)
+}
+
+/// As `sanitize`, for a page of text (a WHOIS record): its line breaks and
+/// tabs kept, every other control and bidi character dropped.
+pub(crate) fn sanitize_text(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            c == '\n'
+                || c == '\t'
+                || !(c.is_control()
+                    || matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        })
+        .collect()
 }
 
 /// As `sanitize`, for long TXT data (SPF, DKIM keys).
@@ -324,5 +356,15 @@ mod tests {
             resolve("[::1]", false).unwrap(),
             "::1".parse::<IpAddr>().unwrap()
         );
+        // Said plainly, not "Invalid argument" from the socket later.
+        let zoned = resolve("fe80::1%eth0", false).unwrap_err().to_string();
+        assert!(zoned.contains("link-local address with a zone"), "{zoned}");
+        assert!(
+            resolve("ff02::1", false)
+                .unwrap_err()
+                .to_string()
+                .contains("multicast")
+        );
+        assert!(resolve("224.0.0.251", false).is_err());
     }
 }

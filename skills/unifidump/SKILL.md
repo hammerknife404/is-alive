@@ -69,8 +69,9 @@ applied fresh each time, not pre-baked into this extraction step.
    (`.zip`), or a bare `db.gz` — the script sniffs the file (zip magic
    bytes, then gzip magic bytes, then JSON) and prints which path it took
    to stderr. A raw (encrypted) `.unf`/`.unifi` stops with a message
-   saying how to convert it. The script handles arbitrarily large
-   exports (Fabrikam Care's test case had ~3900 top-level records,
+   saying how to convert it. The script handles large exports (up to
+   1 GB unpacked; a damaged or crafted file stops with a ValueError naming
+   where, rather than hanging) (Fabrikam Care's test case had ~3900 top-level records,
    including 3000 rogue-AP entries and 800+ historical clients) and
    won't choke on the noise collections — it only touches `site`,
    `device`, `networkconf`, `portconf`, `wlanconf`, and `user` (the client

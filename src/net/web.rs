@@ -55,7 +55,8 @@ pub fn get(
     );
     let mut buf = Vec::new();
     if https {
-        let (mut conn, _verdict) = tls::client(host)?;
+        // The page's title is wanted, not a judgement of its certificate.
+        let mut conn = tls::client_unjudged(host)?;
         tls::handshake(&mut conn, &mut tcp)?;
         let mut s = StreamOwned::new(conn, tcp);
         s.write_all(req.as_bytes())?;

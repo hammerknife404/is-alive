@@ -105,6 +105,54 @@ pub fn client(name: &str) -> io::Result<(ClientConnection, Arc<Recording>)> {
     client_with(name, None)
 }
 
+/// Takes any certificate without judging it, for a connection whose
+/// certificate verdict isn't used: a device's own web page (its title),
+/// an RDP sign-in's first step. The platform verifier would check
+/// revocation online (on Windows), fetching whatever URLs a device's
+/// certificate names and waiting up to 10 s on a LAN with no internet.
+/// The handshake's signatures are still checked.
+#[derive(Debug)]
+struct Unjudged(rustls::crypto::WebPkiSupportedAlgorithms);
+
+impl ServerCertVerifier for Unjudged {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(m, c, d, &self.0)
+    }
+    fn verify_tls13_signature(
+        &self,
+        m: &[u8],
+        c: &CertificateDer<'_>,
+        d: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(m, c, d, &self.0)
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_schemes()
+    }
+}
+
+/// A client connection to `name` whose certificate isn't judged (see
+/// `Unjudged`): nothing is looked up about it.
+pub fn client_unjudged(name: &str) -> io::Result<ClientConnection> {
+    let algs = rustls::crypto::ring::default_provider().signature_verification_algorithms;
+    client_with(name, Some(Arc::new(Unjudged(algs)))).map(|(c, _)| c)
+}
+
 /// As `client`, trusting only `roots` when given (tests: their own CA).
 fn client_with(
     name: &str,
@@ -654,6 +702,20 @@ mod tests {
     }
 
     const SECS: Duration = Duration::from_secs(5);
+
+    /// A device's own certificate (here from a CA nothing trusts, and for
+    /// another name) doesn't stop an unjudged connection: its page is
+    /// read and nothing is looked up about the certificate.
+    #[test]
+    fn an_unjudged_connection_takes_any_certificate() {
+        let p = pki(&["device.local"], (2020, 1, 1), (2021, 1, 1));
+        let addr = serve(vec![p.leaf.clone(), p.ca.clone()], p.key.clone());
+        let mut conn = client_unjudged("127.0.0.1").unwrap();
+        let mut tcp = TcpStream::connect(addr).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        handshake(&mut conn, &mut tcp).expect("handshake despite the certificate");
+    }
 
     #[test]
     fn reads_a_certificate() {

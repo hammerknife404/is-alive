@@ -249,14 +249,16 @@ fn u32le(b: &[u8], at: usize) -> usize {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize
 }
 
-/// Central directory records running from `start` up to exactly `end`.
-fn central_run(b: &[u8], start: usize, end: usize) -> Option<Vec<ZipEntry>> {
+/// Central directory records running from `start` up to exactly `end`,
+/// walking no more than `budget` records (taken from it as they're read).
+fn central_run(b: &[u8], start: usize, end: usize, budget: &mut usize) -> Option<Vec<ZipEntry>> {
     let mut out = Vec::new();
     let mut p = start;
     while p < end {
-        if b.get(p..p + 46)?.get(..4)? != ZIP_CENTRAL {
+        if *budget == 0 || b.get(p..p + 46)?.get(..4)? != ZIP_CENTRAL {
             return None;
         }
+        *budget -= 1;
         let (n, x, c) = (u16le(b, p + 28), u16le(b, p + 30), u16le(b, p + 32));
         out.push(ZipEntry {
             name: String::from_utf8_lossy(b.get(p + 46..p + 46 + n)?).into_owned(),
@@ -269,6 +271,9 @@ fn central_run(b: &[u8], start: usize, end: usize) -> Option<Vec<ZipEntry>> {
     (p == end).then_some(out)
 }
 
+/// Most directory records the search for a damaged zip's directory reads.
+const DIRECTORY_STEPS: usize = 200_000;
+
 /// The zip's directory. Decrypted .unf files carry zero padding and can have
 /// a stale end record, so the directory is found by walking back from the
 /// last end record rather than trusting its offset.
@@ -277,9 +282,14 @@ fn zip_entries(b: &[u8]) -> Result<Vec<ZipEntry>, String> {
         .windows(4)
         .rposition(|w| w == ZIP_END)
         .ok_or("zip: no central directory (file truncated?)")?;
+    // Every candidate start is walked to the end, so a crafted file with
+    // many chained records that overshoot it would cost the square of
+    // their number: the walking is capped for the whole search. A real
+    // backup's directory is a few dozen records.
+    let mut budget = DIRECTORY_STEPS;
     if let Some(e) = b
         .get(end + 16..end + 20)
-        .and_then(|_| central_run(b, u32le(b, end + 16), end))
+        .and_then(|_| central_run(b, u32le(b, end + 16), end, &mut budget))
     {
         return Ok(e);
     }
@@ -287,7 +297,7 @@ fn zip_entries(b: &[u8]) -> Result<Vec<ZipEntry>, String> {
         .windows(4)
         .enumerate()
         .filter(|(_, w)| *w == ZIP_CENTRAL)
-        .find_map(|(p, _)| central_run(b, p, end))
+        .find_map(|(p, _)| central_run(b, p, end, &mut budget))
         .ok_or_else(|| "zip: central directory damaged".into())
 }
 
@@ -459,6 +469,35 @@ fn from_tar(mut r: impl Read, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// A directory of chained records that overshoot the end, tried from
+    /// every start: refused at once rather than walked (the square of
+    /// 20,000 records).
+    #[test]
+    fn a_crafted_directory_is_refused_quickly() {
+        let n = 20_000;
+        let mut b = Vec::new();
+        for i in 0..n {
+            let mut r = vec![0u8; 46];
+            r[..4].copy_from_slice(ZIP_CENTRAL);
+            if i == n - 1 {
+                // The last one's name runs past the end.
+                r[28..30].copy_from_slice(&0xffffu16.to_le_bytes());
+            }
+            b.extend(r);
+        }
+        let mut end = vec![0u8; 22];
+        end[..4].copy_from_slice(ZIP_END);
+        end[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        b.extend(end);
+        let t = std::time::Instant::now();
+        assert!(zip_entries(&b).is_err());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
+    }
     use aes::cipher::BlockEncryptMut;
     use flate2::{Compression, write::GzEncoder};
     use std::io::Write;
