@@ -395,7 +395,10 @@ fn parse_data(r: &[u8], start: usize, d: &[u8], rtype: u16) -> io::Result<Data> 
             let tag = d.get(2..2 + tl).ok_or_else(bad)?;
             Data::Caa {
                 flags: d[0],
-                tag: String::from_utf8_lossy(tag).to_ascii_lowercase(),
+                // The server's bytes, like every other field it sends:
+                // no control or direction-changing characters on screen
+                // or in a report.
+                tag: super::sanitize(&String::from_utf8_lossy(tag).to_ascii_lowercase()),
                 value: super::sanitize(&String::from_utf8_lossy(&d[2 + tl..])),
             }
         }
@@ -608,6 +611,21 @@ mod tests {
         r[10..12].copy_from_slice(&[0, 0]);
         r.extend_from_slice(rrs);
         r
+    }
+
+    #[test]
+    fn a_caa_tag_is_cleaned_like_its_value() {
+        // flags 0, tag "is\u{202e}sue\x07" (a right-to-left override and a
+        // bell), value "ca.example".
+        let tag = "is\u{202e}sue\x07".as_bytes();
+        let mut d = vec![0, tag.len() as u8];
+        d.extend_from_slice(tag);
+        d.extend_from_slice(b"ca.example");
+        let Data::Caa { tag, value, .. } = parse_data(&d, 0, &d, CAA).unwrap() else {
+            panic!("a CAA record");
+        };
+        assert_eq!(tag, "issue");
+        assert_eq!(value, "ca.example");
     }
 
     #[test]
