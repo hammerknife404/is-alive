@@ -222,6 +222,40 @@ pub const NOT_CHECKED: &str = "not checked";
 /// Hours Scratch's runs are kept for, from when each started.
 pub const SCRATCH_HOURS: i64 = 24;
 
+/// Take Scratch's runs past `SCRATCH_HOURS` off disk, whichever site is
+/// open. Scratch's runs can be any client's, and a technician who works in
+/// sites may never open Scratch again for them to expire there. A file
+/// that won't read is left as it is.
+pub fn expire_scratch(now: chrono::NaiveDateTime) {
+    let Some(p) = crate::theme::data_dir().map(|d| d.join(FILE)) else {
+        return;
+    };
+    if p.is_file() {
+        expire_in(&p, now);
+    }
+}
+
+fn expire_in(p: &Path, now: chrono::NaiveDateTime) {
+    // Read directly, not through `Log::load`: that sets a file that won't
+    // read aside, and this one belongs to Scratch, left for it to find.
+    let fits = std::fs::metadata(p).is_ok_and(|m| m.len() <= FILE_MAX);
+    let Some(mut log) = fits
+        .then(|| crate::input::read_capped(p, FILE_MAX))
+        .flatten()
+        .and_then(|t| Log::from_json(&t))
+    else {
+        return;
+    };
+    if log.entries.is_empty() {
+        return;
+    }
+    let before = log.stamp();
+    log.keep_since(now, SCRATCH_HOURS);
+    if log.stamp() != before {
+        let _ = log.save(p);
+    }
+}
+
 impl Log {
     fn to_json(&self) -> String {
         let runs: Vec<Value> = self
@@ -656,6 +690,43 @@ mod tests {
         assert_eq!(kept, [30, 40]);
         assert_eq!((log.entries.len(), log.dropped, log.bytes), (2, 0, 70));
         assert_ne!(log.stamp(), before, "an expiry has to be written back");
+    }
+
+    /// Scratch's file on disk loses its old runs whichever site is open;
+    /// one with nothing old is left untouched, as is one that won't read.
+    #[test]
+    fn scratch_file_expires_from_any_site() {
+        let at = |started: &str, n: usize| Entry {
+            started: started.into(),
+            ..entry(n)
+        };
+        let now = chrono::NaiveDateTime::parse_from_str("2026-11-11 10:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap();
+        let p = temp("scratch-expiry");
+        let mut log = Log::default();
+        log.push(at("2026-11-01 08:00:00", 10));
+        log.push(at("2026-11-11 09:30:00", 40));
+        log.save(&p).unwrap();
+        expire_in(&p, now);
+        let (back, _) = Log::load(&p);
+        assert_eq!(back.entries.len(), 1);
+        assert_eq!(back.entries[0].text.len(), 40);
+        // Nothing old: not rewritten.
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        expire_in(&p, now);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
+        // All old: the file goes.
+        let mut old = Log::default();
+        old.push(at("2026-11-01 08:00:00", 10));
+        old.save(&p).unwrap();
+        expire_in(&p, now);
+        assert!(!p.exists());
+        // Unreadable: left alone.
+        std::fs::write(&p, b"{not json").unwrap();
+        expire_in(&p, now);
+        assert_eq!(std::fs::read(&p).unwrap(), b"{not json");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 
     fn temp(name: &str) -> PathBuf {

@@ -963,22 +963,47 @@ impl App {
         }
     }
 
+    /// Start `tab`'s test on `target` and show it. A run of that tool still
+    /// going is left alone (a toast says so): starting over would drop it
+    /// unlogged, and an hour of continuous ping with it.
+    fn start_test(&mut self, ctx: &egui::Context, tab: Tab, target: &str) {
+        if self.tab_running(tab) {
+            widgets::toast(
+                format!(
+                    "{} is already running: stop it first (what it found goes to Results)",
+                    match tab {
+                        Tab::Ping => "Ping",
+                        Tab::Ports => "Port Check",
+                        Tab::Trace => "Traceroute",
+                        Tab::Speed => "The Speed Test",
+                        Tab::Sweep => "Subnet Sweep",
+                        _ => "That test",
+                    }
+                ),
+                false,
+            );
+            self.tab = tab;
+            return;
+        }
+        match tab {
+            Tab::Ping => self.ping.run(ctx, target, 4),
+            Tab::Ports => self.ports.run(ctx, target),
+            Tab::Trace => self.trace.run(ctx, target),
+            Tab::Speed => self.speed.run(ctx),
+            Tab::Sweep => self.sweep.run(ctx, target),
+            Tab::Advanced => self.advanced.run(ctx, target),
+            _ => return,
+        }
+        self.tab = tab;
+    }
+
     /// What an inspector's button asked for: a test in its own tab, or the
     /// device on the Map.
     fn inspector_ask(&mut self, ctx: &egui::Context, ask: Option<inspector::Ask>) {
         match ask {
-            Some(inspector::Ask::Ping(ip)) => {
-                self.ping.run(ctx, &ip, 4);
-                self.tab = Tab::Ping;
-            }
-            Some(inspector::Ask::Ports(ip)) => {
-                self.ports.run(ctx, &ip);
-                self.tab = Tab::Ports;
-            }
-            Some(inspector::Ask::Trace(ip)) => {
-                self.trace.run(ctx, &ip);
-                self.tab = Tab::Trace;
-            }
+            Some(inspector::Ask::Ping(ip)) => self.start_test(ctx, Tab::Ping, &ip),
+            Some(inspector::Ask::Ports(ip)) => self.start_test(ctx, Tab::Ports, &ip),
+            Some(inspector::Ask::Trace(ip)) => self.start_test(ctx, Tab::Trace, &ip),
             Some(inspector::Ask::OnMap(ip)) => {
                 self.map.find(ip);
                 self.tab = Tab::Map;
@@ -1004,18 +1029,9 @@ impl App {
             }
             // Config Export's dialog; the Map stays on screen and redraws.
             Some(Action::Open) => self.export.open_dialog(ctx),
-            Some(Action::Ping(ip)) => {
-                self.ping.run(ctx, &ip, 4);
-                self.tab = Tab::Ping;
-            }
-            Some(Action::Ports(ip)) => {
-                self.ports.run(ctx, &ip);
-                self.tab = Tab::Ports;
-            }
-            Some(Action::Trace(ip)) => {
-                self.trace.run(ctx, &ip);
-                self.tab = Tab::Trace;
-            }
+            Some(Action::Ping(ip)) => self.start_test(ctx, Tab::Ping, &ip),
+            Some(Action::Ports(ip)) => self.start_test(ctx, Tab::Ports, &ip),
+            Some(Action::Trace(ip)) => self.start_test(ctx, Tab::Trace, &ip),
             Some(Action::Join(host)) => {
                 self.join.ask_about(&host);
                 self.tab = Tab::Join;
@@ -1483,6 +1499,7 @@ fn main() {
             app.notes.set_autosave(app.look.notes_autosave);
             app.export.set_clients(app.look.unifi_clients);
             widgets::set_save_dir(app.look.save_dir.clone(), app.look.save_by_site);
+            log::expire_scratch(chrono::Local::now().naive_local());
             app.load_results();
             // The site opens as it was left: its configs read again (and
             // then any files it was opened with, below, which join them).

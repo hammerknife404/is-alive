@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.20**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.21**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -169,7 +169,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 - is-alive opens the site that was open when it closed.
 - **One copy at a time.** Starting is-alive while it's already open (say, with **Open with** on a backup) shows *is-alive is already open* and goes no further: two copies would write over each other's notes, Results and maps. A portable `is-alive-data` folder is its own: a copy using one doesn't stop a copy using the profile.
 
-**Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch keeps its Results for a day (**Keep for a day**, the same setting): a crash, a flat battery or closing by mistake doesn't lose the visit, but runs older than 24 hours are gone the next time it opens, so one client's runs don't follow you to the next.
+**Results** stay with their site: every run is saved in the site's folder as it finishes, so the last visit's Full scan is there when you come back, and its [Site report](#site-report) can include it. **Keep with site** on the Results tab turns that off. Scratch keeps its Results for a day (**Keep for a day**, the same setting): a crash, a flat battery or closing by mistake doesn't lose the visit, but runs older than 24 hours are gone the next time is-alive starts, whichever site it opens, so one client's runs don't follow you to the next.
 
 ### How every tab is laid out
 
@@ -1372,7 +1372,7 @@ Every finished run from every tab is logged here (Full scan runs too).
 
 | Button | What it does |
 |---|---|
-| **Run again** | The same tool on the same target, with its tab's settings as they are now (a ping sends 4); the new run opens here as it goes. Not for Lookup, whose record type and resolver a rerun wouldn't repeat |
+| **Run again** | The same tool on the same target, with its tab's settings as they are now (a ping sends 4); the new run opens here as it goes. Not for Lookup, whose record type and resolver a rerun wouldn't repeat. While that tool is running, it says so instead (stop the run first: what it found goes to Results); the same goes for a test started from the inspector or a Map card |
 | **On map** | Select its target on the Map, when the target is an address |
 | **Copy / Save…** | This run as text |
 | **Export ▾** | This run as **CSV**, **JSON**, **Markdown** or **HTML** |
