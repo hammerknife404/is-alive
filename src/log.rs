@@ -81,6 +81,9 @@ pub struct Log {
     pub entries: VecDeque<Entry>,
     bytes: usize,
     pub dropped: usize,
+    /// The saved file couldn't be read, nor moved aside: it's left as it
+    /// is, so this log is never saved over it.
+    held: bool,
     /// Changed by every edit, from one counter for every log: a stamp
     /// taken before an edit (or of another site's log) never matches one
     /// taken after, so indices cached against it are never read stale.
@@ -88,6 +91,20 @@ pub struct Log {
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// What a run takes of the log's MAX_BYTES: its text and its table, a
+/// little more per cell for the quoting it gets in the file. (A full
+/// 1-65535 Port Check is 65,535 rows: counting text alone let a few of
+/// them grow the file past what's read back.)
+fn size(e: &Entry) -> usize {
+    e.text.len()
+        + e.table.as_ref().map_or(0, |t| {
+            t.rows
+                .iter()
+                .map(|r| r.iter().map(|c| c.len() + 3).sum::<usize>() + 2)
+                .sum()
+        })
+}
 
 impl Log {
     /// Drop the runs that started more than `hours` before `now` (and any
@@ -111,7 +128,7 @@ impl Log {
     }
 
     fn edited(&mut self) {
-        self.bytes = self.entries.iter().map(|e| e.text.len()).sum();
+        self.bytes = self.entries.iter().map(size).sum();
         self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -130,12 +147,12 @@ impl Log {
     }
 
     pub fn push(&mut self, e: Entry) {
-        self.bytes += e.text.len();
+        self.bytes += size(&e);
         self.entries.push_back(e);
         while self.entries.len() > MAX_ENTRIES || (self.bytes > MAX_BYTES && self.entries.len() > 1)
         {
             if let Some(old) = self.entries.pop_front() {
-                self.bytes -= old.text.len();
+                self.bytes -= size(&old);
                 self.dropped += 1;
             }
         }
@@ -178,7 +195,7 @@ const FILE_MAX: u64 = 3 * MAX_BYTES as u64;
 /// Every tool that logs runs, by the name it logs under, with its table's
 /// columns: a saved run is read back only as one of these (names and
 /// columns are the app's own, never the file's).
-const TOOLS: &[(&str, &[&str])] = &[
+pub(crate) const TOOLS: &[(&str, &[&str])] = &[
     ("Host info", crate::net::hostinfo::COLUMNS),
     ("Ping", crate::tools::ping::COLUMNS),
     ("Port Check", crate::tools::ports::COLUMNS),
@@ -204,6 +221,40 @@ pub const NOT_CHECKED: &str = "not checked";
 
 /// Hours Scratch's runs are kept for, from when each started.
 pub const SCRATCH_HOURS: i64 = 24;
+
+/// Take Scratch's runs past `SCRATCH_HOURS` off disk, whichever site is
+/// open. Scratch's runs can be any client's, and a technician who works in
+/// sites may never open Scratch again for them to expire there. A file
+/// that won't read is left as it is.
+pub fn expire_scratch(now: chrono::NaiveDateTime) {
+    let Some(p) = crate::theme::data_dir().map(|d| d.join(FILE)) else {
+        return;
+    };
+    if p.is_file() {
+        expire_in(&p, now);
+    }
+}
+
+fn expire_in(p: &Path, now: chrono::NaiveDateTime) {
+    // Read directly, not through `Log::load`: that sets a file that won't
+    // read aside, and this one belongs to Scratch, left for it to find.
+    let fits = std::fs::metadata(p).is_ok_and(|m| m.len() <= FILE_MAX);
+    let Some(mut log) = fits
+        .then(|| crate::input::read_capped(p, FILE_MAX))
+        .flatten()
+        .and_then(|t| Log::from_json(&t))
+    else {
+        return;
+    };
+    if log.entries.is_empty() {
+        return;
+    }
+    let before = log.stamp();
+    log.keep_since(now, SCRATCH_HOURS);
+    if log.stamp() != before {
+        let _ = log.save(p);
+    }
+}
 
 impl Log {
     fn to_json(&self) -> String {
@@ -264,17 +315,54 @@ impl Log {
         Some(log)
     }
 
-    /// The runs saved at `path`; an empty log when there are none or the
-    /// file isn't a results file.
-    pub fn load(path: &Path) -> Log {
-        crate::input::read_capped(path, FILE_MAX)
+    /// The runs saved at `path`, and anything to say about them. None
+    /// saved: an empty log. Saved but unreadable (cut short, damaged,
+    /// empty after a power cut, from a newer version, too big): never
+    /// taken for "no runs" and written over. It's moved aside as
+    /// `results.bad.json` to be looked at; when it can't even be moved,
+    /// it's left where it is and this log won't save over it.
+    pub fn load(path: &Path) -> (Log, Option<String>) {
+        if !path.exists() {
+            return (Log::default(), None);
+        }
+        let fits = std::fs::metadata(path).is_ok_and(|m| m.len() <= FILE_MAX);
+        if let Some(log) = fits
+            .then(|| crate::input::read_capped(path, FILE_MAX))
+            .flatten()
             .and_then(|t| Log::from_json(&t))
-            .unwrap_or_default()
+        {
+            return (log, None);
+        }
+        let bad = aside(path);
+        match std::fs::rename(path, &bad) {
+            Ok(()) => (
+                Log::default(),
+                Some(format!(
+                    "The saved Results couldn't be read: kept as {} and a new list started",
+                    bad.display()
+                )),
+            ),
+            Err(e) => (
+                Log {
+                    held: true,
+                    ..Default::default()
+                },
+                Some(format!(
+                    "The saved Results couldn't be read ({e}): left as they are, and this \
+                     session's runs aren't saved over them"
+                )),
+            ),
+        }
     }
 
     /// Write the log to `path` in one step, readable by this user only; an
     /// empty log removes the file.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if self.held {
+            return Err(std::io::Error::other(
+                "the saved Results couldn't be read, so they aren't written over",
+            ));
+        }
         if self.entries.is_empty() && self.dropped == 0 {
             return match std::fs::remove_file(path) {
                 Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -284,10 +372,21 @@ impl Log {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
-        crate::theme::write_private(&tmp, self.to_json())?;
-        std::fs::rename(tmp, path)
+        crate::theme::replace_private(path, self.to_json())
     }
+}
+
+/// Where an unreadable results file is moved: `results.bad.json`, or
+/// `results.bad-2.json` and on when that's taken, so one isn't lost to
+/// the next.
+fn aside(path: &Path) -> PathBuf {
+    (1..)
+        .map(|n| match n {
+            1 => path.with_file_name("results.bad.json"),
+            n => path.with_file_name(format!("results.bad-{n}.json")),
+        })
+        .find(|p| !p.exists())
+        .expect("a free name")
 }
 
 /// A saved run's table, if it has its tool's columns and every row fits them.
@@ -593,6 +692,43 @@ mod tests {
         assert_ne!(log.stamp(), before, "an expiry has to be written back");
     }
 
+    /// Scratch's file on disk loses its old runs whichever site is open;
+    /// one with nothing old is left untouched, as is one that won't read.
+    #[test]
+    fn scratch_file_expires_from_any_site() {
+        let at = |started: &str, n: usize| Entry {
+            started: started.into(),
+            ..entry(n)
+        };
+        let now = chrono::NaiveDateTime::parse_from_str("2026-11-11 10:00:00", "%Y-%m-%d %H:%M:%S")
+            .unwrap();
+        let p = temp("scratch-expiry");
+        let mut log = Log::default();
+        log.push(at("2026-11-01 08:00:00", 10));
+        log.push(at("2026-11-11 09:30:00", 40));
+        log.save(&p).unwrap();
+        expire_in(&p, now);
+        let (back, _) = Log::load(&p);
+        assert_eq!(back.entries.len(), 1);
+        assert_eq!(back.entries[0].text.len(), 40);
+        // Nothing old: not rewritten.
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        expire_in(&p, now);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
+        // All old: the file goes.
+        let mut old = Log::default();
+        old.push(at("2026-11-01 08:00:00", 10));
+        old.save(&p).unwrap();
+        expire_in(&p, now);
+        assert!(!p.exists());
+        // Unreadable: left alone.
+        std::fs::write(&p, b"{not json").unwrap();
+        expire_in(&p, now);
+        assert_eq!(std::fs::read(&p).unwrap(), b"{not json");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!(
             "is-alive-log-{name}-{}-{:?}",
@@ -601,6 +737,75 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&d);
         d.join(FILE)
+    }
+
+    /// A results file that can't be read is never taken for "no runs" and
+    /// written over: it's moved aside (one per name), and said.
+    #[test]
+    fn an_unreadable_file_is_kept_not_written_over() {
+        let path = temp("unreadable");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for (n, bad) in ["{\"format\": \"is-alive-results-1\", \"runs\": [", ""]
+            .into_iter()
+            .enumerate()
+        {
+            std::fs::write(&path, bad).unwrap();
+            let (mut log, said) = Log::load(&path);
+            assert!(log.entries.is_empty());
+            assert!(said.unwrap().contains("couldn't be read"));
+            let aside = match n {
+                0 => path.with_file_name("results.bad.json"),
+                _ => path.with_file_name("results.bad-2.json"),
+            };
+            assert_eq!(
+                std::fs::read_to_string(&aside).unwrap(),
+                bad,
+                "kept as it was"
+            );
+            // The next run starts a new list, beside the old one.
+            log.push(run("Ping", "2026-11-22T10:00:00+00:00", &[]));
+            log.save(&path).unwrap();
+            assert_eq!(Log::load(&path).0.entries.len(), 1);
+            std::fs::remove_file(&path).unwrap();
+        }
+        // Left where it is (it couldn't be moved): never saved over.
+        let held = Log {
+            held: true,
+            ..Default::default()
+        };
+        assert!(held.save(&path).is_err());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A run's table counts toward the log's size, so big scans can't grow
+    /// the file past what's read back.
+    #[test]
+    fn tables_count_toward_the_cap() {
+        let rows = |n: usize| -> Vec<Vec<String>> {
+            (0..n)
+                .map(|i| vec![i.to_string(), "closed".into(), String::new(), String::new()])
+                .collect()
+        };
+        let mut log = Log::default();
+        for i in 0..12 {
+            log.push(Entry {
+                tool: "Port Check",
+                started: format!("2026-11-22T10:{i:02}:00+00:00"),
+                ended: String::new(),
+                text: "scan\n".into(),
+                table: Some(Table {
+                    columns: crate::tools::ports::COLUMNS,
+                    rows: rows(65_535),
+                }),
+            });
+        }
+        assert!(
+            log.dropped > 0,
+            "full-range scans are dropped, oldest first"
+        );
+        assert!(log.bytes <= MAX_BYTES);
+        let json = log.to_json();
+        assert!((json.len() as u64) < FILE_MAX, "{} bytes", json.len());
     }
 
     #[test]
@@ -622,7 +827,7 @@ mod tests {
         log.dropped = 2;
         let path = temp("round-trip");
         log.save(&path).unwrap();
-        let back = Log::load(&path);
+        let back = Log::load(&path).0;
         assert_eq!(back.entries.len(), log.entries.len());
         assert_eq!(back.dropped, 2);
         for (a, b) in log.entries.iter().zip(&back.entries) {
@@ -704,6 +909,7 @@ mod tests {
         // A file that isn't there is an empty log.
         assert!(
             Log::load(Path::new("/nonexistent/is-alive/results.json"))
+                .0
                 .entries
                 .is_empty()
         );

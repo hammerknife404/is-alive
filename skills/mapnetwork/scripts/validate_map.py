@@ -96,7 +96,7 @@ _APOS_IN_WORD = re.compile(r"[A-Za-z]'[A-Za-z]")
 
 def _hint(line_text):
     """Most hand-edit parse failures in practice are a possessive or
-    contraction inside a single-quoted string ('Elaine's Office'). When the
+    contraction inside a single-quoted string ('Dana's Office'). When the
     failing line has that shape, say so."""
     if line_text and _APOS_IN_WORD.search(line_text):
         return (" — this line has an apostrophe inside a word; if it sits in "
@@ -302,6 +302,28 @@ def parse_site_data(html):
                 + _hint(block_lines[src_line - first_line]
                         if 0 <= src_line - first_line < len(block_lines) else "")) from None
     return result
+
+
+# The SITE DATA block sits inside the page's <script> element, and an HTML
+# parser ends that element at the first `</script`, inside a string or not
+# (`<!--` and `<script` change how the rest is read). Device names, web
+# titles and banners come from the client's network, so a device that calls
+# itself `</script><img src=x onerror=...>` would make the rest live HTML.
+_HTML_BREAKERS = re.compile(r"<(/?script|!--)", re.IGNORECASE)
+
+
+def raw_html_errors(html):
+    """Errors for anything in SITE DATA an HTML parser would act on."""
+    block, first_line = extract_site_data_block(html)
+    out = []
+    for m in _HTML_BREAKERS.finditer(block):
+        line = first_line + block.count("\n", 0, m.start())
+        out.append(
+            f"line {line}: `{m.group(0)}` in SITE DATA would end or bend the "
+            f"page's <script> element and turn what follows into live HTML. "
+            f"Write every `<` inside a string as `\\u003c` (it reads back the "
+            f"same).")
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -515,7 +537,8 @@ def main(argv=None):
         print(f"File not found: {path}", file=sys.stderr)
         return 2
     try:
-        data = parse_site_data(path.read_text(encoding="utf-8"))
+        html = path.read_text(encoding="utf-8")
+        data = parse_site_data(html)
     except SiteDataError as e:
         print(f"PARSE FAILED: {e}")
         return 1
@@ -524,6 +547,7 @@ def main(argv=None):
         return 1
 
     errors, warnings = validate(data)
+    errors = raw_html_errors(html) + errors
 
     def n(key):
         v = data.get(key)

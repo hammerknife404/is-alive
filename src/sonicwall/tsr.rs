@@ -135,11 +135,15 @@ fn interfaces(t: &str, withheld: &Cell<usize>) -> Vec<Value> {
             "Network Mask" if v4 => first(&mut i.mask, ip(v)),
             "Gateway IP" if v4 => first(&mut i.gateway, ip(v)),
             "Port Shutdown" if v4 => i.disabled = v == "1",
-            _ if v4 && k.starts_with("Interface ") && k.ends_with(" Management") => {
-                let proto = &k["Interface ".len()..k.len() - " Management".len()];
+            // "Interface HTTPS Management : Yes". Stripped, not sliced by
+            // length: in "Interface Management" the two ends overlap.
+            _ if v4 => {
+                let proto = k
+                    .strip_prefix("Interface ")
+                    .and_then(|r| r.strip_suffix(" Management"));
                 let known = ["http", "https", "ssh", "ping", "snmp"]
                     .into_iter()
-                    .find(|p| p.eq_ignore_ascii_case(proto));
+                    .find(|p| proto.is_some_and(|proto| p.eq_ignore_ascii_case(proto)));
                 if let Some(p) = known
                     && v == "Yes"
                     && !i.mgmt.contains(&p)
@@ -362,10 +366,24 @@ fn nat_rules(t: &str, withheld: &Cell<usize>) -> Vec<Value> {
         .collect()
 }
 
+/// An LLDP talker that's only a station (a PC or server running an LLDP
+/// agent), by its System Capabilities: named like a Windows host, often
+/// after a person.
+fn station_only(caps: &str) -> bool {
+    let c = caps.to_ascii_lowercase();
+    c.contains("station")
+        && ![
+            "bridge", "router", "wlan", "access", "phone", "repeater", "relay", "docsis", "vlan",
+        ]
+        .iter()
+        .any(|w| c.contains(w))
+}
+
 /// Devices the firewall heard on its ports: LLDP from switches, APs and
 /// phones, LLTD from Windows hosts. A Windows host's computer name is left
 /// out (it's often a person's name), as the UniFi client table leaves
-/// names out by default.
+/// names out by default; so is an LLDP talker's that says it's only a
+/// station (a PC with an LLDP agent).
 fn neighbors(t: &str) -> Vec<Value> {
     let mut out: Vec<Map<String, Value>> = Vec::new();
     let mut iface = String::new();
@@ -405,6 +423,15 @@ fn neighbors(t: &str) -> Vec<Value> {
             }
         }
     }
+    for m in &mut out {
+        if m.get("capabilities")
+            .and_then(Value::as_str)
+            .is_some_and(station_only)
+        {
+            m.remove("name");
+            m.remove("description");
+        }
+    }
     out.into_iter()
         .filter(|m| m.contains_key("mac") || m.contains_key("ip"))
         .map(Value::Object)
@@ -441,7 +468,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
             "Interface mac is the port's own address: match it against /unifidump's discovered_devices and uplink MACs.",
             "Rule action is as the report words it (allow, deny, discard). Service objects aren't read from a report; rules name their services.",
             "Accounts, passwords, VPN/RADIUS/LDAP settings, SNMP, certificates and registration codes were not copied.",
-            "neighbors: devices the firewall heard on each interface. LLDP ones (switches, APs, phones) give their own port; LLTD ones are Windows hosts, kept without their computer names.",
+            "neighbors: devices the firewall heard on each interface. LLDP ones (switches, APs, phones) give their own port; LLTD ones are Windows hosts, kept without their computer names; an LLDP one whose capabilities say it's only a station (a PC) is kept without its name and description too.",
         ],
         "interfaces": ifaces,
         "zones": zones,
@@ -554,6 +581,22 @@ Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:
             let _ = sniff(d);
             let _ = convert(d);
         });
+        crate::hostile::each_text(REPORT, |t| {
+            let _ = convert(t.as_bytes());
+        });
+    }
+
+    /// "Interface Management" both starts with "Interface " and ends with
+    /// " Management", and the two overlap: slicing by their lengths
+    /// panicked on it. It's a key, not a protocol, so nothing is added.
+    #[test]
+    fn a_management_key_with_no_protocol() {
+        let wri = "#Network : Interfaces_START\nInterface Name : X0\n\n[IPv4 Settings]\n\
+            IP Address : 192.0.2.1\nInterface Management : Yes\nInterface HTTPS Management : Yes\n\
+            #Network : Interfaces_END\n";
+        let r = convert(wri.as_bytes()).unwrap();
+        let v: Value = serde_json::from_str(&r.json).unwrap();
+        assert_eq!(v["interfaces"][0]["management"], json!(["https"]));
     }
 
     #[test]
@@ -639,6 +682,23 @@ Interface: X0\n\tNumber of neighbors: 2\n\t\tProtocol: LLDP\n\t\tChassis ID: 00:
         assert_eq!(r.withheld, 1);
         assert_eq!(r.count("access rules"), 2);
         assert!(r.summary().contains(".wri"));
+    }
+
+    /// A PC that sends LLDP keeps its address and port, not its name (a
+    /// person's, often); a switch or phone keeps both.
+    #[test]
+    fn a_station_heard_over_lldp_goes_unnamed() {
+        let t = "#Advanced Switching : L2_Discovery_START\nInterface: X2\n\
+\t\tProtocol: LLDP\n\t\tMAC Address: 00:40:10:CC:00:03\n\t\tSystem Name: DR-PATEL-PC\n\
+\t\tSystem Description: Windows 11 Pro\n\t\tSystem Capabilities: Station Only\n\n\
+\t\tProtocol: LLDP\n\t\tMAC Address: 00:40:10:CC:00:04\n\t\tSystem Name: Lobby Phone\n\
+\t\tSystem Capabilities: Bridge, Telephone\n\
+#Advanced Switching : L2_Discovery_END\n";
+        let heard = neighbors(t);
+        assert_eq!(heard.len(), 2);
+        assert!(heard[0].get("name").is_none() && heard[0].get("description").is_none());
+        assert_eq!(heard[0]["mac"], "00:40:10:cc:00:03");
+        assert_eq!(heard[1]["name"], "Lobby Phone");
     }
 
     #[test]

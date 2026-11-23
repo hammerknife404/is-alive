@@ -37,7 +37,26 @@ pub fn system_tool(name: &str) -> Option<std::path::PathBuf> {
 /// Resolve a host name or IP literal. Prefers IPv4 unless `prefer_v6`.
 pub fn resolve(host: &str, prefer_v6: bool) -> io::Result<IpAddr> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    // A zone (fe80::1%eth0) names the interface, and the tests send to a
+    // bare address: the system would refuse with "Invalid argument". Said
+    // plainly instead, as is a multicast address, which no test answers.
+    if let Some((addr, zone)) = host.split_once('%')
+        && addr.parse::<std::net::Ipv6Addr>().is_ok()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "{addr}%{zone} is a link-local address with a zone, which this can't send to: use the device's IPv4 address or a global IPv6 one"
+            ),
+        ));
+    }
     if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_multicast() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{ip} is a multicast address: test one device's address"),
+            ));
+        }
         return Ok(ip);
     }
     let addrs: Vec<IpAddr> = (host, 0).to_socket_addrs()?.map(|a| a.ip()).collect();
@@ -67,6 +86,19 @@ pub fn reverse(ip: IpAddr) -> Option<String> {
 
 pub(crate) fn sanitize(s: &str) -> String {
     clean(s, 255)
+}
+
+/// As `sanitize`, for a page of text (a WHOIS record): its line breaks and
+/// tabs kept, every other control and bidi character dropped.
+pub(crate) fn sanitize_text(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            c == '\n'
+                || c == '\t'
+                || !(c.is_control()
+                    || matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+        })
+        .collect()
 }
 
 /// As `sanitize`, for long TXT data (SPF, DKIM keys).
@@ -222,6 +254,55 @@ pub fn par_for<T: Sync>(
     });
 }
 
+/// A connection that gives up at a deadline: each read or write waits at
+/// most `each`, and never past `deadline`. A per-read timeout alone lets a
+/// device that dribbles a byte at a time hold a worker (and a Stop) for
+/// hours; this bounds the whole exchange.
+pub(crate) struct Timed {
+    tcp: std::net::TcpStream,
+    deadline: Instant,
+    each: Duration,
+}
+
+impl Timed {
+    /// `tcp`, done within `whole` from now.
+    pub fn new(tcp: std::net::TcpStream, each: Duration, whole: Duration) -> Self {
+        Self {
+            tcp,
+            deadline: Instant::now() + whole,
+            each,
+        }
+    }
+
+    fn arm(&self) -> io::Result<()> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "took too long"));
+        }
+        let wait = Some(left.min(self.each));
+        self.tcp.set_read_timeout(wait)?;
+        self.tcp.set_write_timeout(wait)
+    }
+}
+
+impl io::Read for Timed {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.read(buf)
+    }
+}
+
+impl io::Write for Timed {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +356,15 @@ mod tests {
             resolve("[::1]", false).unwrap(),
             "::1".parse::<IpAddr>().unwrap()
         );
+        // Said plainly, not "Invalid argument" from the socket later.
+        let zoned = resolve("fe80::1%eth0", false).unwrap_err().to_string();
+        assert!(zoned.contains("link-local address with a zone"), "{zoned}");
+        assert!(
+            resolve("ff02::1", false)
+                .unwrap_err()
+                .to_string()
+                .contains("multicast")
+        );
+        assert!(resolve("224.0.0.251", false).is_err());
     }
 }

@@ -523,6 +523,13 @@ fn parse_meta(body: &str) -> Option<Meta> {
 /// gone through so far.
 pub struct Transfer {
     bytes: Arc<AtomicU64>,
+    /// Requests the server answered with success. An upload's bytes are
+    /// counted as they leave, before the answer: with none of these, a
+    /// server that refused every one (403, 413, 429) would still show a
+    /// speed.
+    accepted: Arc<AtomicU64>,
+    /// Requests the server answered with a refusal.
+    refused: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     err: Arc<Mutex<Option<String>>>,
     threads: Vec<JoinHandle<()>>,
@@ -532,17 +539,27 @@ impl Transfer {
     /// `streams` connections moving data to or from `url` (see `Server::url`).
     pub fn start(agent: &ureq::Agent, url: &str, dir: Dir, streams: usize) -> Self {
         let bytes = Arc::new(AtomicU64::new(0));
+        let accepted = Arc::new(AtomicU64::new(0));
+        let refused = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let err = Arc::new(Mutex::new(None));
         let threads = (0..streams.max(1))
             .map(|_| {
-                let (agent, bytes, stop, err) =
-                    (agent.clone(), bytes.clone(), stop.clone(), err.clone());
+                let (agent, bytes, accepted, refused, stop, err) = (
+                    agent.clone(),
+                    bytes.clone(),
+                    accepted.clone(),
+                    refused.clone(),
+                    stop.clone(),
+                    err.clone(),
+                );
                 let url = url.to_string();
                 std::thread::spawn(move || {
                     let s = Stream {
                         agent,
                         bytes: &bytes,
+                        accepted: &accepted,
+                        refused: &refused,
                         stop: &stop,
                         err: &err,
                     };
@@ -555,6 +572,8 @@ impl Transfer {
             .collect();
         Self {
             bytes,
+            accepted,
+            refused,
             stop,
             err,
             threads,
@@ -563,6 +582,13 @@ impl Transfer {
 
     pub fn bytes(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The server refused requests and accepted none: whatever was
+    /// counted as sent isn't a speed. (A request still going, or cut off,
+    /// is neither.)
+    pub fn only_refused(&self) -> bool {
+        self.refused.load(Ordering::Relaxed) > 0 && self.accepted.load(Ordering::Relaxed) == 0
     }
 
     /// The last error any stream hit, if one did.
@@ -590,6 +616,8 @@ impl Drop for Transfer {
 struct Stream<'a> {
     agent: ureq::Agent,
     bytes: &'a AtomicU64,
+    accepted: &'a AtomicU64,
+    refused: &'a AtomicU64,
     stop: &'a AtomicBool,
     err: &'a Mutex<Option<String>>,
 }
@@ -628,17 +656,26 @@ impl Stream<'_> {
                 continue;
             }
             let mut body = resp.body_mut().as_reader();
+            let (mut got, mut broke) = (0u64, false);
             while !self.stopped() {
                 match body.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        got += n as u64;
                         self.bytes.fetch_add(n as u64, Ordering::Relaxed);
                     }
                     Err(e) => {
                         self.failed(e);
+                        broke = true;
                         break;
                     }
                 }
+            }
+            // An answer with nothing in it (a misconfigured File URL) is a
+            // failure with a reason, and a pause before asking again: not
+            // a tight loop of requests ending in "no data arrived".
+            if got == 0 && !broke && !self.stopped() {
+                self.failed("the server answered with an empty file");
             }
         }
     }
@@ -658,8 +695,14 @@ impl Stream<'_> {
                 .send(ureq::SendBody::from_reader(&mut src));
             match sent {
                 Ok(mut r) => {
-                    if let Some(why) = refusal(&r, Dir::Up) {
-                        self.failed(why);
+                    match refusal(&r, Dir::Up) {
+                        Some(why) => {
+                            self.refused.fetch_add(1, Ordering::Relaxed);
+                            self.failed(why);
+                        }
+                        None => {
+                            self.accepted.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     let _ = r.body_mut().with_config().limit(64 * 1024).read_to_vec();
                 }
@@ -903,6 +946,25 @@ pub(crate) mod tests {
         }
     }
 
+    /// An upload the server refuses every time is only refusals, however
+    /// many bytes left first; one it accepts isn't.
+    #[test]
+    fn an_upload_refused_every_time_is_no_speed() {
+        let base = mock();
+        let agent = agent(2);
+        for (path, refused) in [("/nowhere", true), ("/__up", false)] {
+            let t = Transfer::start(&agent, &format!("{base}{path}"), Dir::Up, 2);
+            let end = Instant::now() + Duration::from_secs(10);
+            while t.only_refused() != refused && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(t.only_refused(), refused, "{path}");
+            assert!(t.bytes() > 0, "bytes were counted as they left");
+            t.stop(Duration::from_secs(2));
+        }
+    }
+
     #[test]
     fn presets_are_usable_and_grouped() {
         for (list, up) in [(DOWNLOADS, false), (UPLOADS, true)] {
@@ -1020,10 +1082,12 @@ pub(crate) mod tests {
         assert_eq!(t.bytes(), 0);
         assert!(t.error().is_some_and(|e| e.contains("404")));
         t.stop(Duration::from_secs(1));
-        // A page behind a bot check, and a page where a file should be.
+        // A page behind a bot check, a page where a file should be, and a
+        // file with nothing in it (which looped on requests, no reason).
         for (path, says) in [
             ("/challenge", "bot check"),
             ("/page", "web page, not a file"),
+            ("/__down?bytes=0", "empty file"),
         ] {
             let t = Transfer::start(&agent(1), &format!("{base}{path}"), Dir::Down, 1);
             let end = Instant::now() + Duration::from_secs(5);

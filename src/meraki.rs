@@ -9,6 +9,7 @@
 //! VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied.
 
 use crate::sonicwall::clean_comment;
+use crate::unifi::Clients;
 use serde_json::{Map, Value, json};
 use std::cell::Cell;
 
@@ -16,6 +17,11 @@ const FORMAT: &str = "Meraki Dashboard API JSON";
 
 /// Most files read from one zip.
 const MAX_FILES: usize = 2000;
+/// Largest JSON file read, and most read from one zip in all. Parsed JSON
+/// takes many times its size in memory (`[0,0,0,…]` about 16 times), so
+/// the cap is on what's parsed; a whole organisation's export is a few MB.
+const FILE_MAX: usize = 32 << 20;
+const ALL_MAX: usize = 64 << 20;
 
 pub struct Report {
     pub files: usize,
@@ -32,6 +38,61 @@ pub struct Report {
 }
 
 impl Report {
+    /// The JSON with the DHCP reservations' names under `clients`: a
+    /// reservation for something that looks like a phone, laptop or PC
+    /// (by its MAC, as the Map places it) gets its `client-` token or no
+    /// name; gear, printers and the rest keep theirs, as does every one
+    /// with Full.
+    pub fn json_for(&self, clients: Clients) -> String {
+        if clients == Clients::Full {
+            return self.json.clone();
+        }
+        let Ok(mut v) = serde_json::from_str::<Value>(&self.json) else {
+            return self.json.clone();
+        };
+        let fixed = v
+            .get_mut("vlans")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+            .filter_map(|vlan| vlan.get_mut("fixed_ips").and_then(Value::as_array_mut))
+            .flatten()
+            .filter_map(Value::as_object_mut);
+        for a in fixed {
+            let mac_text = a.get("mac").and_then(Value::as_str).unwrap_or_default();
+            let mac = crate::net::mac::parse_mac(mac_text);
+            let key = mac.as_ref().map_or_else(
+                || {
+                    a.get("ip")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                },
+                crate::net::mac::fmt,
+            );
+            let client = crate::map::looks_like_client(mac.as_ref(), &[], None);
+            let name = a
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty());
+            match clients.device_name(name, &key, client) {
+                Some(n) => a.insert("name".into(), json!(n)),
+                None => a.remove("name"),
+            };
+        }
+        if let Some(notes) = v.get_mut("notes").and_then(Value::as_array_mut) {
+            notes.push(json!(format!(
+                "client_names {}: the names of DHCP reservations (vlans[].fixed_ips) for what looks like a phone, laptop or PC by its MAC are {}; other reservations keep theirs.",
+                clients.label(),
+                match clients {
+                    Clients::None => "left out",
+                    _ => "client-xxxxxxxx tokens made from the MAC, the same token the UniFi export's client table and the sweep inventory use",
+                }
+            )));
+        }
+        serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"
+    }
+
     pub fn count(&self, table: &str) -> usize {
         self.counts.iter().find(|c| c.0 == table).map_or(0, |c| c.1)
     }
@@ -67,54 +128,99 @@ unless they mention a password, key or similar.\n",
 }
 
 /// The JSON documents in `data`: the file itself, or each .json in a zip,
-/// with the folder it sat in (often the network's name).
-fn documents(data: &[u8]) -> Vec<(Option<String>, String, Value)> {
+/// with the folder it sat in (often the network's name). Err when there's
+/// more than this reads (`FILE_MAX`, `ALL_MAX`).
+type Docs = Vec<(Option<String>, String, Value)>;
+
+fn documents(data: &[u8]) -> Result<Docs, String> {
     // Windows PowerShell 5.1 writes UTF-8 with a BOM.
     let bom = |b: &[u8]| b.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(b).to_vec();
     let parse = |b: &[u8]| serde_json::from_slice::<Value>(&bom(b)).ok();
+    let too_big = |n: usize| {
+        format!(
+            "{} MB of JSON: more than a Meraki export this reads ({} MB)",
+            n >> 20,
+            FILE_MAX >> 20
+        )
+    };
     let data = &bom(data)[..];
     let first = data.iter().find(|b| !b.is_ascii_whitespace());
     if matches!(first, Some(b'{' | b'[')) {
-        return parse(data)
+        if data.len() > FILE_MAX {
+            return Err(too_big(data.len()));
+        }
+        return Ok(parse(data)
             .map(|v| vec![(None, String::new(), v)])
-            .unwrap_or_default();
+            .unwrap_or_default());
     }
-    crate::unifi::zip_all(
+    let files = crate::unifi::zip_all(
         data,
         |n| n.to_ascii_lowercase().ends_with(".json"),
         MAX_FILES,
+        ALL_MAX,
     )
-    .unwrap_or_default()
-    .into_iter()
-    .filter_map(|(name, b)| {
-        let mut parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
-        let file = parts.pop()?;
-        let stem = file.rsplit_once('.').map_or(file, |s| s.0).to_string();
-        Some((parts.last().map(|d| d.to_string()), stem, parse(&b)?))
-    })
-    .collect()
+    .unwrap_or_default();
+    if let Some((_, b)) = files.iter().find(|(_, b)| b.len() > FILE_MAX) {
+        return Err(too_big(b.len()));
+    }
+    Ok(files
+        .into_iter()
+        .filter_map(|(name, b)| {
+            let mut parts: Vec<&str> = name.split('/').filter(|p| !p.is_empty()).collect();
+            let file = parts.pop()?;
+            let stem = file.rsplit_once('.').map_or(file, |s| s.0).to_string();
+            Some((parts.last().map(|d| d.to_string()), stem, parse(&b)?))
+        })
+        .collect())
 }
 
-/// True when `data` is Meraki API JSON (or a zip of it) with MX config in it.
-pub fn sniff(data: &[u8]) -> bool {
+/// Whether `data` might be Meraki API JSON or a zip of it: worth parsing.
+fn might_be(data: &[u8]) -> bool {
     let first = data
         .strip_prefix(b"\xEF\xBB\xBF")
         .unwrap_or(data)
         .iter()
         .find(|b| !b.is_ascii_whitespace());
-    if !matches!(first, Some(b'{' | b'[' | b'P')) {
-        return false;
-    }
-    let w = read(&documents(data));
-    w.found()
+    matches!(first, Some(b'{' | b'[' | b'P'))
 }
 
+/// Read `data` once as a Meraki export: None when it isn't Meraki API
+/// JSON (or a zip of it) with MX config in it, else what converting it
+/// gave. One too big to read is a Meraki export's error only when it says
+/// it's one near the top.
+pub fn open(data: &[u8]) -> Option<Result<Report, String>> {
+    if !might_be(data) {
+        return None;
+    }
+    let docs = match documents(data) {
+        Ok(d) => d,
+        Err(e) => {
+            let head = String::from_utf8_lossy(&data[..data.len().min(64 << 10)]).to_lowercase();
+            return head.contains("meraki").then_some(Err(e));
+        }
+    };
+    let w = read(&docs);
+    w.found().then(|| convert_docs(docs, w))
+}
+
+/// True when `data` is Meraki API JSON (or a zip of it) with MX config in it.
+#[cfg(test)]
+pub fn sniff(data: &[u8]) -> bool {
+    matches!(open(data), Some(Ok(_)))
+}
+
+/// `data` as a Meraki export, or why not (tests; the app reads with `open`).
+#[cfg(test)]
 pub fn convert(data: &[u8]) -> Result<Report, String> {
-    let docs = documents(data);
+    let docs = documents(data)?;
     if docs.is_empty() {
         return Err("no JSON found: is this a Meraki Dashboard API export?".into());
     }
-    let mut w = read(&docs);
+    let w = read(&docs);
+    convert_docs(docs, w)
+}
+
+fn convert_docs(docs: Docs, mut w: Walk) -> Result<Report, String> {
     if !w.found() {
         return Err(
             "no Meraki MX config found (VLANs, firewall rules, ports, uplinks or MX devices)"
@@ -395,7 +501,16 @@ impl Walk {
                     .and_then(Value::as_object)
                     .map(|m| {
                         m.iter()
-                            .map(|(mac, a)| json!({"mac": mac, "ip": s(a, "ip"), "name": s(a, "name")}))
+                            .map(|(mac, a)| {
+                                // Often a person's ("Dr Patel laptop"): cleaned
+                                // like a comment here; `json_for` applies the
+                                // Clients setting.
+                                let name = match s(a, "name") {
+                                    "" => json!(""),
+                                    n => clean_comment(n, &self.withheld),
+                                };
+                                json!({"mac": mac, "ip": s(a, "ip"), "name": name})
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
@@ -555,6 +670,14 @@ impl Walk {
             ),
         };
         copy(&mut row, v, fields);
+        // A reserved range's comment is free text like a rule's.
+        if let Some(Value::Array(ranges)) = row.get_mut("reservedIpRanges") {
+            for r in ranges.iter_mut().filter_map(Value::as_object_mut) {
+                if let Some(c) = r.get("comment").and_then(Value::as_str).map(str::to_string) {
+                    r.insert("comment".into(), clean_comment(&c, &self.withheld));
+                }
+            }
+        }
         self.tables[table].push(Value::Object(row));
     }
 
@@ -764,6 +887,24 @@ mod tests {
       "uplinkStatuses": [{"networkId": "L_1", "serial": "Q2XX-AAAA-0001", "model": "MX68", "uplinks": [{"interface": "wan1", "status": "active", "ip": "203.0.113.42", "publicIp": "203.0.113.42"}]}]
     }"#;
 
+    /// Past what's parsed, a file is refused before it's parsed (JSON can
+    /// take 16 times its size in memory): as a Meraki export's error when
+    /// it says it's one, else as not Meraki at all.
+    #[test]
+    fn too_much_json_is_refused_unparsed() {
+        let pad = " ".repeat(FILE_MAX);
+        let meraki = format!("{{\"source\": \"meraki-export.ps1\", \"x\": [0]{pad}}}");
+        let Some(Err(e)) = open(meraki.as_bytes()) else {
+            panic!("not refused as a Meraki export");
+        };
+        assert!(e.contains("more than a Meraki export this reads"), "{e}");
+        let other = format!("[0{pad}]");
+        assert!(open(other.as_bytes()).is_none());
+        // The real thing reads, once.
+        assert!(open(EXPORT.as_bytes()).is_some_and(|r| r.is_ok()));
+        assert!(open(b"just text").is_none());
+    }
+
     #[test]
     fn hostile_exports_never_panic() {
         crate::hostile::each(EXPORT.as_bytes(), |d| {
@@ -828,6 +969,60 @@ mod tests {
                 .contains("MX68 Q2XX-AAAA-0001, MX 18.211 (Front MX)")
         );
         assert!(r.summary().contains("Harbor Dental"));
+    }
+
+    /// DHCP reservation names are often people's: cleaned like a comment,
+    /// and the Clients setting decides what a phone, laptop or PC's
+    /// becomes. Gear keeps its name.
+    #[test]
+    fn reservation_names_follow_the_clients_setting() {
+        let export = r#"{"source": "meraki-export.ps1",
+          "networks": [{"id": "L_1", "name": "Main Office", "productTypes": ["appliance"],
+          "appliance": {"vlans": [{"id": 1, "name": "Data", "subnet": "10.20.0.0/24", "applianceIp": "10.20.0.1",
+            "fixedIpAssignments": {
+              "00:12:f0:00:00:01": {"ip": "10.20.0.31", "name": "Dr Patel laptop"},
+              "00:11:32:00:00:02": {"ip": "10.20.0.32", "name": "Backup NAS"},
+              "02:00:00:00:00:03": {"ip": "10.20.0.33", "name": "call jane@example.com"}},
+            "reservedIpRanges": [
+              {"start": "10.20.0.200", "end": "10.20.0.210", "comment": "temp: wifi password is Harbor2024!"},
+              {"start": "10.20.0.220", "end": "10.20.0.230", "comment": "Cameras"}]}]}}]}"#;
+        let r = convert(export.as_bytes()).unwrap();
+        // Cleaned in every mode: no email or password goes out.
+        for c in [Clients::Full, Clients::Anonymized, Clients::None] {
+            let j = r.json_for(c);
+            assert!(
+                !j.contains("jane@example.com") && !j.contains("Harbor2024"),
+                "{c:?}"
+            );
+            assert!(j.contains("\"Cameras\""), "{c:?}");
+        }
+        let names = |c: Clients| {
+            let v: Value = serde_json::from_str(&r.json_for(c)).unwrap();
+            v["vlans"][0]["fixed_ips"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| (s(a, "mac").to_string(), a.get("name").cloned()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let full = names(Clients::Full);
+        assert_eq!(full["00:12:f0:00:00:01"], Some(json!("Dr Patel laptop")));
+        let anon = names(Clients::Anonymized);
+        assert_eq!(
+            anon["00:12:f0:00:00:01"],
+            Some(json!(crate::unifi::token("00:12:f0:00:00:01"))),
+            "an Intel card: a laptop or PC"
+        );
+        assert_eq!(
+            anon["02:00:00:00:00:03"],
+            Some(json!(crate::unifi::token("02:00:00:00:00:03"))),
+            "a private MAC: a phone"
+        );
+        assert_eq!(anon["00:11:32:00:00:02"], Some(json!("Backup NAS")));
+        let none = names(Clients::None);
+        assert_eq!(none["00:12:f0:00:00:01"], None);
+        assert_eq!(none["00:11:32:00:00:02"], Some(json!("Backup NAS")));
+        assert!(r.json_for(Clients::None).contains("client_names none"));
     }
 
     #[test]

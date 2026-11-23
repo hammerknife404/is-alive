@@ -93,10 +93,42 @@ pub fn vendor_label(m: &Mac) -> String {
 
 /// IPv4 → MAC for every resolved entry in this machine's neighbor table.
 pub fn neighbors() -> HashMap<Ipv4Addr, Mac> {
-    imp::neighbors()
-        .into_iter()
-        .filter(|(_, m)| usable(m))
-        .collect()
+    one_each(imp::neighbors(), imp::confirmed)
+}
+
+/// One MAC per address. The table has a row per adapter, so an address can
+/// have two: Wi-Fi on a guest network and the wired LAN both on
+/// 192.168.1.x, or a leftover from the last site. Then the one the OS has
+/// just confirmed wins (`confirmed` is asked only then); with neither
+/// confirmed, the address gets none rather than maybe the wrong one, which
+/// would show the wrong vendor and a false duplicate-IP warning.
+fn one_each(
+    all: Vec<(Ipv4Addr, Mac)>,
+    confirmed: impl FnOnce() -> Vec<(Ipv4Addr, Mac)>,
+) -> HashMap<Ipv4Addr, Mac> {
+    let mut by: HashMap<Ipv4Addr, Vec<Mac>> = HashMap::new();
+    for (ip, m) in all.into_iter().filter(|(_, m)| usable(m)) {
+        let v = by.entry(ip).or_default();
+        if !v.contains(&m) {
+            v.push(m);
+        }
+    }
+    let mut confirmed = Some(confirmed);
+    let mut sure: HashMap<Ipv4Addr, Mac> = HashMap::new();
+    let mut out = HashMap::new();
+    for (ip, macs) in by {
+        if let [m] = macs[..] {
+            out.insert(ip, m);
+            continue;
+        }
+        if let Some(f) = confirmed.take() {
+            sure = f().into_iter().collect();
+        }
+        if let Some(m) = sure.get(&ip).filter(|m| macs.contains(m)) {
+            out.insert(ip, *m);
+        }
+    }
+    out
 }
 
 /// Entries the OS has just confirmed (the device answered an ARP request in
@@ -254,6 +286,39 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two adapters, two MACs for one address: the confirmed one, else
+    /// none. One MAC (however many rows) needs no asking.
+    #[test]
+    fn one_mac_per_address() {
+        let ip = |n: u8| Ipv4Addr::new(192, 168, 1, n);
+        let (wired, wifi) = ([0, 0x11, 0x32, 0, 0, 1], [0x24, 0x5a, 0x4c, 0, 0, 2]);
+        let all = vec![
+            (ip(1), wifi),
+            (ip(1), wired),
+            (ip(9), wired),
+            (ip(9), wired),
+        ];
+        let asked = std::cell::Cell::new(0);
+        let m = one_each(all.clone(), || {
+            asked.set(asked.get() + 1);
+            vec![(ip(1), wired)]
+        });
+        assert_eq!((m[&ip(1)], m[&ip(9)], asked.get()), (wired, wired, 1));
+        let m = one_each(all, Vec::new);
+        assert_eq!(
+            m.get(&ip(1)),
+            None,
+            "neither confirmed: no MAC, not a wrong one"
+        );
+        assert_eq!(m[&ip(9)], wired);
+        let asked = std::cell::Cell::new(0);
+        one_each(vec![(ip(9), wired)], || {
+            asked.set(1);
+            Vec::new()
+        });
+        assert_eq!(asked.get(), 0);
+    }
 
     #[test]
     fn vendor_lookup_longest_prefix() {

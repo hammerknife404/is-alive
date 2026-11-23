@@ -97,27 +97,54 @@ from collections import defaultdict
 # practice.
 # ---------------------------------------------------------------------------
 
+# What a crafted or damaged backup can't make this do: a length that points
+# backwards or past the buffer stops with a ValueError instead of looping
+# or spinning; documents nest at most 64 deep; nothing unpacks past
+# MAX_UNPACKED (is-alive's own reader has the same limits).
+MAX_DEPTH = 64
+MAX_UNPACKED = 1 << 30
+MAX_NESTED_ZIPS = 4
+
+
+def _length(buf, pos, minimum):
+    """An int32 length at `pos` that fits what's left of `buf`."""
+    if pos + 4 > len(buf):
+        raise ValueError(f"BSON truncated at offset {pos}")
+    length = struct.unpack_from("<i", buf, pos)[0]
+    if length < minimum or length > len(buf) - pos:
+        raise ValueError(f"BSON bad length {length} at offset {pos}")
+    return length
+
+
 def _read_cstring(buf, pos):
     end = buf.index(b"\x00", pos)
     return buf[pos:end].decode("utf-8", "replace"), end + 1
 
 
-def _read_element(buf, pos, type_byte):
+def _string(buf, pos):
+    """A BSON string at `pos` (int32 length counting its NUL, then bytes)."""
+    if pos + 4 > len(buf):
+        raise ValueError(f"BSON truncated at offset {pos}")
+    length = struct.unpack_from("<i", buf, pos)[0]
+    if length < 1 or length > len(buf) - pos - 4:
+        raise ValueError(f"BSON bad string length {length} at offset {pos}")
+    pos += 4
+    return buf[pos:pos + length - 1].decode("utf-8", "replace"), pos + length
+
+
+def _read_element(buf, pos, type_byte, depth=0):
     if type_byte == 0x01:  # double
         val = struct.unpack_from("<d", buf, pos)[0]
         return val, pos + 8
     if type_byte == 0x02:  # string
-        length = struct.unpack_from("<i", buf, pos)[0]
-        pos += 4
-        val = buf[pos:pos + length - 1].decode("utf-8", "replace")
-        return val, pos + length
+        return _string(buf, pos)
     if type_byte == 0x03:  # embedded document
-        length = struct.unpack_from("<i", buf, pos)[0]
-        val = _decode_document(buf[pos:pos + length])
+        length = _length(buf, pos, 5)
+        val = _decode_document(buf[pos:pos + length], depth + 1)
         return val, pos + length
     if type_byte == 0x04:  # array
-        length = struct.unpack_from("<i", buf, pos)[0]
-        doc = _decode_document(buf[pos:pos + length])
+        length = _length(buf, pos, 5)
+        doc = _decode_document(buf[pos:pos + length], depth + 1)
         # array is encoded as a document with keys "0","1",... — reorder by
         # numeric key so order is preserved even if a key is skipped.
         try:
@@ -126,7 +153,9 @@ def _read_element(buf, pos, type_byte):
             val = list(doc.values())
         return val, pos + length
     if type_byte == 0x05:  # binary
-        length = struct.unpack_from("<i", buf, pos)[0]
+        length = _length(buf, pos, 0)
+        if pos + 5 + length > len(buf):
+            raise ValueError(f"BSON bad binary length {length} at offset {pos}")
         subtype = buf[pos + 4]
         data = buf[pos + 5:pos + 5 + length]
         return {"$binary": data.hex(), "$subtype": subtype}, pos + 5 + length
@@ -146,21 +175,14 @@ def _read_element(buf, pos, type_byte):
         options, pos = _read_cstring(buf, pos)
         return {"$regex": pattern, "$options": options}, pos
     if type_byte == 0x0C:  # DBPointer (deprecated) — string + 12-byte oid
-        length = struct.unpack_from("<i", buf, pos)[0]
-        pos += 4 + length
+        _, pos = _string(buf, pos)
         return None, pos + 12
     if type_byte == 0x0D:  # JavaScript code
-        length = struct.unpack_from("<i", buf, pos)[0]
-        pos += 4
-        val = buf[pos:pos + length - 1].decode("utf-8", "replace")
-        return val, pos + length
+        return _string(buf, pos)
     if type_byte == 0x0E:  # symbol (deprecated) — same wire shape as string
-        length = struct.unpack_from("<i", buf, pos)[0]
-        pos += 4
-        val = buf[pos:pos + length - 1].decode("utf-8", "replace")
-        return val, pos + length
+        return _string(buf, pos)
     if type_byte == 0x0F:  # code with scope
-        total_len = struct.unpack_from("<i", buf, pos)[0]
+        total_len = _length(buf, pos, 14)
         return None, pos + total_len
     if type_byte == 0x10:  # int32
         val = struct.unpack_from("<i", buf, pos)[0]
@@ -178,18 +200,27 @@ def _read_element(buf, pos, type_byte):
     raise ValueError(f"Unsupported BSON type 0x{type_byte:02x} at offset {pos}")
 
 
-def _decode_document(buf):
+def _decode_document(buf, depth=0):
     # buf[0:4] is the document's own length prefix (already sliced to size
     # by the caller); start reading elements right after it.
+    if depth > MAX_DEPTH:
+        raise ValueError(f"BSON nested more than {MAX_DEPTH} deep")
     pos = 4
     end = len(buf) - 1  # trailing NUL terminator
     doc = {}
-    while pos < end:
-        type_byte = buf[pos]
-        pos += 1
-        key, pos = _read_cstring(buf, pos)
-        value, pos = _read_element(buf, pos, type_byte)
-        doc[key] = value
+    try:
+        while pos < end:
+            type_byte = buf[pos]
+            start = pos
+            pos += 1
+            key, pos = _read_cstring(buf, pos)
+            value, pos = _read_element(buf, pos, type_byte, depth)
+            # Each element moves forward and stays inside its document.
+            if pos <= start or pos > end:
+                raise ValueError(f"BSON element at offset {start} runs past its document")
+            doc[key] = value
+    except struct.error as e:
+        raise ValueError(f"BSON truncated: {e}") from None
     return doc
 
 
@@ -201,11 +232,23 @@ def decode_bson_stream(data):
     pos = 0
     n = len(data)
     while pos < n:
-        length = struct.unpack_from("<i", data, pos)[0]
+        # Zero padding at the end of a decrypted backup: done.
+        if not any(data[pos:pos + 4]):
+            break
+        length = _length(data, pos, 5)
         doc = _decode_document(data[pos:pos + length])
         docs.append(doc)
         pos += length
     return docs
+
+
+def _gunzip(f, what):
+    """Unpack gzip from file object `f`, no further than MAX_UNPACKED."""
+    with gzip.GzipFile(fileobj=f) as g:
+        out = g.read(MAX_UNPACKED + 1)
+    if len(out) > MAX_UNPACKED:
+        raise ValueError(f"{what} unpacks to more than {MAX_UNPACKED >> 20} MB: not a backup this reads")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -215,25 +258,30 @@ def decode_bson_stream(data):
 # there.
 # ---------------------------------------------------------------------------
 
-def _find_db_gz_bytes(zf):
+def _find_db_gz_bytes(zf, level=1):
     """Given an open ZipFile, find and decompress the db.gz entry. Handles
     the flat layout (db.gz at the top level) and the nested case where a
-    .unf (itself a zip) is stored inside an outer .zip wrapper."""
+    .unf (itself a zip) is stored inside an outer .zip wrapper, up to
+    MAX_NESTED_ZIPS deep."""
     names = zf.namelist()
     gz_names = [n for n in names if n.endswith("db.gz")] or \
                [n for n in names if n.endswith(".gz")]
     if gz_names:
         with zf.open(gz_names[0]) as f:
-            return gzip.decompress(f.read())
+            return _gunzip(f, gz_names[0])
 
+    if level >= MAX_NESTED_ZIPS:
+        return None
     # No db.gz at this level — look for a nested .unf (zip) and recurse.
     unf_names = [n for n in names if n.lower().endswith(".unf")]
     for name in unf_names:
+        if zf.getinfo(name).file_size > MAX_UNPACKED:
+            raise ValueError(f"{name} is larger than a backup this reads")
         with zf.open(name) as f:
-            inner_bytes = f.read()
+            inner_bytes = f.read(MAX_UNPACKED + 1)
         if zipfile.is_zipfile(io.BytesIO(inner_bytes)):
             with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zf:
-                found = _find_db_gz_bytes(inner_zf)
+                found = _find_db_gz_bytes(inner_zf, level + 1)
                 if found is not None:
                     return found
     return None
@@ -241,18 +289,23 @@ def _find_db_gz_bytes(zf):
 
 def load_export_documents(input_path):
     """Return a flat list of dicts (mongoexport-JSON shape) regardless of
-    whether input_path is JSON, a raw db.gz, or a .unf/.zip container."""
+    whether input_path is JSON, a raw db.gz, or a zip holding one (a
+    decrypted .unf). An encrypted .unf / .unifi is refused with a message
+    saying how to convert it."""
     with open(input_path, "rb") as f:
         head = f.read(4)
 
-    # zip container: native .unf (autobackup) or a .zip wrapping one.
+    # zip container: a decrypted .unf (autobackup), or a .zip wrapping one.
     if zipfile.is_zipfile(input_path):
         with zipfile.ZipFile(input_path) as zf:
+            names = zf.namelist()
             bson_bytes = _find_db_gz_bytes(zf)
         if bson_bytes is None:
+            if any(n.lower().endswith((".unf", ".unifi")) for n in names):
+                raise ValueError(_ENCRYPTED.format(path=f"The backup inside {input_path}"))
             raise ValueError(
-                f"{input_path} is a zip but no db.gz (or nested .unf "
-                "containing one) was found inside it"
+                f"{input_path} is a zip but no db.gz (or nested decrypted "
+                ".unf containing one) was found inside it"
             )
         print(f"  detected zip/.unf container, decoded db.gz "
               f"({len(bson_bytes)} bytes BSON)", file=sys.stderr)
@@ -262,53 +315,78 @@ def load_export_documents(input_path):
     # (unusually) wasn't a zip but plain gzip.
     if head[:2] == b"\x1f\x8b":
         with open(input_path, "rb") as f:
-            bson_bytes = gzip.decompress(f.read())
+            bson_bytes = _gunzip(f, input_path)
         print(f"  detected raw gzip BSON stream ({len(bson_bytes)} bytes)",
               file=sys.stderr)
         return decode_bson_stream(bson_bytes)
 
-    # otherwise assume mongoexport-style JSON (the original expected format)
-    with open(input_path, "r", encoding="utf-8") as f:
+    # An encrypted UniFi backup: a native .unf (AES-128) or a UniFi OS
+    # .unifi (AES-256). It isn't a zip until it's decrypted, and it holds
+    # every secret on the controller (admin password hashes, Wi-Fi and VPN
+    # keys), so it isn't decrypted here.
+    with open(input_path, "rb") as f:
+        start = f.read(64).lstrip(b"\xef\xbb\xbf \t\r\n")
+    if input_path.lower().endswith((".unf", ".unifi")) or start[:1] not in (b"[", b"{"):
+        raise ValueError(_ENCRYPTED.format(path=input_path))
+
+    # otherwise mongoexport-style JSON (the original expected format); a
+    # BOM, as Windows tools write one, is skipped
+    with open(input_path, "r", encoding="utf-8-sig") as f:
         return json.load(f)
+
+
+_ENCRYPTED = (
+    "{path} isn't a zip, gzip or JSON file: it looks like an encrypted UniFi "
+    "backup (.unf, or .unifi from UniFi OS). This script doesn't decrypt "
+    "those: a raw backup holds every secret on the controller. Convert it "
+    "with is-alive's Config Export, which decrypts it and strips the secrets "
+    "on the technician's machine, and use the .unifidump.json it saves (a "
+    "Claude Handoff zip carries it as unifi.unifidump.json)."
+)
 
 
 # ---------------------------------------------------------------------------
 # Minimal OUI (first-3-octet) -> vendor lookup for discovered_devices' vendor
 # guess. Deliberately small and static — no network lookup, no third-party
-# OUI database bundled. This covers common network/security/infra vendors
+# OUI database bundled. It covers common network/security/infra vendors
 # likely to show up as an unresolved uplink; anything not in here just gets
-# vendor: null rather than a wrong guess. Extend as you actually encounter
-# new OUIs in the field — don't try to make this exhaustive up front.
+# vendor: null rather than a wrong guess.
+#
+# Every entry is checked against the IEEE registry: is-alive's test
+# `the_unifidump_vendor_table_matches_ieee` fails on a prefix the registry
+# gives to someone else, or doesn't list. Add one only after looking it up
+# at https://standards-oui.ieee.org/ (a wrong vendor here becomes a false
+# "conflict" with a sweep's IEEE vendor for the same MAC).
 # ---------------------------------------------------------------------------
 _OUI_VENDORS = {
-    "04d6aa": "Fortinet", "00098b": "Fortinet", "0090fb": "Fortinet",
-    "70728c": "Cisco", "001b0c": "Cisco", "0021d8": "Cisco", "6c9c42": "Cisco",
-    "88157e": "Meraki (Cisco)", "0018ce": "Meraki (Cisco)",
-    "00179a": "SonicWall", "0017c5": "SonicWall",
-    "0009de": "Palo Alto Networks", "50609d": "Palo Alto Networks",
-    "241b8f": "Palo Alto Networks",
-    "d8b370": "Aruba (HPE)", "24de91": "Aruba (HPE)",
-    "cc2d21": "MikroTik", "48a98a": "MikroTik", "6c3b6b": "MikroTik",
-    "4c5e0c": "Ubiquiti", "24a43c": "Ubiquiti", "fcecda": "Ubiquiti",
-    "dc9fdb": "Synology", "0011d9": "Synology",
-    "b827eb": "Raspberry Pi Foundation", "dca632": "Raspberry Pi Foundation",
+    # Firewalls and gateways
+    "00090f": "Fortinet", "000ce6": "Fortinet", "0401a1": "Fortinet",
+    "04d590": "Fortinet",
+    "001b17": "Palo Alto Networks", "00869c": "Palo Alto Networks",
+    "04472a": "Palo Alto Networks", "080342": "Palo Alto Networks",
+    "0006b1": "SonicWall", "0017c5": "SonicWall", "18b169": "SonicWall",
+    "18c241": "SonicWall", "2cb8ed": "SonicWall", "c0eae4": "SonicWall",
+    "00180a": "Meraki (Cisco)", "00841e": "Meraki (Cisco)",
+    "08f1b3": "Meraki (Cisco)", "0c7bc8": "Meraki (Cisco)",
+    "001b0c": "Cisco", "0021d8": "Cisco",
+    "000585": "Juniper Networks", "0010db": "Juniper Networks",
+    "00121e": "Juniper Networks", "0014f6": "Juniper Networks",
+    # Switches, access points, routers
+    "00156d": "Ubiquiti", "002722": "Ubiquiti", "24a43c": "Ubiquiti",
+    "fcecda": "Ubiquiti", "d8b370": "Ubiquiti", "dc9fdb": "Ubiquiti",
+    "000c42": "MikroTik", "4c5e0c": "MikroTik", "48a98a": "MikroTik",
+    "6c3b6b": "MikroTik",
+    "001a1e": "Hewlett Packard Enterprise",
+    "9c8e99": "Hewlett Packard", "3ca82a": "Hewlett Packard",
+    "204e7f": "Netgear", "c46e1f": "TP-Link", "b0be76": "TP-Link",
+    "00179a": "D-Link", "845b12": "Huawei", "cc2d21": "Tenda",
+    # Servers, NAS, cameras and the rest
+    "b8ca3a": "Dell", "509a4c": "Dell", "005056": "VMware",
+    "0050f2": "Microsoft", "001132": "Synology",
+    "b827eb": "Raspberry Pi", "dca632": "Raspberry Pi",
     "00408c": "Axis Communications", "accc8e": "Axis Communications",
-    "9c8e99": "HP / Aruba networking", "3ca82a": "HP Inc.",
-    "001a1e": "Dell", "b8ca3a": "Dell",
-    "005056": "VMware",
-    "0050f2": "Microsoft",
-    "d8cb8a": "Apple", "3c0754": "Apple",
-    "e4382f": "Fortinet",
-    "845b12": "Netgear", "204e7f": "Netgear",
-    "c46e1f": "TP-Link", "b0be76": "TP-Link",
-    "509a4c": "Juniper Networks", "8c6266": "Juniper Networks",
+    "3c0754": "Apple",
 }
-# NOTE: this table was hand-assembled from memory, not cross-checked against
-# the IEEE OUI registry. Treat every vendor string it returns as a *lead*,
-# not ground truth — verify against https://standards-oui.ieee.org/ (or
-# `arp-scan`'s bundled OUI database, which is authoritative and free) before
-# trusting it on a real site. Wrong OUIs here are worse than no lookup at
-# all, since they'd masquerade as fact in a client-facing map.
 
 
 def _vendor_from_mac(mac):

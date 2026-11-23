@@ -338,16 +338,17 @@ impl PingTool {
     }
 
     fn launch(&mut self, ctx: &egui::Context, mode: Mode, count: u32) {
+        // A host that won't read leaves the last run as it was.
+        let target = match crate::input::host(&self.host) {
+            Ok(t) => t,
+            Err(e) => return self.err = Some(e),
+        };
         self.err = None;
         self.target = None;
         self.lines.clear();
         self.rows.clear();
         self.samples.clear();
         self.stats = Stats::default();
-        let target = match crate::input::host(&self.host) {
-            Ok(t) => t,
-            Err(e) => return self.err = Some(e),
-        };
         // A port typed with the host (host:8443, a link) is the one TCP times.
         if let Some(p) = target.port
             && mode == Mode::Tcp

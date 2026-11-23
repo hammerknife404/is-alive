@@ -212,7 +212,9 @@ mod imp {
     use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
     use std::time::{Duration, Instant};
 
-    /// Set once ping sockets are refused; later probes go straight to `ping`.
+    /// Set once ping sockets are refused (socket() itself: the user's group
+    /// isn't in net.ipv4.ping_group_range); later probes go straight to
+    /// `ping`. A send that's refused is that probe's error, not this.
     static NO_PING_SOCKET: AtomicBool = AtomicBool::new(false);
     static SEQ: AtomicU16 = AtomicU16::new(1);
 
@@ -292,7 +294,16 @@ mod imp {
         if sent < 0 {
             let e = io::Error::last_os_error();
             return match e.raw_os_error() {
-                Some(libc::EACCES | libc::EPERM) => Err(e),
+                // One address, not ping sockets: say so for this probe, and
+                // keep using them (falling back to the ping program here
+                // used to slow every later probe, or fail where it's not
+                // installed).
+                Some(libc::EACCES) => Ok(fail(
+                    "not sent: a broadcast address (this network's own?)".into(),
+                )),
+                Some(libc::EPERM) => Ok(fail(
+                    "not sent: blocked by a firewall on this computer".into(),
+                )),
                 Some(libc::ENETUNREACH | libc::EHOSTUNREACH) => Ok(EchoResult {
                     from: None,
                     rtt_ms: 0.0,
@@ -427,6 +438,12 @@ mod imp {
                 {
                     let ee_ptr = libc::CMSG_DATA(c).cast::<libc::sock_extended_err>();
                     let ee = std::ptr::read_unaligned(ee_ptr);
+                    // A redirect (or source quench) is a router's advice
+                    // to this computer, not the echo's fate: keep waiting
+                    // for the reply.
+                    if advice(&ee, v6) {
+                        return None;
+                    }
                     let from = offender(ee_ptr);
                     let status = classify(&ee, v6);
                     return Some(EchoResult {
@@ -458,6 +475,14 @@ mod imp {
                 }
                 _ => None,
             }
+        }
+    }
+
+    pub(super) fn advice(ee: &libc::sock_extended_err, v6: bool) -> bool {
+        match (ee.ee_origin, v6) {
+            (libc::SO_EE_ORIGIN_ICMP, false) => matches!(ee.ee_type, 4 | 5),
+            (libc::SO_EE_ORIGIN_ICMP6, true) => ee.ee_type == 137,
+            _ => false,
         }
     }
 
@@ -662,6 +687,11 @@ mod cmd {
                 continue;
             };
             let lower = msg.to_lowercase();
+            // "Redirect Host(New nexthop: …)" comes before the reply: a
+            // router's advice, not the echo's fate.
+            if lower.contains("redirect") || lower.contains("source quench") {
+                continue;
+            }
             let status = if lower.contains("time to live exceeded")
                 || lower.contains("time exceeded")
                 || lower.contains("hop limit")
@@ -688,6 +718,42 @@ mod cmd {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    /// A router's redirect before the reply (a second router on the LAN)
+    /// isn't the ping's result: the reply after it is. Alone, it's a
+    /// timeout, not an error.
+    #[test]
+    fn a_redirect_before_the_reply_isnt_the_result() {
+        let ip: std::net::IpAddr = "192.0.2.1".parse().unwrap();
+        let out = "PING 192.0.2.1 (192.0.2.1) 56(84) bytes of data.\n\
+            From 192.0.2.254 icmp_seq=1 Redirect Host(New nexthop: 192.0.2.253)\n\
+            64 bytes from 192.0.2.1: icmp_seq=1 ttl=63 time=1.23 ms\n";
+        let r = super::cmd::parse(out, ip, 5.0);
+        assert!(
+            matches!(r.status, super::EchoStatus::Reply),
+            "{:?}",
+            r.status
+        );
+        assert_eq!(r.rtt_ms, 1.23);
+        let alone: String = out.lines().take(2).collect::<Vec<_>>().join("\n");
+        let r = super::cmd::parse(&alone, ip, 5.0);
+        assert!(
+            matches!(r.status, super::EchoStatus::Timeout),
+            "{:?}",
+            r.status
+        );
+        // The ping socket's error queue: redirect and source quench are
+        // advice; unreachable is the probe's fate.
+        let mut ee: libc::sock_extended_err = unsafe { std::mem::zeroed() };
+        ee.ee_origin = libc::SO_EE_ORIGIN_ICMP;
+        for (t, advice) in [(5, true), (4, true), (3, false), (11, false)] {
+            ee.ee_type = t;
+            assert_eq!(super::imp::advice(&ee, false), advice, "type {t}");
+        }
+        ee.ee_origin = libc::SO_EE_ORIGIN_ICMP6;
+        ee.ee_type = 137;
+        assert!(super::imp::advice(&ee, true));
+    }
+
     #[test]
     fn iputils_ping_flags() {
         let ip = "192.0.2.1".parse().unwrap();
