@@ -70,6 +70,15 @@ impl<'a> Reader<'a> {
             let t = self.take(1)?[0];
             let k = self.cstr()?;
             let v = self.value(t)?;
+            // An element must end before this document's last byte. One that
+            // runs past it (a child longer than its parent) would have the
+            // parent jump back to its own end and read those bytes again: on
+            // a crafted file, twice per level, 2^64 at full depth.
+            if self.pos >= end {
+                return Err(format!(
+                    "BSON element runs past its document at byte {start}"
+                ));
+            }
             f(k, v);
         }
         self.pos = end;
@@ -271,5 +280,33 @@ pub mod tests {
         assert!(super::decode(&b[..b.len() - 2]).is_err());
         let negative = [(-8i32).to_le_bytes().to_vec(), vec![0; 8]].concat();
         assert!(super::documents(&negative).next().unwrap().is_err());
+    }
+
+    /// A child document that claims to run past its parent's end is an
+    /// error, not a reason to rewind and read the same bytes again.
+    #[test]
+    fn a_child_longer_than_its_parent() {
+        let inner = encode(&serde_json::json!({"b": 7}));
+        let mut outer = vec![0x03];
+        outer.extend(b"a\0");
+        outer.extend(&inner);
+        outer.push(0);
+        // The parent says it ends three bytes into the child.
+        let mut d = 10i32.to_le_bytes().to_vec();
+        d.extend(&outer);
+        assert!(super::decode(&d).is_err());
+        // Nested 60 deep, each child overrunning its parent: one pass, an
+        // error, no blow-up (it used to double the work at every level).
+        let mut doc = encode(&serde_json::json!({"b": 7}));
+        for _ in 0..60 {
+            let mut body = vec![0x03];
+            body.extend(b"a\0");
+            body.extend(&doc);
+            body.push(0);
+            let mut d = ((body.len() + 4 - 3) as i32).to_le_bytes().to_vec();
+            d.extend(body);
+            doc = d;
+        }
+        assert!(super::decode(&doc).is_err());
     }
 }
