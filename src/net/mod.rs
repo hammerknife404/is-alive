@@ -254,6 +254,55 @@ pub fn par_for<T: Sync>(
     });
 }
 
+/// A connection that gives up at a deadline: each read or write waits at
+/// most `each`, and never past `deadline`. A per-read timeout alone lets a
+/// device that dribbles a byte at a time hold a worker (and a Stop) for
+/// hours; this bounds the whole exchange.
+pub(crate) struct Timed {
+    tcp: std::net::TcpStream,
+    deadline: Instant,
+    each: Duration,
+}
+
+impl Timed {
+    /// `tcp`, done within `whole` from now.
+    pub fn new(tcp: std::net::TcpStream, each: Duration, whole: Duration) -> Self {
+        Self {
+            tcp,
+            deadline: Instant::now() + whole,
+            each,
+        }
+    }
+
+    fn arm(&self) -> io::Result<()> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "took too long"));
+        }
+        let wait = Some(left.min(self.each));
+        self.tcp.set_read_timeout(wait)?;
+        self.tcp.set_write_timeout(wait)
+    }
+}
+
+impl io::Read for Timed {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.read(buf)
+    }
+}
+
+impl io::Write for Timed {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,17 @@ on:
 permissions:
   contents: read
 
+# Whether a run releases is decided at its start (is tag v<version> there
+# yet?), but the tag is made at its end, ten minutes or more later. Runs
+# that could release (pushes to main, tags, by hand) go one at a time, so
+# a docs or lockfile merge right after a version bump finds the tag made
+# and doesn't publish its own build under it. A newer one waiting replaces
+# an older one waiting; one already running is never cancelled. A pull
+# request's runs only replace that pull request's.
+concurrency:
+  group: build-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -19,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: 1.99.1
           components: clippy, rustfmt
@@ -50,12 +61,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: 1.99.1
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: python3 skills/mapnetwork/scripts/test_engine_contract.py
+      - run: python3 skills/mapnetwork/scripts/test_validate_map.py
+      - run: python3 scripts/test_skill_scripts.py
       - run: python3 scripts/test_extract_bson.py
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked

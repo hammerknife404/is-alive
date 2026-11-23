@@ -1,6 +1,6 @@
 ---
 name: "unifidump"
-description: "Extracts a neutral device/network/WLAN/port-VLAN summary from a UniFi controller export: a mongoexport-style JSON dump (flat array with __cmd/select/collection markers) or a native autobackup (.unf, or a .zip wrapping one, e.g. network_site_SITENAME_vVERSION_TIMESTAMP_unf.zip, containing db.gz). Trigger whenever the user uploads or references such a file, including for a site audit, firmware check, or topology troubleshooting, even if they do not name the format. Tells: JSON arrays with port_table, last_uplink, wlanconf_id, networkconf_id, adopted, or __cmd/collection markers; a .zip/.unf name containing unf; a zip holding db.gz. Stops at the summary and offers /mapnetwork; continues into a map only if the user sent /mapnetwork with the upload or accepts. Do NOT trigger for controller screenshots, exported CSVs, or nmap/scan output; /mapnetwork handles those directly."
+description: "Extracts a neutral device/network/WLAN/port-VLAN summary from a UniFi controller export: a mongoexport-style JSON dump (flat array with __cmd/select/collection markers) or a decrypted autobackup (a zip holding db.gz, or a bare db.gz). A raw .unf or .unifi backup is encrypted and holds every controller secret: the script refuses it and says to convert it with is-alive's Config Export (an is-alive bundle's unifi.unifidump.json is already converted). Trigger whenever the user uploads or references such a file, including for a site audit, firmware check, or topology troubleshooting, even if they do not name the format. Tells: JSON arrays with port_table, last_uplink, wlanconf_id, networkconf_id, adopted, or __cmd/collection markers; a .zip/.unf name containing unf; a zip holding db.gz. Stops at the summary and offers /mapnetwork; continues into a map only if the user sent /mapnetwork with the upload or accepts. Do NOT trigger for controller screenshots, exported CSVs, or nmap/scan output; /mapnetwork handles those directly."
 ---
 
 # /unifidump
@@ -22,19 +22,27 @@ starts from clean data instead of re-deriving it from scratch every time.
 - **mongoexport-style JSON** — a flat array mixing `{"__cmd":"select",
   "collection":"..."}` markers with plain-JSON documents. Produced by
   tooling that dumps the controller's mongo database to JSON.
-- **Native `.unf` autobackup** (or a `.zip` wrapping one, e.g. the
-  `network_site_<name>_v<ver>_<timestamp>_unf.zip` the controller UI
-  produces) — a zip container holding `version`, `timestamp`, `db.gz`,
-  and a `sites/` dir. `db.gz` is a gzip-compressed raw BSON document
-  stream (the same wire format `mongodump` produces) — same
-  `__cmd`/`select` marker structure underneath, just BSON-encoded
+- **A decrypted autobackup** — the zip inside a `.unf`, holding `version`,
+  `timestamp`, `db.gz` and a `sites/` dir. `db.gz` is a gzip-compressed
+  raw BSON document stream (the same wire format `mongodump` produces) —
+  same `__cmd`/`select` marker structure underneath, just BSON-encoded
   instead of JSON-encoded. The script decodes this with a small
   dependency-free BSON reader built into `extract.py` itself — no
   `pymongo`, no pip install, no network access needed to run it.
 
-A bare `db.gz` (if someone's already unzipped the container) and a `.zip`
-with a nested `.unf` inside it (rather than `db.gz` at the top level) both
+A bare `db.gz`, and a `.zip` with a decrypted `.unf` nested inside it,
 work too — detection recurses into nested zips looking for the BSON stream.
+
+**A raw `.unf` or `.unifi` is encrypted** (AES: `.unf` from the Network
+application's backups, `.unifi` from a UniFi OS console), so it isn't a
+zip until decrypted. It also holds every secret on the controller: admin
+password hashes, Wi-Fi passphrases, VPN and RADIUS keys. `extract.py`
+doesn't decrypt it; it stops with a message saying to convert the backup
+with is-alive's **Config Export**, which decrypts it and strips the
+secrets on the technician's machine, and to hand over the
+`.unifidump.json` it saves. An is-alive Site Bundle's
+`unifi.unifidump.json` is already that file. Pass the same advice on to
+the user rather than asking for the raw backup.
 
 ## Why this is a separate step from /mapnetwork
 
@@ -57,10 +65,11 @@ applied fresh each time, not pre-baked into this extraction step.
    ```
    python3 scripts/extract.py <path-to-export> <output-path>.json
    ```
-   `<path-to-export>` can be the `.json` dump, the `.unf`/`.zip`
-   autobackup, or a bare `db.gz` — the script sniffs the file (zip magic
-   bytes, then gzip magic bytes, then falls back to JSON) and prints
-   which path it took to stderr. The script handles large exports (up to
+   `<path-to-export>` can be the `.json` dump, a decrypted autobackup
+   (`.zip`), or a bare `db.gz` — the script sniffs the file (zip magic
+   bytes, then gzip magic bytes, then JSON) and prints which path it took
+   to stderr. A raw (encrypted) `.unf`/`.unifi` stops with a message
+   saying how to convert it. The script handles large exports (up to
    1 GB unpacked; a damaged or crafted file stops with a ValueError naming
    where, rather than hanging) (Fabrikam Care's test case had ~3900 top-level records,
    including 3000 rogue-AP entries and 800+ historical clients) and
@@ -303,7 +312,7 @@ Don't try to read the raw dump file directly with `view` or `cat` before
 running the script. For JSON exports the signal-to-noise ratio is bad
 (the `rogue` collection alone can be thousands of entries of overheard
 neighboring APs, and `user` holds every client that's ever connected,
-often 500+ entries). For `.unf`/`.zip` exports it's binary (a zip
+often 500+ entries). For backups it's binary (encrypted, or a zip
 container around gzip-compressed BSON) — `view`/`cat` will just show you
 garbage, not a hint that something's wrong with the file. Run the script
 first; read its output.

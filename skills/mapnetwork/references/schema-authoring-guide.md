@@ -144,7 +144,7 @@ on every node only if you want a hand-tuned layout.
   label:'File Server',             // card title
   sub:'192.168.1.10',              // IP / accent-coloured subtitle
   ip:'192.168.1.10',               // OPTIONAL — the device's management IPv4, bare.
-  mac:'f4:e2:c6:12:34:56',         // OPTIONAL — its MAC, colon-separated. Fill both
+  mac:'f4:e2:c6:00:00:01',         // OPTIONAL — its MAC, colon-separated. Fill both
                                    // whenever the input gives them (/unifidump's
                                    // devices, a scan, a firewall's ARP/interfaces):
                                    // tools that reopen the map (is-alive) match
@@ -193,7 +193,7 @@ this.ZONES = {
 
 ```js
 {
-  id:'discovered_e4382f8bdc6b',        // stable id derived from the MAC
+  id:'discovered_e4382f000001',        // stable id derived from the MAC
   site:'upstream',                      // not at a client location
   zone:'external',                      // <- the grey zone above, not a guess at its real zone
   kind:'FORTINET DEVICE',               // vendor if known, else 'UNKNOWN DEVICE'

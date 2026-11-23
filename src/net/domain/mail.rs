@@ -42,7 +42,19 @@ pub(super) fn mx(c: &Client, d: &str) -> (Check, MxInfo) {
                 bad += 1;
                 continue;
             }
-            let (ips, cname) = addrs(c, host)?;
+            // One host that won't look up is that host's failure; the
+            // rest are still checked, and the checks after this one (MTA-STS,
+            // Blacklists, SMTP) still see every host there is.
+            let (ips, cname) = match addrs(c, host) {
+                Ok(a) => a,
+                Err(e) => {
+                    k.rec(format!("{pref:>3} {host}  ✖ {e}"));
+                    k.fail(format!("{host}: lookup failed: {e}"));
+                    bad += 1;
+                    info.hosts.push(host.clone());
+                    continue;
+                }
+            };
             let list: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
             k.rec(format!("{pref:>3} {host}  ➡ {}", list.join(", ")));
             if let Some(t) = cname {
@@ -131,6 +143,25 @@ impl<'a> SpfWalk<'a> {
             k.fail(format!("{name} (included) has {} SPF records", recs.len()));
         }
         self.path.push(name.to_string());
+        // RFC 7208 §4.6, §5, §6: one malformed term, or an unknown
+        // mechanism, and receivers give up on the whole record (permerror).
+        let mut bad = 0;
+        for term in rec.split_whitespace().skip(1) {
+            if let Some(why) = term_error(term) {
+                bad += 1;
+                if bad <= 5 {
+                    k.fail(format!(
+                        "{term} in {name}: {why}. Receivers return permerror, so SPF fails for every message"
+                    ));
+                }
+            }
+        }
+        // §6.1: with an all mechanism, redirect= is ignored: not looked
+        // up, not counted.
+        let has_all = rec.split_whitespace().any(|t| {
+            t.trim_start_matches(['+', '-', '~', '?'])
+                .eq_ignore_ascii_case("all")
+        });
         for term in rec.split_whitespace().skip(1) {
             // Past the limit SPF has already failed; stop querying.
             if self.lookups > 10 {
@@ -165,6 +196,7 @@ impl<'a> SpfWalk<'a> {
                         ));
                     }
                 }
+                "redirect" if has_all => {}
                 "include" | "redirect" => {
                     self.lookups += 1;
                     let Some(target) = arg else { continue };
@@ -183,6 +215,108 @@ impl<'a> SpfWalk<'a> {
         }
         self.path.pop();
         Ok(())
+    }
+}
+
+/// Why an SPF term isn't valid (RFC 7208 §4.6.1, §5, §6), or None. Macros
+/// in a domain are taken as written.
+fn term_error(term: &str) -> Option<String> {
+    let t = term.strip_prefix(['+', '-', '~', '?']).unwrap_or(term);
+    let (name, rest) = match t.find([':', '/', '=']) {
+        Some(i) => (&t[..i], &t[i..]),
+        None => (t, ""),
+    };
+    let name = name.to_ascii_lowercase();
+    // A modifier: name=value. Unknown ones are allowed and ignored.
+    if let Some(value) = rest.strip_prefix('=') {
+        let named = name.starts_with(|c: char| c.is_ascii_alphabetic())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        return match name.as_str() {
+            _ if !named => Some(format!("\"{name}\" isn't a mechanism or a modifier")),
+            "redirect" | "exp" if value.is_empty() => Some(format!("{name}= has no domain")),
+            _ => None,
+        };
+    }
+    let domain = |rest: &str| -> Option<String> {
+        match rest.strip_prefix(':') {
+            Some("") => Some(format!("{name}: has no domain")),
+            _ => None,
+        }
+    };
+    // a and mx: [:domain][/ip4-cidr][//ip6-cidr].
+    let cidrs = |rest: &str| -> Option<String> {
+        let at = rest.find('/').unwrap_or(rest.len());
+        if let Some(e) = domain(&rest[..at]) {
+            return Some(e);
+        }
+        let c = &rest[at..];
+        let (v4, v6) = match c.split_once("//") {
+            Some((a, b)) => (a, Some(b)),
+            None => (c, None),
+        };
+        let bad = |s: &str, max: u8| {
+            s.parse::<u8>().map_or(true, |n| n > max) || s.starts_with('0') && s.len() > 1
+        };
+        if let Some(n) = v4.strip_prefix('/').filter(|n| bad(n, 32)) {
+            return Some(format!("/{n} isn't an IPv4 prefix length (0-32)"));
+        }
+        if !v4.is_empty() && !v4.starts_with('/') {
+            return Some(format!("\"{v4}\" isn't a prefix length"));
+        }
+        if let Some(n) = v6.filter(|n| bad(n, 128)) {
+            return Some(format!("//{n} isn't an IPv6 prefix length (0-128)"));
+        }
+        None
+    };
+    let network = |rest: &str, v6: bool| -> Option<String> {
+        let Some(a) = rest.strip_prefix(':') else {
+            return Some(format!("{name} needs an address ({name}:…)"));
+        };
+        let (ip, len) = match a.split_once('/') {
+            Some((ip, len)) => (ip, Some(len)),
+            None => (a, None),
+        };
+        if ip.is_empty() {
+            return Some(format!("{name}: has no address (a space after the colon?)"));
+        }
+        let ok = if v6 {
+            ip.parse::<std::net::Ipv6Addr>().is_ok()
+        } else {
+            ip.parse::<std::net::Ipv4Addr>().is_ok()
+        };
+        if !ok {
+            return Some(format!(
+                "\"{ip}\" isn't an IPv{} address",
+                if v6 { 6 } else { 4 }
+            ));
+        }
+        let max = if v6 { 128 } else { 32 };
+        match len {
+            Some(n) if n.parse::<u8>().map_or(true, |n| n > max) => {
+                Some(format!("/{n} isn't a prefix length (0-{max})"))
+            }
+            _ => None,
+        }
+    };
+    match name.as_str() {
+        "all" if rest.is_empty() => None,
+        "all" => Some("all takes nothing after it".into()),
+        "include" | "exists" => match rest.strip_prefix(':') {
+            Some(d) if !d.is_empty() && !d.contains('/') => None,
+            Some(d) if d.contains('/') => Some(format!("{name}: takes no prefix length")),
+            _ => Some(format!("{name} needs a domain ({name}:…)")),
+        },
+        "a" | "mx" => cidrs(rest),
+        "ptr" => match rest {
+            "" => None,
+            _ if rest.contains('/') => Some("ptr takes no prefix length".into()),
+            _ => domain(rest),
+        },
+        "ip4" => network(rest, false),
+        "ip6" => network(rest, true),
+        _ => Some(format!("\"{name}\" isn't an SPF mechanism")),
     }
 }
 
@@ -285,15 +419,43 @@ fn dmarc_record(c: &Client, d: &str) -> io::Result<Option<(String, String)>> {
             return Ok(Some((r, name.to_string())));
         }
         match parent(name) {
-            // Stop before the TLD.
-            Some(p) if p.contains('.') => name = p,
+            // Up to the organizational domain, never a public suffix
+            // (_dmarc.co.uk is no one's policy).
+            Some(p) if p.contains('.') && !public_suffix(p) => name = p,
             _ => return Ok(None),
         }
     }
 }
 
+/// A public suffix of the common two-label kind (co.uk, com.au, org.nz,
+/// gov.br): a generic second-level label under a country code. Without
+/// the full Public Suffix List this covers the ones mail domains sit under.
+fn public_suffix(name: &str) -> bool {
+    const SECOND: &[&str] = &[
+        "co", "com", "net", "org", "gov", "edu", "ac", "mil", "ltd", "plc", "sch", "nhs", "gob",
+        "ne", "or", "go", "nom", "biz", "info",
+    ];
+    let labels: Vec<&str> = name.trim_end_matches('.').split('.').collect();
+    matches!(labels[..], [second, tld] if tld.len() == 2 && SECOND.contains(&second.to_ascii_lowercase().as_str()))
+}
+
+/// A name's organizational domain: the label under its public suffix
+/// (example.com, example.co.uk).
+fn org_domain(name: &str) -> String {
+    let n = name.trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = n.split('.').collect();
+    let keep = if labels.len() >= 3 && public_suffix(&labels[labels.len() - 2..].join(".")) {
+        3
+    } else {
+        2
+    };
+    labels[labels.len().saturating_sub(keep)..].join(".")
+}
+
+/// Whether two names belong to one organization (RFC 7489 §3.2): reports
+/// to reports.example.com for a record at sub.example.com need no consent.
 fn same_org(a: &str, b: &str) -> bool {
-    a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
+    org_domain(a) == org_domain(b)
 }
 
 pub(super) fn dmarc(c: &Client, d: &str) -> Check {
@@ -334,6 +496,9 @@ pub(super) fn dmarc(c: &Client, d: &str) -> Check {
             k.warn("sp=none: subdomains can be spoofed even though the domain is protected");
         }
         match tag(&t, "pct").map(|p| p.parse::<u32>()) {
+            Some(Ok(p)) if p > 100 => k.warn(format!(
+                "pct={p} isn't a percentage (0-100): receivers may ignore it"
+            )),
             Some(Ok(p)) if p < 100 => k.warn(format!(
                 "pct={p}: policy applies to only {p}% of failing mail"
             )),
@@ -576,6 +741,11 @@ pub(super) fn dkim(c: &Client, d: &str, extra: &[String]) -> Check {
     })
 }
 
+/// Largest MTA-STS policy read as one, and most lines: real ones are a few
+/// lines and well under 1 KB.
+const STS_POLICY_MAX: usize = 64 * 1024;
+const STS_LINES_MAX: usize = 100;
+
 /// MX host `h` matches an MTA-STS `mx:` pattern (exact, or `*.` one label).
 fn sts_match(pattern: &str, h: &str) -> bool {
     let p = pattern.trim_end_matches('.').to_ascii_lowercase();
@@ -617,44 +787,67 @@ pub(super) fn mta_sts(c: &Client, d: &str, mx: &MxInfo) -> Check {
                 return Ok(());
             }
         };
-        let mut mode = None;
-        let mut max_age = None;
-        let mut patterns = Vec::new();
-        for line in policy.lines() {
-            k.rec(format!("  {}", line.trim()));
-            let Some((key, v)) = line.split_once(':') else {
-                continue;
-            };
-            let v = v.trim().to_string();
-            match key.trim() {
-                "mode" => mode = Some(v),
-                "max_age" => max_age = v.parse::<u64>().ok(),
-                "mx" => patterns.push(v),
-                _ => {}
-            }
-        }
-        match mode.as_deref() {
-            Some("enforce") => k.pass("mode enforce: senders refuse to deliver without valid TLS"),
-            Some("testing") => k.warn("mode testing: failures are only reported, not enforced"),
-            Some("none") => k.warn("mode none: policy disabled"),
-            _ => k.fail("policy has no valid mode"),
-        }
-        match max_age {
-            Some(a) if a < 86_400 => k.warn(format!(
-                "max_age {a}s is short; 1-2 weeks (604800+) is typical"
-            )),
-            None => k.fail("policy has no max_age"),
-            _ => {}
-        }
-        for h in &mx.hosts {
-            if !patterns.iter().any(|p| sts_match(p, h)) {
-                k.fail(format!(
-                    "MX {h} isn't listed in the policy: senders in enforce mode won't deliver to it"
-                ));
-            }
-        }
+        sts_policy(k, &url, &policy, &mx.hosts);
         Ok(())
     })
+}
+
+/// What an MTA-STS policy fetched from `url` says, for MX hosts `mx_hosts`.
+fn sts_policy(k: &mut Check, url: &str, policy: &str, mx_hosts: &[String]) {
+    // A policy is a few lines (RFC 8461 §3.2). Megabytes of them would
+    // be a record each, drawn every frame: past this it isn't one.
+    let lines = policy.lines().count();
+    if policy.len() > STS_POLICY_MAX || lines > STS_LINES_MAX {
+        for line in policy.lines().take(10) {
+            k.rec(format!("  {}", line.trim()));
+        }
+        k.fail(format!(
+            "{url} is {} KB in {lines} lines: not an MTA-STS policy (a few lines), so senders ignore it",
+            policy.len().div_ceil(1024)
+        ));
+        return;
+    }
+    let mut version = None;
+    let mut mode = None;
+    let mut max_age = None;
+    let mut patterns = Vec::new();
+    for line in policy.lines() {
+        k.rec(format!("  {}", line.trim()));
+        let Some((key, v)) = line.split_once(':') else {
+            continue;
+        };
+        let v = v.trim().to_string();
+        match key.trim() {
+            "version" => version = Some(v),
+            "mode" => mode = Some(v),
+            "max_age" => max_age = v.parse::<u64>().ok(),
+            "mx" => patterns.push(v),
+            _ => {}
+        }
+    }
+    if version.as_deref() != Some("STSv1") {
+        k.fail("policy has no \"version: STSv1\" line: senders ignore it");
+    }
+    match mode.as_deref() {
+        Some("enforce") => k.pass("mode enforce: senders refuse to deliver without valid TLS"),
+        Some("testing") => k.warn("mode testing: failures are only reported, not enforced"),
+        Some("none") => k.warn("mode none: policy disabled"),
+        _ => k.fail("policy has no valid mode"),
+    }
+    match max_age {
+        Some(a) if a < 86_400 => k.warn(format!(
+            "max_age {a}s is short; 1-2 weeks (604800+) is typical"
+        )),
+        None => k.fail("policy has no max_age"),
+        _ => {}
+    }
+    for h in mx_hosts {
+        if !patterns.iter().any(|p| sts_match(p, h)) {
+            k.fail(format!(
+                "MX {h} isn't listed in the policy: senders in enforce mode won't deliver to it"
+            ));
+        }
+    }
 }
 
 pub(super) fn tls_rpt(c: &Client, d: &str) -> Check {
@@ -849,6 +1042,56 @@ pub(super) fn autodiscover(c: &Client, d: &str, mx: &MxInfo) -> Check {
 mod tests {
     use super::*;
 
+    /// RFC 7208's terms: what receivers accept, and what makes them give up
+    /// on the whole record (a stray space, a typo, a bad prefix length).
+    #[test]
+    fn spf_terms_are_checked() {
+        for ok in [
+            "-all",
+            "~all",
+            "+a",
+            "a",
+            "a:mail.example.com/24",
+            "mx/24//64",
+            "mx//64",
+            "ip4:192.0.2.0/24",
+            "ip4:192.0.2.10",
+            "ip6:2001:db8::/32",
+            "ip6:2001:db8::1",
+            "include:_spf.google.com",
+            "exists:%{i}._spf.example.com",
+            "ptr",
+            "ptr:example.com",
+            "redirect=_spf.example.com",
+            "exp=explain.example.com",
+            "x-custom=anything",
+            "?include:spf.protection.outlook.com",
+        ] {
+            assert_eq!(term_error(ok), None, "{ok}");
+        }
+        for bad in [
+            "ip4:",
+            "192.0.2.10",
+            "ipv4:192.0.2.1",
+            "inlcude:x.example",
+            "ip4:192.0.2.0/33",
+            "ip4:2001:db8::1",
+            "ip6:192.0.2.1",
+            "ip6:2001:db8::/129",
+            "include:",
+            "include",
+            "all:x",
+            "a/33",
+            "mx//129",
+            "redirect=",
+            "exists",
+            "a:",
+            "foo",
+        ] {
+            assert!(term_error(bad).is_some(), "{bad} should be an error");
+        }
+    }
+
     #[test]
     fn rsa_key_sizes() {
         let k1024 = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGpt/taRejdyKY59ZXnJz/a8gbnjW4kSwMiMc9x2J+kFNyT88QG5IbpHEx6uMrRvS6y5AOq/QUDBFNnccruUJSwmddtFUKlD7SpfXiPJeYvs77/ey81FUbbHHSL3QJsKz8ZKJOi0CX+iy6IO/VzHjJMUWmqXr677n1RwXhGR7qPQIDAQAB";
@@ -863,6 +1106,37 @@ mod tests {
     fn decodes_base64() {
         assert_eq!(base64("aGVsbG8=").unwrap(), b"hello");
         assert_eq!(base64("aGVs bG8").unwrap(), b"hello");
+    }
+
+    /// A policy is judged by what's in it; one that's megabytes of lines
+    /// is refused whole rather than made a record per line (which froze
+    /// the window), and one without its version line fails.
+    #[test]
+    fn sts_policies() {
+        let mx = vec!["mx1.example.com".to_string()];
+        let url = "https://mta-sts.example.com/.well-known/mta-sts.txt";
+        let judge = |p: &str| {
+            let mut k = Check::default();
+            sts_policy(&mut k, url, p, &mx);
+            k
+        };
+        let good = judge("version: STSv1\nmode: enforce\nmx: *.example.com\nmax_age: 604800\n");
+        assert_eq!(
+            good.status(),
+            super::super::Status::Pass,
+            "{:?}",
+            good.findings
+        );
+        let unversioned = judge("mode: enforce\nmx: *.example.com\nmax_age: 604800\n");
+        assert_eq!(unversioned.status(), super::super::Status::Fail);
+        assert!(unversioned.findings.iter().any(|f| f.1.contains("STSv1")));
+        let flood = "version: STSv1\n".to_string() + &"mx: x\n".repeat(500_000);
+        let t = std::time::Instant::now();
+        let big = judge(&flood);
+        assert!(t.elapsed().as_secs() < 2);
+        assert_eq!(big.status(), super::super::Status::Fail);
+        assert!(big.records.len() <= 10, "{} records", big.records.len());
+        assert!(big.findings[0].1.contains("not an MTA-STS policy"));
     }
 
     #[test]
@@ -881,5 +1155,10 @@ mod tests {
         assert!(same_org("example.com", "example.com"));
         assert!(same_org("reports.example.com", "example.com"));
         assert!(!same_org("dmarc.vendor.net", "example.com"));
+        // Siblings are one organization; two companies under co.uk aren't.
+        assert!(same_org("reports.example.com", "sub.example.com"));
+        assert!(same_org("dmarc.example.co.uk", "mail.example.co.uk"));
+        assert!(!same_org("a.co.uk", "b.co.uk"));
+        assert!(public_suffix("co.uk") && public_suffix("com.au") && !public_suffix("example.com"));
     }
 }
