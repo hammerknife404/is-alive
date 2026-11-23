@@ -91,7 +91,14 @@ pub fn each_text(good: &str, mut f: impl FnMut(&str)) {
         "{",
         "}",
         "\u{202e}",
+        "\u{a0}",
+        "\u{3000}",
     ];
+    // Whitespace that isn't one byte. Code that steps over "the space" with
+    // `+ 1` lands inside it: every space swapped for each one.
+    for ws in ["\u{a0}", "\u{3000}", "\u{2003}", "\u{85}", "\u{2028}"] {
+        f(&good.replace(' ', ws));
+    }
     let mut rnd = Rnd::default();
     let cuts: Vec<usize> = good.char_indices().map(|(i, _)| i).collect();
     let stride = (cuts.len() / 300).max(1);

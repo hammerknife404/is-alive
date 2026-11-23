@@ -63,8 +63,26 @@ pub fn sniff(data: &[u8]) -> bool {
 /// Largest map read: a /mapnetwork map of a big site is a few MB.
 const MAP_MAX: usize = 64 << 20;
 /// Most devices and links a map may hold and still be drawn.
-const NODES_MAX: usize = 10_000;
+pub(crate) const NODES_MAX: usize = 10_000;
 const EDGES_MAX: usize = 50_000;
+/// Longest text kept from any one value. A name or a note is a line or
+/// two; a crafted page with a megabyte one would be copied onto every card
+/// and line that cites it ("Also linked to …", a "+N more" card's devices).
+const FIELD_MAX: usize = 1_000;
+
+/// Cut every string past FIELD_MAX. (Lists are left whole: what copies one
+/// caps it, so a "+N more" card can still say how many it listed.)
+fn cap(v: &mut Value) {
+    match v {
+        Value::String(s) if s.len() > FIELD_MAX => {
+            s.truncate(s.floor_char_boundary(FIELD_MAX));
+            s.push('…');
+        }
+        Value::Array(a) => a.iter_mut().for_each(cap),
+        Value::Object(m) => m.values_mut().for_each(cap),
+        _ => {}
+    }
+}
 
 pub fn parse(data: &[u8]) -> Result<Doc, String> {
     if data.len() > MAP_MAX {
@@ -88,6 +106,7 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
             data.insert(key.to_lowercase(), v);
         }
     }
+    data.values_mut().for_each(cap);
     let list = |k: &str| match data.get(k) {
         Some(Value::Array(a)) => a.iter().filter(|v| v.is_object()).cloned().collect(),
         _ => Vec::new(),
@@ -382,6 +401,20 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A megabyte name is cut where it's read, so nothing later can copy it
+    /// onto every card that cites it.
+    #[test]
+    fn long_values_are_cut_when_read() {
+        let long = "é".repeat(1 << 20);
+        let page =
+            format!("this.NODES = [ {{ id:'a', label:'{long}', details:['{long}', 'short'] }} ];");
+        let d = parse(page.as_bytes()).unwrap();
+        let label = d.nodes[0]["label"].as_str().unwrap();
+        assert!(label.len() <= FIELD_MAX + '…'.len_utf8(), "{}", label.len());
+        assert!(label.ends_with('…'));
+        assert_eq!(d.nodes[0]["details"][1], "short");
+    }
 
     const PAGE: &str = r#"<html><script>
     class X { constructor() {
