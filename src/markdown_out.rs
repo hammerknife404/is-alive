@@ -239,7 +239,9 @@ fn photo(t: &str) -> Option<&str> {
         .split_once("](")?
         .1
         .strip_suffix(')')?;
-    let data = src.strip_prefix("data:image/png;base64,")?;
+    let data = src
+        .strip_prefix("data:image/jpeg;base64,")
+        .or_else(|| src.strip_prefix("data:image/png;base64,"))?;
     data.bytes()
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
         .then_some(src)

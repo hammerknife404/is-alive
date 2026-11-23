@@ -141,13 +141,35 @@ pub(super) fn dnssec(c: &Client, d: &str) -> Check {
         // A bogus signature makes every lookup SERVFAIL; with checking
         // disabled (CD) the same query answers. Test that before anything
         // else, since zone_of() would fail on it too.
-        if c.query(d, dnsq::SOA, false)?.rcode == dnsq::SERVFAIL {
+        // Asked twice: one SERVFAIL can be an upstream timeout.
+        if c.query(d, dnsq::SOA, false)?.rcode == dnsq::SERVFAIL
+            && c.query(d, dnsq::SOA, false)?.rcode == dnsq::SERVFAIL
+        {
             let cd = c.query(d, dnsq::SOA, true)?;
             if cd.rcode == dnsq::SERVFAIL {
                 k.fail("resolver returns SERVFAIL even with DNSSEC checking off: the nameservers are failing, not DNSSEC");
                 return Ok(());
             }
-            for r in c.query(d, dnsq::DS, true)?.of(dnsq::DS) {
+            // Bogus needs a signed zone: a DS at its apex (from the answer
+            // with checking off). Without one, validation can't fail.
+            let apex = cd
+                .answers
+                .iter()
+                .chain(&cd.authority)
+                .find(|r| r.rtype == dnsq::SOA)
+                .map_or_else(|| d.to_string(), |r| r.name.clone());
+            let ds: Vec<Data> = c
+                .query(&apex, dnsq::DS, true)?
+                .of(dnsq::DS)
+                .cloned()
+                .collect();
+            if ds.is_empty() {
+                k.fail(format!(
+                    "the resolver returns SERVFAIL for {d}, though it answers with DNSSEC checking off and {apex} isn't signed (no DS): its nameservers are failing or too slow for the resolver, not DNSSEC"
+                ));
+                return Ok(());
+            }
+            for r in &ds {
                 if let Data::Ds {
                     key_tag,
                     alg,
