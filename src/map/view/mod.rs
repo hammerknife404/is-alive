@@ -92,7 +92,8 @@ enum PanelEv {
     /// × on a run: take its result out of the card.
     Clear(usize, Tool),
     /// A card dragged from one place in the stack to another.
-    Move(usize, usize),
+    /// A card (by id) dragged to a place in the stack.
+    Move(String, usize),
     /// Trace to WAN ticked or not.
     TraceWan(bool),
     /// A card's note: write, save, cancel, remove, redact.
@@ -759,20 +760,22 @@ impl MapView {
         self.slots
             .retain(|s, _| ids.contains(s.as_str()) || map.tucked(s));
         self.runs.keep_only(&ids);
-        if self
+        let draft_gone = self
             .note_edit
             .as_ref()
             .and_then(|e| e.ids.first())
-            .is_some_and(|id| !ids.contains(id.as_str()))
-        {
-            self.note_edit = None;
-        }
+            .is_some_and(|id| !ids.contains(id.as_str()));
         if self
             .selected
             .as_ref()
             .is_some_and(|s| !ids.contains(s.as_str()))
         {
             self.selected = self.also.pop();
+        }
+        if draft_gone {
+            // Its card went (a sweep, a site folded): what was typed goes on
+            // the card's note, which comes back with the card.
+            self.keep_draft();
         }
     }
 
@@ -862,6 +865,14 @@ impl MapView {
         }
         self.order = free;
         self.order.iter().filter_map(|s| self.index(s)).collect()
+    }
+
+    /// Card `id`, dragged by its grip, dropped at place `to`: found where it
+    /// is now, which a sweep that added cards mid-drag may have changed.
+    fn move_card_id(&mut self, id: &str, to: usize) {
+        if let Some(from) = self.order.iter().position(|s| s == id) {
+            self.move_card(from, to);
+        }
     }
 
     /// A card dragged from one panel slot to another. Pinned cards take the
@@ -1413,6 +1424,9 @@ impl MapView {
         self.busy = src.busy;
         let empty = self.map.nodes.is_empty();
         if empty {
+            // As at the end of a drawn frame, so the first frame with cards
+            // doesn't take a key a text box or dialog had.
+            self.keys_busy = keys_taken(&ctx);
             self.track_edits();
             self.sync_notes();
             let full = ui.available_rect_before_wrap();
@@ -1441,8 +1455,9 @@ impl MapView {
         self.canvas(ui, fit, focus);
         // Over the canvas, after it: the first thing asked for wins.
         act = act.or(self.controls(ui, rect, &src, false));
-        // Esc next frame closes a menu or leaves a text box: not the map's.
-        self.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(&ctx);
+        // Esc next frame closes a menu, a dialog or leaves a text box: not
+        // the map's.
+        self.keys_busy = keys_taken(&ctx);
         self.track_edits();
         self.sync_notes();
         self.stamp_notes();
@@ -1500,7 +1515,7 @@ impl MapView {
             Some(PanelEv::Drop(i)) => self.toggle(i),
             Some(PanelEv::TraceWan(on)) => self.trace_wan = on,
             Some(PanelEv::Keep(i)) => self.keep(i),
-            Some(PanelEv::Move(from, to)) => self.move_card(from, to),
+            Some(PanelEv::Move(id, to)) => self.move_card_id(&id, to),
             Some(PanelEv::Run(i, tool)) => {
                 self.run_card(ui.ctx(), i, tool);
                 panel::reveal(ui.ctx(), &self.map.nodes[i].id, tool);
@@ -1565,16 +1580,17 @@ impl MapView {
             search: search_enter,
         } = focus;
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        // L shows or hides the legend, unless a text box or menu has the keys.
+        // L shows or hides the legend, unless a text box, menu or dialog has
+        // the keys.
         if !self.keys_busy
-            && !ctx.text_edit_focused()
+            && !keys_taken(&ctx)
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::L))
         {
             self.legend = !self.legend;
         }
         // N writes a note on the one card selected.
         if !self.keys_busy
-            && !ctx.text_edit_focused()
+            && !keys_taken(&ctx)
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::N))
             && let [i] = self.selection()[..]
         {
@@ -1582,14 +1598,14 @@ impl MapView {
         }
         // E opens the map up into the exploded view, and puts it back.
         if !self.keys_busy
-            && !ctx.text_edit_focused()
+            && !keys_taken(&ctx)
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::E))
         {
             self.explode_toggle();
         }
         // 3 puts the map in 3D (opening it up), and back.
         if !self.keys_busy
-            && !ctx.text_edit_focused()
+            && !keys_taken(&ctx)
             && ui.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::Num3))
         {
             self.three_d_toggle();
@@ -1863,6 +1879,14 @@ fn example_tip(blank: bool) -> &'static str {
     } else {
         "Opens it like a /mapnetwork map loaded in Config Export"
     }
+}
+
+/// A text box, a menu or a dialog (Clear the map?) has the keyboard:
+/// the map's keys aren't the map's.
+pub(super) fn keys_taken(ctx: &egui::Context) -> bool {
+    ctx.text_edit_focused()
+        || egui::Popup::is_any_open(ctx)
+        || ctx.memory(|m| m.top_modal_layer().is_some())
 }
 
 #[cfg(test)]
@@ -2479,6 +2503,119 @@ mod tests {
         v
     }
 
+    /// A note half-written on one card isn't lost by starting one on
+    /// another: it's saved first. An untouched one is just closed.
+    #[test]
+    fn starting_another_note_keeps_the_one_being_written() {
+        let mut v = view(3);
+        v.open_note(&[0]);
+        v.note_edit.as_mut().unwrap().text = "Spare PSU above the rack".into();
+        v.open_note(&[1]);
+        let ids: Vec<String> = v.map.nodes.iter().map(|n| n.id.clone()).collect();
+        let id = |k: usize| ids[k].clone();
+        assert_eq!(
+            v.notes.get(&id(0)).map(String::as_str),
+            Some("Spare PSU above the rack")
+        );
+        assert_eq!(v.note_edit.as_ref().unwrap().ids, [id(1)]);
+        // Nothing typed on the second: opening a third doesn't give it a note.
+        v.open_note(&[2]);
+        assert!(!v.notes.contains_key(&id(1)));
+        assert_eq!(v.note_edit.as_ref().unwrap().ids, [id(2)]);
+    }
+
+    /// A connection to a card with a long name takes one line, cut with
+    /// …, so it doesn't spill over the rows around it.
+    #[test]
+    fn a_long_connection_name_stays_on_its_row() {
+        let mut v = view(2);
+        v.map.nodes[1].label = "Very long switch name ".repeat(12);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.set_max_width(300.0);
+            let _ = v.link_row(ui, 1, "uplink", "Show it");
+        });
+        let rows: Vec<usize> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                Shape::Text(t) if t.galley.text().starts_with("Very long") => {
+                    Some(t.galley.rows.len())
+                }
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        assert_eq!(rows, [1]);
+    }
+
+    /// Beside Layers on a narrow window, the zoom row gives up Center and
+    /// the % rather than reach over Layers.
+    #[test]
+    fn the_zoom_row_fits_the_room_beside_layers() {
+        let shown = |w: f32| {
+            let mut v = view(2);
+            let ctx = egui::Context::default();
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+                let place = Rect::from_min_max(pos2(800.0 - w, 0.0), pos2(800.0, 600.0));
+                v.zoom_controls(ui, rect, place);
+            });
+            let texts: Vec<(String, f32)> = out
+                .shapes
+                .iter()
+                .filter_map(|c| match &c.shape {
+                    Shape::Text(t) => {
+                        Some((t.galley.text().to_string(), t.visual_bounding_rect().min.x))
+                    }
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            texts
+        };
+        let has = |t: &[(String, f32)], s: &str| t.iter().any(|(x, _)| x == s);
+        let wide = shown(400.0);
+        assert!(
+            has(&wide, "Center") && has(&wide, "Fit") && has(&wide, "+"),
+            "{wide:?}"
+        );
+        let narrow = shown(150.0);
+        assert!(
+            !has(&narrow, "Center") && has(&narrow, "Fit") && has(&narrow, "+"),
+            "{narrow:?}"
+        );
+        // Nothing of the row left of the room it has.
+        for (t, x) in narrow
+            .iter()
+            .filter(|(t, _)| ["Fit", "+", "−"].contains(&t.as_str()))
+        {
+            assert!(*x >= 650.0, "{t} at {x}");
+        }
+        let tiny = shown(80.0);
+        assert!(has(&tiny, "Fit") && !has(&tiny, "+"), "{tiny:?}");
+    }
+
+    /// A dialog over the map (Clear the map?) has the keys, as a text box
+    /// or a menu does.
+    #[test]
+    fn a_dialog_over_the_map_has_the_keys() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            egui::Modal::new(egui::Id::new("clear_map_test")).show(ui.ctx(), |ui| {
+                ui.label("Clear the map?");
+            });
+        });
+        out.textures_delta.clear();
+        assert!(keys_taken(&ctx));
+        let calm = egui::Context::default();
+        let mut out = calm.run_ui(Default::default(), |ui| {
+            ui.label("map");
+        });
+        out.textures_delta.clear();
+        assert!(!keys_taken(&calm));
+    }
+
     #[test]
     fn a_big_pick_draws_the_top_twenty_and_says_how_many_more() {
         let mut v = view(30);
@@ -2544,6 +2681,29 @@ mod tests {
         assert_eq!(v.ordered(), [0, 4, 3, 2, 1]);
         v.toggle(3);
         assert_eq!(v.ordered(), [0, 4, 2, 1]);
+    }
+
+    /// A card dragged while new ones joined the stack lands where it was
+    /// dropped: the drag names the card, not the place it started from.
+    #[test]
+    fn a_drag_moves_the_card_it_started_on() {
+        let mut v = three_in_panel(5);
+        assert_eq!(v.ordered(), [2, 1, 0]);
+        let dragged = v.map.nodes[0].id.clone();
+        // Mid-drag, two more cards join on top.
+        v.toggle(3);
+        v.toggle(4);
+        assert_eq!(v.ordered(), [4, 3, 2, 1, 0]);
+        v.move_card_id(&dragged, 0);
+        assert_eq!(
+            v.ordered()[0],
+            0,
+            "card 0 moved, not whatever sat at its old place"
+        );
+        // A card no longer in the stack: nothing moves.
+        let before = v.ordered();
+        v.move_card_id("gone", 0);
+        assert_eq!(v.ordered(), before);
     }
 
     #[test]
@@ -2699,7 +2859,7 @@ mod tests {
         });
         out.textures_delta.clear();
         // As the tab does at the end of each frame.
-        v.keys_busy = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
+        v.keys_busy = keys_taken(ctx);
         shown
     }
 

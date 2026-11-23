@@ -15,6 +15,11 @@ pub const RAIL: f32 = 56.0;
 /// window where panels float over the content (CLAUDE.md), 620 at the least.
 pub const OPEN_FROM: f32 = 1100.0;
 
+/// From this window width up, panels dock beside the content (inspector
+/// 360, the Map's side panel flush); below it the inspector narrows or
+/// floats. CLAUDE.md's breakpoints: 1440 and 1100 (`OPEN_FROM`).
+pub const WIDE_FROM: f32 = 1440.0;
+
 /// Whether the nav is open: what the user pinned, or else open on any
 /// window at least `OPEN_FROM` wide (the app opens at 1120), the Map too.
 pub fn open(width: f32, pinned: Option<bool>) -> bool {
@@ -198,6 +203,8 @@ struct Row<'a> {
     ring: bool,
     /// Can't be used now (Full scan while tools run): drawn faint.
     dim: bool,
+    /// A tool, picked like a tab; else an action (Full scan, Help…).
+    tool: bool,
 }
 
 /// The nav's width this frame, gliding as it opens or folds. The title
@@ -243,7 +250,7 @@ impl App {
                 }
                 let foot = 3.0 * row + 11.0;
                 let room = (ui.available_height() - foot).max(row);
-                egui::ScrollArea::vertical()
+                let tools = egui::ScrollArea::vertical()
                     .max_height(room)
                     .auto_shrink([false, true])
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -269,6 +276,7 @@ impl App {
                         glow,
                         ring,
                         dim: false,
+                        tool: true,
                     };
                     let keys: Vec<String> = g
                         .tabs
@@ -293,6 +301,7 @@ impl App {
                 }
                 running_dots(ui, &dots);
                     });
+                more_below(ui, &tools);
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let fold = Row {
@@ -304,6 +313,7 @@ impl App {
                         glow: 0.0,
                         ring: false,
                         dim: false,
+                        tool: false,
                     };
                     let fold_tip = if self.look.nav.is_some() {
                         "Fold or open the nav. It stays as you leave it; open or fold it back the way the window \
@@ -325,6 +335,7 @@ impl App {
                         glow: 0.0,
                         ring: false,
                         dim: false,
+                        tool: false,
                     };
                     let help = nav_row(ui, &help, labels).on_hover_text(
                         "The manual (built in, works offline), the wiki, release notes and where \
@@ -340,6 +351,7 @@ impl App {
                         glow: 0.0,
                         ring: false,
                         dim: false,
+                        tool: false,
                     };
                     let settings = nav_row(ui, &settings, labels)
                         .on_hover_text(format!("Settings · {} theme", self.look.theme.name()));
@@ -365,6 +377,7 @@ impl App {
             glow: 0.0,
             ring: false,
             dim: busy,
+            tool: false,
         };
         let tip = if busy {
             "Wait for running tools to finish (or stop them) to run a full scan."
@@ -383,6 +396,7 @@ impl App {
             glow: 0.0,
             ring: false,
             dim: false,
+            tool: false,
         };
         if nav_row(ui, &bundle, labels)
             .on_hover_text(
@@ -402,6 +416,7 @@ impl App {
             glow: 0.0,
             ring: false,
             dim: false,
+            tool: false,
         };
         if nav_row(ui, &report, labels)
             .on_hover_text(
@@ -456,13 +471,46 @@ impl App {
     }
 }
 
+/// With no scroll bar, a short window would hide the last tools without a
+/// sign: a fade and a chevron at the bottom of the list say there's more.
+fn more_below<R>(ui: &egui::Ui, out: &egui::scroll_area::ScrollAreaOutput<R>) {
+    let view = out.inner_rect;
+    let hidden = out.content_size.y - view.height() - out.state.offset.y;
+    if hidden <= 1.0 {
+        return;
+    }
+    let p = ui.painter();
+    let bg = ui.visuals().panel_fill;
+    let h = 24.0;
+    for k in 0..8 {
+        let t = k as f32 / 8.0;
+        let band = Rect::from_min_max(
+            egui::pos2(view.left(), view.bottom() - h * (1.0 - t)),
+            egui::pos2(view.right(), view.bottom() - h * (1.0 - t) + h / 8.0 + 0.5),
+        );
+        p.rect_filled(band, 0.0, bg.gamma_multiply(0.15 + 0.85 * t));
+    }
+    p.text(
+        egui::pos2(view.center().x, view.bottom() - 2.0),
+        Align2::CENTER_BOTTOM,
+        "▾",
+        FontId::proportional(theme::BODY),
+        ui.visuals().weak_text_color(),
+    );
+}
+
 /// One row: the icon, and its name when the nav is open.
 fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
     let size = vec2(ui.available_width(), row_height(labels));
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
-    r.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, row.on, row.label)
-    });
+    // A tool is picked like a tab; Full scan, Help, Settings and Fold do
+    // something: a button. Either is unavailable while it's drawn faint.
+    let kind = if row.tool {
+        egui::WidgetType::SelectableLabel
+    } else {
+        egui::WidgetType::Button
+    };
+    r.widget_info(|| egui::WidgetInfo::selected(kind, !row.dim, row.on, row.label));
     if !ui.is_rect_visible(rect) {
         return r;
     }
@@ -477,6 +525,15 @@ fn nav_row(ui: &mut egui::Ui, row: &Row, labels: bool) -> egui::Response {
     };
     let p = ui.painter();
     p.rect_filled(rect, crate::theme::R_CONTROL, fill);
+    // Reached with Tab: ringed, as egui rings its own widgets.
+    if r.has_focus() {
+        p.rect_stroke(
+            rect,
+            crate::theme::R_CONTROL,
+            v.selection.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
     if row.glow > 0.0 {
         map_glow(p, rect, row.glow);
     }

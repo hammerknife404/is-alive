@@ -33,9 +33,9 @@ fn when(started: &str) -> &str {
 /// The run list's width for a window `width` points wide: it always docks
 /// (the list is how the tab is used), narrower on a small window.
 pub fn list_width(width: f32) -> f32 {
-    if width >= 1440.0 {
+    if width >= crate::nav::WIDE_FROM {
         300.0
-    } else if width >= 1100.0 {
+    } else if width >= crate::nav::OPEN_FROM {
         268.0
     } else {
         232.0

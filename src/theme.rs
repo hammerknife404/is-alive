@@ -448,7 +448,8 @@ pub fn accent() -> Color32 {
 
 pub(crate) fn accent_for(t: Theme) -> Color32 {
     match t {
-        Theme::Light => Color32::from_rgb(28, 104, 176),
+        // 5:1 as text on its own picked-row tint, 6.9:1 under white text.
+        Theme::Light => Color32::from_rgb(24, 92, 158),
         Theme::Miami => PINK,
         t => tokens(t).map_or(PINK, |k| k.accent),
     }
@@ -673,8 +674,9 @@ fn light() -> Visuals {
     v.widgets.inactive.bg_fill = Color32::from_rgb(228, 231, 236);
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(214, 219, 226);
     v.widgets.hovered.bg_fill = Color32::from_rgb(214, 219, 226);
-    // Outlined controls, as in every other theme.
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(204, 209, 217));
+    // Outlined controls, as in every other theme: 3:1 against the panel,
+    // so a control's edge shows (it was 1.4:1).
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(136, 142, 152));
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, accent_for(Theme::Light));
     rounded(&mut v, R_CONTROL);
     v
@@ -1898,6 +1900,25 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Light: the picked nav row's text on its own tint reads at 4.5:1 or
+    /// more, and a control's outline shows against the panel at 3:1.
+    #[test]
+    fn light_picked_rows_and_outlines_are_readable() {
+        let c = crate::chrome::contrast;
+        let v = light();
+        let accent = accent_for(Theme::Light);
+        let p = v.panel_fill;
+        let tint = accent.gamma_multiply(0.16);
+        let a = tint.a() as f32 / 255.0;
+        let fill = Color32::from_rgb(
+            (tint.r() as f32 + p.r() as f32 * (1.0 - a)).round() as u8,
+            (tint.g() as f32 + p.g() as f32 * (1.0 - a)).round() as u8,
+            (tint.b() as f32 + p.b() as f32 * (1.0 - a)).round() as u8,
+        );
+        assert!(c(accent, fill) >= 4.5, "{}", c(accent, fill));
+        assert!(c(v.widgets.inactive.bg_stroke.color, p) >= 3.0);
+    }
 
     /// The data folder is the owner's only: other accounts on the laptop
     /// can't list its site folders (named after clients) or read inside.

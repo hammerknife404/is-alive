@@ -372,6 +372,8 @@ fn details(ui: &mut Ui, b: &Block, i: &Info) {
     egui::Grid::new("calc")
         .num_columns(2)
         .striped(true)
+        // Each value copies on a click: rows as tall as a click target.
+        .min_row_height(crate::theme::TARGET_H)
         .min_col_width(KEY_W + ui.spacing().item_spacing.x - 24.0)
         .spacing([24.0, 4.0])
         .show(ui, |ui| {
@@ -379,8 +381,8 @@ fn details(ui: &mut Ui, b: &Block, i: &Info) {
                 ui.label(k);
                 let text = RichText::new(&v).monospace();
                 let text = if k == "Block" { text.strong() } else { text };
-                if ui
-                    .add(egui::Label::new(text).sense(egui::Sense::click()))
+                let label = ui.add(egui::Label::new(text).selectable(false));
+                if widgets::tall_hit(ui, &label, ("calc copy", k))
                     .on_hover_text("Click to copy")
                     .clicked()
                 {
