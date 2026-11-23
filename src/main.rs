@@ -225,6 +225,11 @@ struct App {
     /// Configs it remembers that weren't found when it opened: kept on its
     /// list until Clear map.
     site_missing: Vec<std::path::PathBuf>,
+    /// After "New site from what's open now" in Scratch: Scratch's folder,
+    /// whose copies of what was carried are removed once the new site has
+    /// its own (so Scratch doesn't bring this client's notes back at the
+    /// next one).
+    scratch_carried: Option<(std::path::PathBuf, std::time::Instant)>,
 }
 
 /// The close prompt's question, for what has changes not saved.
@@ -390,6 +395,7 @@ impl App {
             site_ask: None,
             site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
             site_missing: Vec::new(),
+            scratch_carried: None,
         }
     }
 
@@ -578,6 +584,7 @@ impl App {
         }
         self.notes.poll(ctx);
         self.remember_site_configs();
+        self.tidy_scratch();
         self.collect();
         self.keep_results();
         self.dropped_files(ctx);
@@ -1414,6 +1421,8 @@ fn main() {
     startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
+    // Owner-only before anything is written into it.
+    theme::secure_data_dir();
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).

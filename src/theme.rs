@@ -1609,6 +1609,29 @@ pub fn replace_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::i
     Ok(())
 }
 
+/// The data folder, made if it isn't there and, on Unix, readable by this
+/// user only (700). Everything is-alive keeps is under it (site folders
+/// named after clients, maps, notes, Results), so its contents stay
+/// private whatever mode each file or folder inside was given. On Windows
+/// the profile folder already is; a portable folder keeps the permissions
+/// of where it was put.
+pub fn secure_data_dir() {
+    if let Some(d) = data_dir() {
+        let _ = private_dir(&d);
+    }
+}
+
+/// `d`, made if needed, and on Unix owner-only (700).
+fn private_dir(d: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(d)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// The folder that makes is-alive portable: when one of this name sits
 /// beside the program, everything is kept in it and nothing in the
 /// user's profile. For a USB stick, or a client's machine that should
@@ -1811,6 +1834,24 @@ pub fn save(s: &Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The data folder is the owner's only: other accounts on the laptop
+    /// can't list its site folders (named after clients) or read inside.
+    #[test]
+    #[cfg(unix)]
+    fn the_data_folder_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("is-alive-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&d).unwrap();
+        assert_eq!(
+            std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     /// A replace leaves the new file, private, and no temporary one.
     #[test]
