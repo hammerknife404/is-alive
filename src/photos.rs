@@ -117,6 +117,12 @@ impl Attachments {
         }
         out
     }
+    /// How many photos are held.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     /// How much photo data is held for `text`: the photos its markers name.
     pub fn size_in(&self, text: &str) -> usize {
         self.0

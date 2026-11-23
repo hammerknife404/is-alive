@@ -530,7 +530,7 @@ impl BundleTool {
             .num_columns(2)
             .spacing([12.0, 4.0])
             .show(ui, |ui| {
-                let (_, hits) = src.notes.sanitized();
+                let hits = src.notes.hits();
                 part_row(
                     ui,
                     &mut self.use_notes,
@@ -795,7 +795,7 @@ impl BundleTool {
             }),
             "Nothing in Results yet",
         );
-        let (_, hits) = src.notes.sanitized();
+        let hits = src.notes.hits();
         // What still looks secret in a ticked part, said on its row too: the
         // last look before the zip is made.
         let left: HashMap<_, _> = self.still_there(src).into_iter().collect();

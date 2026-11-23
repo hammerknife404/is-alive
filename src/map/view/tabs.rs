@@ -663,7 +663,7 @@ impl MapTabs {
             .into_iter()
             .filter(|s| s.folder != here && s.maps > 0)
             .filter_map(|s| {
-                let (found, _) = saved::list(&s.path.join("maps"));
+                let found = saved::list_summaries(&s.path.join("maps"));
                 let mut maps: Vec<(String, String, PathBuf)> = found
                     .into_iter()
                     .filter(|(_, m)| m.purpose == Purpose::AsFound)

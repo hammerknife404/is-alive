@@ -61,6 +61,12 @@ pub struct NotesTool {
     cache: RefCell<(u64, Vec<Hit>)>,
     /// The same for the sanitized text (preview, status, Site Bundle).
     clean: RefCell<(u64, (String, Vec<Hit>))>,
+    /// `clean` with its photos put back, for the Preview drawn every frame:
+    /// by the same key and the photos held, so megabytes of photo data
+    /// aren't copied each frame.
+    expanded: RefCell<((u64, usize), std::rc::Rc<String>)>,
+    /// (hash of the text, its outline), for the Outline drawn every frame.
+    shape: RefCell<(u64, std::rc::Rc<Shape>)>,
     /// A text file opened to read, and whether its tab is showing.
     file: Option<Viewed>,
     on_file: bool,
@@ -118,16 +124,27 @@ fn find_all(text: &str, query: &str, case: bool) -> Vec<Range<usize>> {
     if query.is_empty() {
         return Vec::new();
     }
-    let Ok(re) = regex::RegexBuilder::new(&regex::escape(query))
-        .case_insensitive(!case)
-        .build()
-    else {
-        return Vec::new();
-    };
-    re.find_iter(text)
-        .take(FIND_MAX)
-        .map(|m| m.range())
-        .collect()
+    // Built once per search, not on each of the two or three calls a frame
+    // makes (the bar's count, its steps, the editor's tint).
+    thread_local! {
+        static BUILT: RefCell<Option<(String, bool, regex::Regex)>> = const { RefCell::new(None) };
+    }
+    BUILT.with(|b| {
+        let mut b = b.borrow_mut();
+        if !matches!(&*b, Some((q, c, _)) if q == query && *c == case) {
+            *b = regex::RegexBuilder::new(&regex::escape(query))
+                .case_insensitive(!case)
+                .build()
+                .ok()
+                .map(|re| (query.to_string(), case, re));
+        }
+        b.as_ref().map_or_else(Vec::new, |(_, _, re)| {
+            re.find_iter(text)
+                .take(FIND_MAX)
+                .map(|m| m.range())
+                .collect()
+        })
+    })
 }
 
 /// Tint `found` in a laid-out job (the selected one, `current`, stronger),
@@ -200,6 +217,28 @@ fn headings(text: &str) -> Vec<(usize, String, Range<usize>)> {
         at += line.len();
     }
     out
+}
+
+/// What the outline shows of the notes, worked out once per edit rather
+/// than on every frame it's open.
+#[derive(Default)]
+struct Shape {
+    heads: Vec<(usize, String, Range<usize>)>,
+    /// Task boxes: (open, done).
+    tasks: (usize, usize),
+    words: usize,
+    lines: usize,
+}
+
+impl Shape {
+    fn of(text: &str) -> Self {
+        Self {
+            heads: headings(text),
+            tasks: tasks(text),
+            words: text.split_whitespace().count(),
+            lines: text.lines().count(),
+        }
+    }
 }
 
 /// A heading's text as the outline shows it: emoji style marks out.
@@ -383,6 +422,8 @@ impl Default for NotesTool {
             flash: f64::NEG_INFINITY,
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            expanded: RefCell::new(((u64::MAX, 0), Default::default())),
+            shape: RefCell::new((u64::MAX, Default::default())),
             file: None,
             on_file: false,
             opening: None,
@@ -432,13 +473,53 @@ impl NotesTool {
 
     /// The notes as they may leave this machine.
     pub fn sanitized(&self) -> (String, Vec<Hit>) {
+        self.clean_key();
+        let c = self.clean.borrow();
+        let (text, hits) = &c.1;
+        (self.photos.expand(text), hits.clone())
+    }
+
+    /// The redaction cache brought up to date; its key.
+    fn clean_key(&self) -> u64 {
         let h = hash_with(&self.text, &self.ov);
         let mut c = self.clean.borrow_mut();
         if c.0 != h {
             *c = (h, redact::sanitize_with(&self.text, &self.ov));
         }
-        let (text, hits) = &c.1;
-        (self.photos.expand(text), hits.clone())
+        h
+    }
+
+    /// What's redacted, without the notes themselves: for the rows that
+    /// count it every frame (the handoff, the report).
+    pub fn hits(&self) -> Vec<Hit> {
+        self.clean_key();
+        self.clean.borrow().1.1.clone()
+    }
+
+    /// `sanitized().0`, kept between frames until the notes, the
+    /// redactions or the photos change.
+    fn sanitized_shared(&self) -> std::rc::Rc<String> {
+        let key = (self.clean_key(), self.photos.len());
+        let mut e = self.expanded.borrow_mut();
+        if e.0 != key {
+            *e = (
+                key,
+                std::rc::Rc::new(self.photos.expand(&self.clean.borrow().1.0)),
+            );
+        }
+        e.1.clone()
+    }
+
+    /// The outline of the notes as they are now.
+    fn shape(&self) -> std::rc::Rc<Shape> {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.text.hash(&mut h);
+        let h = h.finish();
+        let mut c = self.shape.borrow_mut();
+        if c.0 != h {
+            *c = (h, std::rc::Rc::new(Shape::of(&self.text)));
+        }
+        c.1.clone()
     }
 
     /// The sanitized notes for other programs: no emoji style marks.
@@ -1867,7 +1948,8 @@ impl NotesTool {
             .auto_shrink(false)
             .show(ui, |ui| {
                 crate::inspector::section(ui, "Headings");
-                let heads = headings(&self.text);
+                let shape = self.shape();
+                let heads = &shape.heads;
                 if heads.is_empty() {
                     crate::inspector::note(
                         ui,
@@ -1877,7 +1959,7 @@ impl NotesTool {
                 let mut jump = None;
                 // Indented from the shallowest heading the notes have.
                 let top = heads.iter().map(|h| h.0).min().unwrap_or(1);
-                for (level, title, at) in &heads {
+                for (level, title, at) in heads {
                     ui.horizontal(|ui| {
                         ui.add_space(12.0 * (*level - top) as f32);
                         if ui
@@ -1896,7 +1978,7 @@ impl NotesTool {
                 if let Some(r) = jump {
                     self.jump_to(r);
                 }
-                let (open, done) = tasks(&self.text);
+                let (open, done) = shape.tasks;
                 if open + done > 0 {
                     crate::inspector::section(ui, "Tasks");
                     ui.label(format!("{open} open · {done} done"));
@@ -1917,10 +1999,7 @@ impl NotesTool {
                     ui.checkbox(&mut self.show_hits, "Highlight in the editor");
                 }
                 self.overrides_menu(ui);
-                let (words, lines) = (
-                    self.text.split_whitespace().count(),
-                    self.text.lines().count(),
-                );
+                let (words, lines) = (shape.words, shape.lines);
                 let s = |n: usize| if n == 1 { "" } else { "s" };
                 ui.add_space(10.0);
                 ui.weak(format!(
@@ -2313,7 +2392,7 @@ impl NotesTool {
     /// as the Site report and a saved web page read; code stays monospace.
     fn preview(&mut self, ui: &mut Ui, font: &FontId) {
         let font = &FontId::proportional(font.size);
-        let (clean, _) = self.sanitized();
+        let clean = self.sanitized_shared();
         egui::ScrollArea::vertical()
             .id_salt("notes_preview_scroll")
             .auto_shrink(false)
@@ -2664,6 +2743,8 @@ mod tests {
             ov: Default::default(),
             cache: RefCell::new((u64::MAX, Vec::new())),
             clean: RefCell::new((u64::MAX, (String::new(), Vec::new()))),
+            expanded: RefCell::new(((u64::MAX, 0), Default::default())),
+            shape: RefCell::new((u64::MAX, Default::default())),
             file: None,
             on_file: false,
             opening: None,
@@ -2745,6 +2826,25 @@ mod tests {
         assert_eq!(find_all(t, "a.b", false).len(), 1);
         assert!(find_all(t, "", false).is_empty());
         assert_eq!(find_all("Ünïcode ünïcode", "ÜNÏ", false).len(), 2);
+        // The search kept between calls follows the query and its case.
+        assert_eq!(find_all(t, "switch", false).len(), 2);
+        assert_eq!(find_all(t, "switch", true).len(), 1);
+        assert_eq!(find_all(t, "sw-0", false).len(), 2);
+    }
+
+    #[test]
+    fn the_outline_follows_each_edit() {
+        let mut n = notes("# Visit\n- [ ] rack\n");
+        let a = n.shape();
+        assert_eq!(a.heads.len(), 1);
+        assert_eq!(a.tasks, (1, 0));
+        // Unchanged notes: the same outline, not worked out again.
+        assert!(std::rc::Rc::ptr_eq(&a, &n.shape()));
+        n.text.push_str("## Cupboard\n- [x] patched\n");
+        let b = n.shape();
+        assert_eq!(b.heads.len(), 2);
+        assert_eq!(b.tasks, (1, 1));
+        assert_eq!((b.words, b.lines), (11, 4));
     }
 
     #[test]

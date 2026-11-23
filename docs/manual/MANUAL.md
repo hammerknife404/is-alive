@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.25**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.26**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -1011,7 +1011,7 @@ Each item shows only when it applies, with how many cards it takes, and a line s
 
 A card's details open in the [inspector](#how-every-tab-is-laid-out), the same panel a device opens in on Subnet Sweep. From 1440 points wide it sits beside the map, 360 wide; on a smaller window (a laptop) it floats over the map's right edge, so the map keeps its size and its zoom: the selected card is kept clear of it, and **Layers**, **Legend** and the zoom controls move beside it. On the smallest windows Layers and Legend go into **More** while it's open. **×** or **Esc** lets the card go (pinned cards stay).
 
-Each selected card gets a section, newest on top:
+Each selected card gets a section, newest on top. A whole site or role box picked at once can be hundreds of cards: the top 20 get a section, the rest stay lit on the map, and a line at the bottom says how many more are picked.
 
 - **The role and name**, with its address (or what stands for one: *WAN …*, a site's hosts), its zone and tags; **⋯** (the card's right-click menu, see above), the 📌 pin button and **×** at the top.
 - **Ping**, **Port Check**, **Traceroute**: a quick check of this device, right here. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**, and the inspector scrolls to it; click the check's name (or the arrow beside it) for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.

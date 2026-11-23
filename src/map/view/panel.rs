@@ -4,12 +4,16 @@
 use super::*;
 use crate::inspector::{self as insp, Act};
 
+/// Most cards the inspector draws a panel for at once.
+const PANELS_MAX: usize = 20;
+
 impl MapView {
     /// The inspector's body: every selected card, stacked, the one clicked
     /// last on top. Each has /mapnetwork's sections: action items, details
     /// and connections, then what can be run against it. `menus` gets each
     /// card's ⋯ button, for `card_menus` to open the right-click menu from.
-    /// `edit` is the note being written, shown in its card.
+    /// `edit` is the note being written, shown in its card. Only the top
+    /// `PANELS_MAX` of the stack get a panel.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn detail(
         &self,
@@ -32,6 +36,15 @@ impl MapView {
         // Where the stack starts, so a card's place in it doesn't change as
         // the panel scrolls.
         let origin = ui.min_rect().top();
+        // A whole site or Zones box picked at once can be hundreds of cards:
+        // each panel is a full widget tree every frame, so only the first
+        // few are drawn, and a line says how many more are picked (the
+        // map lights them all).
+        let (sel, more) = if sel.len() > PANELS_MAX {
+            (&sel[..PANELS_MAX], sel.len() - PANELS_MAX)
+        } else {
+            (&sel[..], 0)
+        };
         for (k, &i) in sel.iter().enumerate() {
             if k > 0 {
                 ui.add_space(8.0);
@@ -72,6 +85,13 @@ impl MapView {
                     Stroke::new(2.0, crate::theme::accent()),
                 );
             }
+        }
+        if more > 0 {
+            ui.add_space(8.0);
+            ui.weak(format!(
+                "…and {more} more card{} picked: lit on the map, without a panel here",
+                if more == 1 { "" } else { "s" }
+            ));
         }
         act
     }

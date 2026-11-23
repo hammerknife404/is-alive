@@ -894,6 +894,60 @@ pub fn list(dir: &Path) -> (Vec<(PathBuf, Snapshot)>, Vec<String>) {
     (out, errs)
 }
 
+/// What a menu lists of a saved map: its name, when it was made, and
+/// whether it's as found, a plan or a training map.
+#[derive(Clone)]
+pub struct Summary {
+    pub name: String,
+    pub created: String,
+    pub purpose: Purpose,
+}
+
+/// Every saved map in `dir` as `Summary`s, oldest first, each file read and
+/// parsed once until it changes (by its time and size): Compare › Other
+/// sites lists every site's maps while its menu is open, and parsing them
+/// all again every few seconds on the window's thread stalled it.
+pub fn list_summaries(dir: &Path) -> Vec<(PathBuf, Summary)> {
+    type Stamp = (Option<std::time::SystemTime>, u64);
+    type Seen = HashMap<PathBuf, (Stamp, Option<Summary>)>;
+    static SEEN: std::sync::Mutex<Option<Seen>> = std::sync::Mutex::new(None);
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = rd
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    paths.sort();
+    paths.truncate(FILES_MAX);
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = seen.get_or_insert_with(HashMap::new);
+    let mut out = Vec::new();
+    for p in paths {
+        let Ok(meta) = std::fs::metadata(&p) else {
+            continue;
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        let summary = match seen.get(&p) {
+            Some((s, sum)) if *s == stamp => sum.clone(),
+            _ => {
+                let sum = read(&p).ok().map(|s| Summary {
+                    name: s.name,
+                    created: s.created,
+                    purpose: s.purpose,
+                });
+                seen.insert(p.clone(), (stamp, sum.clone()));
+                sum
+            }
+        };
+        if let Some(s) = summary {
+            out.push((p, s));
+        }
+    }
+    out.sort_by(|a, b| a.1.created.cmp(&b.1.created).then(a.0.cmp(&b.0)));
+    out
+}
+
 /// A file name from a map's name: lower-case letters, digits and dashes.
 pub fn slug(name: &str) -> String {
     let mut s = String::new();
