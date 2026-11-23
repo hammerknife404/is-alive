@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.9**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.10**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -1582,10 +1582,10 @@ The steps run across the top of the window: done ones ticked in green, this one 
 
 | Step | What's there |
 |---|---|
-| **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes |
+| **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes, and an amber line says when the text still looks like it holds a password, an email or a patient's details |
 | **2 Configs** | **Open files…** picks UniFi backups, SonicWall and Meraki exports, and last visit's map (`.dc.html`); they open in Config Export and on the Map too. A row for each file open, to tick or untick, and **Last visit's map**: Claude updates it rather than drawing a new one. **Where to get them** says where each kind is downloaded: UniFi under *Settings › System › Backups*, SonicWall under *Device › Settings › Firmware & Settings › Export Configuration*, Meraki as an API export |
 | **3 Sweep** | **Subnets or ranges**, filled in with this computer's network (add others with spaces between), and **Sweep** to run a Subnet Sweep from here (**Sweep again** once there's one). A warning says to tell the site's IT contact first: a sweep probes their devices. Rows for **Sweep inventory** and the **Results log** |
-| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. **Client devices (phones, laptops)**: how UniFi clients go in (**anonymized** by default: MAC, vendor and switch port kept, names replaced with tokens; or **none** or **full**), and **Draw them on the map** (off: infrastructure only) |
+| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. They go in as Notes redacts them: what you marked with **Redact**, and the passwords and keys of the configs loaded; nothing else is taken out. When a ticked part still looks like it holds something secret (a password, an email, a card number, a patient's details), an amber line says what, and so does its row on **5 Save**: redact it in Notes or untick the part. **Client devices (phones, laptops)**: how UniFi clients go in (**anonymized** by default: MAC, vendor and switch port kept, names replaced with tokens; or **none** or **full**), and **Draw them on the map** (off: infrastructure only) |
 | **5 Save** | **Check and save**: every row, ticked or not, saying what it is or what to do to have one. **Save for Claude…** writes the zip and copies the kickoff prompt; it's greyed out until something is ticked that has something in it |
 
 **What can be included:**

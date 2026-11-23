@@ -146,6 +146,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
   `card-notes.json` and the manifest's `known_problems` are the technician's
   word: context, findings and device notes, never topology on their own.
+  They're redacted only where the technician marked a value (and the loaded
+  configs' passwords and keys), not scanned: anything in them that still
+  looks like a credential or a person's or patient's details may be real, so
+  never repeat it in the map, its findings or your reply.
   `results.json` (test runs) becomes a finding only where a run shows a problem
   (loss, a closed port that should be open, a failing mail check). A site
   keeps its runs from one visit to the next, so they can span visits: judge

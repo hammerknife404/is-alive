@@ -792,6 +792,11 @@ fn replace(text: &str, hits: Vec<Hit>) -> (String, Vec<Hit>) {
 
 /// "3 redacted: 2 passwords, 1 email".
 pub fn summary(hits: &[Hit]) -> String {
+    format!("{} redacted: {}", hits.len(), kinds(hits))
+}
+
+/// "2 passwords, 1 email".
+pub fn kinds(hits: &[Hit]) -> String {
     let mut counts: Vec<(Kind, usize)> = Vec::new();
     for h in hits {
         match counts.iter_mut().find(|c| c.0 == h.kind) {
@@ -804,7 +809,7 @@ pub fn summary(hits: &[Hit]) -> String {
         .iter()
         .map(|(k, n)| format!("{n} {}", if *n == 1 { k.label() } else { k.plural() }))
         .collect();
-    format!("{} redacted: {}", hits.len(), parts.join(", "))
+    parts.join(", ")
 }
 
 fn photo_safe_hits(text: &str, mut hits: Vec<Hit>) -> Vec<Hit> {
