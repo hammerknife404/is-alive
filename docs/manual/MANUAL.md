@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.21**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.22**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -546,7 +546,7 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 |---|---|
 | **System** | What this computer's apps see, including the hosts file and DNS suffixes |
 | **Cloudflare 1.1.1.1**, **Google 8.8.8.8**, **Quad9 9.9.9.9** | What the public internet sees |
-| **Authoritative** | The domain's own nameserver: what's published, before any caching |
+| **Authoritative** | The domain's own nameserver: what's published, before any caching. Its zone and servers are found through this computer's own DNS server, so an internal name (an AD zone) isn't sent to a public resolver and finds its own internal servers. A name no zone holds says so instead of showing a root server's answer |
 | **Compare all** | All of the above side by side, with a warning wherever answers differ |
 
 The line under the toolbar reminds you what the chosen resolver means. The status row counts the records and how long it took.
@@ -581,7 +581,7 @@ Big websites behind CDNs (Google, Microsoft, Cloudflare) legitimately answer dif
 
 ### Common problems
 
-- **"does not exist (NXDOMAIN)"**: the name isn't registered or is misspelled. With **Authoritative**, it means the domain's own server says so.
+- **"does not exist (NXDOMAIN)"**: the name isn't registered or is misspelled. With **Authoritative**, it means the domain's own server says so (a name in no zone at all says *no DNS zone holds it* instead).
 - **System answers but public resolvers don't**: the name exists only inside (an Active Directory domain, a hosts file entry).
 - **Records differ between public resolvers**: a recent change still in caches. The **Authoritative** answer is the new truth; the others catch up as the TTL runs out.
 
@@ -626,7 +626,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | **DKIM** | Signing keys under the common selectors (and yours): key size, revoked keys, Microsoft 365 CNAMEs with no key behind them |
 | **Nameservers** | At least two, each answering for the domain, serial numbers in step, matching the registrar's delegation |
 | **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent; a server on an internal address that relays for this network gets a warning, not a FAIL (relaying for its own LAN is normal: test from outside). A server still talking after a minute, or sending a reply of more than 200 lines, is cut off and says so |
-| **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL (URIBL *grey*, a bulk or opt-in sender, is a warning, not a listing) |
+| **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL (URIBL *grey*, a bulk or opt-in sender, is a warning, not a listing). This network's address listed on its own (run from a hotel or a hotspot, often listed) is a warning, not the domain's FAIL, unless MX or SPF says the domain's mail is sent from it. The lists' operators see the addresses asked about |
 
 **Nice-to-haves:** MTA-STS, TLS-RPT, BIMI, DNSSEC, CAA, MX reverse DNS, Autodiscover (for Microsoft 365) and Domain expiry (from the registry, with the registrar and any hold status).
 
@@ -1510,7 +1510,7 @@ When a folder named `is-alive-data` sits beside the program (beside `is-alive.ex
 
 ### Remove everything is-alive saved
 
-At the bottom of Settings, **Remove everything is-alive saved…** is for a client's computer you're done with. It lists what's in the folder (settings, how many sites, Scratch's notes, saved maps and runs, the startup log, and the number of files in all) and asks. **Remove it all and close** deletes every one of them and closes is-alive without writing anything on the way out; the next start is as new.
+At the bottom of Settings, **Remove everything is-alive saved…** is for a client's computer you're done with. It lists what's in the folder (settings, how many sites, Scratch's notes, saved maps and runs, the startup log, and the number of files in all) and asks. **Remove it all and close** deletes every one of them and closes is-alive without writing anything on the way out; the next start is as new. Running portable on a computer where is-alive once ran installed, it offers to remove that run's folder in the profile too (ticked). The system's own recent-files lists (Recent items and Quick Access in Windows, Recent in Linux file managers) can still name files opened or saved with is-alive; the dialog says to clear those in the system's settings.
 
 - In a profile, the `is-alive` folder goes too. In portable mode the `is-alive-data` folder is emptied and stays, so is-alive is still portable there.
 - Files you saved elsewhere with **Save…** or **Export** (reports, bundles, exported maps) are yours and stay. So does the program file itself: delete that by hand.
@@ -1596,7 +1596,7 @@ The steps run across the top of the window: done ones ticked in green, this one 
 | UniFi backups | Every UniFi backup open in Config Export, each converted again with the handoff's client setting | on when loaded |
 | SonicWall exports | Every SonicWall export or report open in Config Export | on when loaded |
 | Meraki exports | Every Meraki export open in Config Export, its DHCP reservation names as the handoff's **Client names** says | on when loaded |
-| Current map | The `/mapnetwork` map open in Config Export, from an earlier visit (step 2 calls it **Last visit's map**): Claude updates it rather than starting over | on when loaded |
+| Current map | The `/mapnetwork` map open in Config Export, from an earlier visit (step 2 calls it **Last visit's map**): Claude updates it rather than starting over. It goes in as it was opened, so its row starts *Check it: …* when it holds a secret from the configs open now, a value marked in Notes, a key, token, email address or patient detail | on when loaded |
 | Sweep inventory | The last finished Subnet Sweep, with phones', laptops' and PCs' names as **Client names** says (the Sweep's own **Inventory…** keeps them all) | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
 | Tech notes | The Notes tab, redacted (the row says how much) | off |
@@ -1634,7 +1634,8 @@ The zip also holds `manifest.json` (what each file is, this computer's LAN, gate
 
 is-alive was built for sites with regulated data (healthcare, finance): it sends as little as possible and keeps secrets out of everything it writes.
 
-- **On start, two requests, both optional:** the public IP (one DNS query to OpenDNS) and the update check (one HTTPS request to GitHub, carrying only the app's version). Turn both off in **Settings → Network** and opening the app sends nothing at all.
+- **On start, two requests, both optional:** the public IP (one DNS query to OpenDNS) and the update check (one HTTPS request to GitHub, carrying only the app's version). Turn both off in **Settings → Network** and opening the app sends nothing at all: then the status bar's domain isn't read at start either (on Windows that runs `dsregcmd /status`, which can ask the domain); **Refresh**, Domain join and a Full scan read it.
+- **A crash report keeps out what it was handling.** If is-alive ever stops with an error, `startup.log` keeps where it happened and the error's wording, with any long quoted text (a note, a name, a config line) replaced by its length and the rest redacted like notes, since that log is what a bug report attaches.
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers; when another program is holding the clipboard, nothing is copied and a message says so, rather than a copy that would land in history. When the app closes, it clears the clipboard if it still holds the app's last copy.

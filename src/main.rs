@@ -211,6 +211,9 @@ struct App {
     /// Settings › Remove everything is asking: what's there, and how
     /// many files; then why it couldn't all be removed, if so.
     remove_ask: Option<(Vec<String>, usize)>,
+    /// Remove everything also clears the profile folder an earlier,
+    /// installed run left (offered only when running portable).
+    remove_profile: bool,
     remove_failed: Option<String>,
     /// The user answered it: close without asking again.
     close_anyway: bool,
@@ -389,6 +392,7 @@ impl App {
             shots_help: false,
             close_asked: false,
             remove_ask: None,
+            remove_profile: true,
             remove_failed: None,
             close_anyway: false,
             site_name: site::name(),
@@ -730,6 +734,11 @@ impl App {
             return;
         };
         let portable = theme::is_portable();
+        // Portable now, installed before: that run's folder is is-alive's too.
+        let other = theme::profile_dir()
+            .filter(|p| portable && *p != dir)
+            .filter(|p| std::fs::read_dir(p).is_ok_and(|mut d| d.next().is_some()));
+        let mut remove_profile = self.remove_profile;
         let mut go = false;
         let r = egui::Modal::new(egui::Id::new("remove_everything")).show(ctx, |ui| {
             ui.set_max_width(420.0);
@@ -759,6 +768,21 @@ impl App {
                 "Files you saved elsewhere with Save… or Export stay: they're yours. \
                  is-alive closes afterwards, and starts as new next time."
             });
+            if let Some(p) = &other {
+                ui.add_space(4.0);
+                ui.checkbox(
+                    &mut remove_profile,
+                    "Also the folder an earlier, installed run of is-alive left in this \
+                     computer's profile",
+                )
+                .on_hover_text(p.display().to_string());
+            }
+            ui.add_space(4.0);
+            ui.weak(
+                "The system's own lists of recent files (Recent items and Quick Access in \
+                 Windows, Recent in Linux file managers) can still name files you opened or \
+                 saved here: clear those in the system's settings.",
+            );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
@@ -772,10 +796,14 @@ impl App {
                 }
             });
         });
+        self.remove_profile = remove_profile;
         if go {
             // Runs under way would write as they finish: stopped first.
             self.notes.set_autosave(false);
-            match theme::remove_everything(&dir, portable) {
+            let also = other
+                .filter(|_| remove_profile)
+                .map_or(Ok(()), |p| theme::remove_everything(&p, false));
+            match theme::remove_everything(&dir, portable).and(also) {
                 Ok(()) => {
                     self.remove_ask = None;
                     self.close_anyway = true;
@@ -1508,8 +1536,14 @@ fn main() {
                 site::touch();
             }
             app.retitle(&cc.egui_ctx);
-            // Local, and quick: the status bar names the domain from the start.
-            app.join.check(&cc.egui_ctx, false);
+            // The status bar names the domain from the start, unless start-up
+            // requests are both off: `dsregcmd /status` (Windows) may ask the
+            // domain controller or Entra ID, and the Privacy page promises
+            // that then opening the app sends nothing. Refresh, Domain join
+            // and a Full scan ask it.
+            if app.look.wan_on_start || app.look.updates_on_start {
+                app.join.check(&cc.egui_ctx, false);
+            }
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
             }

@@ -140,8 +140,11 @@ fn anonymize(doc: &mut Map<String, Value>) -> bool {
 
 /// Field-name fragments that mark a secret. UniFi prefixes stored secrets
 /// with `x_` (x_passphrase, x_authkey, x_wan_password, …); the rest catch
-/// RADIUS secrets, PPSK lists, VPN keys and certificates by name.
+/// RADIUS secrets, PPSK lists, VPN keys and certificates by name, and the
+/// account names that go with them (a PPPoE login is the ISP's account
+/// ID, half the credential): SonicWall's converter drops them too.
 const SECRET: &[&str] = &[
+    "username",
     "password",
     "passwd",
     "passphrase",
@@ -461,7 +464,8 @@ mod tests {
             json!({"_id": "s1", "name": "default", "desc": "Main Office"}),
             sel("device"),
             json!({"name": "SW1", "mac": "aa", "x_authkey": "k", "x_ssh_hostkey": "h",
-                   "config_network": {"type": "pppoe", "password": "p"},
+                   "config_network": {"type": "pppoe", "password": "p", "username": "acct-0042"},
+                   "wan_username": "acct-0042",
                    "port_overrides": [{"port_idx": 1, "portconf_id": "pc1"}]}),
             sel("wlanconf"),
             json!({"name": "Staff", "security": "wpapsk", "x_passphrase": "hunter2",
@@ -578,6 +582,7 @@ mod tests {
             "root",
             "PRIVATE KEY",
             "peer_public_key",
+            "acct-0042",
         ]
         .iter()
         .enumerate()
@@ -602,7 +607,7 @@ mod tests {
             Some(&1)
         );
         assert!(text.contains("\"purpose\":\"vpn-client\""));
-        assert!(r.summary().contains("Secret fields removed: 8"));
+        assert!(r.summary().contains("Secret fields removed: 10"));
         // What was stripped is kept in memory for Notes, not in the output.
         assert!(
             r.secrets.contains(&"hunter2".to_string()),

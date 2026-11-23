@@ -521,6 +521,46 @@ fn log_note() -> String {
     }
 }
 
+/// A panic's message as the log keeps it. startup.log is what a bug report
+/// attaches, and a panic can quote what it was handling (a string slice's
+/// panic quotes up to 256 characters of the string: a note, a host name, a
+/// line of a config). Quoted text longer than a code name is replaced by
+/// its length, what's left is redacted like notes, and the whole is kept
+/// short. Where it happened (file and line) is what a fix needs.
+fn scrub(msg: &str) -> String {
+    const LONG: usize = 24;
+    let mut out = String::new();
+    let mut rest = msg;
+    while let Some(open) = rest.find(['`', '"', '\'']) {
+        let q = rest[open..].chars().next().unwrap_or('`');
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find(q) {
+            Some(close) if after[..close].chars().count() > LONG => {
+                out.push(q);
+                out.push_str(&format!("…{} characters…", after[..close].chars().count()));
+                out.push(q);
+                rest = &after[close + 1..];
+            }
+            Some(close) => {
+                out.push(q);
+                out.push_str(&after[..=close]);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push(q);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    let (clean, _) = crate::redact::sanitize(&out);
+    match clean.char_indices().nth(400) {
+        Some((at, _)) => format!("{}…", &clean[..at]),
+        None => clean,
+    }
+}
+
 /// Show a panic (with `panic = "abort"`, every panic ends the app) in a
 /// message box and the log, or, before the window is open, start again
 /// with the other renderer. Call first thing in main.
@@ -538,7 +578,7 @@ pub fn install_panic_hook() {
             .location()
             .map(|l| format!(" (at {}:{})", l.file(), l.line()))
             .unwrap_or_default();
-        let what = one_line(&format!("{msg}{at}"));
+        let what = one_line(&format!("{}{at}", scrub(&msg)));
         // try_lock: the panic may have come from inside a lock of STATE.
         let state = STATE
             .try_lock()
@@ -737,6 +777,24 @@ fn os_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a panic quotes from its data doesn't reach startup.log; the
+    /// code names and where it happened do.
+    #[test]
+    fn panic_messages_lose_what_they_quote() {
+        let note = "Called Dr Patel about the front desk PC, password is Harbor2024! ok";
+        let msg = format!(
+            "byte index 5 is not a char boundary; it is inside 'é' (bytes 4..6) of `{note}`"
+        );
+        let s = scrub(&msg);
+        assert!(!s.contains("Patel") && !s.contains("Harbor2024"), "{s}");
+        assert!(s.contains("'é'") && s.contains("characters"), "{s}");
+        let code = "called `Result::unwrap()` on an `Err` value: Os { code: 2 }";
+        assert_eq!(scrub(code), code);
+        assert!(scrub(&"x".repeat(5000)).chars().count() <= 401);
+        // An unclosed quote, odd characters: no panic in the panic hook.
+        let _ = scrub("`unclosed and \"also é");
+    }
 
     fn args(a: &[&str]) -> Result<(Option<Renderer>, Vec<PathBuf>), String> {
         parse_args(a.iter().map(OsString::from))
