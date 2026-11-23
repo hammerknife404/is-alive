@@ -150,6 +150,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   config**; `inventory.json` is **observed** (a ping/ARP sweep). `notes.md`,
   `card-notes.json` and the manifest's `known_problems` are the technician's
   word: context, findings and device notes, never topology on their own.
+  They're redacted only where the technician marked a value (and the loaded
+  configs' passwords and keys), not scanned: anything in them that still
+  looks like a credential or a person's or patient's details may be real, so
+  never repeat it in the map, its findings or your reply.
   `results.json` (test runs) becomes a finding only where a run shows a problem
   (loss, a closed port that should be open, a failing mail check). A site
   keeps its runs from one visit to the next, so they can span visits: judge
@@ -191,6 +195,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
+  `complete: false` (top level) means the sweep was stopped before it
+  finished: hosts it hadn't reached are missing and some ports weren't
+  checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
   else its `Server` header), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
@@ -211,6 +218,16 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `netbios` (a Windows host past a router reported it). `netbios` and `mdns`
   are the device's own claim: use them as labels and role hints (a
   `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
+- **`client_names`** (in `inventory.json`, and in the inventory's and each
+  Meraki file's `summary` in `manifest.json`) says what became of the names
+  of phones, laptops and PCs: anything not the gateway that no maker, port
+  or web page marks as network gear, a NAS, a printer or a camera. Their
+  names are often people's. `full` keeps them; `anonymized` makes each a
+  `client-xxxxxxxx` token from its MAC (else its IP), the **same token** the
+  UniFi client table uses for that MAC, so match devices across files by it
+  or by MAC; `none` leaves `name` null (in Meraki's `fixed_ips`, no `name`).
+  `name_from` still says where the real name came from. A token is not a
+  name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
   `open_ports`, `other_macs`, `web_title`, `is_gateway`, `is_this_machine`,

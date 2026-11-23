@@ -263,7 +263,7 @@ impl App {
                     if unsaved_notes {
                         ui.colored_label(
                             widgets::warn(),
-                            format!("The notes have changes not saved (Autosave is off). Save them in {here} first?"),
+                            format!("The notes have changes not saved. Save them in {here} first?"),
                         );
                     }
                     if let Some(why) = busy {
@@ -322,7 +322,7 @@ impl App {
                         ui.colored_label(widgets::warn(), format!("{why} Or start with what's open."));
                     }
                     if !*carry && unsaved_notes {
-                        ui.weak(format!("The notes' changes not saved (Autosave is off) are saved in {here} first."));
+                        ui.weak(format!("The notes' changes not saved are saved in {here} first."));
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -411,12 +411,26 @@ impl App {
         save_notes: bool,
     ) {
         let now = ctx.input(|i| i.time);
+        // Carried out of Scratch: its copies go once the new site has them.
+        let scratch = (carry && site::current().is_none())
+            .then(site::dir)
+            .flatten();
         // What's open is saved where it belongs first.
         self.notes.set_elsewhere(self.map.note_texts());
         if save_notes {
             self.notes.save_now();
         } else {
             self.notes.flush();
+        }
+        // Notes that couldn't be saved here would be dropped by the switch
+        // (carried ones go along): stay, and show them with the error.
+        if !carry && self.notes.save_failed() {
+            self.tab = crate::Tab::Notes;
+            widgets::toast(
+                format!("{} stays open: its notes couldn't be saved", self.site_name),
+                false,
+            );
+            return;
         }
         self.remember_site_configs();
         self.keep_results();
@@ -428,6 +442,7 @@ impl App {
         theme::save(&self.look);
         self.site_name = site::name();
         if carry {
+            self.scratch_carried = scratch.map(|d| (d, std::time::Instant::now()));
             // The notes, configs, sweep and live map are this site's now.
             self.notes.rehome(now);
             self.map.switch_site(true);
@@ -478,9 +493,28 @@ impl App {
     /// found stay on its list until Clear map.
     pub(crate) fn reopen_site_configs(&mut self, ctx: &egui::Context) {
         let Some(m) = site::meta() else { return };
+        // A config on a network share isn't touched by itself: looking at
+        // \\server\share from another client's network asks that network
+        // for "server" and offers it this computer's sign-in (and can hang
+        // the window on a timeout). Kept on the list, opened by hand.
+        let (shared, local): (Vec<PathBuf>, Vec<PathBuf>) =
+            m.configs.into_iter().partition(|p| on_a_share(p));
         let (here, gone): (Vec<PathBuf>, Vec<PathBuf>) =
-            m.configs.into_iter().partition(|p| p.is_file());
+            local.into_iter().partition(|p| p.is_file());
         self.export.reopen(ctx, here);
+        if !shared.is_empty() {
+            let names: Vec<String> = shared
+                .iter()
+                .map(|p| crate::tools::export::file_name(p))
+                .collect();
+            widgets::toast(
+                format!(
+                    "Not opened by itself, on a network share: {}. Open it from Config Export when you're on that network.",
+                    names.join(", ")
+                ),
+                false,
+            );
+        }
         if !gone.is_empty() {
             let names: Vec<String> = gone
                 .iter()
@@ -498,7 +532,29 @@ impl App {
                 false,
             );
         }
-        self.site_missing = gone;
+        self.site_missing = gone.into_iter().chain(shared).collect();
+    }
+
+    /// Once a frame after a carry out of Scratch: each of Scratch's copies
+    /// of what was carried (notes, kept values, card notes, Results) is
+    /// removed once the open site has its own, or Scratch's isn't there.
+    /// A copy whose counterpart doesn't appear within a minute stays
+    /// (nothing is lost): an empty keep list, or Results with Keep off.
+    pub(crate) fn tidy_scratch(&mut self) {
+        let Some((scratch, since)) = self.scratch_carried.clone() else {
+            return;
+        };
+        if since.elapsed() > std::time::Duration::from_secs(60) {
+            self.scratch_carried = None;
+            return;
+        }
+        let Some(here) = site::dir().filter(|d| *d != scratch) else {
+            self.scratch_carried = None;
+            return;
+        };
+        if !tidy(&scratch, &here) {
+            self.scratch_carried = None;
+        }
     }
 
     /// Once a frame: the site remembers the configs open now (and those it
@@ -550,5 +606,92 @@ mod tests {
     fn plurals() {
         assert_eq!(super::plural(1), "");
         assert_eq!(super::plural(2), "s");
+    }
+}
+
+/// A path on a network share: \\server\share\…, //server/…, or the
+/// long form \\?\UNC\server\…. (\\?\C:\… and \\.\… are this computer's.)
+fn on_a_share(p: &std::path::Path) -> bool {
+    let s = p.as_os_str().to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return rest
+            .get(..4)
+            .is_some_and(|p| p.eq_ignore_ascii_case(r"UNC\"));
+    }
+    (s.starts_with(r"\\") && !s.starts_with(r"\\.\")) || s.starts_with("//")
+}
+
+/// What a carry out of Scratch takes along.
+const CARRIED: [&str; 4] = [
+    "notes.md",
+    "notes-allow.json",
+    "map-notes.json",
+    "results.json",
+];
+
+/// Remove each of Scratch's carried files that `here` now has its own copy
+/// of. True while one is still waiting for its copy.
+fn tidy(scratch: &std::path::Path, here: &std::path::Path) -> bool {
+    let mut left = false;
+    for f in CARRIED {
+        let old = scratch.join(f);
+        if !old.exists() {
+            continue;
+        }
+        if here.join(f).exists() {
+            let _ = std::fs::remove_file(&old);
+        } else {
+            left = true;
+        }
+    }
+    left
+}
+
+#[cfg(test)]
+mod scratch_and_share_tests {
+    use super::*;
+
+    #[test]
+    fn network_share_paths() {
+        for p in [
+            r"\\nas01\it\unifi.unf",
+            "//nas01/it/x.exp",
+            r"\\?\UNC\nas01\it\x",
+            r"\\?\unc\nas01\x",
+        ] {
+            assert!(on_a_share(std::path::Path::new(p)), "{p}");
+        }
+        for p in [
+            r"C:\Users\tech\x.unf",
+            r"\\?\C:\long\x.unf",
+            r"\\.\pipe\x",
+            "/home/tech/x.unf",
+            r"\\?\é",
+        ] {
+            assert!(!on_a_share(std::path::Path::new(p)), "{p}");
+        }
+    }
+
+    /// Scratch's copy of a carried file goes once the new site has its own;
+    /// one whose copy isn't there yet stays, and is said to be waiting.
+    #[test]
+    fn scratch_copies_go_once_the_site_has_its_own() {
+        let base = std::env::temp_dir().join(format!("is-alive-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (scratch, here) = (base.join("scratch"), base.join("site"));
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(&here).unwrap();
+        for f in ["notes.md", "map-notes.json", "settings"] {
+            std::fs::write(scratch.join(f), "x").unwrap();
+        }
+        std::fs::write(here.join("notes.md"), "x").unwrap();
+        assert!(tidy(&scratch, &here), "map-notes.json is still waiting");
+        assert!(!scratch.join("notes.md").exists());
+        assert!(scratch.join("map-notes.json").exists());
+        std::fs::write(here.join("map-notes.json"), "x").unwrap();
+        assert!(!tidy(&scratch, &here));
+        assert!(!scratch.join("map-notes.json").exists());
+        assert!(scratch.join("settings").exists(), "only what was carried");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

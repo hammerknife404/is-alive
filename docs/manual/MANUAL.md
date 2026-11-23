@@ -163,7 +163,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 
 - **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
 - **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Claude Handoff's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Claude Handoff finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
-- **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **UniFi clients**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
+- **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **Client names**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
@@ -282,7 +282,7 @@ Files dropped while Config Export is still reading others wait their turn and ar
 
 - **The status row** shows the address being pinged, **Sent** and **Received**, **Loss** (green at 0%, amber for some loss, red for 100%) and **Min / Avg / Max** round-trip time.
 - **The graph** draws each reply as a point on a green line; a red tick is a reply that never came back. The scale in the top left corner is the highest reply time on screen.
-- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*.
+- **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*. A router's *redirect* along the way isn't counted against the ping: the reply after it is.
 
 ### Example: is the internet connection healthy?
 
@@ -376,7 +376,7 @@ With **Certificates** ticked, each open port that speaks TLS gets a **Certificat
 | ⚠ **Self-signed: not trusted** (amber) | Issued by itself, as on most switches, APs, printers and firewalls out of the box. Normal on a LAN device; wrong on anything the public reaches |
 | ⚠ **Not trusted: an issuer this computer doesn't know…** (amber) | A private CA (an internal one, or a firewall inspecting TLS), or the server doesn't send its intermediate certificate |
 | ⚠ **Not valid for** *name* (amber) | The certificate is for another name. Scanning by IP usually shows this: type the name users type (`vpn.example.com`) to check that |
-| ✖ **Expired** *N days* **ago**, **Not valid yet**, **Revoked** (red) | Browsers and VPN clients refuse it |
+| ✖ **Expired** *N days* **ago**, **Not valid yet**, **Revoked** (red) | Browsers and VPN clients refuse it. **Expired: a certificate in the chain** means the server's own is in date but one above it (an intermediate) isn't: the server needs to send the current one |
 | **No TLS reply** (grey) | An HTTPS-type port that didn't complete a TLS handshake; hover for why. A server that only offers TLS 1.0 or 1.1 ends up here |
 
 **Click a certificate** for its details: the full status, the names it's valid for, the issuer, the dates, the TLS version and cipher, and the chain the server sent (server first). **Copy** copies them. Trust is checked against this computer's own certificate store, as its browser would, so a CA your company pushes by Group Policy counts as trusted here too. Only the handshake is made: nothing else is sent, and nothing is stored.
@@ -425,7 +425,7 @@ A device you expect to see with nothing open and every port *filtered* (tick **S
 | **Resolve names** | Look up each router's name (on by default; off is quicker) |
 | **Prefer IPv6** | Trace over IPv6 when the destination has both |
 
-Three probes go to each hop. The table shows **Hop**, **RTT 1–3** (the three round-trip times), **Address** and **Name**. The status row says **Tracing** *address*, then **✔ destination reached** or **destination not reached**.
+Three probes go to each hop. The table shows **Hop**, **RTT 1–3** (the three round-trip times), **Address** and **Name**. The status row says **Tracing** *address*, then **✔ destination reached** or **destination not reached**. When probes can't be sent at all (no `ping` program, a send this computer's firewall refuses), it stops at that hop and says so, rather than listing 30 hops of *request timed out* that look like the network's fault.
 
 ### Example: where is the delay?
 
@@ -466,7 +466,7 @@ How to read it:
 | **Speed** | As in [Port Check](#5-port-check) |
 | **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
 | **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
-| **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run) |
+| **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run), every name as the table shows it. The Claude Handoff's copy follows its **Client names** instead |
 
 ### How it finds devices
 
@@ -486,7 +486,7 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 | **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. Fewer probes for intrusion detection to notice |
 | **All hosts** | Every live device, phones and laptops too |
 
-Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open. Full scan uses the same choice: set **Off** where you mustn't port-scan.
+Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open (while the ports are being tried it says *checking…*). A sweep stopped part way says so in its report and in the Inventory (`complete: false`), and hosts whose ports it hadn't finished say *not checked*. Full scan uses the same choice: set **Off** where you mustn't port-scan.
 
 ### A device's details
 
@@ -620,12 +620,12 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | Check | What it looks at |
 |---|---|
 | **MX** | Where mail is delivered: missing, broken or unresolvable mail servers; a null MX (the domain takes no mail); Microsoft 365 or Google detected |
-| **SPF** | Which servers may send for the domain: missing or duplicate records, the 10-lookup limit, loops, `+all`/`?all`/`~all`/`-all` |
+| **SPF** | Which servers may send for the domain: missing or duplicate records, the 10-lookup limit, loops, `+all`/`?all`/`~all`/`-all`, and every term's syntax: one malformed term (`ip4: 192.0.2.10` with a stray space, `inlcude:`, `/33`) makes receivers fail the whole record, so it's a FAIL |
 | **DMARC** | What receivers do with forged mail: missing, `p=none` (monitor only), subdomain policy, `pct`, report addresses |
 | **DKIM** | Signing keys under the common selectors (and yours): key size, revoked keys, Microsoft 365 CNAMEs with no key behind them |
 | **Nameservers** | At least two, each answering for the domain, serial numbers in step, matching the registrar's delegation |
-| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent |
-| **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL |
+| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent; a server on an internal address that relays for this network gets a warning, not a FAIL (relaying for its own LAN is normal: test from outside). A server still talking after a minute, or sending a reply of more than 200 lines, is cut off and says so |
+| **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL (URIBL *grey*, a bulk or opt-in sender, is a warning, not a listing) |
 
 **Nice-to-haves:** MTA-STS, TLS-RPT, BIMI, DNSSEC, CAA, MX reverse DNS, Autodiscover (for Microsoft 365) and Domain expiry (from the registry, with the registrar and any hold status).
 
@@ -694,7 +694,7 @@ Open everything the visit has, even several of one kind: a client with two sites
 | Control | What it does |
 |---|---|
 | **Open file…** | Pick one or more files. It works while another file is being read: what you pick is read after it |
-| **UniFi clients** | Whether a UniFi backup's client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names, which are often people's names). Your choice is remembered, for every site, and the backups open now are read again with it |
+| **Client names** | What becomes of device names, which are often people's. In a UniFi backup, whether its client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names). In a Meraki export's **Save JSON…**, the names of DHCP reservations for phones, laptops and PCs: left out (**none**), the same kind of token, made from the MAC (**anonymized**), or kept (**full**); reservations for network gear, NAS, printers and cameras keep their names. Your choice is remembered, for every site, and the backups open now are read again with it |
 | **The sub-tabs** | One per file, named *kind · file name*. The file opened last is shown; past six, the oldest fold into an **n more** menu |
 | **Save JSON…** | Save the sanitized JSON: `<name>.unifidump.json`, `.sonicwall.json`, `.meraki.json` or `.mapnetwork.json` |
 | **Copy** | Copy the summary |
@@ -704,9 +704,9 @@ Open everything the visit has, even several of one kind: a client with two sites
 
 ### What's removed
 
-- **UniFi:** only sites, devices, networks, port profiles, Wi-Fi networks and (if you chose) clients are kept. Admin accounts, password hashes, events and everything else are left behind, and any field that holds a password, passphrase, key, token or certificate is removed at any depth. Client notes, email addresses and phone numbers are always dropped.
+- **UniFi:** only sites, devices, networks, port profiles, Wi-Fi networks and (if you chose) clients are kept. Admin accounts, password hashes, events and everything else are left behind, and any field that holds a password, passphrase, key, token or certificate is removed at any depth. So is any value that holds key material whatever its field is called: a certificate or private key (PEM), an OpenVPN or WireGuard config pasted or uploaded as text or base64, a bare WireGuard key, and such an item in a list. Client notes, email addresses and phone numbers are always dropped.
 - **SonicWall:** only named fields are copied (interfaces, zones, address and service objects, access rules, NAT), so accounts, passwords, VPN keys, RADIUS/LDAP secrets, SNMP communities and certificates never leave the file. Comments that mention a password or key are replaced with a placeholder. A tech support report also gives the devices the firewall heard on each port (LLDP), which the Map uses to draw real links.
-- **Meraki:** pre-shared keys, VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied.
+- **Meraki:** pre-shared keys, VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied. DHCP reservation names and reserved ranges' comments are cleaned like rule comments (a password, email address or phone number in one is withheld), and reservation names follow **Client names**.
 
 ### Example: preparing a UniFi site for Claude
 
@@ -940,7 +940,7 @@ Each swatch is drawn exactly as the map draws it. Hover an entry for a word on i
   | A saved map with changes (**•**) | Writes the changes into it |
   | A saved map with no changes | Greyed out: nothing to save |
 
-- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved. The bar opens by itself once a map is saved; **▾** hides it and **More › Saved maps** shows it again.
+- **The bar along the bottom** lists them: **Live** (the map from the sweep and the files loaded now), then a tab for each saved map. Click one to open it. A **•** after its name means it has changed since it was saved; closing is-alive then asks first (**Save** writes every changed saved map, with the notes if they need saving too; **Don't save** or **Cancel**), and a map that couldn't be written stays open with its changes. The bar opens by itself once a map is saved; **▾** hides it and **More › Saved maps** shows it again.
 - **Right-click a tab** to **Rename** it, **Update with current** (keep its changes, or replace it with the map showing), **Duplicate**, **Export JSON…** to share it, or **Delete…** it.
 - **Open…** (here, in **More** or in Config Export, or dropping the file on the window) opens a saved map's `.json`, someone else's too, as a new tab; the same dialog opens backups, exports and `/mapnetwork` maps for the live map. A saved map opened from a file keeps the date it was saved (in its tab's tooltip and in **Compare**), so a colleague's map from last month isn't taken for today's visit. It's copied into this site's saved maps; if one already has its name, it gets a number: *HQ visit (2)*.
 - **Right-click a tab › What it is** marks it **As found** (what was discovered on a network), a **Plan** (drawn by hand: a network to build) or **Training** (made up for practice). A plan or a training map says so on its tab, under the map's toolbar and under the title of an exported picture or draw.io diagram, so it's never taken for what was found; a map saved from the blank example starts as a plan. A card drawn by hand has a *drawn* chip (*drawn link* when only its link up was), in exported pictures and draw.io diagrams too; a client's tile carries no chips, so hover it or open its inspector. A training map's answer key is never shown, only how many faults it holds (in the tab's tooltip), and a file made for a purpose this version doesn't know isn't opened.
@@ -1125,7 +1125,7 @@ Everything is in one row above the notes:
 
 **Dropping files on Notes:** a photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) dropped on the Notes tab is taken as **Open…** takes it: the photo goes in at the end, and notes ask **Replace the notes**, **Add at the end** or **Read only** (one file at a time, when several are dropped). Anything else dropped here (a backup, an export, a map) goes to [Config Export](#10-config-export); see [Dropping files](#dropping-files).
 
-**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#17-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first: **Save**, **Don't save** or **Cancel**. The choice is remembered.
+**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#17-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first, as it does for a saved map with changes: **Save**, **Don't save** or **Cancel**. The choice is remembered. If a save fails (a full disk, a read-only folder), the notes say why, the toolbar says **Not saved** with **Save** to try again, and closing or switching site asks first, autosave on or off; a site switch whose notes can't be saved stays on the site. Every file is written whole or not at all, so a power cut mid-save leaves the last good copy.
 
 ### Photos
 
@@ -1225,7 +1225,7 @@ Reading it: the line is fast, and calls are fine while it's quiet. The moment so
 
 ### Common problems
 
-- **A direction fails with a 403, or the test is blocked**: web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a nearby server from **Servers**, or wait a minute.
+- **A direction fails with a 403, or the test is blocked** (an upload the server refused every time is a failure with the server's answer, not a speed): web filters (SonicWall Content Filtering, DNS filtering) often block speed test sites, and Cloudflare limits back-to-back tests. Try **Download a file** with a nearby server from **Servers**, or wait a minute.
 - **"ICMP got no replies, so latency was measured with TCP connects to port 443"**: ping is blocked on the way; the test carried on with TCP, where loss is less reliable.
 - **"IPv6 to … didn't connect, so the test ran over IPv4"**: this network's IPv6 looks broken: it hands out IPv6 addresses but can't route IPv6. Worth fixing (devices will be slow to connect elsewhere too), and the test carries on over IPv4.
 - **A link to a download page rather than the file**: the test says so. Use the file's direct link.
@@ -1409,7 +1409,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
-**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, in `results.json` in your profile folder, for 24 hours from each run. With it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the list says how many.
+**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, in `results.json` in your profile folder, for 24 hours from each run. With it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB, tables included) are kept and older ones dropped, and the list says how many. A `results.json` that can't be read (cut short, damaged, from a newer version) is never written over: it's kept beside it as `results.bad.json`, a message says so, and a new list starts.
 
 ### Example: a report for the ticket
 
@@ -1582,10 +1582,10 @@ The steps run across the top of the window: done ones ticked in green, this one 
 
 | Step | What's there |
 |---|---|
-| **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes |
+| **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes, and an amber line says when the text still looks like it holds a password, an email or a patient's details |
 | **2 Configs** | **Open files…** picks UniFi backups, SonicWall and Meraki exports, and last visit's map (`.dc.html`); they open in Config Export and on the Map too. A row for each file open, to tick or untick, and **Last visit's map**: Claude updates it rather than drawing a new one. **Where to get them** says where each kind is downloaded: UniFi under *Settings › System › Backups*, SonicWall under *Device › Settings › Firmware & Settings › Export Configuration*, Meraki as an API export |
 | **3 Sweep** | **Subnets or ranges**, filled in with this computer's network (add others with spaces between), and **Sweep** to run a Subnet Sweep from here (**Sweep again** once there's one). A warning says to tell the site's IT contact first: a sweep probes their devices. Rows for **Sweep inventory** and the **Results log** |
-| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. **Client devices (phones, laptops)**: how UniFi clients go in (**anonymized** by default: MAC, vendor and switch port kept, names replaced with tokens; or **none** or **full**), and **Draw them on the map** (off: infrastructure only) |
+| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. They go in as Notes redacts them: what you marked with **Redact**, and the passwords and keys of the configs loaded; nothing else is taken out. When a ticked part still looks like it holds something secret (a password, an email, a card number, a patient's details), an amber line says what, and so does its row on **5 Save**: redact it in Notes or untick the part. **Client devices (phones, laptops)**: **Client names**, what becomes of their names, which are often people's (**anonymized** by default: names replaced with tokens like `client-1a2b3c4d`, made from the MAC so a device reads the same in every file; or **none** or **full**). It covers the UniFi client table (none leaves it out), and the names of phones, laptops and PCs in the sweep inventory and Meraki DHCP reservations: anything the Map wouldn't call network gear, a NAS, a printer or a camera, the gateway aside. And **Draw them on the map** (off: infrastructure only) |
 | **5 Save** | **Check and save**: every row, ticked or not, saying what it is or what to do to have one. **Save for Claude…** writes the zip and copies the kickoff prompt; it's greyed out until something is ticked that has something in it |
 
 **What can be included:**
@@ -1594,9 +1594,9 @@ The steps run across the top of the window: done ones ticked in green, this one 
 |---|---|---|
 | UniFi backups | Every UniFi backup open in Config Export, each converted again with the handoff's client setting | on when loaded |
 | SonicWall exports | Every SonicWall export or report open in Config Export | on when loaded |
-| Meraki exports | Every Meraki export open in Config Export | on when loaded |
+| Meraki exports | Every Meraki export open in Config Export, its DHCP reservation names as the handoff's **Client names** says | on when loaded |
 | Current map | The `/mapnetwork` map open in Config Export, from an earlier visit (step 2 calls it **Last visit's map**): Claude updates it rather than starting over | on when loaded |
-| Sweep inventory | The last finished Subnet Sweep | on when there is one |
+| Sweep inventory | The last finished Subnet Sweep, with phones', laptops' and PCs' names as **Client names** says (the Sweep's own **Inventory…** keeps them all) | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
 | Tech notes | The Notes tab, redacted (the row says how much) | off |
 | Card notes | The notes on the live map's cards, redacted, each with its card's name, role, IP and MAC (`card-notes.json`) | on when there are any |
@@ -1636,8 +1636,8 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **On start, two requests, both optional:** the public IP (one DNS query to OpenDNS) and the update check (one HTTPS request to GitHub, carrying only the app's version). Turn both off in **Settings → Network** and opening the app sends nothing at all.
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
-- **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers. When the app closes, it clears the clipboard if it still holds the app's last copy.
-- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results go in `results.json` in the profile folder, readable only by your user account, and each run is dropped 24 hours after it started.
+- **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers; when another program is holding the clipboard, nothing is copied and a message says so, rather than a copy that would land in history. When the app closes, it clears the clipboard if it still holds the app's last copy.
+- **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results go in `results.json` in the profile folder, readable only by your user account, and each run is dropped 24 hours after it started. On Linux and macOS the data folder itself is readable by your user only (mode 700, set at every start), so other accounts can't list the sites in it either. On Windows the profile folder already is; a portable `is-alive-data` folder keeps the permissions of wherever you put it. A config a site remembers on a network share (`\\server\share\…`) isn't opened by itself when the site opens or the app starts: open it from Config Export when you're on that network.
 - **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking is capped, and the readers are tested against damaged and random input.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.

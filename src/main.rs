@@ -225,15 +225,32 @@ struct App {
     /// Configs it remembers that weren't found when it opened: kept on its
     /// list until Clear map.
     site_missing: Vec<std::path::PathBuf>,
+    /// After "New site from what's open now" in Scratch: Scratch's folder,
+    /// whose copies of what was carried are removed once the new site has
+    /// its own (so Scratch doesn't bring this client's notes back at the
+    /// next one).
+    scratch_carried: Option<(std::path::PathBuf, std::time::Instant)>,
+}
+
+/// The close prompt's question, for what has changes not saved.
+fn close_question(notes: bool, maps: &[String]) -> &'static str {
+    match (notes, maps.len()) {
+        (_, 0) => "Save the notes before closing?",
+        (false, 1) => "Save the map before closing?",
+        (false, _) => "Save the maps before closing?",
+        (true, _) => "Save the notes and maps before closing?",
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
         theme::set_moves(ui.ctx(), self.look.moves());
+        // Notes with autosave off, or a saved map, with changes not saved:
+        // ask before they're lost.
         if ui.input(|i| i.viewport().close_requested())
-            && self.notes.unsaved()
             && !self.close_anyway
+            && (self.notes.unsaved() || !self.map.unsaved().is_empty())
         {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -378,6 +395,7 @@ impl App {
             site_ask: None,
             site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
             site_missing: Vec::new(),
+            scratch_carried: None,
         }
     }
 
@@ -566,6 +584,7 @@ impl App {
         }
         self.notes.poll(ctx);
         self.remember_site_configs();
+        self.tidy_scratch();
         self.collect();
         self.keep_results();
         self.dropped_files(ctx);
@@ -626,10 +645,22 @@ impl App {
             return;
         }
         let mut choice = None;
+        let notes = self.notes.unsaved();
+        let reason = self.notes.unsaved_reason();
+        let maps = self.map.unsaved();
         let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
-            ui.set_max_width(340.0);
-            ui.strong("Save the notes before closing?");
-            ui.label("Autosave is off, and the notes have changes that aren't saved.");
+            ui.set_max_width(360.0);
+            ui.strong(close_question(notes, &maps));
+            if notes {
+                ui.label(reason.as_str());
+            }
+            if !maps.is_empty() {
+                ui.label(format!(
+                    "Saved map{} with changes not saved: {}.",
+                    if maps.len() == 1 { "" } else { "s" },
+                    maps.join(", ")
+                ));
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
@@ -649,11 +680,20 @@ impl App {
         match choice {
             Some(save) => {
                 if save {
-                    self.notes.set_elsewhere(self.map.note_texts());
-                    if !self.notes.save_now() {
-                        // The error shows in Notes; the window stays open.
+                    if notes {
+                        self.notes.set_elsewhere(self.map.note_texts());
+                        if !self.notes.save_now() {
+                            // The error shows in Notes; the window stays open.
+                            self.close_asked = false;
+                            self.tab = Tab::Notes;
+                            return;
+                        }
+                    }
+                    if !self.map.update_all().is_empty() {
+                        // Said in a toast; the map that failed shows, its
+                        // changes kept, and the window stays open.
                         self.close_asked = false;
-                        self.tab = Tab::Notes;
+                        self.tab = Tab::Map;
                         return;
                     }
                 }
@@ -812,7 +852,7 @@ impl App {
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => {
                 self.export.ui(ui);
-                // Its UniFi clients choice is kept, so a site's backup
+                // Its Client names choice is kept, so a site's backup
                 // reopens with the clients the Map shows.
                 if self.export.clients() != self.look.unifi_clients {
                     self.look.unifi_clients = self.export.clients();
@@ -1142,7 +1182,13 @@ impl App {
     /// off); Scratch's from the last day only.
     pub(crate) fn load_results(&mut self) {
         self.log = match log::site_file().filter(|_| self.look.results_keep) {
-            Some(p) => log::Log::load(&p),
+            Some(p) => {
+                let (log, said) = log::Log::load(&p);
+                if let Some(s) = said {
+                    widgets::toast(s, false);
+                }
+                log
+            }
             None => log::Log::default(),
         };
         // As read: runs that expired make it differ, so the file is written
@@ -1375,6 +1421,8 @@ fn main() {
     startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
+    // Owner-only before anything is written into it.
+    theme::secure_data_dir();
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).
@@ -1462,10 +1510,68 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, TABS, Tab, Target, drop_hint, drop_target, egui, fonts, log, notice_toasts,
-        results_ui, route_drop, small_screen, theme, tools,
+        App, TABS, Tab, Target, close_question, drop_hint, drop_target, egui, fonts, log,
+        notice_toasts, results_ui, route_drop, small_screen, theme, tools,
     };
     use std::path::{Path, PathBuf};
+
+    /// Closing asks about what would be lost: the notes, the saved maps,
+    /// or both.
+    #[test]
+    fn the_close_prompt_names_what_isnt_saved() {
+        assert_eq!(close_question(true, &[]), "Save the notes before closing?");
+        assert_eq!(
+            close_question(false, &["HQ".into()]),
+            "Save the map before closing?"
+        );
+        let two = ["HQ".to_string(), "Branch".to_string()];
+        assert_eq!(close_question(false, &two), "Save the maps before closing?");
+        assert_eq!(
+            close_question(true, &two),
+            "Save the notes and maps before closing?"
+        );
+    }
+
+    /// The close prompt fits a field laptop's window, whatever it lists.
+    #[test]
+    fn the_close_prompt_fits_the_window() {
+        for size in [(1280.0, 720.0), (1120.0, 720.0)] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts::definitions());
+            let mut app = App::fresh(theme::Settings::default(), None, false);
+            app.close_asked = true;
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| app.close_dialog(ui.ctx()));
+                out.textures_delta.clear();
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|c| match &c.shape {
+                        egui::Shape::Text(t) => {
+                            Some((t.galley.text().to_string(), t.visual_bounding_rect()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
+            assert!(
+                texts.iter().any(|(t, _)| t.contains("before closing")),
+                "{texts:?}"
+            );
+            for (t, r) in &texts {
+                assert!(
+                    screen.contains_rect(*r),
+                    "{t:?} at {r:?} is outside {size:?}"
+                );
+            }
+        }
+    }
 
     /// The screens the first window opens maximised on: a 1080p laptop at
     /// 150% and 1366 × 768; not 1280 × 800 (it fits) or bigger.

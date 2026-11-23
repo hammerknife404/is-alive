@@ -929,12 +929,7 @@ pub fn write(path: &Path, s: &Snapshot) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, to_json(s)).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    crate::theme::replace_private(path, to_json(s)).map_err(|e| e.to_string())
 }
 
 impl MapView {
@@ -1014,9 +1009,7 @@ pub(super) fn live_clients(dir: &Path) -> Clients {
 }
 pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join("map-clients.tmp");
-    std::fs::write(&tmp, clients.name())?;
-    std::fs::rename(tmp, dir.join("map-clients.txt"))
+    crate::theme::replace_private(&dir.join("map-clients.txt"), clients.name())
 }
 
 /// internet - gateway - {switch - ap, server}, at two sites.

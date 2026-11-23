@@ -281,6 +281,10 @@ impl TraceTool {
                     note: String::new(),
                 };
                 let mut reached = false;
+                // An error with no router behind it is this computer's (no
+                // ping program, a send refused): every hop would just time
+                // out, which reads as the network's fault.
+                let mut local = None;
                 for slot in hop.rtts.iter_mut() {
                     if tx.cancelled() {
                         return;
@@ -293,8 +297,15 @@ impl TraceTool {
                     match r.status {
                         EchoStatus::Reply => reached = true,
                         EchoStatus::Unreachable(m) => hop.note = m,
+                        EchoStatus::Error(m) if r.from.is_none() => local = Some(m),
                         _ => {}
                     }
+                }
+                if let Some(m) = local.filter(|_| hop.addr.is_none()) {
+                    tx.send(Ev::Hop(hop));
+                    return tx.send(Ev::Error(format!(
+                        "stopped at hop {ttl}: {m}. That's this computer, not the network"
+                    )));
                 }
                 if names {
                     hop.name = hop.addr.and_then(net::reverse);
