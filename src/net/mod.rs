@@ -34,6 +34,70 @@ pub fn system_tool(name: &str) -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Run `cmd` for its output, for at most `limit`: past it the program is
+/// stopped and what it printed so far comes back (with a TimedOut error if
+/// it printed nothing). Both pipes are read as it runs, so a program that
+/// prints a lot can't fill one and stall.
+pub fn output_within(
+    cmd: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let drain = |p: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = p {
+                // At most 4 MB: no status tool prints more.
+                let _ = p.by_ref().take(4 << 20).read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Some(s);
+        }
+        if start.elapsed() >= limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    match status {
+        Some(status) => Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }),
+        None => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("still running after {} s: stopped", limit.as_secs()),
+        )),
+    }
+}
+
 /// Resolve a host name or IP literal. Prefers IPv4 unless `prefer_v6`.
 pub fn resolve(host: &str, prefer_v6: bool) -> io::Result<IpAddr> {
     let host = host.trim().trim_start_matches('[').trim_end_matches(']');
@@ -306,6 +370,28 @@ impl io::Write for Timed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A program that doesn't finish is stopped at the limit; one that
+    /// does gives what it printed.
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_program_is_stopped_at_the_limit() {
+        use std::time::{Duration, Instant};
+        let t = Instant::now();
+        let r = output_within(
+            std::process::Command::new("sleep").arg("10"),
+            Duration::from_millis(300),
+        );
+        assert_eq!(r.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        assert!(t.elapsed() < Duration::from_secs(3));
+        let out = output_within(
+            std::process::Command::new("echo").arg("joined"),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "joined\n");
+    }
     use std::net::TcpListener;
 
     #[test]
