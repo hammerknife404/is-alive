@@ -311,7 +311,7 @@ impl MapView {
                 self.side = false;
             }
         }
-        if !self.keys_busy {
+        if !self.keys_busy && !super::keys_taken(ui.ctx()) {
             self.keys(ui, rect);
         }
         let icon = if self.dragging() || (resp.dragged() && over.is_none()) {

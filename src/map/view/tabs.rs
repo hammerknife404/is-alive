@@ -308,6 +308,18 @@ impl MapTabs {
     /// with the others and shown. Why not, when it couldn't be.
     pub fn open_file(&mut self, path: &Path, data: &[u8]) -> Result<(), String> {
         let name = crate::tools::export::file_name(path);
+        // One of this site's own saved maps: show its tab, not a copy of
+        // it as "Name (2)" (Open… starts in the maps folder).
+        let same = |p: &Path| match (p.canonicalize(), path.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => p == path,
+        };
+        if let Some(k) = self.saved.iter().position(|t| same(&t.path)) {
+            self.shown = Some(k);
+            self.bar = true;
+            widgets::toast(format!("{name} is already open"), true);
+            return Ok(());
+        }
         let r = saved::parse(data).and_then(|s| self.add(s, &name));
         if let Err(e) = &r {
             widgets::toast(format!("Couldn't open {name}: {e}"), false);
@@ -1675,6 +1687,22 @@ mod tests {
         assert_eq!(corner_top(wide), wide.max.y - 10.0 - CORNER_H);
         let tiny = Rect::from_min_size(pos2(240.0, 0.0), vec2(60.0, 500.0));
         assert!(toggle_rect(tiny).is_none());
+    }
+
+    /// One of this site's own saved maps opened again (Open… starts in its
+    /// folder) shows its tab: no copy "Name (2)".
+    #[test]
+    fn opening_a_saved_map_of_this_site_shows_it() {
+        let dir = temp("reopen");
+        let mut t = MapTabs::in_dir(MapView::new(None), Some(dir.clone()));
+        let text = saved::to_json(&sample("HQ visit", "2026-10-01T09:30:00Z"));
+        t.open_file(Path::new("hq.json"), text.as_bytes()).unwrap();
+        let own = t.saved[0].path.clone();
+        t.shown = None;
+        t.open_file(&own, &std::fs::read(&own).unwrap()).unwrap();
+        assert_eq!(t.saved.len(), 1);
+        assert_eq!(t.shown, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A saved map opened from a file (a colleague's, last month's) keeps

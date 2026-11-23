@@ -512,6 +512,9 @@ impl MapView {
     /// they share, if they all have the same; else empty.
     pub(super) fn open_note(&mut self, cards: &[usize]) {
         let Some(&first) = cards.first() else { return };
+        // A note being written on other cards is kept, not dropped for the
+        // new one: N or Add note on another card saves it first.
+        self.keep_draft();
         if !self.selection().contains(&first) {
             if self.selection().is_empty() {
                 self.select(Some(first));
@@ -533,6 +536,19 @@ impl MapView {
             text,
             fresh: true,
         });
+    }
+
+    /// Save the note being written if it says something its cards' note
+    /// doesn't yet; drop it if it's unchanged.
+    pub(super) fn keep_draft(&mut self) {
+        let Some(e) = &self.note_edit else { return };
+        let stored = e.ids.first().and_then(|id| self.notes.get(id));
+        let changed = e.text.trim() != stored.map_or("", |s| s.trim());
+        if changed {
+            self.save_note();
+        } else {
+            self.note_edit = None;
+        }
     }
 
     /// Save the note being written on each of its cards (an empty one

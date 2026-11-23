@@ -245,9 +245,19 @@ pub fn diff(was: &Map, now: &Map, was_all: bool) -> Diff {
         used[k] = true;
         Some(k)
     };
-    // By MAC first: the same hardware, wherever DHCP put it.
+    // By MAC first: the same hardware, wherever DHCP put it. One MAC can
+    // be on several cards (a router's interfaces, a VM host): those at the
+    // same address pair first, so the first card in the list doesn't take
+    // another address's card and leave both reading as moved.
     for (i, n) in cur.iter().enumerate() {
-        if let Some(m) = n.mac.filter(real) {
+        if let (Some(m), Some(ip)) = (n.mac.filter(real), n.ip) {
+            pair[i] = take(by_mac.get(&m), &|k| old[k].ip == Some(ip), &mut used);
+        }
+    }
+    for (i, n) in cur.iter().enumerate() {
+        if pair[i].is_none()
+            && let Some(m) = n.mac.filter(real)
+        {
             pair[i] = take(by_mac.get(&m), &|_| true, &mut used);
         }
     }
@@ -411,6 +421,24 @@ mod tests {
         assert!(d.is_empty());
         assert_eq!(d.same, 1);
         assert_eq!(d.counts(), "No changes");
+    }
+
+    /// One MAC on two cards (a router's two interfaces): each pairs with
+    /// the card at its own address, whatever order the map lists them in,
+    /// so nothing reads as moved.
+    #[test]
+    fn one_mac_on_two_cards_pairs_by_address() {
+        let was = map(vec![
+            node("ip:10.0.0.1", "LAN", Some("10.0.0.1"), Some(A), &[]),
+            node("ip:10.0.1.1", "Guest", Some("10.0.1.1"), Some(A), &[]),
+        ]);
+        let now = map(vec![
+            node("ip:10.0.1.1", "Guest", Some("10.0.1.1"), Some(A), &[]),
+            node("ip:10.0.0.1", "LAN", Some("10.0.0.1"), Some(A), &[]),
+        ]);
+        let d = diff(&was, &now, true);
+        assert!(d.is_empty(), "{:?}", d.counts());
+        assert_eq!(d.same, 2);
     }
 
     #[test]
