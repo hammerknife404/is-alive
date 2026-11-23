@@ -1687,10 +1687,16 @@ fn pick(
 /// The folder the program file is in: the AppImage's (not where it's
 /// mounted while it runs), or the exe's.
 fn beside_program() -> Option<std::path::PathBuf> {
-    let file = std::env::var_os("APPIMAGE")
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_file())
-        .or_else(|| std::env::current_exe().ok())?;
+    // APPIMAGE names the AppImage only while this program runs from inside
+    // it (from under APPDIR): a variable left over in the environment of a
+    // plain binary must not move the data folder somewhere else.
+    let file = crate::startup::relaunch_path(
+        std::env::current_exe().ok(),
+        std::env::var_os("APPIMAGE"),
+        std::env::var_os("APPDIR").map(std::path::PathBuf::from),
+    )
+    .filter(|p| p.is_file())
+    .or_else(|| std::env::current_exe().ok())?;
     Some(file.parent()?.to_path_buf())
 }
 

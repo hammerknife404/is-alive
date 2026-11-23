@@ -26,7 +26,8 @@ fn hash(s: &str) -> u64 {
 /// clipboard history (Win+V), cloud clipboard sync and clipboard managers,
 /// as password managers do; when that can't be done (another program is
 /// holding the clipboard), nothing is copied and a message says so, rather
-/// than a copy that would land in history unmarked.
+/// than a copy that would land in history unmarked. On Linux it's marked
+/// for clipboard managers to leave out of their history.
 pub fn copy(ctx: &egui::Context, text: String) {
     if let Ok(mut l) = LAST_COPY.lock() {
         *l = Some(hash(&text));
@@ -50,7 +51,28 @@ pub fn copy(ctx: &egui::Context, text: String) {
             false,
         );
     }
-    #[cfg(not(windows))]
+    // Linux: marked for clipboard managers to leave out of their history
+    // (KDE's password-manager hint, which Klipper and others honour). The
+    // clipboard is kept open for the app's life, as X11 serves a copy from
+    // the program that made it. Where that can't be had (Wayland with no
+    // X11), the window's own clipboard copies it, unmarked.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use arboard::SetExtLinux;
+        static CLIP: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+        let mut held = CLIP.lock().unwrap_or_else(|e| e.into_inner());
+        if held.is_none() {
+            *held = arboard::Clipboard::new().ok();
+        }
+        if let Some(c) = held.as_mut()
+            && c.set().exclude_from_history().text(text.clone()).is_ok()
+        {
+            return;
+        }
+        ctx.copy_text(text);
+    }
+    // macOS keeps no clipboard history of its own.
+    #[cfg(target_os = "macos")]
     ctx.copy_text(text);
 }
 
@@ -968,11 +990,30 @@ pub fn save_start() -> Option<std::path::PathBuf> {
     let dir = dir.filter(|d| d.is_dir())?;
     if by_site && crate::site::current().is_some() {
         let own = dir.join(folder_name(&crate::site::name()));
-        if own.is_dir() || std::fs::create_dir_all(&own).is_ok() {
+        if own.is_dir() {
+            return Some(own);
+        }
+        if std::fs::create_dir_all(&own).is_ok() {
+            // Made for the dialog to start in: taken away again if nothing
+            // is saved in it (`tidy_save_folder`), so a cancelled save
+            // leaves no folder named after the client behind.
+            *MADE.lock().unwrap_or_else(|e| e.into_inner()) = Some(own.clone());
             return Some(own);
         }
     }
     Some(dir)
+}
+
+/// The site folder `save_start` made, while its dialog is open.
+static MADE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// After a save dialog: the site folder made for it goes again if it's
+/// still empty (the save was cancelled, or went somewhere else).
+pub fn tidy_save_folder() {
+    if let Some(d) = MADE.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        // Fails, as it should, on a folder with anything in it.
+        let _ = std::fs::remove_dir(d);
+    }
 }
 
 /// A site's name as a folder name on any system: the characters Windows
@@ -1022,6 +1063,7 @@ pub fn save_made(
                 .save_file(),
         };
         let Some(path) = picked else {
+            tidy_save_folder();
             return;
         };
         let path = safe_path(path, &exts);
@@ -1039,6 +1081,8 @@ pub fn save_made(
         } else {
             toast(format!("Saved {name}"), true);
         }
+        // Saved elsewhere, or the save failed: the empty folder goes.
+        tidy_save_folder();
     });
 }
 
@@ -1606,6 +1650,38 @@ mod tests {
         assert_eq!(toast_look(1.0, true), (1.0, 0.0));
         assert!(toast_look(0.01, true).0 < 0.5);
         assert!(toast_frames(std::iter::empty(), true).1.is_none());
+    }
+
+    /// Linux: a copy lands on the clipboard with the history-exclusion
+    /// mark. Needs an X display (run under xvfb-run with --ignored).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    #[ignore]
+    fn a_linux_copy_is_marked_for_clipboard_managers() {
+        let ctx = egui::Context::default();
+        copy(&ctx, "Harbor2024!".into());
+        let got = arboard::Clipboard::new().unwrap().get_text().unwrap();
+        assert_eq!(got, "Harbor2024!");
+    }
+
+    /// The site folder made for a save dialog goes if nothing was saved in
+    /// it, and stays once a file is there.
+    #[test]
+    fn a_cancelled_save_leaves_no_site_folder() {
+        let base = std::env::temp_dir().join(format!("is-alive-tidy-{}", std::process::id()));
+        let empty = base.join("Contoso");
+        std::fs::create_dir_all(&empty).unwrap();
+        *MADE.lock().unwrap() = Some(empty.clone());
+        tidy_save_folder();
+        assert!(!empty.exists());
+        let used = base.join("Fabrikam");
+        std::fs::create_dir_all(&used).unwrap();
+        std::fs::write(used.join("report.html"), "x").unwrap();
+        *MADE.lock().unwrap() = Some(used.clone());
+        tidy_save_folder();
+        assert!(used.join("report.html").exists());
+        assert!(MADE.lock().unwrap().is_none());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
