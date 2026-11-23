@@ -236,9 +236,7 @@ impl Store {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = p.with_extension("json.tmp");
-        crate::theme::write_private(&tmp, serde_json::to_string_pretty(&doc).unwrap_or_default())
-            .and_then(|_| std::fs::rename(&tmp, p))
+        crate::theme::replace_private(p, serde_json::to_string_pretty(&doc).unwrap_or_default())
             .map_err(|e| e.to_string())
     }
 }

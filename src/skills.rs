@@ -292,6 +292,52 @@ mod tests {
         assert!(example(Path::new("/tmp/example-Contoso_Health.dc.html")).is_none());
     }
 
+    /// The bundled skills are public: every release and Site Bundle carries
+    /// them. No MAC in them may keep its device half (the last three bytes
+    /// are 00:00:nn, as scripts/sync-skills.py leaves them), however it's
+    /// written: colon or dash pairs, dotted or dashed quads (a SonicWall
+    /// serial is its MAC), or bare in an id. The same rule as the script's,
+    /// so a hand edit can't put one back either. Twelve bare digits are a
+    /// date or a number, not counted.
+    #[test]
+    fn the_bundled_skills_carry_no_full_macs() {
+        let run = regex::Regex::new(r"[0-9A-Fa-f:.\-]+").unwrap();
+        let shape = regex::Regex::new(
+            r"^(?:(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{4}[.\-][0-9A-Fa-f]{4}[.\-][0-9A-Fa-f]{4}|[0-9A-Fa-f]{12})$",
+        )
+        .unwrap();
+        let mut full = Vec::new();
+        for (path, data) in FILES {
+            let Ok(text) = std::str::from_utf8(data) else {
+                continue;
+            };
+            for m in run.find_iter(text) {
+                let core = m.as_str().trim_matches([':', '.', '-']);
+                if !shape.is_match(core) {
+                    continue;
+                }
+                let hex = core
+                    .chars()
+                    .filter(char::is_ascii_hexdigit)
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                let bare = !core.contains([':', '.', '-']);
+                if bare && hex.bytes().all(|b| b.is_ascii_digit()) {
+                    continue;
+                }
+                // The format example in validate_map.py's warning.
+                if &hex[6..10] != "0000" && hex != "aabbccddeeff" {
+                    full.push(format!("{path}: {core}"));
+                }
+            }
+        }
+        assert!(
+            full.is_empty(),
+            "full MACs in skills/, which is public:\n{}",
+            full.join("\n")
+        );
+    }
+
     /// /mapnetwork maps open in the Dark theme, as is-alive does: the
     /// template, the examples and every map is-alive writes. (A sync from
     /// the owner's copy that brings RGB back fails here: restore the
@@ -336,5 +382,70 @@ mod tests {
         assert_eq!(doc.edges.len(), 1);
         assert_eq!(doc.sites.len(), 1);
         assert!(doc.actions.is_empty());
+    }
+
+    /// The vendor names /unifidump's extract.py puts on uplinks it can't
+    /// place are the IEEE registry's, as is-alive's own are: a wrong one
+    /// reads as a conflict with the sweep's vendor for the same MAC on a
+    /// client's map. A prefix the registry doesn't list, or gives to
+    /// another maker, fails here.
+    #[test]
+    fn the_unifidump_vendor_table_matches_ieee() {
+        let text = std::str::from_utf8(file("unifidump/scripts/extract.py").unwrap()).unwrap();
+        let start = text.find("_OUI_VENDORS = {").expect("the table");
+        let table = &text[start..start + text[start..].find('}').unwrap()];
+        // "D-Link" / "D-LINK" alike; a brand under another company name.
+        let flat = |s: &str| -> String {
+            s.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect()
+        };
+        fn alias(w: &str) -> &str {
+            match w {
+                "mikrotik" => "routerboard",
+                w => w,
+            }
+        }
+        let mut n = 0;
+        let mut bad = Vec::new();
+        for line in table.lines() {
+            let mut rest = line;
+            while let Some(a) = rest.find('"') {
+                let after = &rest[a + 1..];
+                let Some(b) = after.find('"') else { break };
+                let prefix = &after[..b];
+                let tail = &after[b + 1..];
+                let Some(v) = tail.trim_start().strip_prefix(':').map(str::trim_start) else {
+                    break;
+                };
+                let v = v.strip_prefix('"').unwrap_or(v);
+                let name = &v[..v.find('"').unwrap_or(v.len())];
+                rest = &v[name.len() + 1..];
+                let bytes: Vec<u8> = (0..3)
+                    .filter_map(|k| u8::from_str_radix(prefix.get(k * 2..k * 2 + 2)?, 16).ok())
+                    .collect();
+                assert_eq!(
+                    (prefix.len(), bytes.len()),
+                    (6, 3),
+                    "{prefix}: not a prefix"
+                );
+                let ieee = crate::net::mac::vendor(&[bytes[0], bytes[1], bytes[2], 0, 0, 0]);
+                let word = flat(name)
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !ieee.is_some_and(|v| flat(v).contains(alias(&word))) {
+                    bad.push(format!("{prefix} says {name}, the IEEE registry {ieee:?}"));
+                }
+                n += 1;
+            }
+        }
+        assert!(
+            n >= 20,
+            "only {n} entries read: did the table's shape change?"
+        );
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }

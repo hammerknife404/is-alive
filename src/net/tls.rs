@@ -387,9 +387,23 @@ impl Info {
         if leaf.and_then(|c| c.not_before).is_some_and(|b| b > now) {
             out.push((Level::Bad, "Not valid yet".into()));
         }
+        // The leaf's own dates were read above. When they don't explain the
+        // verifier's verdict (an expired intermediate, or dates that
+        // couldn't be read), say it from the verdict: never "Trusted".
+        let leaf_expired = self.days_left(now).is_some_and(|d| d < 0);
+        let leaf_early = leaf.and_then(|c| c.not_before).is_some_and(|b| b > now);
         match &self.problem {
-            // Dates are read above, from the certificate itself.
-            None | Some(Problem::Expired | Problem::NotYetValid) => {}
+            None => {}
+            Some(Problem::Expired) if !leaf_expired => out.push((
+                Level::Bad,
+                "Expired: a certificate in the chain (an intermediate, or one whose dates couldn't be read)"
+                    .into(),
+            )),
+            Some(Problem::NotYetValid) if !leaf_early => out.push((
+                Level::Bad,
+                "Not valid yet: a certificate in the chain".into(),
+            )),
+            Some(Problem::Expired | Problem::NotYetValid) => {}
             // However the verifier words it (an unknown issuer; a CA's
             // certificate used as a server's, as appliances' often are).
             Some(Problem::Untrusted | Problem::Other(_)) if leaf.is_some_and(|c| c.self_signed) => {
@@ -767,6 +781,30 @@ mod tests {
         assert_eq!(words, ["Expired 3 days ago"]);
         // Not yet valid.
         assert_eq!(info.verdict(at(2026, 8, 1)).1, ["Not valid yet"]);
+        // The verifier says expired but the leaf's dates are fine: an
+        // expired intermediate (or dates that couldn't be read). Bad, never
+        // "Trusted"; and a leaf only expiring soon doesn't hide it.
+        let chain = Info {
+            problem: Some(Problem::Expired),
+            ..info.clone()
+        };
+        let (level, words) = chain.verdict(at(2026, 9, 2));
+        assert_eq!(level, Level::Bad);
+        assert!(
+            words[0].starts_with("Expired: a certificate in the chain"),
+            "{words:?}"
+        );
+        assert_eq!(
+            chain.verdict(at(2026, 11, 9)).0,
+            Level::Bad,
+            "soon, and an intermediate gone"
+        );
+        let unread = Info {
+            chain: vec![Cert::default()],
+            problem: Some(Problem::NotYetValid),
+            ..info.clone()
+        };
+        assert_eq!(unread.verdict(at(2026, 9, 2)).0, Level::Bad);
     }
 
     #[test]

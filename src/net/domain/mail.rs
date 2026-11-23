@@ -131,6 +131,25 @@ impl<'a> SpfWalk<'a> {
             k.fail(format!("{name} (included) has {} SPF records", recs.len()));
         }
         self.path.push(name.to_string());
+        // RFC 7208 §4.6, §5, §6: one malformed term, or an unknown
+        // mechanism, and receivers give up on the whole record (permerror).
+        let mut bad = 0;
+        for term in rec.split_whitespace().skip(1) {
+            if let Some(why) = term_error(term) {
+                bad += 1;
+                if bad <= 5 {
+                    k.fail(format!(
+                        "{term} in {name}: {why}. Receivers return permerror, so SPF fails for every message"
+                    ));
+                }
+            }
+        }
+        // §6.1: with an all mechanism, redirect= is ignored: not looked
+        // up, not counted.
+        let has_all = rec.split_whitespace().any(|t| {
+            t.trim_start_matches(['+', '-', '~', '?'])
+                .eq_ignore_ascii_case("all")
+        });
         for term in rec.split_whitespace().skip(1) {
             // Past the limit SPF has already failed; stop querying.
             if self.lookups > 10 {
@@ -165,6 +184,7 @@ impl<'a> SpfWalk<'a> {
                         ));
                     }
                 }
+                "redirect" if has_all => {}
                 "include" | "redirect" => {
                     self.lookups += 1;
                     let Some(target) = arg else { continue };
@@ -183,6 +203,108 @@ impl<'a> SpfWalk<'a> {
         }
         self.path.pop();
         Ok(())
+    }
+}
+
+/// Why an SPF term isn't valid (RFC 7208 §4.6.1, §5, §6), or None. Macros
+/// in a domain are taken as written.
+fn term_error(term: &str) -> Option<String> {
+    let t = term.strip_prefix(['+', '-', '~', '?']).unwrap_or(term);
+    let (name, rest) = match t.find([':', '/', '=']) {
+        Some(i) => (&t[..i], &t[i..]),
+        None => (t, ""),
+    };
+    let name = name.to_ascii_lowercase();
+    // A modifier: name=value. Unknown ones are allowed and ignored.
+    if let Some(value) = rest.strip_prefix('=') {
+        let named = name.starts_with(|c: char| c.is_ascii_alphabetic())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        return match name.as_str() {
+            _ if !named => Some(format!("\"{name}\" isn't a mechanism or a modifier")),
+            "redirect" | "exp" if value.is_empty() => Some(format!("{name}= has no domain")),
+            _ => None,
+        };
+    }
+    let domain = |rest: &str| -> Option<String> {
+        match rest.strip_prefix(':') {
+            Some("") => Some(format!("{name}: has no domain")),
+            _ => None,
+        }
+    };
+    // a and mx: [:domain][/ip4-cidr][//ip6-cidr].
+    let cidrs = |rest: &str| -> Option<String> {
+        let at = rest.find('/').unwrap_or(rest.len());
+        if let Some(e) = domain(&rest[..at]) {
+            return Some(e);
+        }
+        let c = &rest[at..];
+        let (v4, v6) = match c.split_once("//") {
+            Some((a, b)) => (a, Some(b)),
+            None => (c, None),
+        };
+        let bad = |s: &str, max: u8| {
+            s.parse::<u8>().map_or(true, |n| n > max) || s.starts_with('0') && s.len() > 1
+        };
+        if let Some(n) = v4.strip_prefix('/').filter(|n| bad(n, 32)) {
+            return Some(format!("/{n} isn't an IPv4 prefix length (0-32)"));
+        }
+        if !v4.is_empty() && !v4.starts_with('/') {
+            return Some(format!("\"{v4}\" isn't a prefix length"));
+        }
+        if let Some(n) = v6.filter(|n| bad(n, 128)) {
+            return Some(format!("//{n} isn't an IPv6 prefix length (0-128)"));
+        }
+        None
+    };
+    let network = |rest: &str, v6: bool| -> Option<String> {
+        let Some(a) = rest.strip_prefix(':') else {
+            return Some(format!("{name} needs an address ({name}:…)"));
+        };
+        let (ip, len) = match a.split_once('/') {
+            Some((ip, len)) => (ip, Some(len)),
+            None => (a, None),
+        };
+        if ip.is_empty() {
+            return Some(format!("{name}: has no address (a space after the colon?)"));
+        }
+        let ok = if v6 {
+            ip.parse::<std::net::Ipv6Addr>().is_ok()
+        } else {
+            ip.parse::<std::net::Ipv4Addr>().is_ok()
+        };
+        if !ok {
+            return Some(format!(
+                "\"{ip}\" isn't an IPv{} address",
+                if v6 { 6 } else { 4 }
+            ));
+        }
+        let max = if v6 { 128 } else { 32 };
+        match len {
+            Some(n) if n.parse::<u8>().map_or(true, |n| n > max) => {
+                Some(format!("/{n} isn't a prefix length (0-{max})"))
+            }
+            _ => None,
+        }
+    };
+    match name.as_str() {
+        "all" if rest.is_empty() => None,
+        "all" => Some("all takes nothing after it".into()),
+        "include" | "exists" => match rest.strip_prefix(':') {
+            Some(d) if !d.is_empty() && !d.contains('/') => None,
+            Some(d) if d.contains('/') => Some(format!("{name}: takes no prefix length")),
+            _ => Some(format!("{name} needs a domain ({name}:…)")),
+        },
+        "a" | "mx" => cidrs(rest),
+        "ptr" => match rest {
+            "" => None,
+            _ if rest.contains('/') => Some("ptr takes no prefix length".into()),
+            _ => domain(rest),
+        },
+        "ip4" => network(rest, false),
+        "ip6" => network(rest, true),
+        _ => Some(format!("\"{name}\" isn't an SPF mechanism")),
     }
 }
 
@@ -876,6 +998,56 @@ pub(super) fn autodiscover(c: &Client, d: &str, mx: &MxInfo) -> Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC 7208's terms: what receivers accept, and what makes them give up
+    /// on the whole record (a stray space, a typo, a bad prefix length).
+    #[test]
+    fn spf_terms_are_checked() {
+        for ok in [
+            "-all",
+            "~all",
+            "+a",
+            "a",
+            "a:mail.example.com/24",
+            "mx/24//64",
+            "mx//64",
+            "ip4:192.0.2.0/24",
+            "ip4:192.0.2.10",
+            "ip6:2001:db8::/32",
+            "ip6:2001:db8::1",
+            "include:_spf.google.com",
+            "exists:%{i}._spf.example.com",
+            "ptr",
+            "ptr:example.com",
+            "redirect=_spf.example.com",
+            "exp=explain.example.com",
+            "x-custom=anything",
+            "?include:spf.protection.outlook.com",
+        ] {
+            assert_eq!(term_error(ok), None, "{ok}");
+        }
+        for bad in [
+            "ip4:",
+            "192.0.2.10",
+            "ipv4:192.0.2.1",
+            "inlcude:x.example",
+            "ip4:192.0.2.0/33",
+            "ip4:2001:db8::1",
+            "ip6:192.0.2.1",
+            "ip6:2001:db8::/129",
+            "include:",
+            "include",
+            "all:x",
+            "a/33",
+            "mx//129",
+            "redirect=",
+            "exists",
+            "a:",
+            "foo",
+        ] {
+            assert!(term_error(bad).is_some(), "{bad} should be an error");
+        }
+    }
 
     #[test]
     fn rsa_key_sizes() {
