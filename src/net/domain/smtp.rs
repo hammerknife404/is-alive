@@ -136,6 +136,23 @@ struct Probe {
     open_relay: Option<bool>,
     /// The relay test broke off (connection dropped or stalled).
     relay_error: Option<String>,
+    /// The address talked to.
+    addr: Option<IpAddr>,
+}
+
+/// An address only reachable from inside a network: a relay test from here
+/// that's accepted says nothing about strangers on the internet.
+fn internal(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || (o[0] == 100 && o[1] & 0xc0 == 64)
+        }
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    }
 }
 
 fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
@@ -164,19 +181,24 @@ fn relay_test<S: Read + Write>(s: &mut Session<S>, helo: &str) -> io::Result<Opt
 /// port 25.
 fn probe(host: &str, addr: SocketAddr) -> io::Result<Probe> {
     let tcp = connect(addr)?;
-    talk(host, tcp).map_err(|e| {
-        if matches!(
-            e.kind(),
-            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-        ) {
-            io::Error::other(format!(
-                "connected, but no reply within {}s",
-                READ.as_secs()
-            ))
-        } else {
-            e
-        }
-    })
+    talk(host, tcp)
+        .map(|p| Probe {
+            addr: Some(addr.ip()),
+            ..p
+        })
+        .map_err(|e| {
+            if matches!(
+                e.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ) {
+                io::Error::other(format!(
+                    "connected, but no reply within {}s",
+                    READ.as_secs()
+                ))
+            } else {
+                e
+            }
+        })
 }
 
 fn talk(host: &str, tcp: TcpStream) -> io::Result<Probe> {
@@ -342,6 +364,13 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
                     "{h}: the relay test broke off ({}), so relaying couldn't be tested",
                     p.relay_error.as_deref().unwrap_or_default()
                 )),
+                Some(true) if p.addr.is_some_and(internal) => {
+                    ok = false;
+                    k.warn(format!(
+                        "{h} ({}) accepted mail for gmail.com from this network. It's an internal address, and relaying for its own LAN is normal for an on-site server: test from outside to know whether strangers can",
+                        p.addr.map(|a| a.to_string()).unwrap_or_default()
+                    ));
+                }
                 Some(true) => {
                     ok = false;
                     k.fail(format!(
@@ -385,6 +414,28 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A relay test that reaches the server on one of these is a test from
+    /// inside its own network.
+    #[test]
+    fn internal_addresses() {
+        for ip in [
+            "10.1.2.3",
+            "192.168.1.5",
+            "172.20.0.1",
+            "100.64.3.4",
+            "127.0.0.1",
+            "169.254.1.1",
+            "fd00::25",
+            "fe80::1",
+            "::1",
+        ] {
+            assert!(internal(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["203.0.113.25", "8.8.8.8", "100.128.0.1", "2001:db8::25"] {
+            assert!(!internal(ip.parse().unwrap()), "{ip}");
+        }
+    }
     use std::net::TcpListener;
 
     /// A scripted SMTP server: answers each command with the next reply.
