@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.14**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.15**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -163,7 +163,7 @@ A site keeps one visit together: its **notes**, its **saved maps** and the **not
 
 - **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
 - **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Claude Handoff's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Claude Handoff finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
-- **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **UniFi clients**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
+- **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **Client names**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
 - is-alive opens the site that was open when it closed.
@@ -466,7 +466,7 @@ How to read it:
 | **Speed** | As in [Port Check](#5-port-check) |
 | **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
 | **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
-| **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run) |
+| **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run), every name as the table shows it. The Claude Handoff's copy follows its **Client names** instead |
 
 ### How it finds devices
 
@@ -694,7 +694,7 @@ Open everything the visit has, even several of one kind: a client with two sites
 | Control | What it does |
 |---|---|
 | **Open file…** | Pick one or more files. It works while another file is being read: what you pick is read after it |
-| **UniFi clients** | Whether a UniFi backup's client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names, which are often people's names). Your choice is remembered, for every site, and the backups open now are read again with it |
+| **Client names** | What becomes of device names, which are often people's. In a UniFi backup, whether its client list (every device that has connected) goes into the JSON and onto the Map: **none** (default here), **anonymized** (MAC, vendor and switch port kept, names replaced by tokens like `client-1a2b3c4d`), or **full** (real device names). In a Meraki export's **Save JSON…**, the names of DHCP reservations for phones, laptops and PCs: left out (**none**), the same kind of token, made from the MAC (**anonymized**), or kept (**full**); reservations for network gear, NAS, printers and cameras keep their names. Your choice is remembered, for every site, and the backups open now are read again with it |
 | **The sub-tabs** | One per file, named *kind · file name*. The file opened last is shown; past six, the oldest fold into an **n more** menu |
 | **Save JSON…** | Save the sanitized JSON: `<name>.unifidump.json`, `.sonicwall.json`, `.meraki.json` or `.mapnetwork.json` |
 | **Copy** | Copy the summary |
@@ -704,9 +704,9 @@ Open everything the visit has, even several of one kind: a client with two sites
 
 ### What's removed
 
-- **UniFi:** only sites, devices, networks, port profiles, Wi-Fi networks and (if you chose) clients are kept. Admin accounts, password hashes, events and everything else are left behind, and any field that holds a password, passphrase, key, token or certificate is removed at any depth. Client notes, email addresses and phone numbers are always dropped.
+- **UniFi:** only sites, devices, networks, port profiles, Wi-Fi networks and (if you chose) clients are kept. Admin accounts, password hashes, events and everything else are left behind, and any field that holds a password, passphrase, key, token or certificate is removed at any depth. So is any value that holds key material whatever its field is called: a certificate or private key (PEM), an OpenVPN or WireGuard config pasted or uploaded as text or base64, a bare WireGuard key, and such an item in a list. Client notes, email addresses and phone numbers are always dropped.
 - **SonicWall:** only named fields are copied (interfaces, zones, address and service objects, access rules, NAT), so accounts, passwords, VPN keys, RADIUS/LDAP secrets, SNMP communities and certificates never leave the file. Comments that mention a password or key are replaced with a placeholder. A tech support report also gives the devices the firewall heard on each port (LLDP), which the Map uses to draw real links.
-- **Meraki:** pre-shared keys, VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied.
+- **Meraki:** pre-shared keys, VPN, RADIUS and SNMP secrets and PPPoE passwords are never copied. DHCP reservation names and reserved ranges' comments are cleaned like rule comments (a password, email address or phone number in one is withheld), and reservation names follow **Client names**.
 
 ### Example: preparing a UniFi site for Claude
 
@@ -1585,7 +1585,7 @@ The steps run across the top of the window: done ones ticked in green, this one 
 | **1 Site** | How the handoff works, in four lines. **Site name**: the client and building; it names the zip (`<site>.bundle.zip`) and the map, and is filled in from a UniFi backup's site when you open one. **Known problems (optional)**: anything you already know is wrong ("Closet 2 switch flaky"); it goes straight into the map's findings. **Redact** (**Ctrl+R**) works here as in Notes, and an amber line says when the text still looks like it holds a password, an email or a patient's details |
 | **2 Configs** | **Open files…** picks UniFi backups, SonicWall and Meraki exports, and last visit's map (`.dc.html`); they open in Config Export and on the Map too. A row for each file open, to tick or untick, and **Last visit's map**: Claude updates it rather than drawing a new one. **Where to get them** says where each kind is downloaded: UniFi under *Settings › System › Backups*, SonicWall under *Device › Settings › Firmware & Settings › Export Configuration*, Meraki as an API export |
 | **3 Sweep** | **Subnets or ranges**, filled in with this computer's network (add others with spaces between), and **Sweep** to run a Subnet Sweep from here (**Sweep again** once there's one). A warning says to tell the site's IT contact first: a sweep probes their devices. Rows for **Sweep inventory** and the **Results log** |
-| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. They go in as Notes redacts them: what you marked with **Redact**, and the passwords and keys of the configs loaded; nothing else is taken out. When a ticked part still looks like it holds something secret (a password, an email, a card number, a patient's details), an amber line says what, and so does its row on **5 Save**: redact it in Notes or untick the part. **Client devices (phones, laptops)**: how UniFi clients go in (**anonymized** by default: MAC, vendor and switch port kept, names replaced with tokens; or **none** or **full**), and **Draw them on the map** (off: infrastructure only) |
+| **4 Notes** | **Tech notes** and **Card notes**, each saying what was redacted. They go in as Notes redacts them: what you marked with **Redact**, and the passwords and keys of the configs loaded; nothing else is taken out. When a ticked part still looks like it holds something secret (a password, an email, a card number, a patient's details), an amber line says what, and so does its row on **5 Save**: redact it in Notes or untick the part. **Client devices (phones, laptops)**: **Client names**, what becomes of their names, which are often people's (**anonymized** by default: names replaced with tokens like `client-1a2b3c4d`, made from the MAC so a device reads the same in every file; or **none** or **full**). It covers the UniFi client table (none leaves it out), and the names of phones, laptops and PCs in the sweep inventory and Meraki DHCP reservations: anything the Map wouldn't call network gear, a NAS, a printer or a camera, the gateway aside. And **Draw them on the map** (off: infrastructure only) |
 | **5 Save** | **Check and save**: every row, ticked or not, saying what it is or what to do to have one. **Save for Claude…** writes the zip and copies the kickoff prompt; it's greyed out until something is ticked that has something in it |
 
 **What can be included:**
@@ -1594,9 +1594,9 @@ The steps run across the top of the window: done ones ticked in green, this one 
 |---|---|---|
 | UniFi backups | Every UniFi backup open in Config Export, each converted again with the handoff's client setting | on when loaded |
 | SonicWall exports | Every SonicWall export or report open in Config Export | on when loaded |
-| Meraki exports | Every Meraki export open in Config Export | on when loaded |
+| Meraki exports | Every Meraki export open in Config Export, its DHCP reservation names as the handoff's **Client names** says | on when loaded |
 | Current map | The `/mapnetwork` map open in Config Export, from an earlier visit (step 2 calls it **Last visit's map**): Claude updates it rather than starting over | on when loaded |
-| Sweep inventory | The last finished Subnet Sweep | on when there is one |
+| Sweep inventory | The last finished Subnet Sweep, with phones', laptops' and PCs' names as **Client names** says (the Sweep's own **Inventory…** keeps them all) | on when there is one |
 | Results log | Every run in Results. Off by default: it can include other clients' hosts and domains, so the row lists its targets for you to check | off |
 | Tech notes | The Notes tab, redacted (the row says how much) | off |
 | Card notes | The notes on the live map's cards, redacted, each with its card's name, role, IP and MAC (`card-notes.json`) | on when there are any |

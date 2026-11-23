@@ -1412,6 +1412,16 @@ fn classify_with_page(
     }
 }
 
+/// Whether a device looks like a phone, laptop or PC (the Map's Clients
+/// zone) by its MAC, the ports found open and its web page: the devices
+/// whose names are often people's. A gateway is never one; the caller
+/// knows that, this doesn't.
+pub fn looks_like_client(mac: Option<&Mac>, open: &[u16], page: Option<&str>) -> bool {
+    let vendor = mac.and_then(mac::vendor);
+    let private = mac.is_some_and(mac::local_admin);
+    classify_with_page(vendor, private, open, page).0 == Zone::Client
+}
+
 /// Role of a host the sweep found and nothing else describes.
 fn classify(vendor: Option<&str>, private: bool, open: &[u16]) -> (Zone, String, bool) {
     let p = |x| open.contains(&x);
@@ -2816,7 +2826,7 @@ pub fn is_count_chip(c: &str) -> bool {
 }
 
 /// A client's name that's really an anonymized token (Config Export's
-/// "UniFi clients: anonymized"): no more telling than no name.
+/// "Client names: anonymized"): no more telling than no name.
 fn is_token(name: &str) -> bool {
     name.strip_prefix("client-")
         .is_some_and(|h| h.len() == 8 && h.chars().all(|c| c.is_ascii_hexdigit()))

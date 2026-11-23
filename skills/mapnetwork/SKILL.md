@@ -214,6 +214,16 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `netbios` (a Windows host past a router reported it). `netbios` and `mdns`
   are the device's own claim: use them as labels and role hints (a
   `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
+- **`client_names`** (in `inventory.json`, and in the inventory's and each
+  Meraki file's `summary` in `manifest.json`) says what became of the names
+  of phones, laptops and PCs: anything not the gateway that no maker, port
+  or web page marks as network gear, a NAS, a printer or a camera. Their
+  names are often people's. `full` keeps them; `anonymized` makes each a
+  `client-xxxxxxxx` token from its MAC (else its IP), the **same token** the
+  UniFi client table uses for that MAC, so match devices across files by it
+  or by MAC; `none` leaves `name` null (in Meraki's `fixed_ips`, no `name`).
+  `name_from` still says where the real name came from. A token is not a
+  name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
   `open_ports`, `other_macs`, `web_title`, `is_gateway`, `is_this_machine`,

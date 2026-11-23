@@ -852,7 +852,7 @@ impl App {
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => {
                 self.export.ui(ui);
-                // Its UniFi clients choice is kept, so a site's backup
+                // Its Client names choice is kept, so a site's backup
                 // reopens with the clients the Map shows.
                 if self.export.clients() != self.look.unifi_clients {
                     self.look.unifi_clients = self.export.clients();
