@@ -114,29 +114,74 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     let i = &self.info;
                     let na = || "unknown".to_string();
+                    // Under 1100 the words before the addresses go (their
+                    // hovers say them), so a 620-wide window still has room
+                    // for what's running on the right.
+                    let narrow = ui.ctx().content_rect().width() < crate::nav::OPEN_FROM;
+                    let word = |w: &str| {
+                        if narrow {
+                            String::new()
+                        } else {
+                            format!("{w} ")
+                        }
+                    };
                     ui.label(format!(
-                        "LAN {}",
+                        "{}{}",
+                        word("LAN"),
                         i.lan.map_or_else(na, |(ip, bits)| format!("{ip}/{bits}"))
-                    ));
+                    ))
+                    .on_hover_text("This computer's LAN address");
                     ui.separator();
                     ui.label(format!(
-                        "Gateway {}",
+                        "{}{}",
+                        word("Gateway"),
                         i.gateway.map_or_else(na, |g| g.to_string())
-                    ));
+                    ))
+                    .on_hover_text("Default gateway");
                     ui.separator();
+                    // What the right-hand side will take: measured first, so
+                    // the domain gives way to it rather than overlap it.
+                    let running = self.running_names();
+                    let font = egui::TextStyle::Body.resolve(ui.style());
+                    let w = |s: &str| {
+                        ui.painter()
+                            .layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE)
+                            .size()
+                            .x
+                    };
+                    let running_text = match (narrow, running.len()) {
+                        (_, 0) => String::new(),
+                        (true, n) => format!("{n} running"),
+                        (false, _) => format!("{} running", running.join(", ")),
+                    };
+                    let right = w(&format!("v{VERSION}"))
+                        + if running_text.is_empty() {
+                            0.0
+                        } else {
+                            w(&running_text) + 30.0
+                        }
+                        + if self.update.is_some() { 110.0 } else { 0.0 };
                     // The domain this computer is joined to; a click opens its tab.
                     // A long name gives way (…) so WAN and Refresh stay on a
                     // small window; the hover has it whole.
-                    let room = (ui.available_width() - 240.0).max(80.0);
-                    let domain = ui
+                    let room = (ui.available_width() - 200.0 - right).max(60.0);
+                    let bar = ui.max_rect();
+                    let label = ui
                         .allocate_ui(egui::vec2(room, ui.available_height()), |ui| {
                             ui.add(
-                                egui::Label::new(format!("Domain {}", self.join.short()))
-                                    .truncate()
-                                    .sense(egui::Sense::click()),
+                                egui::Label::new(format!(
+                                    "{}{}",
+                                    word("Domain"),
+                                    self.join.short()
+                                ))
+                                .truncate(),
                             )
                         })
-                        .inner
+                        .inner;
+                    // The bar's whole height is the target, not the text's.
+                    let hit = egui::Rect::from_x_y_ranges(label.rect.x_range(), bar.y_range());
+                    let domain = ui
+                        .interact(hit, ui.id().with("status domain"), egui::Sense::click())
                         .on_hover_text(self.join.tip())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                     if domain.clicked() {
@@ -149,7 +194,7 @@ impl App {
                         (None, false, true) => na(),
                         (None, false, false) => "not looked up".into(),
                     };
-                    ui.label(format!("WAN {wan}")).on_hover_text(
+                    ui.label(format!("{}{wan}", word("WAN"))).on_hover_text(
                         "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
                          on Refresh or a full scan",
                     );
@@ -185,10 +230,10 @@ impl App {
                                 r.version
                             ));
                         }
-                        let running = self.running_names();
                         if !running.is_empty() {
                             ui.separator();
-                            ui.label(format!("{} running", running.join(", ")));
+                            ui.label(&running_text)
+                                .on_hover_text(format!("{} running", running.join(", ")));
                             let (dot, _) =
                                 ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot.center(), 3.0, widgets::ok());
@@ -478,7 +523,7 @@ fn strip_button(
             .layout_no_wrap(name.to_string(), font.clone(), egui::Color32::WHITE)
     });
     let w = 10.0 + 18.0 + text.as_ref().map_or(0.0, |t| 8.0 + t.size().x) + 10.0;
-    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, theme::TARGET_H), egui::Sense::click());
     r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
     let v = ui.visuals();
     let accent = theme::accent();

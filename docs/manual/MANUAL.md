@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.24**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.25**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -207,6 +207,8 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 - **Refresh** reads the LAN, gateway and domain again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
 - **The version** at the far right (**v** and a number) is the one you're running: worth including when you report a problem.
+
+On a window under 1100 points wide the words *LAN*, *Gateway*, *Domain* and *WAN* drop off (hover an item for what it is) and what's running is a count (*2 running*, its names on hover), so everything still fits at the smallest size.
 
 ### Full scan
 
@@ -497,7 +499,7 @@ Click a device's row to open it in the **inspector** on the right: what it is (*
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
 - **On map**: switch to the Map with its card selected (if it's on the map).
 
-Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**: both stay in the inspector.
+Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**, then **TTL** (so the open ports still fit at the smallest window): all three stay in the inspector.
 
 ### Example: what's on the office network?
 

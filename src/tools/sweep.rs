@@ -342,7 +342,8 @@ impl SweepTool {
         let running = self.poll();
 
         let mut enter = false;
-        ui.horizontal(|ui| {
+        // Wraps on a narrow window rather than cut off Start.
+        ui.horizontal_wrapped(|ui| {
             widgets::lead(ui, "Ranges");
             // Wide enough for a few targets; it scrolls past that.
             let w = (ui.available_width() - 260.0).clamp(widgets::MAIN_W, 520.0);
@@ -479,7 +480,7 @@ impl SweepTool {
     fn hosts_table(&mut self, ui: &mut Ui) {
         let width = ui.available_width();
         let cols = columns(width, self.ran_ports != PortCheck::Off);
-        let row_h = 24.0;
+        let row_h = theme::TARGET_H;
         let font = FontId::proportional(crate::theme::BODY);
         let mono = FontId::monospace(crate::theme::MONO);
         let v = ui.visuals().clone();
@@ -1352,7 +1353,9 @@ fn columns(width: f32, ports: bool) -> Cols {
         all.push(Col::Ports);
     }
     let need = |cols: &[Col]| cols.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
-    for drop in [Col::Vendor, Col::Mac] {
+    // Vendor, then MAC (CLAUDE.md), then TTL: at 620 wide with ports
+    // checked, Ports would be cut off. The inspector shows all three.
+    for drop in [Col::Vendor, Col::Mac, Col::Ttl] {
         if need(&all) > width {
             all.retain(|c| *c != drop);
         }
@@ -1494,6 +1497,12 @@ mod tests {
         // Open ports only after a port check, and it keeps its place last.
         assert!(!has(1400.0, Col::Ports));
         assert_eq!(columns(1400.0, true).0.last(), Some(&Col::Ports));
+        // At 620 wide (about 548 for the table), with ports checked, TTL
+        // goes too so Ports isn't cut off.
+        let narrow = columns(548.0, true);
+        let fits = narrow.0.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
+        assert!(fits <= 548.0, "{fits}");
+        assert!(narrow.0.contains(&Col::Ports) && !narrow.0.contains(&Col::Ttl));
     }
 
     /// One frame of the Sweep tab in a window `size` big: every text drawn,

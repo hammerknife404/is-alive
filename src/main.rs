@@ -332,6 +332,12 @@ fn small_screen(monitor: egui::Vec2) -> bool {
     monitor.y < 800.0 || monitor.x < 1200.0
 }
 
+/// A saved window size that wouldn't fit this monitor with its taskbar and
+/// the window's own frame (about 80 points of it).
+fn too_big(saved: (f32, f32), monitor: egui::Vec2) -> bool {
+    saved.0 > monitor.x - 16.0 || saved.1 > monitor.y - 80.0
+}
+
 impl App {
     /// The app as it starts, before anything is read from disk or asked
     /// of the network: every tab empty.
@@ -428,8 +434,16 @@ impl App {
         if self.look.maximized {
             self.fitted = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-        } else if self.look.size.is_some() {
+        } else if let Some((w, h)) = self.look.size {
+            // A size saved on a bigger screen (docked at the office, then on
+            // the laptop on site): maximised to this screen instead, so the
+            // status bar isn't left under the taskbar. Until the monitor's
+            // size is known, the next frame asks again.
+            let Some(m) = monitor else { return };
             self.fitted = true;
+            if too_big((w as f32, h as f32), m) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
         } else if let Some(m) = monitor {
             self.fitted = true;
             if small_screen(m) {
@@ -1572,7 +1586,7 @@ fn main() {
 mod tests {
     use super::{
         App, TABS, Tab, Target, close_question, drop_hint, drop_target, egui, fonts, log,
-        notice_toasts, results_ui, route_drop, small_screen, theme, tools,
+        notice_toasts, results_ui, route_drop, small_screen, theme, too_big, tools,
     };
     use std::path::{Path, PathBuf};
 
@@ -1743,6 +1757,18 @@ mod tests {
             all(&mut app, "the map cleared");
         }
         theme::apply(&egui::Context::default(), theme::Theme::Dark);
+    }
+
+    #[test]
+    fn a_size_saved_on_a_bigger_screen_is_maximised() {
+        let laptop = egui::vec2(1280.0, 720.0);
+        assert!(too_big((2400.0, 1300.0), laptop));
+        assert!(
+            too_big((1280.0, 720.0), laptop),
+            "the whole screen, frame and all"
+        );
+        assert!(!too_big((1120.0, 600.0), laptop));
+        assert!(!too_big((1280.0, 720.0), egui::vec2(2560.0, 1440.0)));
     }
 
     #[test]
