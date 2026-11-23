@@ -331,7 +331,7 @@ pub(super) fn no_clients_why(src: &Sources) -> &'static str {
         backups.peek().is_some() && backups.all(|u| u.1.clients == crate::unifi::Clients::None);
     if unifi_none {
         "This map has no client data: the UniFi backup was read without its client table \
-         (Config Export, UniFi clients: none). Pick anonymized or full there and open it \
+         (Config Export, Client names: none). Pick anonymized or full there and open it \
          again, or run a Subnet Sweep to add hosts"
     } else if src.export.mapnetwork().is_some() {
         "This map has no client data: /mapnetwork drew infrastructure only. Run a Subnet \

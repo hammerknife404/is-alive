@@ -256,7 +256,9 @@ impl SpeedTool {
     pub fn ui(&mut self, ui: &mut Ui) {
         let running = self.poll();
 
-        ui.horizontal(|ui| {
+        // Wraps on a narrow window: the File and Upload rows need about
+        // 620 points, and Start was off the edge.
+        ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(!running, |ui| {
                 widgets::lead(ui, "Server");
                 egui::ComboBox::from_id_salt("speed_server")
@@ -1092,8 +1094,11 @@ fn transfer(
     }
     let (end, total) = (Instant::now(), t.bytes());
     let err = t.error();
+    // An upload's bytes count as they leave: refused every time, they
+    // aren't a speed.
+    let refused = t.only_refused();
     t.stop(Duration::from_secs(2));
-    if total == 0 {
+    if total == 0 || refused {
         let why = match err {
             // The error already says why: no guessing at web filters.
             Some(e) if e.contains("bot check") || e.contains("web page") => {

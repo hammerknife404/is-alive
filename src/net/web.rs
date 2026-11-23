@@ -32,7 +32,14 @@ impl Page {
     }
 }
 
-/// GET `path` from `addr`, asking for `host`, over TLS when `https`.
+/// How long one GET may take in all, in `timeout`s: the handshake and the
+/// read share it. A device that dribbles a byte at a time can't hold a
+/// sweep's worker (and its Stop) past this.
+const WHOLE: u32 = 3;
+
+/// GET `path` from `addr`, asking for `host`, over TLS when `https`. All of
+/// it, from the handshake to the last byte read, within `WHOLE` times
+/// `timeout` of connecting.
 pub fn get(
     addr: SocketAddr,
     host: &str,
@@ -40,16 +47,16 @@ pub fn get(
     path: &str,
     timeout: Duration,
 ) -> io::Result<Page> {
-    let mut tcp = TcpStream::connect_timeout(&addr, timeout)?;
-    tcp.set_read_timeout(Some(timeout))?;
-    tcp.set_write_timeout(Some(timeout))?;
+    let tcp = TcpStream::connect_timeout(&addr, timeout)?;
+    let mut tcp = super::Timed::new(tcp, timeout, timeout * WHOLE);
     let req = format!(
         "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: is-alive\r\nAccept: text/html\r\n\
          Connection: close\r\n\r\n"
     );
     let mut buf = Vec::new();
     if https {
-        let (mut conn, _verdict) = tls::client(host)?;
+        // The page's title is wanted, not a judgement of its certificate.
+        let mut conn = tls::client_unjudged(host)?;
         tls::handshake(&mut conn, &mut tcp)?;
         let mut s = StreamOwned::new(conn, tcp);
         s.write_all(req.as_bytes())?;
@@ -61,13 +68,22 @@ pub fn get(
     parse(&buf).ok_or_else(|| io::Error::other("not an HTTP answer"))
 }
 
-/// Read until the end, `READ_MAX`, a timeout or an error, keeping what came.
+/// Read until the end, `READ_MAX`, the page's `</title>` (all that's
+/// wanted from it), a timeout or an error, keeping what came.
 fn read_some(r: &mut impl Read, buf: &mut Vec<u8>) {
     let mut chunk = [0u8; 4096];
     while buf.len() < READ_MAX {
         match r.read(&mut chunk) {
             Ok(0) | Err(_) => break,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        // Looked for in what just came and the few bytes before it.
+        let from = buf.len().saturating_sub(chunk.len() + 8);
+        if buf[from..]
+            .windows(8)
+            .any(|w| w.eq_ignore_ascii_case(b"</title>"))
+        {
+            break;
         }
     }
 }
@@ -187,6 +203,61 @@ pub fn identify(addr: std::net::IpAddr, open: &[u16], timeout: Duration) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server on this machine: what `talk` does with the connection.
+    fn serve(talk: impl FnOnce(TcpStream) + Send + 'static) -> SocketAddr {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((s, _)) = l.accept() {
+                talk(s);
+            }
+        });
+        addr
+    }
+
+    /// A device that sends a byte every so often, never quite timing a
+    /// read out, is given up on at the whole GET's deadline.
+    #[test]
+    fn a_page_that_dribbles_is_cut_off() {
+        let addr = serve(|mut s| {
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nServer: slow\r\n\r\n");
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(100));
+                if s.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let t = std::time::Instant::now();
+        let page = get(addr, "x", false, "/", Duration::from_millis(300)).unwrap();
+        assert_eq!(page.server.as_deref(), Some("slow"));
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            t.elapsed()
+        );
+    }
+
+    /// The title is all that's wanted: once it's in, the read stops rather
+    /// than wait for a server that keeps the connection open.
+    #[test]
+    fn the_read_stops_at_the_title() {
+        let addr = serve(|mut s| {
+            let _ = s.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><head><TITLE>UniFi OS</TITLE>",
+            );
+            std::thread::sleep(Duration::from_secs(10));
+        });
+        let t = std::time::Instant::now();
+        let page = get(addr, "x", false, "/", Duration::from_secs(5)).unwrap();
+        assert_eq!(page.title.as_deref(), Some("UniFi OS"));
+        assert!(
+            t.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            t.elapsed()
+        );
+    }
 
     #[test]
     fn hostile_pages_never_panic() {

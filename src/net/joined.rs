@@ -257,12 +257,56 @@ fn closed(e: &io::Error) -> &'static str {
     }
 }
 
-fn connect(ip: IpAddr, port: u16) -> io::Result<TcpStream> {
+/// Longest one computer's exchange may take after connecting: a device
+/// that sends a byte every few seconds can't hold a worker (64 KiB at
+/// 3 s a read is two days), and Stop, which waits for the workers.
+const WHOLE: Duration = Duration::from_secs(10);
+
+/// A connection to one computer that gives up at its deadline: each read
+/// or write waits at most `REPLY`, and never past `WHOLE` from connecting.
+struct Conn {
+    tcp: TcpStream,
+    deadline: std::time::Instant,
+}
+
+impl Conn {
+    fn arm(&self) -> io::Result<()> {
+        let left = self
+            .deadline
+            .saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "took too long"));
+        }
+        self.tcp.set_read_timeout(Some(left.min(REPLY)))?;
+        self.tcp.set_write_timeout(Some(left.min(REPLY)))
+    }
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
+fn connect(ip: IpAddr, port: u16) -> io::Result<Conn> {
     let tcp = TcpStream::connect_timeout(&SocketAddr::new(ip, port), CONNECT)?;
-    tcp.set_read_timeout(Some(REPLY))?;
-    tcp.set_write_timeout(Some(REPLY))?;
     let _ = tcp.set_nodelay(true);
-    Ok(tcp)
+    Ok(Conn {
+        tcp,
+        deadline: std::time::Instant::now() + WHOLE,
+    })
 }
 
 fn said(what: &str) -> io::Error {
@@ -540,7 +584,7 @@ fn ts_request(ntlm: &[u8]) -> Vec<u8> {
 
 /// The names from an RDP sign-in's first step, over a connection to
 /// 3389, when the server takes Network Level Authentication.
-fn rdp(tcp: &mut TcpStream, host: &str) -> io::Result<Names> {
+fn rdp(tcp: &mut Conn, host: &str) -> io::Result<Names> {
     tcp.write_all(&RDP_REQUEST)?;
     let mut reply = [0u8; 19];
     let n = read_some(tcp, &mut reply)?;
@@ -551,7 +595,7 @@ fn rdp(tcp: &mut TcpStream, host: &str) -> io::Result<Names> {
     }
     // Its certificate is its own (self-signed on almost every PC):
     // nothing secret is sent, so it isn't checked.
-    let (mut conn, _) = super::tls::client(host)?;
+    let mut conn = super::tls::client_unjudged(host)?;
     super::tls::handshake(&mut conn, tcp)?;
     let mut tls = rustls::Stream::new(&mut conn, tcp);
     tls.write_all(&ts_request(&ntlm_negotiate()))?;
@@ -573,6 +617,33 @@ fn read_some(r: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A computer that answers a byte at a time is given up on at its
+    /// deadline: it can't hold a worker, and Stop with it, for hours.
+    #[test]
+    fn a_dripping_computer_is_given_up_on() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = l.accept() {
+                // A length that promises 64 KiB, then a byte at a time.
+                let _ = s.write_all(&[0, 0, 0xff, 0xff]);
+                for _ in 0..200 {
+                    if s.write_all(b"x").is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        });
+        let mut c = Conn {
+            tcp: TcpStream::connect(addr).unwrap(),
+            deadline: std::time::Instant::now() + Duration::from_millis(500),
+        };
+        let t = std::time::Instant::now();
+        assert!(smb_exchange(&mut c).is_err());
+        assert!(t.elapsed() < Duration::from_secs(3), "{:?}", t.elapsed());
+    }
 
     /// An NTLM challenge as a Windows server sends it, naming these.
     fn challenge(pairs: &[(u16, &str)], target: &str) -> Vec<u8> {

@@ -564,13 +564,28 @@ fn direct(c: dnsq::Client, q: &str, types: &[u16]) -> Rows {
 }
 
 /// A client for the first reachable nameserver of the zone holding `q`.
+/// The zone is found through this computer's own DNS server, as a name
+/// typed here would be looked up anyway: an internal name (an AD zone, a
+/// client's host) isn't sent to a public resolver, and finds its own
+/// internal servers.
 fn authoritative(q: &str) -> Result<(String, dnsq::Client), String> {
-    let c = dnsq::Client::new(SocketAddr::from(([1, 1, 1, 1], 53)));
+    let server = dnsq::system_servers()
+        .first()
+        .copied()
+        .ok_or("no system DNS server found to find the zone through")?;
+    let c = dnsq::Client::new(SocketAddr::new(server, 53));
     let name = match q.parse::<IpAddr>() {
         Ok(ip) => dnsq::reverse_name(ip),
         Err(_) => q.to_string(),
     };
     let zone = net::domain::zone_of(&c, &name).map_err(|e| e.to_string())?;
+    if no_zone(&zone) {
+        // Only the root's SOA came back: no zone holds the name, and a
+        // root server's NXDOMAIN isn't the domain's own answer.
+        return Err(format!(
+            "no DNS zone holds {name}: there's no authoritative server to ask"
+        ));
+    }
     let ns = c
         .ask(&zone, dnsq::NS)
         .map_err(|e| e.to_string())?
@@ -588,9 +603,19 @@ fn authoritative(q: &str) -> Result<(String, dnsq::Client), String> {
     Err(format!("no reachable nameserver for {zone}"))
 }
 
+/// The zone found is the root (or nothing): the name is in no zone.
+fn no_zone(zone: &str) -> bool {
+    zone.trim_end_matches('.').is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_root_is_no_zone() {
+        assert!(no_zone("") && no_zone(".") && !no_zone("example.com"));
+    }
 
     #[test]
     fn hints_srv_for_service_names() {

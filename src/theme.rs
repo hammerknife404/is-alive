@@ -105,9 +105,10 @@ pub fn status() -> (Color32, Color32, Color32) {
             Color32::from_rgb(230, 180, 60),
             Color32::from_rgb(235, 90, 90),
         ),
+        // At least 4.5:1 on the panel and on white (WCAG AA for text).
         Theme::Light => (
-            Color32::from_rgb(22, 132, 70),
-            Color32::from_rgb(176, 108, 0),
+            Color32::from_rgb(18, 118, 62),
+            Color32::from_rgb(150, 90, 0),
             Color32::from_rgb(198, 40, 40),
         ),
         Theme::Paper => (
@@ -664,6 +665,9 @@ fn light() -> Visuals {
     };
     v.selection.bg_fill = Color32::from_rgb(196, 222, 246);
     v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(20, 80, 140));
+    // Secondary text (headings in the nav, the inspector's keys, hints):
+    // egui's default is grey at 60% alpha, under 3:1; this is 5.5:1.
+    v.weak_text_color = Some(Color32::from_rgb(96, 100, 108));
     v.hyperlink_color = accent_for(Theme::Light);
     v.widgets.inactive.weak_bg_fill = Color32::from_rgb(228, 231, 236);
     v.widgets.inactive.bg_fill = Color32::from_rgb(228, 231, 236);
@@ -785,8 +789,9 @@ fn tokens(t: Theme) -> Option<Tokens> {
         Theme::Paper => k(
             true,
             [
+                // Muted text 0x6e6453: 5.5:1 on the panel, 4.6 on a button.
                 0xf5f0e6, 0xfbf8f2, 0xfffdf8, 0xf1ebdf, 0xece4d4, 0xddd2bd, 0x3e362a, 0x2a241b,
-                0x8a7f6c, 0x2f5fb3, 0x2f5fb3,
+                0x6e6453, 0x2f5fb3, 0x2f5fb3,
             ],
         ),
         Theme::Light | Theme::Miami => return None,
@@ -1578,7 +1583,58 @@ pub fn write_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io:
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         }
     }
-    o.open(path)?.write_all(data.as_ref())
+    let mut f = o.open(path)?;
+    f.write_all(data.as_ref())?;
+    // On the disk before anyone relies on it: a laptop that dies just
+    // after a save mustn't leave an empty file.
+    f.sync_all()
+}
+
+/// Replace `path` with `data`, whole or not at all: written private and
+/// flushed to a temporary file beside it, then renamed over it. A crash or
+/// power cut at any point leaves the old file or the new one, never a cut
+/// or empty one. The temporary file is named for this process, so two
+/// copies of is-alive never write into the same one.
+pub fn replace_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    let r = write_private(&tmp, data).and_then(|_| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r?;
+    // The rename itself, on the disk too (Windows has no folder to flush).
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
+}
+
+/// The data folder, made if it isn't there and, on Unix, readable by this
+/// user only (700). Everything is-alive keeps is under it (site folders
+/// named after clients, maps, notes, Results), so its contents stay
+/// private whatever mode each file or folder inside was given. On Windows
+/// the profile folder already is; a portable folder keeps the permissions
+/// of where it was put.
+pub fn secure_data_dir() {
+    if let Some(d) = data_dir() {
+        let _ = private_dir(&d);
+    }
+}
+
+/// `d`, made if needed, and on Unix owner-only (700).
+fn private_dir(d: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(d)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// The folder that makes is-alive portable: when one of this name sits
@@ -1657,6 +1713,57 @@ pub fn profile_dir() -> Option<std::path::PathBuf> {
 
 static REMOVED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// This copy's hold on the data folder (see `claim_data_dir`).
+static CLAIM: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+
+/// The lock file in the data folder that one running copy holds.
+const LOCK_FILE: &str = "is-alive.lock";
+
+/// Claim the data folder for this copy of is-alive. Two copies on one
+/// folder each write their whole notes, Results, settings and saved maps
+/// over the other's (the last to write wins) and share the same temp
+/// files. Err, saying so, when another copy holds it. A folder that can't
+/// be made or locked (read-only, a filesystem without locks) isn't a
+/// reason not to start: Ok, unclaimed.
+pub fn claim_data_dir() -> Result<(), String> {
+    let Some(dir) = data_dir() else {
+        return Ok(());
+    };
+    claim_in(&dir).map(|held| {
+        if let Some(f) = held {
+            *CLAIM.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        }
+    })
+}
+
+fn claim_in(dir: &std::path::Path) -> Result<Option<std::fs::File>, String> {
+    let _ = std::fs::create_dir_all(dir);
+    let Ok(f) = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_FILE))
+    else {
+        return Ok(None);
+    };
+    match f.try_lock() {
+        Ok(()) => Ok(Some(f)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "is-alive is already open on this computer, with the same data folder ({}).\n\n\
+Two copies would write over each other's notes, Results and maps. Use the window that's open, \
+or close it and start is-alive again.",
+            dir.display()
+        )),
+        Err(std::fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
+/// Let go of the data folder: before starting this program again (the
+/// other renderer), and before Remove everything deletes the lock file.
+pub fn release_data_dir() {
+    CLAIM.lock().unwrap_or_else(|e| e.into_inner()).take();
+}
+
 /// Everything was removed (Settings): nothing more is written, so the
 /// app closing doesn't put its settings and notes straight back.
 pub fn removed() -> bool {
@@ -1724,6 +1831,8 @@ pub fn kept_in(dir: &std::path::Path) -> (Vec<String>, usize) {
 /// written (`removed`). An error names what couldn't be removed.
 pub fn remove_everything(dir: &std::path::Path, portable: bool) -> Result<(), String> {
     REMOVED.store(true, Ordering::Relaxed);
+    // Windows won't delete a file that's held open.
+    release_data_dir();
     remove_in(dir, portable)
 }
 
@@ -1775,13 +1884,58 @@ pub fn save(s: &Settings) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, s.text());
+        // Whole or not at all: a cut file would lose the open site.
+        let _ = replace_private(&p, s.text());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The data folder is the owner's only: other accounts on the laptop
+    /// can't list its site folders (named after clients) or read inside.
+    #[test]
+    #[cfg(unix)]
+    fn the_data_folder_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("is-alive-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&d).unwrap();
+        assert_eq!(
+            std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A replace leaves the new file, private, and no temporary one.
+    #[test]
+    fn replace_private_writes_whole_and_tidy() {
+        let dir = std::env::temp_dir().join(format!("is-alive-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("notes.md");
+        replace_private(&p, "one").unwrap();
+        replace_private(&p, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "two");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["notes.md"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Into a folder that isn't there: an error, and nothing left behind.
+        assert!(replace_private(&dir.join("gone").join("x"), "y").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("is-alive-{tag}-{}", std::process::id()));
@@ -1814,6 +1968,19 @@ mod tests {
     /// Remove everything says what's there first, then takes all of it:
     /// the folder too in a profile, and only its contents when it's the
     /// portable folder, which has to stay for the app to stay portable.
+    /// One copy per data folder: a second is turned away while the first
+    /// holds it, and gets it once the first lets go (or ends).
+    #[test]
+    fn one_copy_per_data_folder() {
+        let dir = std::env::temp_dir().join(format!("is-alive-claim-{}", std::process::id()));
+        let first = claim_in(&dir).unwrap().expect("locked");
+        let second = claim_in(&dir).unwrap_err();
+        assert!(second.contains("already open"), "{second}");
+        drop(first);
+        assert!(claim_in(&dir).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn remove_everything_lists_it_and_leaves_nothing() {
         for portable in [false, true] {

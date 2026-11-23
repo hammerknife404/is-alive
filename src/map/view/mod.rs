@@ -274,6 +274,10 @@ pub struct MapView {
     /// A saved map: drawn from this (every site open) rather than from the
     /// sweep and files.
     frozen: Option<Box<Map>>,
+    /// The live map as built, before its collapsed sites were folded:
+    /// kept only while one is, for exports read back as a map (a
+    /// /mapnetwork page), which hold every card.
+    unfolded: Option<Box<Map>>,
     /// Which cards match the search, worked out once (see `matches`).
     match_memo: std::cell::RefCell<MatchMemo>,
     /// What a saved map is (as found, a plan, a training map); the live
@@ -671,6 +675,7 @@ impl MapView {
         } else {
             super::build(&input)
         };
+        self.unfolded = (!self.closed.is_empty()).then(|| Box::new(saved::copy_map(&map)));
         map.close_sites(&self.closed);
         for (from, to) in self.carry_gone(&self.map, &mut map) {
             self.rename(&from, &to);

@@ -512,7 +512,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .collect(),
         _ => Vec::new(),
     };
-    let map = Map {
+    let mut map = Map {
         title: text(m, "title", TEXT_MAX),
         summary: text(m, "summary", TEXT_MAX),
         hidden: m.get("hidden").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -527,6 +527,8 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         cap: 0,
         sweep_apart: false,
     };
+    // A file can say anything: a chain no layout should walk is cut back.
+    map.cap_depth_noted();
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
     let placed = match view.get("placed") {
@@ -981,12 +983,7 @@ pub fn write(path: &Path, s: &Snapshot) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, to_json(s)).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        e.to_string()
-    })
+    crate::theme::replace_private(path, to_json(s)).map_err(|e| e.to_string())
 }
 
 impl MapView {
@@ -1066,9 +1063,7 @@ pub(super) fn live_clients(dir: &Path) -> Clients {
 }
 pub(super) fn save_live_clients(dir: &Path, clients: Clients) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join("map-clients.tmp");
-    std::fs::write(&tmp, clients.name())?;
-    std::fs::rename(tmp, dir.join("map-clients.txt"))
+    crate::theme::replace_private(&dir.join("map-clients.txt"), clients.name())
 }
 
 /// internet - gateway - {switch - ap, server}, at two sites.

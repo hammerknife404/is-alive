@@ -211,6 +211,9 @@ struct App {
     /// Settings › Remove everything is asking: what's there, and how
     /// many files; then why it couldn't all be removed, if so.
     remove_ask: Option<(Vec<String>, usize)>,
+    /// Remove everything also clears the profile folder an earlier,
+    /// installed run left (offered only when running portable).
+    remove_profile: bool,
     remove_failed: Option<String>,
     /// The user answered it: close without asking again.
     close_anyway: bool,
@@ -225,15 +228,32 @@ struct App {
     /// Configs it remembers that weren't found when it opened: kept on its
     /// list until Clear map.
     site_missing: Vec<std::path::PathBuf>,
+    /// After "New site from what's open now" in Scratch: Scratch's folder,
+    /// whose copies of what was carried are removed once the new site has
+    /// its own (so Scratch doesn't bring this client's notes back at the
+    /// next one).
+    scratch_carried: Option<(std::path::PathBuf, std::time::Instant)>,
+}
+
+/// The close prompt's question, for what has changes not saved.
+fn close_question(notes: bool, maps: &[String]) -> &'static str {
+    match (notes, maps.len()) {
+        (_, 0) => "Save the notes before closing?",
+        (false, 1) => "Save the map before closing?",
+        (false, _) => "Save the maps before closing?",
+        (true, _) => "Save the notes and maps before closing?",
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
         theme::set_moves(ui.ctx(), self.look.moves());
+        // Notes with autosave off, or a saved map, with changes not saved:
+        // ask before they're lost.
         if ui.input(|i| i.viewport().close_requested())
-            && self.notes.unsaved()
             && !self.close_anyway
+            && (self.notes.unsaved() || !self.map.unsaved().is_empty())
         {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -280,6 +300,7 @@ impl eframe::App for App {
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
         widgets::route_copies(ui.ctx());
+        widgets::note_esc_owners(ui.ctx());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -309,6 +330,12 @@ impl eframe::App for App {
 /// 1366 × 768. The window opens maximised there.
 fn small_screen(monitor: egui::Vec2) -> bool {
     monitor.y < 800.0 || monitor.x < 1200.0
+}
+
+/// A saved window size that wouldn't fit this monitor with its taskbar and
+/// the window's own frame (about 80 points of it).
+fn too_big(saved: (f32, f32), monitor: egui::Vec2) -> bool {
+    saved.0 > monitor.x - 16.0 || saved.1 > monitor.y - 80.0
 }
 
 impl App {
@@ -371,6 +398,7 @@ impl App {
             shots_help: false,
             close_asked: false,
             remove_ask: None,
+            remove_profile: true,
             remove_failed: None,
             close_anyway: false,
             site_name: site::name(),
@@ -378,6 +406,7 @@ impl App {
             site_ask: None,
             site_configs: site::meta().map(|m| m.configs).unwrap_or_default(),
             site_missing: Vec::new(),
+            scratch_carried: None,
         }
     }
 
@@ -405,8 +434,16 @@ impl App {
         if self.look.maximized {
             self.fitted = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-        } else if self.look.size.is_some() {
+        } else if let Some((w, h)) = self.look.size {
+            // A size saved on a bigger screen (docked at the office, then on
+            // the laptop on site): maximised to this screen instead, so the
+            // status bar isn't left under the taskbar. Until the monitor's
+            // size is known, the next frame asks again.
+            let Some(m) = monitor else { return };
             self.fitted = true;
+            if too_big((w as f32, h as f32), m) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
         } else if let Some(m) = monitor {
             self.fitted = true;
             if small_screen(m) {
@@ -566,6 +603,7 @@ impl App {
         }
         self.notes.poll(ctx);
         self.remember_site_configs();
+        self.tidy_scratch();
         self.collect();
         self.keep_results();
         self.dropped_files(ctx);
@@ -626,10 +664,22 @@ impl App {
             return;
         }
         let mut choice = None;
+        let notes = self.notes.unsaved();
+        let reason = self.notes.unsaved_reason();
+        let maps = self.map.unsaved();
         let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
-            ui.set_max_width(340.0);
-            ui.strong("Save the notes before closing?");
-            ui.label("Autosave is off, and the notes have changes that aren't saved.");
+            ui.set_max_width(360.0);
+            ui.strong(close_question(notes, &maps));
+            if notes {
+                ui.label(reason.as_str());
+            }
+            if !maps.is_empty() {
+                ui.label(format!(
+                    "Saved map{} with changes not saved: {}.",
+                    if maps.len() == 1 { "" } else { "s" },
+                    maps.join(", ")
+                ));
+            }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
@@ -649,11 +699,20 @@ impl App {
         match choice {
             Some(save) => {
                 if save {
-                    self.notes.set_elsewhere(self.map.note_texts());
-                    if !self.notes.save_now() {
-                        // The error shows in Notes; the window stays open.
+                    if notes {
+                        self.notes.set_elsewhere(self.map.note_texts());
+                        if !self.notes.save_now() {
+                            // The error shows in Notes; the window stays open.
+                            self.close_asked = false;
+                            self.tab = Tab::Notes;
+                            return;
+                        }
+                    }
+                    if !self.map.update_all().is_empty() {
+                        // Said in a toast; the map that failed shows, its
+                        // changes kept, and the window stays open.
                         self.close_asked = false;
-                        self.tab = Tab::Notes;
+                        self.tab = Tab::Map;
                         return;
                     }
                 }
@@ -689,6 +748,11 @@ impl App {
             return;
         };
         let portable = theme::is_portable();
+        // Portable now, installed before: that run's folder is is-alive's too.
+        let other = theme::profile_dir()
+            .filter(|p| portable && *p != dir)
+            .filter(|p| std::fs::read_dir(p).is_ok_and(|mut d| d.next().is_some()));
+        let mut remove_profile = self.remove_profile;
         let mut go = false;
         let r = egui::Modal::new(egui::Id::new("remove_everything")).show(ctx, |ui| {
             ui.set_max_width(420.0);
@@ -718,6 +782,21 @@ impl App {
                 "Files you saved elsewhere with Save… or Export stay: they're yours. \
                  is-alive closes afterwards, and starts as new next time."
             });
+            if let Some(p) = &other {
+                ui.add_space(4.0);
+                ui.checkbox(
+                    &mut remove_profile,
+                    "Also the folder an earlier, installed run of is-alive left in this \
+                     computer's profile",
+                )
+                .on_hover_text(p.display().to_string());
+            }
+            ui.add_space(4.0);
+            ui.weak(
+                "The system's own lists of recent files (Recent items and Quick Access in \
+                 Windows, Recent in Linux file managers) can still name files you opened or \
+                 saved here: clear those in the system's settings.",
+            );
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
@@ -731,10 +810,14 @@ impl App {
                 }
             });
         });
+        self.remove_profile = remove_profile;
         if go {
             // Runs under way would write as they finish: stopped first.
             self.notes.set_autosave(false);
-            match theme::remove_everything(&dir, portable) {
+            let also = other
+                .filter(|_| remove_profile)
+                .map_or(Ok(()), |p| theme::remove_everything(&p, false));
+            match theme::remove_everything(&dir, portable).and(also) {
                 Ok(()) => {
                     self.remove_ask = None;
                     self.close_anyway = true;
@@ -812,7 +895,7 @@ impl App {
             Tab::Advanced => self.advanced.ui(ui),
             Tab::Export => {
                 self.export.ui(ui);
-                // Its UniFi clients choice is kept, so a site's backup
+                // Its Client names choice is kept, so a site's backup
                 // reopens with the clients the Map shows.
                 if self.export.clients() != self.look.unifi_clients {
                     self.look.unifi_clients = self.export.clients();
@@ -922,22 +1005,47 @@ impl App {
         }
     }
 
+    /// Start `tab`'s test on `target` and show it. A run of that tool still
+    /// going is left alone (a toast says so): starting over would drop it
+    /// unlogged, and an hour of continuous ping with it.
+    fn start_test(&mut self, ctx: &egui::Context, tab: Tab, target: &str) {
+        if self.tab_running(tab) {
+            widgets::toast(
+                format!(
+                    "{} is already running: stop it first (what it found goes to Results)",
+                    match tab {
+                        Tab::Ping => "Ping",
+                        Tab::Ports => "Port Check",
+                        Tab::Trace => "Traceroute",
+                        Tab::Speed => "The Speed Test",
+                        Tab::Sweep => "Subnet Sweep",
+                        _ => "That test",
+                    }
+                ),
+                false,
+            );
+            self.tab = tab;
+            return;
+        }
+        match tab {
+            Tab::Ping => self.ping.run(ctx, target, 4),
+            Tab::Ports => self.ports.run(ctx, target),
+            Tab::Trace => self.trace.run(ctx, target),
+            Tab::Speed => self.speed.run(ctx),
+            Tab::Sweep => self.sweep.run(ctx, target),
+            Tab::Advanced => self.advanced.run(ctx, target),
+            _ => return,
+        }
+        self.tab = tab;
+    }
+
     /// What an inspector's button asked for: a test in its own tab, or the
     /// device on the Map.
     fn inspector_ask(&mut self, ctx: &egui::Context, ask: Option<inspector::Ask>) {
         match ask {
-            Some(inspector::Ask::Ping(ip)) => {
-                self.ping.run(ctx, &ip, 4);
-                self.tab = Tab::Ping;
-            }
-            Some(inspector::Ask::Ports(ip)) => {
-                self.ports.run(ctx, &ip);
-                self.tab = Tab::Ports;
-            }
-            Some(inspector::Ask::Trace(ip)) => {
-                self.trace.run(ctx, &ip);
-                self.tab = Tab::Trace;
-            }
+            Some(inspector::Ask::Ping(ip)) => self.start_test(ctx, Tab::Ping, &ip),
+            Some(inspector::Ask::Ports(ip)) => self.start_test(ctx, Tab::Ports, &ip),
+            Some(inspector::Ask::Trace(ip)) => self.start_test(ctx, Tab::Trace, &ip),
             Some(inspector::Ask::OnMap(ip)) => {
                 self.map.find(ip);
                 self.tab = Tab::Map;
@@ -963,18 +1071,9 @@ impl App {
             }
             // Config Export's dialog; the Map stays on screen and redraws.
             Some(Action::Open) => self.export.open_dialog(ctx),
-            Some(Action::Ping(ip)) => {
-                self.ping.run(ctx, &ip, 4);
-                self.tab = Tab::Ping;
-            }
-            Some(Action::Ports(ip)) => {
-                self.ports.run(ctx, &ip);
-                self.tab = Tab::Ports;
-            }
-            Some(Action::Trace(ip)) => {
-                self.trace.run(ctx, &ip);
-                self.tab = Tab::Trace;
-            }
+            Some(Action::Ping(ip)) => self.start_test(ctx, Tab::Ping, &ip),
+            Some(Action::Ports(ip)) => self.start_test(ctx, Tab::Ports, &ip),
+            Some(Action::Trace(ip)) => self.start_test(ctx, Tab::Trace, &ip),
             Some(Action::Join(host)) => {
                 self.join.ask_about(&host);
                 self.tab = Tab::Join;
@@ -1066,6 +1165,11 @@ impl App {
             || self.dns.is_running()
             || self.advanced.is_running()
             || self.netcheck.running_since().is_some()
+            // A logged check (not the quiet one on start) and other
+            // computers: their answers go to Results when they end, so a
+            // site switch waits for them like any run.
+            || self.join.running_since().is_some()
+            || self.join.others_running_since().is_some()
     }
 
     /// Run every tool against this machine's network and switch to Results.
@@ -1142,7 +1246,13 @@ impl App {
     /// off); Scratch's from the last day only.
     pub(crate) fn load_results(&mut self) {
         self.log = match log::site_file().filter(|_| self.look.results_keep) {
-            Some(p) => log::Log::load(&p),
+            Some(p) => {
+                let (log, said) = log::Log::load(&p);
+                if let Some(s) = said {
+                    widgets::toast(s, false);
+                }
+                log
+            }
             None => log::Log::default(),
         };
         // As read: runs that expired make it differ, so the file is written
@@ -1375,6 +1485,12 @@ fn main() {
     startup::install_panic_hook();
     #[cfg(target_os = "linux")]
     close_inherited_fds_on_exec();
+    // Owner-only before anything is written into it.
+    theme::secure_data_dir();
+    // One copy per data folder: a second would write over the first's work.
+    if let Err(why) = theme::claim_data_dir() {
+        startup::already_open(&why);
+    }
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).
@@ -1425,6 +1541,7 @@ fn main() {
             app.notes.set_autosave(app.look.notes_autosave);
             app.export.set_clients(app.look.unifi_clients);
             widgets::set_save_dir(app.look.save_dir.clone(), app.look.save_by_site);
+            log::expire_scratch(chrono::Local::now().naive_local());
             app.load_results();
             // The site opens as it was left: its configs read again (and
             // then any files it was opened with, below, which join them).
@@ -1433,8 +1550,14 @@ fn main() {
                 site::touch();
             }
             app.retitle(&cc.egui_ctx);
-            // Local, and quick: the status bar names the domain from the start.
-            app.join.check(&cc.egui_ctx, false);
+            // The status bar names the domain from the start, unless start-up
+            // requests are both off: `dsregcmd /status` (Windows) may ask the
+            // domain controller or Entra ID, and the Privacy page promises
+            // that then opening the app sends nothing. Refresh, Domain join
+            // and a Full scan ask it.
+            if app.look.wan_on_start || app.look.updates_on_start {
+                app.join.check(&cc.egui_ctx, false);
+            }
             if app.look.wan_on_start && app.shots.is_none() {
                 app.refresh_info(&cc.egui_ctx);
             }
@@ -1462,10 +1585,68 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        App, TABS, Tab, Target, drop_hint, drop_target, egui, fonts, log, notice_toasts,
-        results_ui, route_drop, small_screen, theme, tools,
+        App, TABS, Tab, Target, close_question, drop_hint, drop_target, egui, fonts, log,
+        notice_toasts, results_ui, route_drop, small_screen, theme, too_big, tools,
     };
     use std::path::{Path, PathBuf};
+
+    /// Closing asks about what would be lost: the notes, the saved maps,
+    /// or both.
+    #[test]
+    fn the_close_prompt_names_what_isnt_saved() {
+        assert_eq!(close_question(true, &[]), "Save the notes before closing?");
+        assert_eq!(
+            close_question(false, &["HQ".into()]),
+            "Save the map before closing?"
+        );
+        let two = ["HQ".to_string(), "Branch".to_string()];
+        assert_eq!(close_question(false, &two), "Save the maps before closing?");
+        assert_eq!(
+            close_question(true, &two),
+            "Save the notes and maps before closing?"
+        );
+    }
+
+    /// The close prompt fits a field laptop's window, whatever it lists.
+    #[test]
+    fn the_close_prompt_fits_the_window() {
+        for size in [(1280.0, 720.0), (1120.0, 720.0)] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts::definitions());
+            let mut app = App::fresh(theme::Settings::default(), None, false);
+            app.close_asked = true;
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| app.close_dialog(ui.ctx()));
+                out.textures_delta.clear();
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|c| match &c.shape {
+                        egui::Shape::Text(t) => {
+                            Some((t.galley.text().to_string(), t.visual_bounding_rect()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+            }
+            assert!(
+                texts.iter().any(|(t, _)| t.contains("before closing")),
+                "{texts:?}"
+            );
+            for (t, r) in &texts {
+                assert!(
+                    screen.contains_rect(*r),
+                    "{t:?} at {r:?} is outside {size:?}"
+                );
+            }
+        }
+    }
 
     /// The screens the first window opens maximised on: a 1080p laptop at
     /// 150% and 1366 × 768; not 1280 × 800 (it fits) or bigger.
@@ -1576,6 +1757,18 @@ mod tests {
             all(&mut app, "the map cleared");
         }
         theme::apply(&egui::Context::default(), theme::Theme::Dark);
+    }
+
+    #[test]
+    fn a_size_saved_on_a_bigger_screen_is_maximised() {
+        let laptop = egui::vec2(1280.0, 720.0);
+        assert!(too_big((2400.0, 1300.0), laptop));
+        assert!(
+            too_big((1280.0, 720.0), laptop),
+            "the whole screen, frame and all"
+        );
+        assert!(!too_big((1120.0, 600.0), laptop));
+        assert!(!too_big((1280.0, 720.0), egui::vec2(2560.0, 1440.0)));
     }
 
     #[test]

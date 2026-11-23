@@ -285,7 +285,7 @@ impl MapView {
                 plan.panel.max.x - PAD - 6.0,
                 plan.panel.min.y + PAD + TITLE / 2.0 - 2.0,
             ),
-            vec2(18.0, 18.0),
+            vec2(crate::theme::TARGET_H, crate::theme::TARGET_H),
         );
         if ui
             .put(x, egui::Button::new("×").frame(false))

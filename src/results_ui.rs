@@ -765,17 +765,13 @@ impl App {
         }
     }
 
-    /// Run `tab`'s tool again on `target` (the Speed Test has none).
+    /// Run `tab`'s tool again on `target` (the Speed Test has none), unless
+    /// it's running now.
     fn run_again(&mut self, ctx: &egui::Context, tab: Tab, target: &str) {
-        match tab {
-            Tab::Ping => self.ping.run(ctx, target, 4),
-            Tab::Ports => self.ports.run(ctx, target),
-            Tab::Trace => self.trace.run(ctx, target),
-            Tab::Speed => self.speed.run(ctx),
-            Tab::Sweep => self.sweep.run(ctx, target),
-            Tab::Advanced => self.advanced.run(ctx, target),
-            _ => {}
-        }
+        let here = self.tab;
+        self.start_test(ctx, tab, target);
+        // Run again stays on Results, as before.
+        self.tab = here;
     }
 }
 

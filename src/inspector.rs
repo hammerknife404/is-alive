@@ -98,15 +98,19 @@ pub fn show_as(
                 egui::pos2(room.max.x - w, room.min.y),
                 egui::pos2(room.max.x, room.max.y),
             );
-            // Esc that closes a menu or leaves a text box is theirs.
+            // Esc that closes a menu or leaves a text box is theirs; then
+            // it closes this, and a run goes on.
             let ctx = ui.ctx().clone();
             if esc
                 && ui.input(|i| i.key_pressed(egui::Key::Escape))
-                && !ctx.text_edit_focused()
+                && !crate::widgets::esc_for_text_or_menu(&ctx)
                 && !egui::Popup::is_any_open(&ctx)
             {
                 *open = false;
                 return;
+            }
+            if esc {
+                crate::widgets::floating_open(&ctx);
             }
             let v = ui.visuals().clone();
             egui::Area::new(egui::Id::new(id))
