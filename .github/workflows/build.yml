@@ -104,16 +104,23 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
 
-  # Signs is-alive.exe (Authenticode, through Azure Artifact Signing), so
-  # Windows names the publisher instead of "Unknown Publisher". Only for a
-  # release, and only once signing is set up (docs/wiki/Developing.md, "Code
-  # signing"): until AZURE_SIGNING_ACCOUNT is set the release ships the
-  # unsigned .exe, as before. Its own job, so the Azure sign-in never shares
-  # a runner with cargo and the crates' build scripts; and in the
-  # release-signing environment, whose branch rules decide which refs may
-  # sign at all (the Azure credential trusts that environment only).
+  # Signs is-alive.exe (Authenticode), so Windows names the publisher instead
+  # of "Unknown Publisher". Two ways, set up in docs/wiki/Developing.md
+  # ("Code signing"):
+  # - Azure Artifact Signing (AZURE_SIGNING_ACCOUNT set): a publicly trusted
+  #   certificate, a publisher name on every PC.
+  # - A NetTech self-signed certificate (SIGNING_CERT_THUMBPRINT set, the
+  #   .pfx in environment secrets): a publisher name only on machines that
+  #   trust that certificate (pushed by GPO or Intune).
+  # Azure wins when both are set. With neither, the release ships the
+  # unsigned .exe, as before. Only for a release; in its own job, so the
+  # signing key never shares a runner with cargo and the crates' build
+  # scripts; and in the release-signing environment, whose branch rules
+  # decide which refs may sign at all.
   sign:
-    if: needs.version.outputs.release == 'true' && vars.AZURE_SIGNING_ACCOUNT != ''
+    if: >-
+      needs.version.outputs.release == 'true'
+      && (vars.AZURE_SIGNING_ACCOUNT != '' || vars.SIGNING_CERT_THUMBPRINT != '')
     needs: [version, windows]
     runs-on: windows-latest
     environment: release-signing
@@ -125,11 +132,13 @@ jobs:
         with:
           name: is-alive-windows-x64
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        if: vars.AZURE_SIGNING_ACCOUNT != ''
         with:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
@@ -150,6 +159,38 @@ jobs:
           exclude-workload-identity-credential: true
           exclude-managed-identity-credential: true
           exclude-azure-cli-credential: false
+      - name: Sign with the NetTech certificate
+        if: vars.AZURE_SIGNING_ACCOUNT == ''
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+          THUMBPRINT: ${{ vars.SIGNING_CERT_THUMBPRINT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PFX_BASE64) { Write-Error "SIGNING_PFX_BASE64 isn't set in the release-signing environment"; exit 1 }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            $pw = ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -Password $pw -CertStoreLocation Cert:\CurrentUser\My
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+          # The certificate the variable names, not whatever the secret holds.
+          if ($cert.Thumbprint -ne $env:THUMBPRINT.Replace(' ', '').ToUpper()) {
+            Write-Error "The .pfx holds $($cert.Thumbprint), not SIGNING_CERT_THUMBPRINT"; exit 1
+          }
+          # This runner trusts it as NetTech's machines do, so the check
+          # below can say Valid.
+          $cer = Join-Path $env:RUNNER_TEMP 'signing.cer'
+          Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+          $r = Set-AuthenticodeSignature -FilePath is-alive.exe -Certificate $cert -HashAlgorithm SHA256 `
+            -TimestampServer http://timestamp.digicert.com
+          Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey
+          if ($r.Status -ne 'Valid') { Write-Error "Signing failed: $($r.StatusMessage)"; exit 1 }
       - name: The signature checks out
         shell: pwsh
         run: |

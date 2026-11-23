@@ -51,7 +51,41 @@ On other platforms (macOS etc.) ICMP falls back to the system `ping` command (de
 
 ## Code signing
 
-Windows shows *Unknown Publisher* for an `.exe` without an Authenticode signature from a certificate it trusts. The build attestation above doesn't change that: Windows only names a publisher whose certificate comes from a code-signing CA, and since 2023 a CA keeps that key in a hardware security module, so a `.pfx` in a repository secret is no longer an option. The **build** workflow signs `is-alive.exe` for each release through [Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/overview) once it's set up, and ships it unsigned until then.
+Windows shows *Unknown Publisher* for an `.exe` without an Authenticode signature from a certificate it trusts. The build attestation above doesn't change that. The **build** workflow signs `is-alive.exe` for each release one of two ways, and ships it unsigned until one is set up:
+
+| | NetTech self-signed certificate | Azure Artifact Signing |
+|---|---|---|
+| Publisher named | Only on machines that trust the certificate (NetTech's, pushed by GPO or Intune) | On every PC |
+| SmartScreen | Unchanged | Builds reputation over time |
+| Cost and wait | None | A paid subscription; identity validation takes 1 to 30 business days |
+| Turned on by | `SIGNING_CERT_THUMBPRINT` | `AZURE_SIGNING_ACCOUNT` (wins when both are set) |
+
+A publicly trusted certificate can't sit in a repository secret (since 2023 a CA keeps that key in a hardware security module), which is why the public route goes through Azure. A self-signed one can.
+
+### The NetTech self-signed certificate
+
+**Make it, once, on a Windows machine** (elevated PowerShell). The subject is what Windows shows as the publisher:
+
+```powershell
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=NetTech is-alive" `
+  -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -KeyLength 3072 `
+  -NotAfter (Get-Date).AddYears(2)
+Export-Certificate -Cert $cert -FilePath .\NetTech-is-alive.cer | Out-Null
+$pw = Read-Host -AsSecureString "Password for the .pfx"
+Export-PfxCertificate -Cert $cert -FilePath .\NetTech-is-alive.pfx -Password $pw | Out-Null
+[Convert]::ToBase64String([IO.File]::ReadAllBytes(".\NetTech-is-alive.pfx")) | Set-Clipboard
+$cert.Thumbprint
+```
+
+**GitHub, Settings → Environments:** create `release-signing`. Under **Deployment branches and tags** choose **Selected branches and tags** and add the branch `main` and the tag pattern `v*`. Add two environment secrets: `SIGNING_PFX_BASE64` (paste the clipboard) and `SIGNING_PFX_PASSWORD`. Then under **Settings → Secrets and variables → Actions → Variables** add the repository variable `SIGNING_CERT_THUMBPRINT` (the thumbprint printed above): that turns signing on, and the run refuses a `.pfx` holding any other certificate.
+
+**Then:** keep the `.pfx` and its password in the password vault, and delete the `.pfx` and the certificate from the machine you made it on (`Remove-Item Cert:\CurrentUser\My\<thumbprint> -DeleteKey`): whoever holds the key can sign anything NetTech's machines will trust. Push `NetTech-is-alive.cer` (the public half only) to NetTech's laptops and workstations into both **Trusted Root Certification Authorities** and **Trusted Publishers** (Group Policy: *Computer Configuration › Policies › Windows Settings › Security Settings › Public Key Policies*; Intune: a *Trusted certificate* profile for Root, and `Import-Certificate -CertStoreLocation Cert:\LocalMachine\TrustedPublisher` as a script run as SYSTEM).
+
+**Never on clients' machines.** A root NetTech controls in a client's trusted roots could vouch for any site or program there. A tool run from ScreenConnect's toolbox carries no download mark, so SmartScreen doesn't stop it on a client's PC either way.
+
+**Renewing:** the certificate lasts two years; signatures stay valid after that because each is timestamped. Before it expires, make a new one, push the new `.cer`, and replace the two secrets and the variable.
+
+### Azure Artifact Signing
 
 **What it takes:** a paid Azure subscription, and an organization in a [supported country](https://learn.microsoft.com/azure/artifact-signing/quickstart#prerequisites) (the US, Canada, the EU, the UK and a few others) or an individual developer in the US or Canada. Identity validation takes 1 to 30 business days. The Basic tier (5,000 signatures a month) is plenty; see [pricing](https://azure.microsoft.com/pricing/details/artifact-signing/). Windows shows the validated legal name as the publisher.
 
@@ -64,11 +98,11 @@ Windows shows *Unknown Publisher* for an `.exe` without an Authenticode signatur
 5. **GitHub, Settings → Environments:** create `release-signing`. Under **Deployment branches and tags** choose **Selected branches and tags** and add the branch `main` and the tag pattern `v*`. Add three environment secrets: `AZURE_CLIENT_ID` (the app registration), `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`.
 6. **Settings → Secrets and variables → Actions → Variables** (repository variables): `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT` and `AZURE_SIGNING_PROFILE`. Setting `AZURE_SIGNING_ACCOUNT` turns signing on.
 
-The next release is then signed. The **sign** job downloads the `.exe` the **windows** job built, signs and timestamps it, and checks the signature; the release's checksum and attestation are of the signed file. If signing fails, the release stops instead of shipping an unsigned `.exe`. To check a download: **Properties → Digital Signatures**, or `Get-AuthenticodeSignature is-alive.exe` in PowerShell.
+The next release is then signed. Either way, the **sign** job downloads the `.exe` the **windows** job built, signs and timestamps it, and checks the signature; the release's checksum and attestation are of the signed file. If signing fails, the release stops instead of shipping an unsigned `.exe`. To check a download: **Properties → Digital Signatures**, or `Get-AuthenticodeSignature is-alive.exe` in PowerShell.
 
-**Why the environment:** the Azure credential accepts GitHub's sign-in only for the `release-signing` environment, and the environment's rule lets only `main` and `v*` tags use it. A workflow changed on any other branch can't sign. Signing runs in its own job, never on the runner where cargo runs the crates' build scripts.
+**Why the environment:** its secrets (the `.pfx`, or the Azure app's ids) are given only to jobs running in `release-signing`, and its rule lets only `main` and `v*` tags use it; the Azure credential also accepts GitHub's sign-in for that environment only. A workflow changed on any other branch can't sign. Signing runs in its own job, never on the runner where cargo runs the crates' build scripts.
 
-**SmartScreen is separate.** A signed file can still get the blue *Windows protected your PC* box until it has built up download reputation, which happens on its own. After the first signed release, update "not code-signed yet" in `SECURITY.md` and the manual's *Why "Unknown Publisher"?* paragraph.
+**SmartScreen is separate.** A signed file can still get the blue *Windows protected your PC* box until it has built up download reputation, which happens on its own with Azure's certificate and never with a self-signed one. After the first signed release, update "not code-signed yet" in `SECURITY.md` and the manual's *Why "Unknown Publisher"?* paragraph.
 
 ## CI
 
