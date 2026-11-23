@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.10**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.11**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -1125,7 +1125,7 @@ Everything is in one row above the notes:
 
 **Dropping files on Notes:** a photo (PNG, JPEG, WebP) or notes (`.md`, `.txt`) dropped on the Notes tab is taken as **Open…** takes it: the photo goes in at the end, and notes ask **Replace the notes**, **Add at the end** or **Read only** (one file at a time, when several are dropped). Anything else dropped here (a backup, an export, a map) goes to [Config Export](#10-config-export); see [Dropping files](#dropping-files).
 
-**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#17-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first, as it does for a saved map with changes: **Save**, **Don't save** or **Cancel**. The choice is remembered.
+**Autosave** (on by default): the notes save themselves, redacted, half a second after each change to the open site's folder (see [Sites](#sites) and [Settings](#17-settings-and-themes)), and are there next time you open the app; each site has its own. Untick it (**File ▾ › Autosave**) to save only when you choose: the toolbar then says **Not saved** after a change, with **Save** beside it (or press **Ctrl+S** anywhere on the Notes tab). Closing is-alive with changes not saved asks first, as it does for a saved map with changes: **Save**, **Don't save** or **Cancel**. The choice is remembered. If a save fails (a full disk, a read-only folder), the notes say why, the toolbar says **Not saved** with **Save** to try again, and closing or switching site asks first, autosave on or off; a site switch whose notes can't be saved stays on the site. Every file is written whole or not at all, so a power cut mid-save leaves the last good copy.
 
 ### Photos
 
@@ -1409,7 +1409,7 @@ Copy, Save and Export always follow the filter, so filter to one customer's host
 
 **CSV** uses each tool's own columns, one row per result, with the run's start time first, so repeated runs stack and filter cleanly in Excel. Exporting several tools at once gives one CSV with a `tool` column. **HTML** gives a report you can attach or print.
 
-**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, in `results.json` in your profile folder, for 24 hours from each run. With it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB) are kept and older ones dropped, and the list says how many.
+**Where it's kept.** At a site, with **Keep with site** on, in the site's `results.json`, readable by your user account only, and written as each run finishes. In Scratch, in `results.json` in your profile folder, for 24 hours from each run. With it off, in memory only: export what you need before closing. Either way the newest 500 runs (or 8 MB, tables included) are kept and older ones dropped, and the list says how many. A `results.json` that can't be read (cut short, damaged, from a newer version) is never written over: it's kept beside it as `results.bad.json`, a message says so, and a new list starts.
 
 ### Example: a report for the ticket
 

@@ -639,12 +639,13 @@ impl App {
         }
         let mut choice = None;
         let notes = self.notes.unsaved();
+        let reason = self.notes.unsaved_reason();
         let maps = self.map.unsaved();
         let r = egui::Modal::new(egui::Id::new("close_unsaved")).show(ctx, |ui| {
             ui.set_max_width(360.0);
             ui.strong(close_question(notes, &maps));
             if notes {
-                ui.label("Autosave is off, and the notes have changes that aren't saved.");
+                ui.label(reason.as_str());
             }
             if !maps.is_empty() {
                 ui.label(format!(
@@ -1174,7 +1175,13 @@ impl App {
     /// off); Scratch's from the last day only.
     pub(crate) fn load_results(&mut self) {
         self.log = match log::site_file().filter(|_| self.look.results_keep) {
-            Some(p) => log::Log::load(&p),
+            Some(p) => {
+                let (log, said) = log::Log::load(&p);
+                if let Some(s) = said {
+                    widgets::toast(s, false);
+                }
+                log
+            }
             None => log::Log::default(),
         };
         // As read: runs that expired make it differ, so the file is written
