@@ -774,7 +774,7 @@ A map with nothing to show says what it's built from (and that Meraki configs ar
 **Open a backup or map…** on the empty map, **More › Open…** and the saved maps bar's **Open…** all show the same file dialog as Config Export's **Open file…**, with every kind it reads: UniFi backups, SonicWall exports and reports, Meraki configs, `/mapnetwork` maps (`.dc.html`, or a zip holding one) and saved maps (`.json`). Pick several at once if you like. You stay on the Map:
 
 - **Backups, exports and `/mapnetwork` maps** are read by [Config Export](#10-config-export) (they get its sub-tabs too) and the live map redraws with them. While a file is read, *Reading …* and its name show under the toolbar.
-- **A saved map** opens as a saved map (see *Undo and saved maps*, below).
+- **A saved map** opens as a saved map (see *Undo and saved maps*, below). One of this site's own saved maps shows its tab rather than a second copy.
 - **A Meraki config** is read in Config Export, and a message at the bottom of the window says the Map doesn't draw it.
 - **A file that can't be read** says why in a message at the bottom of the window (Config Export lists it too).
 
@@ -835,7 +835,7 @@ Under the toolbar the map says what it needs to: that it's a plan or a training 
 
 ### Moving around
 
-- **Drag the background** to pan; **scroll** or pinch to zoom; **Save**, the zoom buttons, **Center** and **Fit** sit in the bottom right corner.
+- **Drag the background** to pan; **scroll** or pinch to zoom; **Save**, the zoom buttons, **Center** and **Fit** sit in the bottom right corner. Beside Layers on a narrow window there may not be room for all of them: **Center** and the **%** go first (the keys still do both), then **−** and **+**, so they never cover Layers.
 - **Double-click the background** to fit the whole map; **double-click a card** to zoom to it.
 - **A big map opens close enough to read.** A site whose cards would be too narrow for their names if all of it were shown opens at 60%, its gateway at the top and centre, and you pan from there; **Fit** (or **F**, or a double-click on the background) shows the whole of it, however small. A map that fits at 60% or more opens whole.
 - **Panels keep the zoom.** Layers and a card's inspector lie over the map's edges (or, on a wide window, beside it) without zooming it out: the map stays as it was, and a selected card is moved clear of them. **Fit** (or **F**, or a double-click) frames the whole map in the room the open panels leave, and keeps it there as the map grows; with every panel shut, it fills the window again.
@@ -958,7 +958,7 @@ Back at a site, **More › Compare** (on the live map) lists this site's saved m
 - **Since** *date*, at the top of the left panel, lists them: **New**, **Changed** (with what: *IP 10.0.0.5 → 10.0.0.9*, *Newly open: 3389 (rdp)*, *No longer open: 22 (ssh)*, *Name OLD-PC → NEW-PC*) and **Gone**, the devices on the saved map that aren't on the map now. Click a device, or a heading for all of them, to show it on the map. **Copy** puts the list in a ticket or a report; **Stop** takes the marks off.
 - A selected card's inspector says the same under **Since** *date*.
 
-**How devices are matched:** by MAC first, so a device DHCP moved is the same device with a new IP, not one gone and one new. A device with no MAC (known only by IP, past a router) is matched by IP, then by its card (a /mapnetwork card keeps its id when its address changes). Two devices at one IP with different MACs are one gone and one new.
+**How devices are matched:** by MAC first, so a device DHCP moved is the same device with a new IP, not one gone and one new. A device with no MAC (known only by IP, past a router) is matched by IP, then by its card (a /mapnetwork card keeps its id when its address changes). Two devices at one IP with different MACs are one gone and one new. One MAC on several cards (a router's interfaces, a VM host) pairs card for card by address, so nothing reads as moved.
 
 **What isn't compared, and why:**
 
@@ -1030,7 +1030,7 @@ With several cards selected, the inspector's header says how many and offers **T
 
 ### Notes on cards
 
-Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ⋯), **Add note** in its inspector, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's inspector. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Several cards selected: **Add note to N cards…** writes one note onto each.
+Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ⋯), **Add note** in its inspector, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's inspector. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Starting a note on another card while one is open saves what you typed first, and so does its card leaving the map (a new sweep, a site folded): the note is there when the card comes back. Several cards selected: **Add note to N cards…** writes one note onto each.
 
 A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy details** and the exports carry it.
 

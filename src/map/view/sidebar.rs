@@ -59,17 +59,25 @@ impl MapView {
                 .on_hover_text(tip)
                 .clicked()
         };
+        // All of them take 236 points. Beside Layers on a narrow window the
+        // canvas left can be less: Center and the % go first (the keys and
+        // the wheel still do both), then − and +, so the row never reaches
+        // over Layers.
+        let room = place.width() - 20.0;
         let fit = button(ui, 40.0, "Fit", "Show the whole map (F)");
-        let center = button(
-            ui,
-            66.0,
-            "Center",
-            "Move the middle of the map to the middle of the view, at this zoom",
-        );
-        let zoom_in = button(ui, 28.0, "+", "Zoom in (+)");
+        let all = room >= 236.0;
+        let center = all
+            && button(
+                ui,
+                66.0,
+                "Center",
+                "Move the middle of the map to the middle of the view, at this zoom",
+            );
+        let plus_minus = room >= 108.0;
+        let zoom_in = plus_minus && button(ui, 28.0, "+", "Zoom in (+)");
         let pct = format!("{:.0}%", self.zoom * 100.0);
-        let reset = button(ui, 54.0, &pct, "Back to 100% (0)");
-        let zoom_out = button(ui, 28.0, "−", "Zoom out (−)");
+        let reset = all && button(ui, 54.0, &pct, "Back to 100% (0)");
+        let zoom_out = plus_minus && button(ui, 28.0, "−", "Zoom out (−)");
         self.explode_controls(ui, place);
         let target = if zoom_in {
             Some(self.zoom * 1.25)

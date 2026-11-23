@@ -196,6 +196,8 @@ pub(super) fn since_side(ui: &mut Ui, s: &Since, map: &Map) -> Option<SinceEv> {
             let row = |ui: &mut Ui, text: String, c: Color32, at: Option<usize>, tip: String| {
                 let r = ui
                     .horizontal_top(|ui| {
+                        // A whole row to click, at least 28 points tall.
+                        ui.set_min_height(crate::theme::TARGET_H);
                         let (dot, _) = ui.allocate_exact_size(vec2(10.0, 16.0), Sense::hover());
                         ui.painter()
                             .circle_filled(dot.center() - vec2(0.0, 2.0), 4.0, c);
