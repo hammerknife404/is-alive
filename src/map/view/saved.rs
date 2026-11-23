@@ -906,6 +906,49 @@ pub struct Summary {
 /// Every saved map in `dir` as `Summary`s, oldest first, each file read and
 /// parsed once until it changes (by its time and size): Compare › Other
 /// sites lists every site's maps while its menu is open, and parsing them
+/// A saved map's name, date and purpose from the first 4 KB of its file,
+/// where `to_json` writes them: None when they aren't all there.
+fn header(path: &Path) -> Option<Summary> {
+    use std::io::Read;
+    use std::sync::OnceLock;
+    let mut head = Vec::with_capacity(4096);
+    std::fs::File::open(path)
+        .ok()?
+        .take(4096)
+        .read_to_end(&mut head)
+        .ok()?;
+    if !sniff(&head) {
+        return None;
+    }
+    let head = String::from_utf8_lossy(&head);
+    static FIELD: OnceLock<regex::Regex> = OnceLock::new();
+    let re = FIELD.get_or_init(|| {
+        regex::Regex::new(r#""(name|created|purpose|map)"\s*:\s*("(?:[^"\\]|\\.)*")?"#).unwrap()
+    });
+    let mut doc = serde_json::Map::new();
+    for c in re.captures_iter(&head) {
+        let key = c.get(1)?.as_str();
+        // "map" opens the map itself: past it, a "name" is a card's.
+        if key == "map" {
+            break;
+        }
+        let value: String = serde_json::from_str(c.get(2)?.as_str()).ok()?;
+        doc.entry(key).or_insert(Value::String(value));
+    }
+    let doc = Value::Object(doc);
+    let purpose = Purpose::of(doc.get("purpose")?.as_str()?)?;
+    let name = text(&doc, "name", NAME_MAX);
+    Some(Summary {
+        name: if name.is_empty() {
+            "Untitled map".into()
+        } else {
+            name
+        },
+        created: doc.get("created").map(|_| text(&doc, "created", 40))?,
+        purpose,
+    })
+}
+
 /// all again every few seconds on the window's thread stalled it.
 pub fn list_summaries(dir: &Path) -> Vec<(PathBuf, Summary)> {
     type Stamp = (Option<std::time::SystemTime>, u64);
@@ -931,10 +974,17 @@ pub fn list_summaries(dir: &Path) -> Vec<(PathBuf, Summary)> {
         let summary = match seen.get(&p) {
             Some((s, sum)) if *s == stamp => sum.clone(),
             _ => {
-                let sum = read(&p).ok().map(|s| Summary {
-                    name: s.name,
-                    created: s.created,
-                    purpose: s.purpose,
+                // The header is enough for a list: a saved map writes its
+                // name, date and purpose first. Reading the whole map (up
+                // to megabytes each, every site's) held the window the
+                // first time Compare's list opened. A file whose header
+                // isn't where it should be is read whole.
+                let sum = header(&p).or_else(|| {
+                    read(&p).ok().map(|s| Summary {
+                        name: s.name,
+                        created: s.created,
+                        purpose: s.purpose,
+                    })
                 });
                 seen.insert(p.clone(), (stamp, sum.clone()));
                 sum
@@ -962,7 +1012,20 @@ pub fn slug(name: &str) -> String {
         }
     }
     let s = s.trim_end_matches('-');
-    if s.is_empty() { "map".into() } else { s.into() }
+    // Windows keeps device names (CON, AUX, COM1…) whatever the extension:
+    // "con.json" can't be made there.
+    const DEVICES: [&str; 4] = ["con", "prn", "aux", "nul"];
+    let device = DEVICES.contains(&s)
+        || ((s.starts_with("com") || s.starts_with("lpt"))
+            && s.len() == 4
+            && s.as_bytes()[3].is_ascii_digit());
+    if s.is_empty() {
+        "map".into()
+    } else if device {
+        format!("{s}-map")
+    } else {
+        s.into()
+    }
 }
 
 /// A new file in `dir` for a map called `name`, not taken by another.
@@ -1660,6 +1723,12 @@ mod tests {
     fn slugs_and_fresh_paths() {
         assert_eq!(slug("Head Office / 2nd floor"), "head-office-2nd-floor");
         assert_eq!(slug("  ***  "), "map");
+        // Windows device names can't be file names, extension or not.
+        assert_eq!(slug("CON"), "con-map");
+        assert_eq!(slug("com1"), "com1-map");
+        assert_eq!(slug("LPT9"), "lpt9-map");
+        assert_eq!(slug("Console"), "console");
+        assert_eq!(slug("com10"), "com10");
         assert_eq!(slug(&"a".repeat(100)).len(), 48);
         let dir = std::env::temp_dir().join(format!("is-alive-maps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1667,6 +1736,32 @@ mod tests {
         assert_eq!(p, dir.join("site-a.json"));
         write(&p, &sample()).unwrap();
         assert_eq!(fresh_path(&dir, "Site A"), dir.join("site-a-2.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list reads a saved map's header, and gets what reading the
+    /// whole file would; a file without one at the top is read whole.
+    #[test]
+    fn the_list_reads_only_the_header() {
+        let dir = std::env::temp_dir().join(format!("is-alive-header-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = sample();
+        s.name = "HQ \"east\" wing".into();
+        let p = dir.join("hq.json");
+        write(&p, &s).unwrap();
+        let h = header(&p).expect("a header");
+        let whole = read(&p).unwrap();
+        assert_eq!(
+            (h.name.as_str(), h.created.as_str()),
+            (whole.name.as_str(), whole.created.as_str())
+        );
+        assert_eq!(h.purpose, whole.purpose);
+        // Not a saved map at all, or no purpose up top: not from the header.
+        std::fs::write(dir.join("x.json"), r#"{"format":"other","name":"x"}"#).unwrap();
+        assert!(header(&dir.join("x.json")).is_none());
+        let listed = list_summaries(&dir);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].1.name, "HQ \"east\" wing");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

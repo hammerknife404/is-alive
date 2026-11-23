@@ -380,6 +380,26 @@ servers; it matters only if mail for {d} is sent from here"
 mod tests {
     use super::*;
 
+    /// Any answer a list gives, read as addresses, classifies without a
+    /// panic.
+    #[test]
+    fn any_answer_classifies() {
+        let good = [
+            127u8, 0, 0, 2, 127, 255, 255, 254, 10, 0, 0, 1, 127, 0, 0, 1,
+        ];
+        crate::hostile::each(&good, |b| {
+            let ips: Vec<IpAddr> = b
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| IpAddr::V4(Ipv4Addr::from(*c)))
+                .collect();
+            for list in LISTS {
+                let _ = classify(list, &ips);
+            }
+        });
+    }
+
     /// URIBL's answer is a mask: black (2) or red (8) is a listing; grey
     /// (4) alone is a bulk sender, scored, not blocked; 127.0.0.1 refused.
     #[test]

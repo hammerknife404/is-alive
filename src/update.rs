@@ -42,7 +42,10 @@ fn compare(body: &str, current: &str) -> Found {
         return Found::Failed("no release found".into());
     };
     let (Some(latest), Some(now)) = (semver(tag), semver(current)) else {
-        return Found::Failed(format!("can't read the version {tag:?}"));
+        // As sent, but short and with no control characters: it's shown in
+        // Settings.
+        let shown: String = tag.chars().filter(|c| !c.is_control()).take(40).collect();
+        return Found::Failed(format!("can't read the version {shown:?}"));
     };
     if latest <= now {
         return Found::UpToDate;
@@ -131,5 +134,12 @@ mod tests {
         assert_eq!(semver("v1.2.3-rc1"), Some((1, 2, 3)));
         assert_eq!(semver("1.2"), Some((1, 2, 0)));
         assert_eq!(semver("1.2.3.4"), None);
+        // A tag that isn't a version is shown short and without control
+        // characters (it lands in Settings).
+        let long = format!("x\u{1b}[31m{}", "y".repeat(5000));
+        match compare(&body(&long, RELEASES), "0.23.0") {
+            Found::Failed(m) => assert!(m.len() < 80 && !m.contains('\u{1b}'), "{m}"),
+            other => panic!("{other:?}"),
+        }
     }
 }

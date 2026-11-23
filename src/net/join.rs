@@ -80,7 +80,9 @@ pub struct Join {
 
 /// The fields that go to Results (and from there to the Site report and
 /// the Site Bundle): what says how the machine is joined and whether that
-/// join works. dsregcmd prints more, the signed-in user's account among
+/// join works. Not the device's or the tenant's IDs, nor the MDM address:
+/// they identify this machine and the client's Entra tenant, and say
+/// nothing about whether the join works (the tab still shows them). dsregcmd prints more, the signed-in user's account among
 /// it: the tab shows all of it, Results only these.
 const KEEP: &[&str] = &[
     // dsregcmd
@@ -89,12 +91,9 @@ const KEEP: &[&str] = &[
     "DomainJoined",
     "DomainName",
     "Device Name",
-    "DeviceId",
     "DeviceAuthStatus",
     "TpmProtected",
     "TenantName",
-    "TenantId",
-    "MdmUrl",
     "WorkplaceJoined",
     "AzureAdPrt",
     "EnterprisePrt",
@@ -213,7 +212,9 @@ fn ask() -> Join {
         cmd.creation_flags(0x0800_0000);
     }
     let source = "dsregcmd /status";
-    match cmd.output() {
+    // It asks Entra ID's servers along the way: on a network that drops
+    // them it can take minutes. Every start and Full scan wait on it.
+    match super::output_within(&mut cmd, std::time::Duration::from_secs(20)) {
         Ok(out) => {
             let text = String::from_utf8_lossy(&out.stdout);
             let mut j = parse_dsregcmd(&text);
@@ -240,11 +241,20 @@ fn ask() -> Join {
 
 #[cfg(not(windows))]
 fn ask() -> Join {
-    let mut cmd = Command::new("realm");
-    cmd.args(["list"]);
-    crate::widgets::host_libraries(&mut cmd);
     let source = "realm list";
-    match cmd.output() {
+    // From the system's own folders, not whatever `realm` is first on
+    // PATH; in the C locale, as its output is read for English words.
+    let Some(realm) = super::system_tool("realm") else {
+        return Join {
+            source,
+            error: Some(NO_REALM.into()),
+            ..Join::default()
+        };
+    };
+    let mut cmd = Command::new(realm);
+    cmd.args(["list"]).env("LC_ALL", "C");
+    crate::widgets::host_libraries(&mut cmd);
+    match super::output_within(&mut cmd, std::time::Duration::from_secs(20)) {
         Ok(out) if out.status.success() => Join {
             source,
             ..parse_realm(&String::from_utf8_lossy(&out.stdout))
@@ -257,17 +267,17 @@ fn ask() -> Join {
             )),
             ..Join::default()
         },
-        Err(_) => Join {
+        Err(e) => Join {
             source,
-            error: Some(
-                "realmd isn't installed (no `realm` command), so this can't tell. A computer \
-                 joined with winbind or by hand isn't seen either."
-                    .into(),
-            ),
+            error: Some(format!("realm list: {e}")),
             ..Join::default()
         },
     }
 }
+
+#[cfg(not(windows))]
+const NO_REALM: &str = "realmd isn't installed (no `realm` command), so this can't tell. A computer \
+                        joined with winbind or by hand isn't seen either.";
 
 /// The computer's primary DNS suffix: its AD domain when joined.
 #[cfg(windows)]
@@ -483,6 +493,10 @@ mod tests {
         assert!(text.contains("DomainJoined"), "{text}");
         assert!(text.contains("TenantName"), "{text}");
         assert!(!text.contains("someone"), "{text}");
+        // Nor the IDs of this machine and the client's tenant.
+        for id in ["DeviceId", "TenantId", "MdmUrl", "00000000-0000"] {
+            assert!(!text.contains(id), "{id} in {text}");
+        }
         let t = j.table();
         assert_eq!(t.columns, COLUMNS);
         assert_eq!(t.rows[0], ["join", "kind", "hybrid"]);

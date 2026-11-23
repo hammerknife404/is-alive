@@ -333,6 +333,9 @@ pub(crate) fn http_get(url: &str, follow: bool) -> Result<String, String> {
         .tls_config(tls)
         .timeout_global(Some(Duration::from_secs(10)))
         .max_redirects(if follow { 5 } else { 0 })
+        // HTTPS only, redirects included: a policy or a registration
+        // record fetched in the clear could be read or changed on the way.
+        .https_only(true)
         .user_agent(concat!("is-alive/", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
@@ -347,6 +350,17 @@ pub(crate) fn http_get(url: &str, follow: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A TXT record's tags, damaged any way, read without a panic.
+    #[test]
+    fn damaged_tag_records_never_panic() {
+        crate::hostile::each_text(
+            "v=DMARC1; p=reject; sp=none; pct=50; rua=mailto:dmarc@example.com",
+            |t| {
+                let _ = tags(t);
+            },
+        );
+    }
 
     #[test]
     fn normalizes_input() {
