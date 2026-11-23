@@ -63,8 +63,26 @@ pub fn sniff(data: &[u8]) -> bool {
 /// Largest map read: a /mapnetwork map of a big site is a few MB.
 const MAP_MAX: usize = 64 << 20;
 /// Most devices and links a map may hold and still be drawn.
-const NODES_MAX: usize = 10_000;
+pub(crate) const NODES_MAX: usize = 10_000;
 const EDGES_MAX: usize = 50_000;
+/// Longest text kept from any one value. A name or a note is a line or
+/// two; a crafted page with a megabyte one would be copied onto every card
+/// and line that cites it ("Also linked to …", a "+N more" card's devices).
+const FIELD_MAX: usize = 1_000;
+
+/// Cut every string past FIELD_MAX. (Lists are left whole: what copies one
+/// caps it, so a "+N more" card can still say how many it listed.)
+fn cap(v: &mut Value) {
+    match v {
+        Value::String(s) if s.len() > FIELD_MAX => {
+            s.truncate(s.floor_char_boundary(FIELD_MAX));
+            s.push('…');
+        }
+        Value::Array(a) => a.iter_mut().for_each(cap),
+        Value::Object(m) => m.values_mut().for_each(cap),
+        _ => {}
+    }
+}
 
 pub fn parse(data: &[u8]) -> Result<Doc, String> {
     if data.len() > MAP_MAX {
@@ -75,19 +93,23 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
         ));
     }
     let text = std::str::from_utf8(data).map_err(|_| "map file isn't UTF-8 text")?;
-    let block = match text.find(START) {
+    // Inside the SITE DATA block (data only), its strings are passed over:
+    // a device named "this.ACTIONS = []" or "END SITE DATA" is a name.
+    let (block, strict) = match text.find(START) {
         Some(s) => {
             let rest = &text[s + START.len()..];
-            &rest[..rest.find(END).unwrap_or(rest.len())]
+            let end = code_hits(rest, END, true).first().copied();
+            (&rest[..end.unwrap_or(rest.len())], true)
         }
-        None => text,
+        None => (text, false),
     };
     let mut data = Map::new();
     for key in ["META", "SITES", "ZONES", "NODES", "EDGES", "ACTIONS"] {
-        if let Some(v) = assignment(block, key)? {
+        if let Some(v) = assignment(block, key, strict)? {
             data.insert(key.to_lowercase(), v);
         }
     }
+    data.values_mut().for_each(cap);
     let list = |k: &str| match data.get(k) {
         Some(Value::Array(a)) => a.iter().filter(|v| v.is_object()).cloned().collect(),
         _ => Vec::new(),
@@ -134,14 +156,72 @@ pub fn parse(data: &[u8]) -> Result<Doc, String> {
     })
 }
 
+/// Where `pat` is in `code`, skipping its string literals ('…', "…",
+/// `…`) and, unless `comments`, its comments. For the SITE DATA block,
+/// which holds data and comments only (no regular expressions to confuse
+/// it). A quote left open ends at the line's end, as in JavaScript.
+fn code_hits(code: &str, pat: &str, comments: bool) -> Vec<usize> {
+    let b = code.as_bytes();
+    let p = pat.as_bytes();
+    let mut out = Vec::new();
+    let hits_in = |from: usize, to: usize, out: &mut Vec<usize>| {
+        if comments {
+            out.extend(code[from..to].match_indices(pat).map(|(k, _)| from + k));
+        }
+    };
+    let mut i = 0;
+    while i < b.len() {
+        let rest = &b[i..];
+        if rest.starts_with(b"//") {
+            let end = rest
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |k| i + k);
+            hits_in(i, end, &mut out);
+            i = end;
+        } else if rest.starts_with(b"/*") {
+            let end = rest[2..]
+                .windows(2)
+                .position(|w| w == b"*/")
+                .map_or(b.len(), |k| i + 2 + k + 2);
+            hits_in(i, end, &mut out);
+            i = end;
+        } else if let q @ (b'\'' | b'"' | b'`') = rest[0] {
+            i += 1;
+            while i < b.len() {
+                match b[i] {
+                    b'\\' => i += 2,
+                    c if c == q => {
+                        i += 1;
+                        break;
+                    }
+                    b'\n' if q != b'`' => break,
+                    _ => i += 1,
+                }
+            }
+        } else if rest.starts_with(p) {
+            out.push(i);
+            i += p.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// The literal assigned to `this.<key>`. A mention in a comment, a
 /// comparison or the engine reading it back (`this.NODES = this.NODES…`)
-/// is passed over: only `= {` or `= [` starts the data.
-fn assignment(block: &str, key: &str) -> Result<Option<Value>, String> {
+/// is passed over: only `= {` or `= [` starts the data. With `strict`
+/// (the SITE DATA block) a mention inside a string or comment is too.
+fn assignment(block: &str, key: &str, strict: bool) -> Result<Option<Value>, String> {
     let pat = format!("this.{key}");
-    let mut from = 0;
-    while let Some(at) = block[from..].find(&pat).map(|i| from + i) {
-        from = at + pat.len();
+    let hits: Vec<usize> = if strict {
+        code_hits(block, &pat, false)
+    } else {
+        block.match_indices(&pat).map(|(k, _)| k).collect()
+    };
+    for at in hits {
+        let from = at + pat.len();
         let rest = block[from..].trim_start();
         let Some(rest) = rest.strip_prefix('=').filter(|r| !r.starts_with('=')) else {
             continue;
@@ -383,6 +463,20 @@ impl Parser<'_> {
 mod tests {
     use super::*;
 
+    /// A megabyte name is cut where it's read, so nothing later can copy it
+    /// onto every card that cites it.
+    #[test]
+    fn long_values_are_cut_when_read() {
+        let long = "é".repeat(1 << 20);
+        let page =
+            format!("this.NODES = [ {{ id:'a', label:'{long}', details:['{long}', 'short'] }} ];");
+        let d = parse(page.as_bytes()).unwrap();
+        let label = d.nodes[0]["label"].as_str().unwrap();
+        assert!(label.len() <= FIELD_MAX + '…'.len_utf8(), "{}", label.len());
+        assert!(label.ends_with('…'));
+        assert_eq!(d.nodes[0]["details"][1], "short");
+    }
+
     const PAGE: &str = r#"<html><script>
     class X { constructor() {
     /* ===================== SITE DATA ===================== */
@@ -447,6 +541,26 @@ this.NODES = this.NODES || [];\nthis.NODES = [ { id:'a', label:'A' } ];";
         let d = parse(page.as_bytes()).unwrap();
         assert_eq!(d.nodes.len(), 1);
         assert_eq!(d.html, page);
+    }
+
+    /// A page Claude wrote, strings as they are: a name inside the data
+    /// that reads like an assignment or the block's end is still a name.
+    #[test]
+    fn a_name_inside_the_data_is_text() {
+        let page = "<script>\n/* ===== SITE DATA ===== */\n\
+this.NODES = [ { id:'a', label:'this.ACTIONS = [] it\\'s' },\n\
+  { id:'b', label: \"END SITE DATA\" }, { id:'c', label:`this.EDGES = []` } ];\n\
+// this.EDGES = [ {from:'x', to:'y'} ] in a comment\n\
+this.EDGES = [ {from:'a', to:'b'}, {from:'a', to:'c'} ];\n\
+this.ACTIONS = [ {sev:'high', text:'Real'} ];\n\
+/* === END SITE DATA === */\nthis.ACTIONS = [ {sev:'low', text:'After the block'} ];\n</script>";
+        let d = parse(page.as_bytes()).unwrap();
+        assert_eq!(d.nodes.len(), 3);
+        assert_eq!(d.nodes[0]["label"], "this.ACTIONS = [] it's");
+        assert_eq!(d.nodes[1]["label"], "END SITE DATA");
+        assert_eq!(d.edges.len(), 2);
+        assert_eq!(d.actions.len(), 1);
+        assert_eq!(d.actions[0]["text"], "Real");
     }
 
     #[test]

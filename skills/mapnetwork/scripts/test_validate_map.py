@@ -55,12 +55,12 @@ CASES = [
     ("url in string",            site(two("'https://portal.example.com/admin'")), 0, None),
     ("key-like text, dq string", site(two('"Two NICs, mgmt: .5"')), 0, None),
     ("key-like text, sq string", site(two("'Two NICs, mgmt: .5'")), 0, None),
-    ("apostrophe in /* */",      site("[ /* Elaine's closet */ { id:'a', zone:'core', kind:'X', label:'A' },"
+    ("apostrophe in /* */",      site("[ /* Dana's closet */ { id:'a', zone:'core', kind:'X', label:'A' },"
                                       " { id:'b', zone:'core', kind:'X', label:'B' } ]"), 0, None),
-    ("apostrophe in //",         site("[ // Elaine's closet\n { id:'a', zone:'core', kind:'X', label:'A' },"
+    ("apostrophe in //",         site("[ // Dana's closet\n { id:'a', zone:'core', kind:'X', label:'A' },"
                                       " { id:'b', zone:'core', kind:'X', label:'B' } ]"), 0, None),
-    ("dq string w/ apostrophe",  site(two('"Elaine\'s office"')), 0, None),
-    ("escaped apostrophe",       site(two("'Elaine\\'s office'")), 0, None),
+    ("dq string w/ apostrophe",  site(two('"Dana\'s office"')), 0, None),
+    ("escaped apostrophe",       site(two("'Dana\\'s office'")), 0, None),
     ("', ]' inside string",      site(two("'ports 1-4, ]x'")), 0, None),
     ("'/*' inside string",       site(two("'fan 1/* tray'")), 0, None),
     ("'this.X =' in string",     site(two("'note: this.X = y'")), 0, None),
@@ -97,13 +97,13 @@ CASES = [
                              sites="{ hq:{ name:'HQ' } }"), 0, "Unassigned"),
     # ---- broken files: must reject, at the right line ----
     ("missing comma",     site("[ { id:'a' zone:'core' } ]"), 1, "line 8"),
-    ("unescaped apos",    site(two("'Elaine's office'")), 1, "unescaped"),
+    ("unescaped apos",    site(two("'Dana's office'")), 1, "unescaped"),
     ("mismatched close",  site("[ { id:'a', chips:['x' } ]"), 1, "closes a `[`"),
     ("unterminated str",  site(two("'oops")), 1, "string"),
     ("undefined literal", site("[ { id:'a', zone:'core', flags:undefined } ]"), 1, "not a literal"),
     ("template literal",  site(two("`x`")), 1, "template"),
     ("no markers",        "<html>nothing here</html>", 1, "marker"),
-    # ASC of Northern LA, 2026-10-05: data spliced after the banner's first
+    # Seen on a real map: data spliced after the banner's first
     # line, so the banner's */ was dropped and every this.X = ... sat inside
     # the comment. Browser rendered undefined data; validator said VALID.
     ("unclosed banner",

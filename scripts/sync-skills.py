@@ -24,7 +24,33 @@ PLACES = _t["places"] if _t else {}
 SITE_ONLY = _t["site_only"] if _t else {}
 FIXED = _t["fixed"] if _t else {}
 DOC_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")]
-MAC = re.compile(r"\b((?:[0-9a-fA-F]{2}:){3})((?:[0-9a-fA-F]{2}:){2}[0-9a-fA-F]{2})\b")
+# A MAC is written many ways: colon or dash pairs, Cisco's dotted quads, a
+# SonicWall serial's dashed quads (the serial is the X0 MAC), and bare (an id
+# derived from a MAC, d_<12 hex>). Each is a run of hex and separators with
+# one of these shapes; the same rule is in src/skills.rs's test.
+RUN = re.compile(r"[0-9A-Fa-f:.-]+")
+SHAPES = re.compile(
+    r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
+    r"|[0-9A-Fa-f]{4}[.-][0-9A-Fa-f]{4}[.-][0-9A-Fa-f]{4}"
+    r"|[0-9A-Fa-f]{12}"
+)
+# Not a device: the format example in validate_map.py's warning.
+PLACEHOLDERS = {"aabbccddeeff"}
+
+
+def macs_in(text):
+    """(start, end, 12 lowercase hex) for each MAC in text, in any form."""
+    for m in RUN.finditer(text):
+        run = m.group(0)
+        core = run.strip(":.-")
+        at = m.start() + run.index(core) if core else m.start()
+        if not SHAPES.fullmatch(core):
+            continue
+        hexes = re.sub(r"[^0-9A-Fa-f]", "", core).lower()
+        # Twelve bare digits are a date or a number more often than a MAC.
+        if core == hexes and not re.search(r"[a-f]", hexes):
+            continue
+        yield at, at + len(core), hexes
 
 
 def forms(old, new):
@@ -49,11 +75,27 @@ def scrub(text, site_file, macs):
     t = table(site_file)
     for old in sorted(t, key=len, reverse=True):  # longest first: "X Clinic" before "X"
         text = re.sub(rf"(?<![A-Za-z]){re.escape(old)}(?![a-z])", t[old], text)
-    def mac(m):
-        key = m.group(0).lower()
-        macs.setdefault(key, len(macs) + 1)
-        return f"{m.group(1)}00:00:{macs[key]:02x}"
-    return MAC.sub(mac, text)
+    # Every form of one MAC gets the same number, so an id stays the MAC
+    # it was made from: d_10da43f1165d and 10:da:43:f1:16:5d both end 00:02.
+    out, last = [], 0
+    for start, end, hexes in macs_in(text):
+        if hexes[6:10] == "0000" or hexes in PLACEHOLDERS:
+            continue
+        n = macs.setdefault(hexes, len(macs) + 1)
+        if n > 0xFF:
+            sys.exit("more than 255 MACs: widen the numbering in scrub()")
+        keep = iter(f"0000{n:02x}")
+        seen, chars = 0, []
+        for c in text[start:end]:
+            if c in "0123456789abcdefABCDEF":
+                seen += 1
+                if seen > 6:
+                    c = next(keep)
+                    c = c.upper() if text[start:end].isupper() else c
+            chars.append(c)
+        out += [text[last:start], "".join(chars)]
+        last = end
+    return "".join(out) + text[last:]
 
 
 def check(path, text, site_file):
@@ -62,9 +104,9 @@ def check(path, text, site_file):
     for n in names:
         if re.search(rf"(?<![A-Za-z]){re.escape(n)}(?![a-z])", text, re.I):
             bad.append(f"name {n!r}")
-    for m in MAC.finditer(text):
-        if not m.group(2).lower().startswith("00:00:"):
-            bad.append(f"MAC {m.group(0)}")
+    for start, end, hexes in macs_in(text):
+        if hexes[6:10] != "0000" and hexes not in PLACEHOLDERS:
+            bad.append(f"MAC {text[start:end]}")
     for ip in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text):
         try:
             a = ipaddress.ip_address(ip)
@@ -81,7 +123,10 @@ def main():
     if _t is None:
         sys.exit(f"no scrub table at {TABLE}: the names to replace aren't kept in the repo")
     src = Path(sys.argv[1]).expanduser()
-    out = Path(__file__).resolve().parent.parent / "skills"
+    final = Path(__file__).resolve().parent.parent / "skills"
+    # Built beside skills/ and swapped in only when nothing is flagged: a
+    # failed run never leaves unscrubbed text where `git add` would take it.
+    out = final.with_name("skills.new")
     shutil.rmtree(out, ignore_errors=True)
     macs, problems = {}, []
     for skill in SKILLS:
@@ -93,11 +138,18 @@ def main():
             dest = out / scrub(str(rel), site_file, macs)
             dest.parent.mkdir(parents=True, exist_ok=True)
             text = scrub(f.read_text(encoding="utf-8"), site_file, macs)
-            problems += check(dest.relative_to(out.parent), text, site_file)
+            problems += check(final.name / dest.relative_to(out), text, site_file)
             dest.write_text(text, encoding="utf-8")
     if problems:
-        sys.exit("left in the copies:\n  " + "\n  ".join(problems))
-    n = sum(1 for p in out.rglob("*") if p.is_file())
+        shutil.rmtree(out, ignore_errors=True)
+        sys.exit("left in the copies (skills/ unchanged):\n  " + "\n  ".join(problems))
+    old = final.with_name("skills.old")
+    shutil.rmtree(old, ignore_errors=True)
+    if final.exists():
+        final.rename(old)
+    out.rename(final)
+    shutil.rmtree(old, ignore_errors=True)
+    n = sum(1 for p in final.rglob("*") if p.is_file())
     print(f"skills/: {n} files, {len(macs)} MACs reduced to their vendor prefix")
 
 
