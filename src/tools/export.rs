@@ -74,12 +74,14 @@ impl Export {
         }
     }
 
-    fn json(&self) -> &str {
+    /// What Save JSON writes. A UniFi backup was read with `clients`
+    /// already; a Meraki export's DHCP reservation names follow it here.
+    fn json(&self, clients: unifi::Clients) -> String {
         match self {
-            Export::Unifi(r) => &r.json,
-            Export::SonicWall(r) => &r.json,
-            Export::Meraki(r) => &r.json,
-            Export::Map(d) => &d.json,
+            Export::Unifi(r) => r.json.clone(),
+            Export::SonicWall(r) => r.json.clone(),
+            Export::Meraki(r) => r.json_for(clients),
+            Export::Map(d) => d.json.clone(),
         }
     }
 
@@ -263,8 +265,8 @@ file this reads",
     }
     if sonicwall::sniff(&data) {
         sonicwall::convert(&data).map(Export::SonicWall)
-    } else if meraki::sniff(&data) {
-        meraki::convert(&data).map(Export::Meraki)
+    } else if let Some(r) = meraki::open(&data) {
+        r.map(Export::Meraki)
     } else {
         unifi::convert(data, clients)
             .map(Export::Unifi)
@@ -291,10 +293,12 @@ fn note_unread(unread: &mut Vec<PathBuf>, path: &Path, ok: bool) {
     }
 }
 
-/// "UniFi clients: none / anonymized / full" picker; true when changed.
+/// "Client names: none / anonymized / full" picker; true when changed.
 pub fn clients_choice(ui: &mut Ui, id: &str, clients: &mut unifi::Clients) -> bool {
-    ui.label("UniFi clients")
-        .on_hover_text("Include the UniFi client table (every device that has connected)");
+    ui.label("Client names").on_hover_text(
+        "How client devices' names go out: the UniFi client table (every device that has \
+connected), and phones', laptops' and PCs' names in the sweep inventory and Meraki DHCP reservations",
+    );
     let mut changed = false;
     egui::ComboBox::from_id_salt(id)
         .selected_text(clients.label())
@@ -789,6 +793,7 @@ impl ExportTool {
         });
         ui.separator();
         let mut clear = None;
+        let clients = self.clients;
         if let Some(Slot { path, export: r }) = self.slots.get(self.shown) {
             ui.label(egui::RichText::new(r.headline()).strong());
             if let Export::Meraki(_) = r {
@@ -806,7 +811,7 @@ impl ExportTool {
                         format!("{stem}.{}.json", r.suffix()),
                         "JSON",
                         vec!["json"],
-                        r.json().to_string(),
+                        r.json(clients),
                     );
                 }
                 widgets::copy_button(ui, || r.summary());

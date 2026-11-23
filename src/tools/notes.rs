@@ -45,6 +45,10 @@ pub struct NotesTool {
     outline: Option<bool>,
     /// When the text last changed, while unsaved.
     dirty: Option<f64>,
+    /// The last write failed: the changes are still only in memory.
+    /// Autosave waits for the next edit to try again (not every frame),
+    /// and closing or switching site asks first.
+    write_failed: bool,
     saved: Option<String>,
     err: Option<String>,
     /// Redactions found so far, to flash the count when it grows.
@@ -372,6 +376,7 @@ impl Default for NotesTool {
             show_hits: true,
             outline: None,
             dirty: None,
+            write_failed: false,
             saved: None,
             err: None,
             known_hits: 0,
@@ -441,24 +446,30 @@ impl NotesTool {
         crate::theme::strip_emoji_styles(&self.sanitized().0)
     }
 
-    /// Write the sanitized notes, replacing the file in one step.
+    /// Write the sanitized notes, replacing the file in one step. The
+    /// changes count as saved only once they are.
     fn write(&mut self) {
-        self.dirty = None;
-        let Some(p) = path() else { return };
+        let Some(p) = path() else {
+            self.dirty = None;
+            return;
+        };
         let (clean, _) = self.sanitized();
-        let tmp = p.with_extension("md.tmp");
         let r = p
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|_| crate::theme::write_private(&tmp, clean))
-            .and_then(|_| std::fs::rename(&tmp, &p));
+            .and_then(|_| crate::theme::replace_private(&p, clean));
         match r {
             Ok(()) => {
+                self.dirty = None;
+                self.write_failed = false;
                 self.saved = Some(chrono::Local::now().format("%H:%M").to_string());
                 self.err = None;
                 self.write_allow();
             }
-            Err(e) => self.err = Some(format!("Couldn't autosave notes: {e}")),
+            Err(e) => {
+                self.write_failed = true;
+                self.err = Some(format!("Couldn't save the notes: {e}"));
+            }
         }
     }
 
@@ -474,7 +485,9 @@ impl NotesTool {
                 _ => Ok(()),
             }
         } else {
-            crate::theme::write_private(
+            // Whole or not at all: a cut list would load empty, and the
+            // kept values would then be redacted in the notes for good.
+            crate::theme::replace_private(
                 &p,
                 serde_json::to_string(&self.ov.allow).unwrap_or_default(),
             )
@@ -529,8 +542,23 @@ impl NotesTool {
     }
 
     /// Changes that only Save writes: autosave is off.
+    /// Changes that aren't on disk and won't be by themselves: autosave
+    /// is off, or its last write failed.
     pub fn unsaved(&self) -> bool {
-        !self.autosave && self.dirty.is_some()
+        self.dirty.is_some() && (!self.autosave || self.write_failed)
+    }
+
+    /// A save was tried and failed: the changes are only in memory.
+    pub fn save_failed(&self) -> bool {
+        self.write_failed && self.dirty.is_some()
+    }
+
+    /// Why closing or switching site asks about the notes.
+    pub fn unsaved_reason(&self) -> String {
+        match &self.err {
+            Some(e) if self.write_failed => format!("{e}. Save tries again."),
+            _ => "Autosave is off, and the notes have changes that aren't saved.".into(),
+        }
     }
 
     /// Write the notes now (closing with autosave off). False if it failed.
@@ -591,6 +619,8 @@ impl NotesTool {
 
     fn changed(&mut self, now: f64) {
         self.dirty = Some(now);
+        // A new edit is a new try.
+        self.write_failed = false;
     }
 
     /// Replace the selection (or insert at the cursor) via `f`, which gets
@@ -1120,10 +1150,13 @@ impl NotesTool {
         if !self.autosave {
             return;
         }
+        if self.write_failed {
+            return;
+        }
         if self.dirty.is_some_and(|t| now - t >= SAVE_AFTER) {
             self.write();
         }
-        if let Some(t) = self.dirty {
+        if let Some(t) = self.dirty.filter(|_| !self.write_failed) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(
                 (SAVE_AFTER - (now - t)).max(0.05),
             ));
@@ -1633,7 +1666,12 @@ impl NotesTool {
     /// Saving…, Not saved (with Save), or when it last was.
     fn saved_state(&mut self, ui: &mut Ui) {
         let file = path().map_or("No profile folder".into(), |p| p.display().to_string());
-        match (self.autosave, self.dirty.is_some(), &self.saved) {
+        // After a failed write, as with autosave off: Not saved, and Save.
+        match (
+            self.autosave && !self.write_failed,
+            self.dirty.is_some(),
+            &self.saved,
+        ) {
             (true, true, _) => {
                 ui.weak("Saving…");
             }
@@ -1701,7 +1739,7 @@ impl NotesTool {
             .config(stay)
             .ui(ui, |ui| {
                 ui.set_min_width(240.0);
-                if !self.autosave
+                if (!self.autosave || self.write_failed)
                     && ui
                         .add_enabled(
                             self.dirty.is_some(),
@@ -2586,6 +2624,26 @@ mod tests {
         assert_eq!(n.photos.size_in(&n.text), photo(3 * max).len());
     }
 
+    /// A failed save leaves the changes counted as not saved (with
+    /// autosave on too), so closing or a site switch asks; autosave waits
+    /// for the next edit to try again, and that edit clears the failure.
+    #[test]
+    fn a_failed_save_keeps_the_changes_unsaved() {
+        let mut n = notes("site notes");
+        n.autosave = true;
+        n.dirty = Some(1.0);
+        assert!(!n.unsaved(), "autosave will write them");
+        n.write_failed = true;
+        n.err = Some("Couldn't save the notes: disk full".into());
+        assert!(n.unsaved() && n.save_failed());
+        assert!(n.unsaved_reason().contains("disk full"));
+        n.changed(2.0);
+        assert!(!n.write_failed && n.dirty == Some(2.0));
+        n.autosave = false;
+        assert!(n.unsaved());
+        assert!(n.unsaved_reason().contains("Autosave is off"));
+    }
+
     fn notes(text: &str) -> NotesTool {
         NotesTool {
             photos: Default::default(),
@@ -2594,6 +2652,7 @@ mod tests {
             show_hits: true,
             outline: None,
             dirty: None,
+            write_failed: false,
             saved: None,
             err: None,
             known_hits: 0,

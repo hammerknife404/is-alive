@@ -1578,7 +1578,58 @@ pub fn write_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io:
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         }
     }
-    o.open(path)?.write_all(data.as_ref())
+    let mut f = o.open(path)?;
+    f.write_all(data.as_ref())?;
+    // On the disk before anyone relies on it: a laptop that dies just
+    // after a save mustn't leave an empty file.
+    f.sync_all()
+}
+
+/// Replace `path` with `data`, whole or not at all: written private and
+/// flushed to a temporary file beside it, then renamed over it. A crash or
+/// power cut at any point leaves the old file or the new one, never a cut
+/// or empty one. The temporary file is named for this process, so two
+/// copies of is-alive never write into the same one.
+pub fn replace_private(path: &std::path::Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+    let r = write_private(&tmp, data).and_then(|_| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r?;
+    // The rename itself, on the disk too (Windows has no folder to flush).
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
+}
+
+/// The data folder, made if it isn't there and, on Unix, readable by this
+/// user only (700). Everything is-alive keeps is under it (site folders
+/// named after clients, maps, notes, Results), so its contents stay
+/// private whatever mode each file or folder inside was given. On Windows
+/// the profile folder already is; a portable folder keeps the permissions
+/// of where it was put.
+pub fn secure_data_dir() {
+    if let Some(d) = data_dir() {
+        let _ = private_dir(&d);
+    }
+}
+
+/// `d`, made if needed, and on Unix owner-only (700).
+fn private_dir(d: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(d)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// The folder that makes is-alive portable: when one of this name sits
@@ -1828,13 +1879,58 @@ pub fn save(s: &Settings) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let _ = std::fs::write(p, s.text());
+        // Whole or not at all: a cut file would lose the open site.
+        let _ = replace_private(&p, s.text());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The data folder is the owner's only: other accounts on the laptop
+    /// can't list its site folders (named after clients) or read inside.
+    #[test]
+    #[cfg(unix)]
+    fn the_data_folder_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("is-alive-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&d).unwrap();
+        assert_eq!(
+            std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A replace leaves the new file, private, and no temporary one.
+    #[test]
+    fn replace_private_writes_whole_and_tidy() {
+        let dir = std::env::temp_dir().join(format!("is-alive-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("notes.md");
+        replace_private(&p, "one").unwrap();
+        replace_private(&p, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "two");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["notes.md"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // Into a folder that isn't there: an error, and nothing left behind.
+        assert!(replace_private(&dir.join("gone").join("x"), "y").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("is-alive-{tag}-{}", std::process::id()));

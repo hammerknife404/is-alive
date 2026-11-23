@@ -106,6 +106,11 @@ pub struct Backdrop {
     scene_tex: Option<TextureHandle>,
     frame: Option<i64>,
     image: Option<Picture>,
+    /// A picture being read and decoded off the UI thread.
+    loading: Option<(PathBuf, std::sync::mpsc::Receiver<Loaded>)>,
+    /// A picture that wouldn't load, as the file was then: not read again
+    /// until it changes (or another is picked), not every frame.
+    failed: Option<(PathBuf, Option<FileStamp>)>,
     /// Why the chosen image couldn't be shown.
     pub err: Option<String>,
     gpu: Option<Arc<Mutex<gpu::Gpu>>>,
@@ -253,23 +258,7 @@ impl Backdrop {
                 }
             }
             Source::Image(path) => {
-                if self.image.as_ref().is_none_or(|i| &i.path != path) {
-                    self.image = None;
-                    match load_image(path) {
-                        Ok((img, glow, haze)) => {
-                            let o = TextureOptions::LINEAR;
-                            self.image = Some(Picture {
-                                path: path.clone(),
-                                size: egui::vec2(img.size[0] as f32, img.size[1] as f32),
-                                tex: ctx.load_texture("backdrop-image", img, o),
-                                glow: ctx.load_texture("backdrop-glow", glow, o),
-                                haze: ctx.load_texture("backdrop-haze", haze, o),
-                            });
-                            self.err = None;
-                        }
-                        Err(e) => self.err = Some(e),
-                    }
-                }
+                self.load(ctx, path);
                 match &self.image {
                     Some(p) => {
                         let s = if animate { time } else { 0.0 };
@@ -289,6 +278,71 @@ impl Backdrop {
         }
         if moving && *source != Source::None {
             repaint_in(ctx, wait);
+        }
+    }
+}
+
+/// A file as it was: when it was changed and how big it was.
+type FileStamp = (std::time::SystemTime, u64);
+
+fn stamp(path: &Path) -> Option<FileStamp> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
+}
+
+/// The picture, its glow and its haze, or why not.
+type Loaded = Result<(ColorImage, ColorImage, ColorImage), String>;
+
+impl Backdrop {
+    /// Have `path`'s picture ready, read and decoded on a thread of its own
+    /// (a 40 MB photo takes a while): the scene's solid colour meanwhile.
+    /// One that won't load is tried again only once the file changes.
+    fn load(&mut self, ctx: &egui::Context, path: &PathBuf) {
+        if self.image.as_ref().is_some_and(|i| &i.path == path) {
+            return;
+        }
+        if let Some((p, when)) = &self.failed {
+            if p == path && *when == stamp(path) {
+                return;
+            }
+            self.failed = None;
+        }
+        if self.loading.as_ref().is_none_or(|(p, _)| p != path) {
+            self.image = None;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (p, ctx2) = (path.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send(load_image(&p));
+                ctx2.request_repaint();
+            });
+            self.loading = Some((path.clone(), rx));
+        }
+        let Some((p, rx)) = &self.loading else { return };
+        let got = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("the picture couldn't be read".to_string())
+            }
+        };
+        let p = p.clone();
+        self.loading = None;
+        match got {
+            Ok((img, glow, haze)) => {
+                let o = TextureOptions::LINEAR;
+                self.image = Some(Picture {
+                    path: p,
+                    size: egui::vec2(img.size[0] as f32, img.size[1] as f32),
+                    tex: ctx.load_texture("backdrop-image", img, o),
+                    glow: ctx.load_texture("backdrop-glow", glow, o),
+                    haze: ctx.load_texture("backdrop-haze", haze, o),
+                });
+                self.err = None;
+            }
+            Err(e) => {
+                self.err = Some(e);
+                self.failed = Some((p.clone(), stamp(&p)));
+            }
         }
     }
 }
@@ -715,6 +769,34 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture that won't decode is read once, off the UI thread, and
+    /// not again every frame; changing the file tries it again.
+    #[test]
+    fn a_broken_picture_is_read_once_until_it_changes() {
+        let dir = std::env::temp_dir().join(format!("is-alive-backdrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.jpg");
+        std::fs::write(&path, b"\xff\xd8\xff not really a jpeg").unwrap();
+        let ctx = egui::Context::default();
+        let mut b = Backdrop::default();
+        let t = std::time::Instant::now();
+        while b.err.is_none() && t.elapsed() < std::time::Duration::from_secs(5) {
+            b.load(&ctx, &path);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(b.err.is_some() && b.loading.is_none());
+        // Frames after: nothing read again.
+        for _ in 0..50 {
+            b.load(&ctx, &path);
+            assert!(b.loading.is_none(), "read again");
+        }
+        // The file changes: one more try.
+        std::fs::write(&path, b"\xff\xd8\xff still not a jpeg, but longer").unwrap();
+        b.load(&ctx, &path);
+        assert!(b.loading.is_some() || b.failed.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn scene_renders_every_frame_at_odd_sizes() {
