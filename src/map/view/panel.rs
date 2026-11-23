@@ -51,7 +51,7 @@ impl MapView {
             }
             let layer = ui.layer_id();
             let first = ui.ctx().graphics(|g| g.get(layer).map(|l| l.next_idx()));
-            let (a, frame, menu) = self.card_panel(ui, k, i, busy, sel.len() > 1, pick, ev, edit);
+            let (a, frame, menu) = self.card_panel(ui, i, busy, sel.len() > 1, pick, ev, edit);
             act = act.take().or(a);
             menus.extend(menu.map(|m| (i, m)));
             // A card whose place in the stack changed (moved, or pushed down
@@ -76,9 +76,16 @@ impl MapView {
                 });
             }
             // Drop another card's grip here to put it in this place.
-            if let Some(from) = frame.dnd_release_payload::<usize>() {
-                *ev = Some(PanelEv::Move(*from, k));
-            } else if frame.dnd_hover_payload::<usize>().is_some_and(|f| *f != k) {
+            // The grip carries its card's id, not its place: the stack can
+            // change under a drag (a sweep adds cards), and a place would
+            // then name another card.
+            let this = &self.map.nodes[i].id;
+            if let Some(from) = frame.dnd_release_payload::<String>() {
+                *ev = Some(PanelEv::Move((*from).clone(), k));
+            } else if frame
+                .dnd_hover_payload::<String>()
+                .is_some_and(|f| *f != *this)
+            {
                 ui.painter().hline(
                     frame.rect.x_range(),
                     frame.rect.top() - 4.0,
@@ -155,13 +162,12 @@ impl MapView {
         ui.add_space(6.0);
     }
 
-    /// One card in the inspector, `at` from the top of the stack: framed
-    /// when `stacked` with others; with its ⋯ button.
+    /// One card in the inspector: framed when `stacked` with others; with
+    /// its ⋯ button.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn card_panel(
         &self,
         ui: &mut Ui,
-        at: usize,
         i: usize,
         busy: bool,
         stacked: bool,
@@ -192,7 +198,7 @@ impl MapView {
                 &n.label,
                 |ui| {
                     if stacked {
-                        grip(ui, i, at);
+                        grip(ui, i, &n.id);
                     }
                 },
                 |ui| {
@@ -510,11 +516,16 @@ impl MapView {
 
     /// A card in Connections, a row the height of a button: a click shows
     /// it, Ctrl+click adds it to the selection.
-    fn link_row(&self, ui: &mut Ui, k: usize, via: &str, tip: &str) -> Option<(usize, bool)> {
+    pub(super) fn link_row(
+        &self,
+        ui: &mut Ui,
+        k: usize,
+        via: &str,
+        tip: &str,
+    ) -> Option<(usize, bool)> {
         let m = &self.map.nodes[k];
         let (r, resp) =
             ui.allocate_exact_size(vec2(ui.available_width(), insp::ICON.y), Sense::click());
-        let resp = resp.on_hover_text(tip);
         if resp.hovered() {
             ui.painter().rect_filled(
                 r,
@@ -531,7 +542,10 @@ impl MapView {
             .layout_no_wrap(via.to_string(), small.clone(), Color32::WHITE)
             .size()
             .x;
-        let name = p.layout(
+        // One line, cut with … when it's longer than the row (the row is one
+        // line high: a second would spill over the rows around it); the
+        // whole name is on hover.
+        let mut job = egui::text::LayoutJob::simple_singleline(
             m.label.clone(),
             font,
             if resp.hovered() {
@@ -539,8 +553,15 @@ impl MapView {
             } else {
                 ui.visuals().text_color()
             },
-            (r.width() - 32.0 - via_w).max(40.0),
         );
+        job.wrap =
+            egui::text::TextWrapping::truncate_at_width((r.width() - 32.0 - via_w).max(40.0));
+        let name = p.layout_job(job);
+        let resp = if name.elided {
+            resp.on_hover_text(format!("{}\n{tip}", m.label))
+        } else {
+            resp.on_hover_text(tip)
+        };
         p.galley(
             pos2(r.min.x + 20.0, r.center().y - name.size().y / 2.0),
             name,
@@ -564,8 +585,8 @@ impl MapView {
 }
 
 /// The dots to drag a stacked card up or down by.
-fn grip(ui: &mut Ui, i: usize, at: usize) {
-    ui.dnd_drag_source(ui.id().with(("map_grip", i)), at, |ui| {
+fn grip(ui: &mut Ui, i: usize, id: &str) {
+    ui.dnd_drag_source(ui.id().with(("map_grip", i)), id.to_string(), |ui| {
         // Hover only: the drag belongs to the source around it.
         let (r, resp) = ui.allocate_exact_size(vec2(12.0, insp::ICON.y), Sense::hover());
         let c = ui.visuals().weak_text_color();
