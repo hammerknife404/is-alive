@@ -236,7 +236,16 @@ pub fn expire_scratch(now: chrono::NaiveDateTime) {
 }
 
 fn expire_in(p: &Path, now: chrono::NaiveDateTime) {
-    let mut log = Log::load(p);
+    // Read directly, not through `Log::load`: that sets a file that won't
+    // read aside, and this one belongs to Scratch, left for it to find.
+    let fits = std::fs::metadata(p).is_ok_and(|m| m.len() <= FILE_MAX);
+    let Some(mut log) = fits
+        .then(|| crate::input::read_capped(p, FILE_MAX))
+        .flatten()
+        .and_then(|t| Log::from_json(&t))
+    else {
+        return;
+    };
     if log.entries.is_empty() {
         return;
     }
@@ -699,7 +708,7 @@ mod tests {
         log.push(at("2026-11-11 09:30:00", 40));
         log.save(&p).unwrap();
         expire_in(&p, now);
-        let back = Log::load(&p);
+        let (back, _) = Log::load(&p);
         assert_eq!(back.entries.len(), 1);
         assert_eq!(back.entries[0].text.len(), 40);
         // Nothing old: not rewritten.
