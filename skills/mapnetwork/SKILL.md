@@ -191,6 +191,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
+  `complete: false` (top level) means the sweep was stopped before it
+  finished: hosts it hadn't reached are missing and some ports weren't
+  checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
   else its `Server` header), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
