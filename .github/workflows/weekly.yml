@@ -55,7 +55,11 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # The token isn't left in .git/config for the script that runs on
+      # downloaded data next; create-pull-request uses its own.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: python3 scripts/update-oui.py
       - uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:

@@ -62,7 +62,10 @@ fn registry() -> &'static Registry {
                 continue;
             };
             if let Some(t) = r.iter_mut().find(|t| t.0 == p.len()) {
-                t.1.push((key, v.to_string()));
+                // The table is downloaded from a public registry each week:
+                // a name with control or direction-changing characters, or
+                // markup, isn't shown as it came.
+                t.1.push((key, clean_vendor(v)));
             }
         }
         for t in &mut r {
@@ -70,6 +73,25 @@ fn registry() -> &'static Registry {
         }
         r
     })
+}
+
+/// A vendor name as shown: no control, format (bidi) or angle-bracket
+/// characters, at most 80 characters.
+fn clean_vendor(v: &str) -> String {
+    let s: String = v
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '<' | '>') && !is_format(*c))
+        .take(80)
+        .collect();
+    s.trim().to_string()
+}
+
+/// Unicode's format characters (Cf) that matter here: direction marks and
+/// overrides, zero-width joiners and the like.
+fn is_format(c: char) -> bool {
+    matches!(c,
+        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{00ad}')
 }
 
 pub fn vendor(m: &Mac) -> Option<&'static str> {
@@ -286,6 +308,15 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A vendor name from the downloaded table loses control, bidi and
+    /// markup characters and is cut at 80.
+    #[test]
+    fn vendor_names_are_cleaned() {
+        assert_eq!(clean_vendor("Acme Networks"), "Acme Networks");
+        assert_eq!(clean_vendor("Ev\u{202e}il\u{7}<b>Co</b>"), "EvilbCo/b");
+        assert_eq!(clean_vendor(&"x".repeat(200)).len(), 80);
+    }
 
     /// Two adapters, two MACs for one address: the confirmed one, else
     /// none. One MAC (however many rows) needs no asking.

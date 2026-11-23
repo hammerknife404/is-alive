@@ -416,16 +416,24 @@ def validate(data):
         nid = nd.get("id")
         if not nid:
             errors.append(f"NODES[{idx}] has no id."); continue
+        # Ids, zones and sites are looked up as keys: a list or an object
+        # there would stop the check with a traceback instead of a line.
+        if not isinstance(nid, str):
+            errors.append(f"NODES[{idx}]: id must be a string, not {type(nid).__name__}."); continue
         if nid in node_ids:
             dupes.add(nid)
         node_ids.append(nid)
         zone = nd.get("zone")
+        if zone is not None and not isinstance(zone, str):
+            errors.append(f"Node '{nid}': zone must be a string."); zone = None
         if not zone:
             errors.append(f"Node '{nid}' has no zone.")
         elif zone not in zones:
             errors.append(f"Node '{nid}': zone '{zone}' is not in ZONES "
                           f"(renders as grey 'Unzoned').")
         site = nd.get("site")
+        if site is not None and not isinstance(site, str):
+            errors.append(f"Node '{nid}': site must be a string."); site = None
         if sites:
             if site is None:
                 warnings.append(f"Node '{nid}' has no site on a map that declares "
@@ -455,6 +463,8 @@ def validate(data):
         if not isinstance(e, dict):
             errors.append(f"EDGES[{idx}] is not an object."); continue
         eid = e.get("id")
+        if eid is not None and not isinstance(eid, str):
+            errors.append(f"EDGES[{idx}]: id must be a string."); eid = None
         label = eid if eid else f"EDGES[{idx}]"
         if not eid:
             errors.append(f"{label} has no id.")
@@ -463,6 +473,10 @@ def validate(data):
                 edup.add(eid)
             edge_ids.append(eid)
         f, t = e.get("from"), e.get("to")
+        if not isinstance(f, (str, type(None))) or not isinstance(t, (str, type(None))):
+            errors.append(f"Edge '{label}': from and to must be node ids (strings).")
+            f = f if isinstance(f, str) else None
+            t = t if isinstance(t, str) else None
         if f not in id_set:
             errors.append(f"Edge '{label}': from '{f}' is not a node (edge is dropped).")
         if t not in id_set:
@@ -477,7 +491,9 @@ def validate(data):
         errors.append(f"Duplicate edge id '{eid}' ({edge_ids.count(eid)}x) — "
                       f"breaks site-collapse trunk folding.")
 
-    for cyc in _find_cycles(list(dict.fromkeys(node_ids)), [e for e in edges if isinstance(e, dict)]):
+    for cyc in _find_cycles(list(dict.fromkeys(node_ids)),
+                            [e for e in edges if isinstance(e, dict)
+                             and isinstance(e.get("from"), str) and isinstance(e.get("to"), str)]):
         if len(cyc) == 2:
             a, b = cyc
             errors.append(f"Reciprocal edges '{a}' <-> '{b}': collapse to one "
@@ -493,6 +509,8 @@ def validate(data):
         if not isinstance(a, dict):
             errors.append(f"ACTIONS[{idx}] is not an object."); continue
         aid = a.get("id")
+        if aid is not None and not isinstance(aid, str):
+            errors.append(f"ACTIONS[{idx}]: id must be a string."); aid = None
         label = aid if aid else f"ACTIONS[{idx}]"
         if not aid:
             errors.append(f"{label} has no id.")
@@ -508,6 +526,8 @@ def validate(data):
             errors.append(f"Action '{label}': nodes must be an array.")
             refs = []
         for ref in refs:
+            if not isinstance(ref, str):
+                errors.append(f"Action '{label}': node {ref!r} must be a node id (a string)."); continue
             if ref not in id_set:
                 errors.append(f"Action '{label}': node '{ref}' is not a node.")
     for aid in sorted(adup):

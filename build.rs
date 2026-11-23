@@ -6,6 +6,22 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // Which version of the repository the app's links to its files name.
+    // A release is built on main and tagged v<version> as it's published;
+    // any other build (a pull request's, a local one) has no tag of its
+    // version yet, so its links go to main rather than to a 404.
+    println!("cargo:rerun-if-env-changed=GITHUB_REF");
+    let release = std::env::var("GITHUB_REF")
+        .is_ok_and(|r| r == "refs/heads/main" || r.starts_with("refs/tags/v"));
+    let docs_ref = if release {
+        format!(
+            "v{}",
+            std::env::var("CARGO_PKG_VERSION").unwrap_or_default()
+        )
+    } else {
+        "main".to_string()
+    };
+    println!("cargo:rustc-env=IS_ALIVE_DOCS_REF={docs_ref}");
     println!("cargo:rerun-if-changed=assets/is-alive.ico");
     println!("cargo:rerun-if-changed=packaging/windows/is-alive.manifest");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
