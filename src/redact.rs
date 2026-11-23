@@ -342,10 +342,12 @@ fn bare_passwords(text: &str) -> Vec<Range<usize>> {
             let at = line_start + lead;
             out.push(at..at + token.len());
         } else {
-            let mut at = line_start;
             for word in body.split(char::is_whitespace) {
                 let t = word.trim_matches(|c: char| ",;()[]{}\"'".contains(c));
-                let start = at + word.find(t).unwrap_or(0);
+                // Where `t` sits in `text`, taken from the slice itself:
+                // counting "word plus one space" drifts after a space that
+                // isn't one byte (a no-break space, U+3000).
+                let start = t.as_ptr() as usize - text.as_ptr() as usize;
                 let email = t
                     .split_once('@')
                     .is_some_and(|(_, d)| d.contains('.') && !d.ends_with('.'));
@@ -359,7 +361,6 @@ fn bare_passwords(text: &str) -> Vec<Range<usize>> {
                 {
                     out.push(start..start + t.len());
                 }
-                at += word.len() + 1;
             }
         }
         line_start += line.len();
@@ -710,10 +711,12 @@ fn detect(text: &str) -> Vec<Hit> {
             if !fresh(&m.range()) {
                 continue;
             }
-            // The token this match sits in, for the URL check.
-            let token_start = text[..m.start()]
-                .rfind(char::is_whitespace)
-                .map_or(0, |i| i + 1);
+            // The token this match sits in, for the URL check. Split rather
+            // than "last space + 1": a no-break space is two bytes.
+            let token = text[..m.start()]
+                .rsplit(char::is_whitespace)
+                .next()
+                .unwrap_or("");
             let keep = match r.kind {
                 // The number itself must pass Luhn; its CVV and expiry can't.
                 Kind::Card => s.chars().filter(char::is_ascii_digit).count() < 12 || luhn(s),
@@ -722,7 +725,7 @@ fn detect(text: &str) -> Vec<Hit> {
                 }
                 Kind::Password | Kind::Patient => !s.trim().is_empty(),
                 // user:password@host is a URL login, handled above.
-                Kind::Email => !text[token_start..m.start()].contains("://"),
+                Kind::Email => !token.contains("://"),
                 _ => true,
             };
             if keep {
@@ -824,6 +827,52 @@ mod tests {
 
     fn red(t: &str) -> String {
         sanitize(t).0
+    }
+
+    /// Config comments and pasted text carry whitespace that isn't one
+    /// byte (a no-break space from Outlook or Word, U+3000). Stepping over
+    /// it with `+ 1` sliced inside the character and aborted the app.
+    #[test]
+    fn whitespace_wider_than_a_byte() {
+        assert_eq!(
+            red("Contact\u{a0}jane@example.com"),
+            "Contact\u{a0}[🔑 REDACTED: email]"
+        );
+        assert_eq!(
+            red("see https://x.example/a\u{3000}bob@clinic.example"),
+            "see https://x.example/a\u{3000}[🔑 REDACTED: email]"
+        );
+        // The bare password after a wide space is still found, and found
+        // where it is.
+        assert_eq!(
+            red("a\u{3000}Spring26$x b"),
+            "a\u{3000}[🔑 REDACTED: password] b"
+        );
+        assert_eq!(
+            red("x\u{a0}y\u{2003}Winter25!Go z"),
+            "x\u{a0}y\u{2003}[🔑 REDACTED: password] z"
+        );
+    }
+
+    /// Every rule over text with secrets in it, cut short and with odd
+    /// characters (wide spaces included) put in: never a panic.
+    #[test]
+    fn hostile_text_never_panics() {
+        const SAMPLE: &str = "Contact jane@example.com or bob@clinic.example today\n\
+            admin password: hunter2! and wifi PSK=abc123xyz\n\
+            u: admin p: Tr0ub4dor (Spring26$x) https://bob:s3cret@nas.local/x\n\
+            card 4111 1111 1111 1111 exp 12/29, key AKIAIOSFODNN7EXAMPLE\n\
+            commit 3f9a1c0e7b2d4a6f8e0c1b3d5f7a9c2e4b6d8f0a for MRN 12345678\n";
+        let ov = Overrides {
+            known: vec!["hunter2!".into()],
+            ..Default::default()
+        };
+        crate::hostile::each_text(SAMPLE, |t| {
+            let (clean, hits) = sanitize(t);
+            let _ = summary(&hits);
+            let _ = markers(&clean);
+            let _ = sanitize_with(t, &ov);
+        });
     }
 
     #[test]

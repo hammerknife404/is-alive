@@ -624,7 +624,7 @@ The status row counts fail, warn and pass. Each row shows its worst finding; cli
 | **DMARC** | What receivers do with forged mail: missing, `p=none` (monitor only), subdomain policy, `pct`, report addresses |
 | **DKIM** | Signing keys under the common selectors (and yours): key size, revoked keys, Microsoft 365 CNAMEs with no key behind them |
 | **Nameservers** | At least two, each answering for the domain, serial numbers in step, matching the registrar's delegation |
-| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent |
+| **SMTP (port 25)** | Connects to the first three mail servers: greeting, STARTTLS, TLS version, certificate, and an open-relay test that stops before any mail is sent. A server still talking after a minute, or sending a reply of more than 200 lines, is cut off and says so |
 | **Blacklists** | The domain's own mail servers and SPF addresses, and this network's public address, against Spamhaus, Barracuda, SpamCop and five more; the domain against Spamhaus DBL, URIBL and SURBL |
 
 **Nice-to-haves:** MTA-STS, TLS-RPT, BIMI, DNSSEC, CAA, MX reverse DNS, Autodiscover (for Microsoft 365) and Domain expiry (from the registry, with the registrar and any hold status).
