@@ -160,6 +160,12 @@ impl DomainJoin {
         running
     }
 
+    /// Forget the other computers asked about, the box included: they're
+    /// the last site's.
+    pub fn clear_others(&mut self) {
+        self.others = Others::default();
+    }
+
     pub fn others_running_since(&self) -> Option<&str> {
         self.others.job.as_ref().and(self.others.started.as_deref())
     }

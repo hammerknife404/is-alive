@@ -452,6 +452,7 @@ impl App {
         } else {
             self.export.clear();
             self.sweep.clear_results();
+            self.join.clear_others();
             self.load_results();
             // The next site's notes, in the view they were read in.
             let fresh = crate::tools::notes::NotesTool::default();

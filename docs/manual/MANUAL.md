@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.17**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.30.18**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -162,7 +162,7 @@ The first time it opens, is-alive takes 1120 × 720, or the whole screen on a sm
 A site keeps one visit together: its **notes**, its **saved maps** and the **notes on its cards**, its **Results**, and the **configs** it had open. Configs are remembered by where they are on disk, never copied: a backup holds passwords. **Configs**, **Map**, **Notes**, **Results** and the **Claude Handoff** all work on the site that's open, and its name is in the window's title.
 
 - **New site…**: name it after the client and building. **Start with** *an empty site*, or *what's open now* to take the notes, configs, map and Results you already have along.
-- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, and the Claude Handoff's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Claude Handoff finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
+- **Switching** (click a site in the list): the open site keeps its notes, saved maps, card notes, Results and the list of its configs. Then everything else is cleared from memory: the configs and the passwords and keys taken from them (so Notes stops hiding one site's secrets in another's notes), the sweep and the live map, Results, Domain join's **Other computers** (the box and its answers), and the Claude Handoff's details. The other site opens as it was left, its Results with it, its configs read again from where they are. A switch waits while a tool runs (Domain join included), so no run's results land in the other site. A config that isn't there (a USB stick not plugged in) is named, and stays on the site's list until **Clear map**; so does one that's there but couldn't be read, to be tried again next time. Stop running tools before switching, and let Config Export finish reading and a Claude Handoff finish saving (the dialog says which); a saved map with changes not saved is named so you can **Update** it first. With **Autosave** off and the notes changed, it asks first: **Save notes and switch**, or **Switch, don't save**.
 - **What doesn't change with the site:** how you look at things. The Map keeps its layout, **Clients** level, **Links** view, **Trace to WAN**, the roles you faded out, Layers and the legend; Notes keeps **Edit / Split / Preview**, the outline and the highlight; Config Export keeps **Client names**, so a site's UniFi backup is read again with the clients the Map shows. Settings, the nav and the tools' options don't change either.
 - **Scratch** is no site: the notes and saved maps kept outside any site, as before sites existed. It doesn't remember configs.
 - **Rename this site…** changes its name; **Delete a site…** deletes another site's notes, saved maps and card notes (its configs stay where they are).
@@ -180,7 +180,7 @@ All the testing tabs work the same way:
 4. **The results** below. Before the first run, a short explanation says what to do.
 5. **The inspector** on the right, where a tab has things to pick (a device in [Subnet Sweep](#7-subnet-sweep), a card on the [Map](#selecting-cards)): the picked item's details and what you can do with it. On a small window it floats over the results instead of squeezing them, and **Esc** closes it.
 
-**Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). A small spinner turns while it works. It holds still while the window is behind another one, so a ping left running for hours doesn't keep redrawing the window. Copies and saves confirm themselves with a short message at the bottom of the window.
+**Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). One press of Esc does one thing: if you were typing in a box, it only leaves the box; if a menu is open, it only closes the menu; if the inspector floats over the results, it only closes the inspector. Only an Esc with none of those stops the run. A target that won't read (a typo in the range or host) says what's wrong and leaves the last run's results as they were, and a run's report and its row in Results name what it ran on, even if you've typed the next target in the box since. A small spinner turns while it works. It holds still while the window is behind another one, so a ping left running for hours doesn't keep redrawing the window. Copies and saves confirm themselves with a short message at the bottom of the window.
 
 Every text box has a right-click menu with **Cut**, **Copy**, **Paste** and **Select all**.
 
@@ -1525,7 +1525,7 @@ At the bottom of Settings, **Remove everything is-alive saved…** is for a clie
 | **Ctrl+0** | Anywhere | Results |
 | **F1** | Anywhere | Open the manual at the chapter about this tab (same as **Help → This tab**) |
 | **Enter** | A tool's field | Start the run |
-| **Esc** | While a tool runs | Stop the run |
+| **Esc** | While a tool runs | Stop the run (once no text box, menu or floating inspector has it) |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
 | **Ctrl+B / Ctrl+I / Ctrl+E** | Notes | Bold / italic / code |
 | **Ctrl+K** | Notes | Link |

@@ -205,12 +205,56 @@ pub enum Action {
     Stop,
 }
 
+// One Esc, one job. It leaves a text box or closes a menu first, then
+// closes a floating panel, and only then stops a run. egui drops a text
+// box's focus and closes its menus before anything is drawn, and a run bar
+// is drawn before the panel floating over the page, so who Esc was for is
+// read from the frame before.
+fn esc_id(what: &str) -> egui::Id {
+    egui::Id::new(("esc owner", what))
+}
+
+/// Call once, at the end of every frame: whether a text box or menu has
+/// Esc now.
+pub fn note_esc_owners(ctx: &egui::Context) {
+    let busy = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
+    ctx.data_mut(|d| d.insert_temp(esc_id("text or menu"), busy));
+}
+
+/// A panel that Esc closes is floating open this frame.
+pub fn floating_open(ctx: &egui::Context) {
+    let n = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(esc_id("floating"), n));
+}
+
+/// Esc was pressed now to leave a text box or close a menu (as of the
+/// frame before).
+pub fn esc_for_text_or_menu(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        && ctx
+            .data(|d| d.get_temp::<bool>(esc_id("text or menu")))
+            .unwrap_or(false)
+}
+
+/// Esc was pressed now and nothing before a run wants it.
+pub fn esc_stops_run(ctx: &egui::Context) -> bool {
+    let n = ctx.cumulative_pass_nr();
+    let floating = ctx
+        .data(|d| d.get_temp::<u64>(esc_id("floating")))
+        .is_some_and(|f| f + 1 >= n);
+    ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        && !esc_for_text_or_menu(ctx)
+        && !floating
+        && !egui::Popup::is_any_open(ctx)
+}
+
 /// Start/Stop button pair. `enter` lets a text field's Enter key start the run;
-/// Esc stops it.
+/// Esc stops it, unless it's leaving a text box, closing a menu or closing a
+/// floating panel.
 pub fn run_button(ui: &mut Ui, running: bool, enter: bool) -> Action {
     if running {
         spinner(ui);
-        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        let esc = esc_stops_run(ui.ctx());
         if ui.button("■ Stop").on_hover_text("Stop (Esc)").clicked() || esc {
             return Action::Stop;
         }
@@ -1366,6 +1410,59 @@ fn host_library_path(value: &str, appdir: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One Esc, one job: leaving a text box (as of the frame before, since
+    /// egui drops the focus first) or closing a floating panel doesn't
+    /// stop a run; an Esc with neither does.
+    #[test]
+    fn esc_leaves_a_text_box_or_closes_a_panel_before_it_stops_a_run() {
+        let ctx = egui::Context::default();
+        let esc = || egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let mut text = String::new();
+        let mut stops = Vec::new();
+        let frame = |mut out: egui::FullOutput| out.textures_delta.clear();
+        // Frame 1: typing in a box.
+        frame(ctx.run_ui(Default::default(), |ui| {
+            let r = ui.text_edit_singleline(&mut text);
+            r.request_focus();
+            note_esc_owners(ui.ctx());
+        }));
+        frame(ctx.run_ui(Default::default(), |ui| {
+            ui.text_edit_singleline(&mut text);
+            note_esc_owners(ui.ctx());
+        }));
+        // Frame 3: Esc leaves the box.
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            ui.text_edit_singleline(&mut text);
+            note_esc_owners(ui.ctx());
+        }));
+        // A panel floating open, then Esc: it's the panel's.
+        frame(ctx.run_ui(Default::default(), |ui| {
+            floating_open(ui.ctx());
+            note_esc_owners(ui.ctx());
+        }));
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            note_esc_owners(ui.ctx());
+        }));
+        // Nothing else open: Esc stops the run.
+        frame(ctx.run_ui(Default::default(), |ui| note_esc_owners(ui.ctx())));
+        frame(ctx.run_ui(esc(), |ui| {
+            stops.push(esc_stops_run(ui.ctx()));
+            note_esc_owners(ui.ctx());
+        }));
+        assert_eq!(stops, [false, false, true]);
+    }
 
     /// A named menu's button is a comfortable click target and says what
     /// it holds.
