@@ -558,7 +558,7 @@ fn grouped(
 ) -> Layout {
     let n = map.nodes.len();
     let mut out = empty(n);
-    let depths: Vec<usize> = (0..n).map(|i| map.path(i).len()).collect();
+    let depths = map.depths();
     let sort = |v: &mut Vec<usize>| {
         v.sort_by(|&a, &b| {
             let (x, y) = (&map.nodes[a], &map.nodes[b]);

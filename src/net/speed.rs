@@ -523,6 +523,13 @@ fn parse_meta(body: &str) -> Option<Meta> {
 /// gone through so far.
 pub struct Transfer {
     bytes: Arc<AtomicU64>,
+    /// Requests the server answered with success. An upload's bytes are
+    /// counted as they leave, before the answer: with none of these, a
+    /// server that refused every one (403, 413, 429) would still show a
+    /// speed.
+    accepted: Arc<AtomicU64>,
+    /// Requests the server answered with a refusal.
+    refused: Arc<AtomicU64>,
     stop: Arc<AtomicBool>,
     err: Arc<Mutex<Option<String>>>,
     threads: Vec<JoinHandle<()>>,
@@ -532,17 +539,27 @@ impl Transfer {
     /// `streams` connections moving data to or from `url` (see `Server::url`).
     pub fn start(agent: &ureq::Agent, url: &str, dir: Dir, streams: usize) -> Self {
         let bytes = Arc::new(AtomicU64::new(0));
+        let accepted = Arc::new(AtomicU64::new(0));
+        let refused = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let err = Arc::new(Mutex::new(None));
         let threads = (0..streams.max(1))
             .map(|_| {
-                let (agent, bytes, stop, err) =
-                    (agent.clone(), bytes.clone(), stop.clone(), err.clone());
+                let (agent, bytes, accepted, refused, stop, err) = (
+                    agent.clone(),
+                    bytes.clone(),
+                    accepted.clone(),
+                    refused.clone(),
+                    stop.clone(),
+                    err.clone(),
+                );
                 let url = url.to_string();
                 std::thread::spawn(move || {
                     let s = Stream {
                         agent,
                         bytes: &bytes,
+                        accepted: &accepted,
+                        refused: &refused,
                         stop: &stop,
                         err: &err,
                     };
@@ -555,6 +572,8 @@ impl Transfer {
             .collect();
         Self {
             bytes,
+            accepted,
+            refused,
             stop,
             err,
             threads,
@@ -563,6 +582,13 @@ impl Transfer {
 
     pub fn bytes(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
+    }
+
+    /// The server refused requests and accepted none: whatever was
+    /// counted as sent isn't a speed. (A request still going, or cut off,
+    /// is neither.)
+    pub fn only_refused(&self) -> bool {
+        self.refused.load(Ordering::Relaxed) > 0 && self.accepted.load(Ordering::Relaxed) == 0
     }
 
     /// The last error any stream hit, if one did.
@@ -590,6 +616,8 @@ impl Drop for Transfer {
 struct Stream<'a> {
     agent: ureq::Agent,
     bytes: &'a AtomicU64,
+    accepted: &'a AtomicU64,
+    refused: &'a AtomicU64,
     stop: &'a AtomicBool,
     err: &'a Mutex<Option<String>>,
 }
@@ -667,8 +695,14 @@ impl Stream<'_> {
                 .send(ureq::SendBody::from_reader(&mut src));
             match sent {
                 Ok(mut r) => {
-                    if let Some(why) = refusal(&r, Dir::Up) {
-                        self.failed(why);
+                    match refusal(&r, Dir::Up) {
+                        Some(why) => {
+                            self.refused.fetch_add(1, Ordering::Relaxed);
+                            self.failed(why);
+                        }
+                        None => {
+                            self.accepted.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                     let _ = r.body_mut().with_config().limit(64 * 1024).read_to_vec();
                 }
@@ -908,6 +942,25 @@ pub(crate) mod tests {
             }
             assert!(t.bytes() >= 4 << 20, "{dir:?}: {} bytes", t.bytes());
             assert_eq!(t.error(), None, "{dir:?}");
+            t.stop(Duration::from_secs(2));
+        }
+    }
+
+    /// An upload the server refuses every time is only refusals, however
+    /// many bytes left first; one it accepts isn't.
+    #[test]
+    fn an_upload_refused_every_time_is_no_speed() {
+        let base = mock();
+        let agent = agent(2);
+        for (path, refused) in [("/nowhere", true), ("/__up", false)] {
+            let t = Transfer::start(&agent, &format!("{base}{path}"), Dir::Up, 2);
+            let end = Instant::now() + Duration::from_secs(10);
+            while t.only_refused() != refused && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(t.only_refused(), refused, "{path}");
+            assert!(t.bytes() > 0, "bytes were counted as they left");
             t.stop(Duration::from_secs(2));
         }
     }
