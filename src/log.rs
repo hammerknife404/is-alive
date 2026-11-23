@@ -195,7 +195,7 @@ const FILE_MAX: u64 = 3 * MAX_BYTES as u64;
 /// Every tool that logs runs, by the name it logs under, with its table's
 /// columns: a saved run is read back only as one of these (names and
 /// columns are the app's own, never the file's).
-const TOOLS: &[(&str, &[&str])] = &[
+pub(crate) const TOOLS: &[(&str, &[&str])] = &[
     ("Host info", crate::net::hostinfo::COLUMNS),
     ("Ping", crate::tools::ping::COLUMNS),
     ("Port Check", crate::tools::ports::COLUMNS),

@@ -212,6 +212,25 @@ pub(super) fn blacklists(c: &Client, d: &str, mx: &MxInfo, wan: Option<Ipv4Addr>
         for ip in spf.first().map(|r| spf_ip4(r)).unwrap_or_default() {
             add(ip, "SPF");
         }
+        // The lists are asked about IPv4 addresses: say what that leaves
+        // out, rather than a PASS that reads as covering it.
+        let v6 = if mx.hosted() {
+            0
+        } else {
+            mx.ips.iter().filter(|i| i.is_ipv6()).count()
+        } + spf.first().map_or(0, |r| {
+            r.split_whitespace()
+                .filter(|t| {
+                    t.trim_start_matches(['+', '-', '~', '?'])
+                        .starts_with("ip6:")
+                })
+                .count()
+        });
+        if v6 > 0 {
+            k.info(format!(
+                "{v6} IPv6 address(es) (MX or SPF ip6:) not checked: these lists are asked about IPv4"
+            ));
+        }
         ips.truncate(12);
         let fallback = dnsq::system_servers()
             .first()

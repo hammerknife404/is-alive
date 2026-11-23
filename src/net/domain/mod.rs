@@ -490,6 +490,41 @@ mod tests {
         assert_eq!(*got.lock().unwrap(), vec![0]);
     }
 
+    /// One MX host whose lookup fails is that host's failure: the others
+    /// are still looked up and handed on to the checks after.
+    #[test]
+    fn one_bad_mx_host_doesnt_stop_the_rest() {
+        let c = mock(vec![
+            ("two.test", dnsq::MX, mx_to("fail.mx.two.test")),
+            ("two.test", dnsq::MX, mx_to("mx.two.test")),
+            ("mx.two.test", dnsq::A, vec![127, 0, 0, 7]),
+        ]);
+        let (k, info) = mx(&c, "two.test");
+        assert!(
+            has(&k, Status::Fail, "fail.mx.two.test: lookup failed"),
+            "{k:?}"
+        );
+        assert_eq!(info.hosts.len(), 2, "{:?}", info.hosts);
+        assert_eq!(info.ips, vec!["127.0.0.7".parse::<IpAddr>().unwrap()]);
+    }
+
+    /// IPv6 addresses aren't asked about; the check says so.
+    #[test]
+    fn blacklists_say_ipv6_isnt_checked() {
+        let c = mock(vec![(
+            "v6.test",
+            dnsq::TXT,
+            txt("v=spf1 ip6:2001:db8::1 ip4:192.0.2.1 -all"),
+        )]);
+        let info = MxInfo {
+            hosts: vec!["mx.v6.test".into()],
+            ips: vec!["2001:db8::25".parse().unwrap()],
+            ..Default::default()
+        };
+        let bl = blacklists(&c, "v6.test", &info, None);
+        assert!(has(&bl, Status::Info, "2 IPv6 address(es)"), "{bl:?}");
+    }
+
     #[test]
     fn mail_checks_against_mock_zone() {
         let key = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGpt/taRejdyKY59ZXnJz/a8gbnjW4kSwMiMc9x2J+kFNyT88QG5IbpHEx6uMrRvS6y5AOq/QUDBFNnccruUJSwmddtFUKlD7SpfXiPJeYvs77/ey81FUbbHHSL3QJsKz8ZKJOi0CX+iy6IO/VzHjJMUWmqXr677n1RwXhGR7qPQIDAQAB";

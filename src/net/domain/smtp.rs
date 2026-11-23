@@ -269,6 +269,29 @@ impl Probe {
     }
 }
 
+/// How a connection to port 25 failed, when it says nothing about the
+/// server: what a block on this network looks like.
+const TIMED_OUT: &str = "timed out";
+const REFUSED: &str = "connection refused";
+const UNREACHABLE: &str = "unreachable";
+
+/// Whether every MX failed the way a block on this network does (each
+/// `None` is one that answered): what to say then.
+fn blocked_here(errs: &[Option<&str>]) -> Option<&'static str> {
+    let each = |want: &[&str]| errs.iter().all(|e| e.is_some_and(|e| want.contains(&e)));
+    if errs.is_empty() || !each(&[TIMED_OUT, REFUSED, UNREACHABLE]) {
+        None
+    } else if each(&[TIMED_OUT]) {
+        Some(
+            "port 25 timed out on every MX: this network (or ISP) probably blocks outbound SMTP. Run from a network that allows it",
+        )
+    } else {
+        Some(
+            "port 25 was refused or unreachable on every MX: a firewall here (or the ISP) probably blocks outbound SMTP. Run from a network that allows it",
+        )
+    }
+}
+
 pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
     Check::run(|k| {
         if mx.hosts.is_empty() {
@@ -288,14 +311,14 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
                                 .find(|i| i.is_ipv4())
                                 .or(ips.first())
                                 .ok_or("does not resolve")?;
-                            probe(h, SocketAddr::new(*ip, 25)).map_err(|e| {
-                                if e.kind() == io::ErrorKind::TimedOut
-                                    || e.kind() == io::ErrorKind::WouldBlock
-                                {
-                                    "timed out".to_string()
-                                } else {
-                                    e.to_string()
+                            probe(h, SocketAddr::new(*ip, 25)).map_err(|e| match e.kind() {
+                                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => {
+                                    TIMED_OUT.to_string()
                                 }
+                                io::ErrorKind::ConnectionRefused => REFUSED.to_string(),
+                                io::ErrorKind::HostUnreachable
+                                | io::ErrorKind::NetworkUnreachable => UNREACHABLE.to_string(),
+                                _ => e.to_string(),
                             })
                         })();
                         (h, r)
@@ -306,12 +329,20 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
         });
 
         // Every host timing out is almost always outbound port 25 being
-        // blocked here, not every MX being down.
-        if results
+        // blocked here, not every MX being down. A firewall that resets
+        // the connection, or answers "administratively prohibited", says
+        // refused or unreachable instead: the same block.
+        let errs: Vec<Option<&str>> = results
             .iter()
-            .all(|(_, r)| matches!(r, Err(e) if e == "timed out"))
-        {
-            k.info("port 25 timed out on every MX: this network (or ISP) probably blocks outbound SMTP. Run from a network that allows it");
+            .map(|(_, r)| r.as_ref().err().map(String::as_str))
+            .collect();
+        if let Some(why) = blocked_here(&errs) {
+            k.info(why);
+            for (h, r) in &results {
+                if let Err(e) = r {
+                    k.rec(format!("{h}  ✖ {e}"));
+                }
+            }
             return Ok(());
         }
         let mut good = 0;
@@ -414,6 +445,20 @@ pub(super) fn smtp(c: &Client, mx: &MxInfo) -> Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A block on this network shows as timeouts, refusals or
+    /// unreachables on every MX; one MX answering, or another error, is
+    /// about the servers.
+    #[test]
+    fn a_block_here_is_not_the_domains_fault() {
+        let t = Some(TIMED_OUT);
+        assert!(blocked_here(&[t, t]).is_some_and(|m| m.contains("timed out")));
+        let mixed = blocked_here(&[t, Some(REFUSED), Some(UNREACHABLE)]);
+        assert!(mixed.is_some_and(|m| m.contains("refused or unreachable")));
+        assert_eq!(blocked_here(&[Some(REFUSED), None]), None, "one answered");
+        assert_eq!(blocked_here(&[Some("reset by peer"), Some(REFUSED)]), None);
+        assert_eq!(blocked_here(&[]), None);
+    }
 
     /// A relay test that reaches the server on one of these is a test from
     /// inside its own network.

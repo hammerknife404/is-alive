@@ -22,6 +22,18 @@ struct Hop {
     note: String,
 }
 
+impl Hop {
+    /// What a hop says beside its address: its name, and why it ended
+    /// (unreachable, filtered) when it did. A name alone would hide that.
+    fn label(&self) -> String {
+        match (self.name.as_deref(), self.note.as_str()) {
+            (Some(n), "") => n.to_string(),
+            (Some(n), note) => format!("{n} · {note}"),
+            (None, note) => note.to_string(),
+        }
+    }
+}
+
 enum Ev {
     Resolved(IpAddr),
     Hop(Hop),
@@ -174,7 +186,7 @@ impl TraceTool {
                                 Some(a) => ui.monospace(a.to_string()),
                                 None => ui.weak("request timed out"),
                             };
-                            ui.label(h.name.as_deref().unwrap_or(&h.note));
+                            ui.label(h.label());
                             ui.end_row();
                         }
                     });
@@ -211,7 +223,7 @@ impl TraceTool {
                 .map(|r| r.map_or("*".into(), widgets::fmt_ms))
                 .collect();
             let addr = h.addr.map_or("request timed out".into(), |a| a.to_string());
-            let name = h.name.as_deref().unwrap_or(&h.note);
+            let name = h.label();
             s += &format!(
                 "{:>3}  {:>7} {:>7} {:>7}  {addr}  {name}\n",
                 h.ttl, rtts[0], rtts[1], rtts[2]
