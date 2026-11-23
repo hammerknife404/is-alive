@@ -447,6 +447,25 @@ pub(super) fn expiry(d: &str) -> Check {
 mod tests {
     use super::*;
 
+    /// IANA's bootstrap file and a registry's record, damaged any way,
+    /// read without a panic.
+    #[test]
+    fn damaged_rdap_answers_never_panic() {
+        crate::hostile::each_text(
+            r#"{"services":[[["net","com"],["https://rdap.verisign.com/com/v1/"]]]}"#,
+            |t| {
+                let _ = rdap_services(t);
+            },
+        );
+        crate::hostile::each_text(
+            r#"{"status":["active"],"events":[{"eventAction":"expiration","eventDate":"2030-01-01T00:00:00Z"}],
+               "entities":[{"roles":["registrar"],"vcardArray":["vcard",[["fn",{},"text","Example Registrar"]]]}]}"#,
+            |t| {
+                let _ = parse_rdap(t);
+            },
+        );
+    }
+
     #[test]
     fn rdap_bootstrap_and_record() {
         let boot = r#"{"services":[[["net","com"],["https://rdap.verisign.com/com/v1/"]]]}"#;

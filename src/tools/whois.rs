@@ -153,6 +153,17 @@ fn lookup(name: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A directory's reply, damaged any way, gives a referral or None.
+    #[test]
+    fn damaged_replies_never_panic() {
+        crate::hostile::each_text(
+            "domain: COM\nrefer: whois.verisign-grs.com\nstatus: ACTIVE\n",
+            |t| {
+                let _ = referral(t);
+            },
+        );
+    }
+
     /// A server that sends a byte every so often is given up on at the
     /// deadline, not after hours; what it sends loses its control and
     /// bidi characters but keeps its lines.

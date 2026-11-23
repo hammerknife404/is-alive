@@ -65,9 +65,16 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         if name == "__pycache__" || name.to_string_lossy().starts_with('.') {
             continue;
         }
-        if p.is_dir() {
+        // The entry itself, not what a link points at: a link loop would
+        // recurse for ever, and a link out of skills/ would embed a file
+        // from elsewhere in every build.
+        let Ok(kind) = e.file_type() else { continue };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
             walk(&p, out);
-        } else {
+        } else if kind.is_file() {
             out.push(p);
         }
     }

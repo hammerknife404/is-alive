@@ -489,6 +489,14 @@ impl NotesTool {
         h
     }
 
+    /// The redacted notes with each photo still its marker: what a check of
+    /// the words reads, without copying and scanning megabytes of photo
+    /// data every frame.
+    pub fn sanitized_words(&self) -> String {
+        self.clean_key();
+        self.clean.borrow().1.0.clone()
+    }
+
     /// What's redacted, without the notes themselves: for the rows that
     /// count it every frame (the handoff, the report).
     pub fn hits(&self) -> Vec<Hit> {
@@ -2831,6 +2839,19 @@ mod tests {
         assert_eq!(find_all(t, "switch", false).len(), 2);
         assert_eq!(find_all(t, "switch", true).len(), 1);
         assert_eq!(find_all(t, "sw-0", false).len(), 2);
+    }
+
+    /// The Handoff's check reads the words: photos stay markers, not
+    /// megabytes of data copied and scanned each frame.
+    #[test]
+    fn the_words_leave_the_photos_out() {
+        let mut n = notes("");
+        n.text = n
+            .photos
+            .compact("rack\n![Photo](data:image/png;base64,AAAA)\n");
+        assert!(n.sanitized_words().contains("rack"));
+        assert!(!n.sanitized_words().contains("base64"));
+        assert!(n.sanitized().0.contains("base64,AAAA"));
     }
 
     #[test]
