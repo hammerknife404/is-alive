@@ -263,7 +263,10 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         if multi_site && let Some(site) = site {
             n.chip(site);
         }
-        for c in chips {
+        // is-alive's own page marks a card a person drew on a plan.
+        let drawn = crate::map::export::DC_HTML_DRAWN;
+        n.drawn = chips.iter().any(|c| c == drawn);
+        for c in chips.into_iter().filter(|c| c != drawn) {
             n.chip(c);
         }
         let vlans = strings(v, "vlans");
@@ -524,6 +527,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;
+    map.cap_depth_noted();
     map.sweep_apart = !local && !input.sweep.is_empty();
     map.title = doc.title.trim().to_string();
     // A map without SITES is one place: the map's own title names it. With

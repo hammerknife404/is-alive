@@ -512,7 +512,7 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
             .collect(),
         _ => Vec::new(),
     };
-    let map = Map {
+    let mut map = Map {
         title: text(m, "title", TEXT_MAX),
         summary: text(m, "summary", TEXT_MAX),
         hidden: m.get("hidden").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -527,6 +527,8 @@ pub fn from_json(text_in: &str) -> Result<Snapshot, String> {
         cap: 0,
         sweep_apart: false,
     };
+    // A file can say anything: a chain no layout should walk is cut back.
+    map.cap_depth_noted();
     let view = doc.get("view").cloned().unwrap_or(json!({}));
     let ids: HashSet<&str> = map.nodes.iter().map(|n| n.id.as_str()).collect();
     let placed = match view.get("placed") {

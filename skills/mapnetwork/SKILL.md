@@ -135,7 +135,11 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   *from is-alive <version>*) is the app's own quick map, not one you drew. It
   holds sites, zones, uplinks and ports, the app's findings and the
   technician's card notes, and clients only if the app drew them (it stops at
-  120 cards and says so in the subtitle). A dashed `wired` edge is an uplink
+  120 cards, leaving out clients first and then the cards furthest from the
+  internet, and says how many of each in the subtitle). A subtitle that starts
+  *Plan —* or *Training map —* is not what was found on site: those cards were
+  drawn by hand. A `drawn` chip marks such a card (its link dashed): keep the
+  chip, and never report a drawn card as discovered. A dashed `wired` edge is an uplink
   the app inferred, not one a backup showed; a device's second link is a line
   of text in its notes, since a card has one uplink. Treat it as **observed**,
   not enforced config: take the update path, but redo the topology from the
