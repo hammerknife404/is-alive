@@ -296,10 +296,10 @@ impl MapView {
             // As it was before letting go (which shows the inspector again).
             let hidden = self.insp_hidden;
             self.select(None);
-            let small = ui.ctx().content_rect().width() < 1100.0;
+            let small = ui.ctx().content_rect().width() < crate::nav::OPEN_FROM;
             // Only pinned cards left: under 1440 the inspector floats over
             // the map, and Esc shuts it first (the pins stay).
-            let floats = ui.ctx().content_rect().width() < 1440.0;
+            let floats = ui.ctx().content_rect().width() < crate::nav::WIDE_FROM;
             if self.selection().len() == had && had > 0 && floats && !hidden {
                 self.insp_hidden = true;
             } else if self.selection().len() == had && self.ex_on {
