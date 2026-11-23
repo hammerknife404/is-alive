@@ -1900,7 +1900,7 @@ mod tests {
         assert!(r.contains("Mgmt ports checked on 1 of 3"), "{r}");
         assert!(r.contains("Stopped before it finished"), "{r}");
         let inv: serde_json::Value =
-            serde_json::from_str(&s.inventory(&HostInfo::default())).unwrap();
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
         assert_eq!(inv["complete"], false);
         assert!(
             inv["hosts"][2]["open_ports"].is_null(),
