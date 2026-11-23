@@ -137,7 +137,10 @@ fn client_with(
 }
 
 /// Run the handshake to the end over `tcp`.
-pub fn handshake(conn: &mut ClientConnection, tcp: &mut TcpStream) -> io::Result<()> {
+pub fn handshake<S: io::Read + io::Write>(
+    conn: &mut ClientConnection,
+    tcp: &mut S,
+) -> io::Result<()> {
     while conn.is_handshaking() {
         conn.complete_io(tcp).map_err(|e| {
             if matches!(
