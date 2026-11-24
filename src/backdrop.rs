@@ -791,10 +791,16 @@ mod tests {
             b.load(&ctx, &path);
             assert!(b.loading.is_none(), "read again");
         }
-        // The file changes: one more try.
+        // The file changes: one more try. The read is on its way, or (a
+        // fast thread) already failed again, now for the changed file.
+        let before = b.failed.as_ref().and_then(|f| f.1);
         std::fs::write(&path, b"\xff\xd8\xff still not a jpeg, but longer").unwrap();
         b.load(&ctx, &path);
-        assert!(b.loading.is_some() || b.failed.is_none());
+        let retried = b.loading.is_some()
+            || b.failed
+                .as_ref()
+                .is_some_and(|f| f.1 != before && f.1 == stamp(&path));
+        assert!(retried, "not tried again after the file changed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -363,6 +363,39 @@ fn parse(r: &[u8], id: u16) -> io::Result<Msg> {
     Ok(m)
 }
 
+/// Every record of a response (answers, authority and additional), with
+/// its raw data, whatever its ID: for multicast DNS, where the additional
+/// section carries the SRV, TXT and A records a browse needs, and a TXT
+/// record's strings are read one by one.
+pub fn records(r: &[u8]) -> io::Result<Vec<(Rr, &[u8])>> {
+    if r.len() < 12 || r[2] & 0x80 == 0 {
+        return Err(bad());
+    }
+    let qd = u16_at(r, 4)?;
+    let n = u16_at(r, 6)? as usize + u16_at(r, 8)? as usize + u16_at(r, 10)? as usize;
+    let mut i = 12;
+    for _ in 0..qd {
+        i = read_name(r, i)?.1 + 4;
+    }
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let (name, j) = read_name(r, i)?;
+        let rtype = u16_at(r, j)?;
+        let len = u16_at(r, j + 8)? as usize;
+        let start = j + 10;
+        let rd = r.get(start..start + len).ok_or_else(bad)?;
+        let data = parse_data(r, start, rd, rtype).unwrap_or(Data::Other);
+        out.push((Rr { name, rtype, data }, rd));
+        i = start + len;
+    }
+    Ok(out)
+}
+
+/// Write `name` as DNS labels (for a query built elsewhere).
+pub fn put_name(q: &mut Vec<u8>, name: &str) -> io::Result<()> {
+    encode_name(q, name)
+}
+
 fn parse_data(r: &[u8], start: usize, d: &[u8], rtype: u16) -> io::Result<Data> {
     Ok(match rtype {
         A if d.len() == 4 => Data::A(Ipv4Addr::new(d[0], d[1], d[2], d[3])),

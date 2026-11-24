@@ -90,7 +90,7 @@ fn exchange(
     }
 }
 
-fn id() -> u16 {
+pub(crate) fn id() -> u16 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
     h.write_u128(

@@ -847,11 +847,20 @@ impl MapView {
 
     /// Wake-on-LAN: the card, or every selected card with a real MAC.
     fn menu_wake(&mut self, ui: &mut Ui, sep: &mut Sep, group: &[usize]) {
-        let cards: Vec<(crate::net::mac::Mac, Option<std::net::Ipv4Addr>)> = group
+        let cards: Vec<crate::net::wol::Target> = group
             .iter()
             .filter_map(|&k| {
                 let n = &self.map.nodes[k];
-                n.mac.filter(crate::net::wol::wakeable).map(|m| (m, n.ip))
+                n.mac
+                    .filter(crate::net::wol::wakeable)
+                    .map(|m| crate::net::wol::Target {
+                        mac: m,
+                        ip: n.ip,
+                        // Swept as a whole network: its directed broadcast too.
+                        net: n
+                            .ip
+                            .and_then(|ip| crate::net::targets::network_of(&self.swept, ip)),
+                    })
             })
             .collect();
         if cards.is_empty() {
@@ -870,7 +879,7 @@ impl MapView {
                 "Wake (Wake-on-LAN)".to_string(),
                 format!(
                     "Send a Wake-on-LAN packet to {}",
-                    crate::net::mac::fmt(&cards[0].0)
+                    crate::net::mac::fmt(&cards[0].mac)
                 ),
             )
         };

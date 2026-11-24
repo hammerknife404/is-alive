@@ -224,6 +224,9 @@ pub struct MapView {
     raised: Vec<String>,
     /// When the map was last rebuilt, to pace rebuilds during a sweep.
     built_at: f64,
+    /// The whole networks the live sweep covered, so Wake can also send a
+    /// card's network its directed broadcast. Empty on a saved map.
+    swept: Vec<(std::net::Ipv4Addr, u32)>,
     /// The Layers panel (sites, roles, findings) is open; shut until asked for.
     side: bool,
     /// Spot checks run from cards, with their results.
@@ -600,6 +603,27 @@ impl MapView {
         self.relayout(ctx);
     }
 
+    /// Its cards with a real MAC: name, and what Wake sends to.
+    pub fn wakeable(&self) -> Vec<crate::tools::ping::Known> {
+        self.map
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let mac = n.mac.filter(crate::net::wol::wakeable)?;
+                Some((
+                    Some(n.label.clone()).filter(|l| !l.is_empty()),
+                    crate::net::wol::Target {
+                        mac,
+                        ip: n.ip,
+                        net: n
+                            .ip
+                            .and_then(|ip| crate::net::targets::network_of(&self.swept, ip)),
+                    },
+                ))
+            })
+            .collect()
+    }
+
     /// Keep cards' runs going while another tab is shown.
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.runs.poll(ctx);
@@ -669,6 +693,7 @@ impl MapView {
         }
         self.built_at = now;
         self.key = key;
+        self.swept = src.sweep.networks();
         self.stale = false;
         let input = self.input(src);
         let mut map = if input.is_empty() {

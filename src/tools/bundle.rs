@@ -117,7 +117,8 @@ const MERAKI_MORE_WHAT: &str = "Another Meraki export from this visit, in the sa
 meraki.json: its own networks and MX appliances, each a gateway of its own. Enforced config, not \
 observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL and open management ports (null where a host's ports weren't checked). \
+with where it came from: mac_from, name_from), TTL, open management ports (null where a host's ports weren't checked) and what it said over DNS-SD \
+(service types, a printer's model; the scanner's own segment only). \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). Observed state; complete false \
 when the sweep was stopped before it finished.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
