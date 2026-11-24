@@ -206,7 +206,7 @@ pub struct Seen {
 /// portal's own, so a portal is reported instead of inspection.
 pub fn judge_https(seen: &[Result<Seen, String>], portal: &Portal) -> Item {
     let check = "HTTPS inspection";
-    let r = judge_certs(seen);
+    let r = judge_issuers(seen);
     if portal.intercepted() && r.status != Status::Ok {
         let fail = seen.iter().filter(|s| s.is_err()).count();
         let s = seen.iter().filter_map(|s| s.as_ref().ok()).next();
@@ -227,7 +227,7 @@ pub fn judge_https(seen: &[Result<Seen, String>], portal: &Portal) -> Item {
     r
 }
 
-fn judge_certs(seen: &[Result<Seen, String>]) -> Item {
+fn judge_issuers(seen: &[Result<Seen, String>]) -> Item {
     let check = "HTTPS inspection";
     let got: Vec<&Seen> = seen.iter().filter_map(|s| s.as_ref().ok()).collect();
     if got.is_empty() {
@@ -569,13 +569,13 @@ mod tests {
     /// the portal, not inspection, and there's no certificate to install.
     #[test]
     fn a_captive_portal_isnt_https_inspection() {
-        let portal_cert = [
+        let portal_seen = [
             seen("www.cloudflare.com", "guest.example.net", false),
             seen("github.com", "guest.example.net", false),
             seen("www.microsoft.com", "guest.example.net", false),
         ];
         // Without the portal check this reads as inspection.
-        let r = judge_https(&portal_cert, &Portal::Unreached("timed out".into()));
+        let r = judge_https(&portal_seen, &Portal::Unreached("timed out".into()));
         assert_eq!(r.status, Status::Fail);
         let page = web::parse(
             b"HTTP/1.1 302 Found\r\nLocation: https://guest.example.net/login?u=x\r\n\r\n",
@@ -593,7 +593,7 @@ mod tests {
         let p = judge_portal(&portal);
         assert_eq!(p.status, Status::Fail);
         assert!(p.detail.contains("captive portal") && p.detail.contains("guest.example.net"));
-        let r = judge_https(&portal_cert, &portal);
+        let r = judge_https(&portal_seen, &portal);
         assert_ne!(r.status, Status::Fail);
         assert!(r.detail.contains("captive portal"), "{}", r.detail);
         assert!(!r.detail.contains("HTTPS is inspected"), "{}", r.detail);
