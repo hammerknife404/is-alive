@@ -6,9 +6,13 @@ The rules here apply to every change. Reference specs live in `docs/dev/`; they 
 
 One change, one PR, one release, straight into `main` (no `release-*` branches). Merging publishes it: `build.yml` tags `v<version>` and uploads both binaries with checksums. Build, CI and wiki mechanics: `docs/wiki/Developing.md`.
 
-- **Bump the patch in the same PR** when users get something different (a fix, a feature, wording in the app): `version` in `Cargo.toml`, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). The same number goes in the manual's intro paragraph (`**is-alive X.Y.Z**`, the only place `docs/manual/MANUAL.md` may name it) and step 4 of `FOLLOW-ALONG.md`. `the_manual_and_the_guide_name_this_version` (src/manual.rs) checks all three.
-- **No bump** for docs, the wiki, CI or tests only. **x.y.0 only when the owner asks** for a feature release.
-- **Another release landed first?** Merge `main` into the branch and take the next free patch.
+- **Bump the version in the same PR** when users get something different (a fix, a feature, wording in the app). Pick the step by the size of the change:
+  - **Minor (0.X.Y → 0.X+1.0)** when the change is large: deep (reworks how a tool works underneath, or changes a file, bundle or settings format), broad (user-visible changes across several tools or the shared shell: nav, inspector, layout), or several large pieces together.
+  - **Patch (0.X.Y → 0.X.Y+1)** for everything else.
+  - On a judgment call, say in the PR which you picked and why, so the owner can overrule it before merging. **1.0.0 only when the owner asks.**
+- **Where the number goes:** `version` in `Cargo.toml`, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). The same number goes in the manual's intro paragraph (`**is-alive X.Y.Z**`, the only place `docs/manual/MANUAL.md` may name it) and step 4 of `FOLLOW-ALONG.md`. `the_manual_and_the_guide_name_this_version` (src/manual.rs) checks all three.
+- **No bump** for docs, the wiki, CI or tests only.
+- **Another release landed first?** Merge `main` into the branch and take the next free number at the same step.
 - **The PR title is the release note** (GitHub builds the notes from merged PR titles), so write it for users: "Sweep: several networks in one box".
 - **Before asking to merge:** `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`.
 - **After merging:** the `build` run on `main` passed, and the release has `is-alive.exe`, `is-alive-x86_64.AppImage` and both `.sha256` files.
