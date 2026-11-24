@@ -252,11 +252,27 @@ const SCENES: &[Scene] = &[
         },
         |a| over(a.ports.is_running(), a.ports.error()),
     ),
+    // A MAC and its IP typed: the button reads Wake & wait. Nothing is
+    // sent; the tour never wakes anything.
+    scene(
+        "ping-wake",
+        Tab::Ping,
+        |a, _| a.ping.show_for_shots("00:11:32:00:00:01 192.0.2.50"),
+        at_once,
+    ),
     scene("traceroute", Tab::Trace, nothing, at_once),
     scene(
         "subnet-sweep",
         Tab::Sweep,
         |a, _| a.sweep.show_for_shots(crate::net::targets::EXAMPLES),
+        at_once,
+    ),
+    // Fictional hosts (documentation addresses), a printer picked: its
+    // DNS-SD model and Wake in the inspector.
+    scene(
+        "subnet-sweep-host",
+        Tab::Sweep,
+        |a, _| a.sweep.sample_for_shots(),
         at_once,
     ),
     scene(

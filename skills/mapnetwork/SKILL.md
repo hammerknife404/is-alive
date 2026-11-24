@@ -202,6 +202,18 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   else its `Server` header), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
   HP printer's page), the device's own claim rather than proof.
+  `dnssd` is what the host said over DNS-SD (Bonjour), `null` if it said
+  nothing: `services` lists the service types it offers (`_ipp._tcp` and
+  `_pdl-datastream._tcp` are printing, `_airplay._tcp` and `_googlecast._tcp`
+  cast targets, `_smb._tcp` a file share), and `ty` and `product` are a
+  printer's make and model from its TXT record (`null` when it gave none).
+  Label a printer node with its model and use the services as role
+  evidence; it is the device's own claim, not proof. The browse is
+  multicast, so it only reaches the scanner's own segment: only hosts with
+  `on_scanner_lan: true` can answer, and a routed host's `null` means
+  nothing. `dnssd_browsed` (top level) says whether the browse was sent at
+  all (it isn't with names off, or when no swept range is on the scanner's
+  segment).
   `other_macs` lists any other MAC the address answered from during the
   sweep: two devices on one IP (a duplicate address), or a failover
   mid-sweep. Flag it on that node and in `ACTIONS` (med).
@@ -230,8 +242,8 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
-  `open_ports`, `other_macs`, `web_title`, `is_gateway`, `is_this_machine`,
-  `on_scanner_lan`.
+  `open_ports`, `other_macs`, `web_title`, `dnssd`, `is_gateway`,
+  `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
   Its `inferred` list says what about that card is-alive worked out and did

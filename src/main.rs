@@ -883,7 +883,13 @@ impl App {
 
     fn tab_ui(&mut self, ui: &mut egui::Ui) {
         match self.tab {
-            Tab::Ping => self.ping.ui(ui),
+            Tab::Ping => {
+                // What a MAC or a name typed in Ping can be woken by: the
+                // last sweep first (freshest address), then the Map.
+                let mut known = self.sweep.wakeable();
+                known.extend(self.map.wakeable());
+                self.ping.ui(ui, &known);
+            }
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),
             Tab::Speed => self.speed.ui(ui),

@@ -1,6 +1,7 @@
 pub mod checks;
 pub mod clock;
 pub mod dnsq;
+pub mod dnssd;
 pub mod domain;
 pub mod hostinfo;
 pub mod icmp;

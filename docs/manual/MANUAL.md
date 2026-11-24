@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.30.32**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.31.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -271,8 +271,9 @@ Files dropped while Config Export is still reading others wait their turn and ar
 
 | Control | What it does |
 |---|---|
-| **Host** | A name (`printer01`, `google.com`) or address (`192.168.1.1`, `2606:4700::1111`) |
+| **Host** | A name (`printer01`, `google.com`) or address (`192.168.1.1`, `2606:4700::1111`). A MAC address, or a name the last sweep or the Map saw with a MAC, makes it a **Wake** instead (below) |
 | **▶ Start / ■ Stop** | Start the run (or press Enter); stop it (or press Esc) |
+| **▶ Wake / ▶ Wake & wait** | (In Start's place when **Host** is a MAC) Send Wake-on-LAN; with an address known, then wait for the device to come up. A line beside it, in the **ICMP / TCP** switch's place, says what it will do |
 | **ICMP / TCP** | **ICMP** is the classic ping. **TCP** times a connection to a port instead, for devices and firewalls that ignore ICMP |
 | **Port** | (TCP only) The port to connect to; 443 by default |
 | **Count** | How many pings; **0** keeps going until you stop it |
@@ -286,6 +287,22 @@ Files dropped while Config Export is still reading others wait their turn and ar
 - **The status row** shows the address being pinged, **Sent** and **Received**, **Loss** (green at 0%, amber for some loss, red for 100%) and **Min / Avg / Max** round-trip time.
 - **The graph** draws each reply as a point on a green line; a red tick is a reply that never came back. The scale in the top left corner is the highest reply time on screen.
 - **Each line** is one ping: `#3  reply from 1.1.1.1: bytes=32 time=12.6 ms ttl=57`. (From a real network, `1.1.1.1` replies with a TTL around 50 to 60.) Lost ones say *request timed out*, or why: *TTL expired in transit*, *destination unreachable*. A router's *redirect* along the way isn't counted against the ping: the reply after it is.
+
+### Waking a device (Wake-on-LAN)
+
+Type a device's MAC in **Host** (`00:11:32:ab:cd:ef`, or with dashes) and the button becomes **Wake**: it sends a Wake-on-LAN packet that turns on a computer that's asleep or shut down, if its network card is set up for it. A name works too when the last sweep or the Map saw that device with a MAC (`FRONTDESK-PC`, `frontdesk-pc.local`); to ping such a device without waking it, type its address instead.
+
+With an address known the button reads **Wake & wait**: after the packet it pings that address every 5 seconds for up to 3 minutes and ends with *is up after N s* or *No answer*. The address is the one typed after the MAC (`00:11:32:ab:cd:ef 192.168.1.50`), else where the last sweep or the Map saw that MAC. With none it only sends the packet; ping it yourself a minute later.
+
+Where the packet goes:
+
+| The device's address | Sent to |
+|---|---|
+| On this computer's network | That network's broadcast (`192.168.1.255`) and 255.255.255.255: reaches it whenever Wake-on-LAN is on |
+| On another network the last sweep covered as a whole (`10.20.0.0/24`) | 255.255.255.255, the address itself, and that network's **directed broadcast** (`10.20.0.255`). The message says the directed broadcast only arrives if the router allows it, which most routers don't by default |
+| Elsewhere, or unknown | 255.255.255.255 and the address itself: it only arrives if the router passes it on |
+
+Wake-on-LAN is only ever sent from **Wake** here, a Sweep row, the Sweep inspector or a Map card; Full scan never sends it. If it doesn't wake, see [Troubleshooting → Wake-on-LAN doesn't wake it](#wake-on-lan-doesnt-wake-it).
 
 ### Example: is the internet connection healthy?
 
@@ -479,6 +496,8 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **Name** comes from DNS (the device's PTR record) when there is one. Most small sites have none, so a device DNS can't name is asked for its own: over **NetBIOS** (UDP port 137: Windows, Samba, most NAS boxes and many printers answer with their computer name) and, failing that, over **multicast DNS** (UDP port 5353: Apple devices, printers, cast devices and Linux with Avahi answer with a name ending `.local`). Each is one small question to that device and one answer, from an ordinary port: no admin rights, nothing broadcast. A device that answers neither keeps a blank name. The name is the device's own claim, like its DNS name.
 
+**DNS-SD** (Bonjour): with **Resolve names** on and the sweep covering part of this computer's own network, the sweep also sends one multicast DNS question to the segment, asking which services devices offer and which are printers. It's sent from an ordinary port, never port 5353, and devices answer straight back to it. Printers answer with their make and model (`ty=` and `product=` in their DNS-SD record), which the inspector shows as **Model**, with **Services** listing what the device offers (`_ipp._tcp` printing, `_airplay._tcp`, `_googlecast._tcp` and so on). Multicast doesn't cross a router, so **only devices on this computer's own segment can answer**: a device on a routed network with no model isn't a sign of anything. The report says how many answered. Nothing is sent to a printer's own ports.
+
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
 **Mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
@@ -493,11 +512,13 @@ Every device the sweep found stays in the list and on the Map whether its ports 
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. **Model** and **Services** are what it said over DNS-SD (above), with a note that only this segment's devices can answer. Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
 - **On map**: switch to the Map with its card selected (if it's on the map).
+- **Domain join**: put it in Domain join's **Other computers** box (nothing is sent until you press Start).
+- **Wake**: send it Wake-on-LAN, as [Ping's Wake](#waking-a-device-wake-on-lan) does (greyed out without a real MAC: a private MAC doesn't wake). Right-clicking a device's row offers the same **Wake (Wake-on-LAN)**.
 
 Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**, then **TTL** (so the open ports still fit at the smallest window): all three stay in the inspector.
 
@@ -995,7 +1016,7 @@ Right-click a card, or click **⋯** at the top of it in the inspector. Under th
 | **Ping**, **Port Check**, **Traceroute** | (A card with an IP) The inspector's quick check, run on this card: it joins the selection if it wasn't in it (other selected cards stay), and the inspector scrolls to the result under **Results** in its section. Greyed out while that check is still running on it |
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
 | **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
-| **Wake (Wake-on-LAN)** | (A card with a MAC known from a sweep of this network or a backup) A Wake-on-LAN packet to wake a computer that's asleep or switched off. It goes out as a broadcast on the device's network, so it reaches a device on this computer's own network, or further only if the router passes it on; the device wakes only if Wake-on-LAN is turned on in its BIOS and network card. Ping it a minute later to see it come up. A private (randomized) MAC gets no item: phones and virtual adapters don't wake this way. On several selected cards, **Wake all (N)** wakes each one with a MAC, and one message says how many went out |
+| **Wake (Wake-on-LAN)** | (A card with a MAC known from a sweep of this network or a backup) A Wake-on-LAN packet to wake a computer that's asleep or switched off. It goes out as a broadcast on the device's network, so it reaches a device on this computer's own network, or further only if the router passes it on (a card from a sweep of its whole network also gets that network's directed broadcast, which arrives only if the router allows directed broadcast: off by default on most); the device wakes only if Wake-on-LAN is turned on in its BIOS and network card. Ping it a minute later to see it come up. A private (randomized) MAC gets no item: phones and virtual adapters don't wake this way. On several selected cards, **Wake all (N)** wakes each one with a MAC, and one message says how many went out |
 | **Copy IP** / **Copy MAC** | (When it has one) The address, shown on the right of the item |
 | **Copy details** | Copy the card as text |
 | **Put back in the layout** | (A card you've dragged) Back where the layout had it |
@@ -1683,6 +1704,16 @@ is-alive pings without root using the kernel's unprivileged ping sockets, which 
 ```sh
 sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 ```
+
+### Wake-on-LAN doesn't wake it
+
+**Wake & wait** says *No answer*, or the device stays dark:
+
+- **Wi-Fi adapters rarely wake.** Wake-on-LAN is for wired network cards; most laptops on Wi-Fi don't wake from sleep this way and almost none from shutdown. Plug it into a cable.
+- **Windows Fast Startup often blocks waking from shutdown.** A "shut down" Windows PC with Fast Startup on is really hibernating, and many network cards don't listen then. Turn it off (**Control Panel › Power Options › Choose what the power buttons do › Turn on fast startup**), or wake it from sleep instead.
+- **Wake-on-LAN off.** It has to be on in the BIOS or UEFI (*Wake on LAN*, *Power on by PCI-E*) and in the network card's settings in Device Manager (*Wake on Magic Packet*; on the **Power Management** tab, *Allow this device to wake the computer*).
+- **Another network.** The packet is a broadcast: past a router it only arrives if the router passes it on (directed broadcast, usually off). Wake it from a computer on its own network.
+- **It woke but drops ping.** Windows' firewall drops ping by default: try **TCP** to port 3389 or 445.
 
 ### Results look wrong
 

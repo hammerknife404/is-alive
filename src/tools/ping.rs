@@ -2,11 +2,12 @@ use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
 use crate::net::icmp::{self, EchoStatus};
-use crate::net::{self, TcpState};
+use crate::net::mac;
+use crate::net::{self, TcpState, wol};
 use crate::widgets::{self, Action};
 use eframe::egui::{self, RichText, Ui};
 use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 /// Results (CSV export, the saved log): one row per result, these columns.
@@ -18,6 +19,66 @@ pub const COLUMNS: &[&str] = &[
 enum Mode {
     Icmp,
     Tcp,
+}
+
+/// Wake & wait: a ping this often after the Wake-on-LAN packet...
+const WAKE_EVERY: Duration = Duration::from_secs(5);
+/// ...for this long. A PC from shutdown takes a minute or two to boot.
+const WAKE_FOR: Duration = Duration::from_secs(180);
+
+/// A device the site has seen with a MAC Wake can use: its name (when
+/// it has one) and what to wake. From the last sweep, then the Map.
+pub type Known = (Option<String>, wol::Target);
+
+/// What the box asks to wake, if it names a MAC rather than a host: a
+/// MAC typed (optionally with its IP after it: "00:11:32:ab:cd:ef
+/// 192.168.1.50"), or a name the site has already seen with a MAC. The
+/// IP, when not typed, is where the site last saw that MAC.
+fn wake_of(text: &str, known: &[Known]) -> Option<wol::Target> {
+    let words: Vec<&str> = text
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let first = *words.first()?;
+    if let Some(m) = mac::parse_mac(first) {
+        let seen = known.iter().find(|k| k.1.mac == m).map(|k| k.1);
+        let typed = match words.get(1) {
+            Some(w) => Some(w.parse::<Ipv4Addr>().ok()?),
+            None => None,
+        };
+        if words.len() > 2 {
+            return None;
+        }
+        let ip = typed.or(seen.and_then(|s| s.ip));
+        // The network it was swept on, while it's the same address.
+        let net = known
+            .iter()
+            .find(|k| k.1.ip.is_some() && k.1.ip == ip)
+            .and_then(|k| k.1.net);
+        return Some(wol::Target { mac: m, ip, net });
+    }
+    if words.len() != 1 || first.parse::<IpAddr>().is_ok() {
+        return None;
+    }
+    let bare = |n: &str| {
+        n.trim_end_matches('.')
+            .trim_end_matches(".local")
+            .to_ascii_lowercase()
+    };
+    let want = bare(first);
+    known
+        .iter()
+        .find(|(n, _)| n.as_deref().is_some_and(|n| bare(n) == want))
+        .map(|k| k.1)
+}
+
+/// Beside Wake: what it will do.
+fn wake_hint(t: &wol::Target) -> String {
+    let m = mac::fmt(&t.mac);
+    match t.ip {
+        Some(ip) => format!("Wake-on-LAN to {m}, then wait for {ip}"),
+        None => format!("Wake-on-LAN to {m} (no IP known: add it to wait for it)"),
+    }
 }
 
 /// Log lines kept for display/copy; stats cover the whole run regardless.
@@ -61,6 +122,8 @@ enum Ev {
         row: Vec<String>,
     },
     Error(String),
+    /// A line of Wake & wait's own: what went out, and how it ended.
+    Note(bool, String),
 }
 
 pub struct PingTool {
@@ -120,11 +183,15 @@ impl PingTool {
                 push_capped(&mut self.rows, row, MAX_LINES);
             }
             Ev::Error(e) => self.err = Some(e),
+            Ev::Note(ok, text) => push_capped(&mut self.lines, (ok, text), MAX_LINES),
         })
     }
 
-    pub fn ui(&mut self, ui: &mut Ui) {
+    /// The tab. `known` is every device the site has seen with a MAC, for
+    /// a name typed in the box to be woken by.
+    pub fn ui(&mut self, ui: &mut Ui, known: &[Known]) {
         let running = self.poll();
+        let wake = wake_of(&self.host, known);
 
         let mut enter = false;
         // Wraps on a narrow window (docs/dev/ui-layout.md): TCP mode's Port box would
@@ -136,20 +203,39 @@ impl PingTool {
                 Field::Host,
                 &mut self.host,
                 widgets::MAIN_W,
-                "hostname or IP",
+                "hostname, IP or MAC",
             );
-            match widgets::run_button(ui, running, enter) {
-                Action::Start => self.start(ui.ctx()),
+            let act = match &wake {
+                Some(t) if !running => wake_button(ui, t, enter),
+                _ => widgets::run_button(ui, running, enter),
+            };
+            match act {
+                Action::Start => match wake {
+                    Some(t) => self.wake(ui.ctx(), t),
+                    None => self.start(ui.ctx()),
+                },
                 Action::Stop => self.job.as_ref().map_or((), Job::stop),
                 Action::None => {}
             }
             ui.separator();
-            widgets::segmented(ui, |ui| {
-                ui.selectable_value(&mut self.mode, Mode::Icmp, "ICMP");
-                ui.selectable_value(&mut self.mode, Mode::Tcp, "TCP");
-            });
-            if self.mode == Mode::Tcp {
-                widgets::num(ui, "Port", &mut self.port, 1..=65535, "");
+            if let Some(t) = &wake {
+                // In the mode switch's place: no new row (docs/dev/ui-layout.md).
+                let hint = wake_hint(t);
+                ui.add(egui::Label::new(RichText::new(&hint).weak()).truncate())
+                    .on_hover_text(format!(
+                        "{hint}. A MAC, or a name the last sweep or the Map saw with a MAC, \
+                         sends Wake-on-LAN instead of a ping. With an IP (typed after the MAC, \
+                         or where it was last seen) it then pings every 5 s for up to 3 \
+                         minutes. Type the IP to ping it without waking it."
+                    ));
+            } else {
+                widgets::segmented(ui, |ui| {
+                    ui.selectable_value(&mut self.mode, Mode::Icmp, "ICMP");
+                    ui.selectable_value(&mut self.mode, Mode::Tcp, "TCP");
+                });
+                if self.mode == Mode::Tcp {
+                    widgets::num(ui, "Port", &mut self.port, 1..=65535, "");
+                }
             }
         });
         let summary = self.summary();
@@ -280,7 +366,7 @@ impl PingTool {
 
     /// Report text for the Results tab; None until something has run.
     pub fn output(&self) -> Option<String> {
-        (self.stats.sent > 0).then(|| self.report())
+        (self.stats.sent > 0 || !self.lines.is_empty()).then(|| self.report())
     }
 
     fn report(&self) -> String {
@@ -324,6 +410,11 @@ impl PingTool {
         self.run(ctx, host, count);
     }
 
+    /// For the screenshot tour: `text` in the box, nothing sent.
+    pub fn show_for_shots(&mut self, text: &str) {
+        self.host = text.into();
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
     }
@@ -335,6 +426,74 @@ impl PingTool {
 
     fn start(&mut self, ctx: &egui::Context) {
         self.launch(ctx, self.mode, self.count);
+    }
+
+    /// Wake: the Wake-on-LAN packet, then, with an IP known, a ping every
+    /// 5 s until it answers ("up after N s") or 3 minutes pass ("no
+    /// answer"). Only ever from the tab's own button: Full scan and the
+    /// Map's quick runs go through `run`, which never wakes anything.
+    fn wake(&mut self, ctx: &egui::Context, t: wol::Target) {
+        if !wol::wakeable(&t.mac) {
+            self.err = Some(format!(
+                "{} is a private, multicast or empty MAC: no network card wakes to it",
+                mac::fmt(&t.mac)
+            ));
+            return;
+        }
+        self.err = None;
+        self.target = None;
+        self.lines.clear();
+        self.rows.clear();
+        self.samples.clear();
+        self.stats = Stats::default();
+        self.run_started = Some(log::now());
+        self.job = Some(Job::spawn(ctx, move |tx| {
+            let sent = wol::wake(&t);
+            let (text, ok) = wol::report(&t.mac, &sent);
+            if !ok {
+                return tx.send(Ev::Error(text));
+            }
+            // The report's "give it a minute, then Ping it" is this run's job.
+            let text = text
+                .replace(" Give it a minute, then Ping it.", "")
+                .replace(" Give it a minute, then Ping it", "");
+            tx.send(Ev::Note(true, text));
+            if let Ok(s) = &sent
+                && let Some(d) = s.directed
+            {
+                tx.send(Ev::Note(true, wol::directed_note(d)));
+            }
+            let Some(ip) = t.ip else {
+                return tx.send(Ev::Note(
+                    true,
+                    "No IP known to wait for: type it after the MAC to have Wake wait for it, \
+                     or Ping it in a minute."
+                        .into(),
+                ));
+            };
+            tx.send(Ev::Resolved(IpAddr::V4(ip)));
+            tx.send(Ev::Note(
+                true,
+                format!("Waiting for {ip}: a ping every 5 s for up to 3 minutes."),
+            ));
+            let t0 = Instant::now();
+            let mut seq = 0;
+            while !tx.cancelled() {
+                seq += 1;
+                let tick = Instant::now();
+                let ev = icmp_line(IpAddr::V4(ip), seq, 32, 1000);
+                let up = matches!(ev, Ev::Reply { ok: true, .. });
+                tx.send(ev);
+                let secs = t0.elapsed().as_secs();
+                if up {
+                    return tx.send(Ev::Note(true, format!("{ip} is up after {secs} s.")));
+                }
+                if t0.elapsed() + WAKE_EVERY > WAKE_FOR {
+                    return tx.send(Ev::Note(false, wake_gave_up(ip, secs)));
+                }
+                tx.sleep(WAKE_EVERY.saturating_sub(tick.elapsed()));
+            }
+        }));
     }
 
     fn launch(&mut self, ctx: &egui::Context, mode: Mode, count: u32) {
@@ -382,6 +541,32 @@ impl PingTool {
             }
         }));
     }
+}
+
+/// Wake's button, in Start's place: "Wake & wait" when there's an IP to
+/// wait for.
+fn wake_button(ui: &mut Ui, t: &wol::Target, enter: bool) -> Action {
+    let (label, tip) = match t.ip {
+        Some(ip) => (
+            "▶ Wake & wait",
+            format!("Send Wake-on-LAN, then ping {ip} every 5 s for up to 3 minutes (Enter)"),
+        ),
+        None => ("▶ Wake", "Send Wake-on-LAN (Enter)".to_string()),
+    };
+    if ui.add(widgets::primary(label)).on_hover_text(tip).clicked() || enter {
+        Action::Start
+    } else {
+        Action::None
+    }
+}
+
+/// How Wake & wait ends when nothing answered.
+fn wake_gave_up(ip: Ipv4Addr, secs: u64) -> String {
+    format!(
+        "No answer from {ip} after {secs} s. It may not have woken (Wake-on-LAN off in its \
+         BIOS or network card, a Wi-Fi adapter, Windows Fast Startup), it may drop ping, or \
+         the packet didn't reach its network."
+    )
 }
 
 fn icmp_line(ip: IpAddr, seq: u32, size: u16, timeout: u32) -> Ev {
@@ -507,6 +692,61 @@ mod tests {
         if let Some(j) = &t.job {
             j.stop();
         }
+    }
+
+    #[test]
+    fn a_mac_or_a_name_seen_with_one_is_woken() {
+        use crate::net::mac::Mac;
+        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        let m: Mac = [0x00, 0x11, 0x32, 0xAB, 0xCD, 0xEF];
+        let known: Vec<Known> = vec![(
+            Some("FRONTDESK-PC".into()),
+            wol::Target {
+                mac: m,
+                ip: Some(ip("10.20.0.5")),
+                net: Some((ip("10.20.0.0"), 24)),
+            },
+        )];
+        // A MAC alone: where the site last saw it, with its swept network.
+        let t = wake_of("00:11:32:ab:cd:ef", &known).unwrap();
+        assert_eq!(
+            (t.ip, t.net),
+            (Some(ip("10.20.0.5")), Some((ip("10.20.0.0"), 24)))
+        );
+        // A MAC and an IP typed: that IP; not the swept one, so no network.
+        let t = wake_of("00-11-32-AB-CD-EF 192.168.1.50", &known).unwrap();
+        assert_eq!((t.ip, t.net), (Some(ip("192.168.1.50")), None));
+        // A MAC never seen: nothing to wait for.
+        let t = wake_of("00:11:32:00:00:01", &known).unwrap();
+        assert_eq!((t.mac[5], t.ip), (1, None));
+        // A name the site saw with a MAC, any case, .local or not.
+        assert_eq!(wake_of("frontdesk-pc.local", &known).unwrap().mac, m);
+        // Everything else is a ping.
+        for text in [
+            "10.20.0.5",
+            "example.com",
+            "FRONTDESK-PC 1",
+            "00:11:32:ab:cd:ef x",
+            "",
+        ] {
+            assert_eq!(wake_of(text, &known), None, "{text}");
+        }
+        assert!(wake_hint(&wake_of("00:11:32:00:00:01", &known).unwrap()).contains("no IP"));
+        assert!(wake_gave_up(ip("10.20.0.5"), 180).contains("Fast Startup"));
+    }
+
+    /// Full scan and the Map ping through `run`: a MAC there is a host
+    /// that won't resolve, never a Wake-on-LAN packet.
+    #[test]
+    fn run_never_wakes() {
+        let ctx = egui::Context::default();
+        let mut t = PingTool::default();
+        t.run(&ctx, "00:11:32:ab:cd:ef", 1);
+        let end = Instant::now() + Duration::from_secs(10);
+        while t.poll() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(t.lines.iter().all(|(_, l)| !l.contains("Wake-on-LAN")));
     }
 
     #[test]

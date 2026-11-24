@@ -4,7 +4,7 @@ use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
-use crate::net::{self, TcpState, names, ports, subnet, targets};
+use crate::net::{self, TcpState, dnssd, names, ports, subnet, targets, wol};
 use crate::theme;
 use crate::unifi::Clients;
 use crate::widgets::{self, Action};
@@ -53,6 +53,9 @@ struct Host {
     /// What its own web page calls it (its title, else its server), read
     /// after the port check where a web port answered.
     web: Option<String>,
+    /// What it said over DNS-SD (its service types, a printer's model):
+    /// only devices on the scanner's own segment can answer.
+    dnssd: Option<Box<dnssd::Found>>,
 }
 
 /// Ports a device's own web page may be on.
@@ -156,6 +159,10 @@ enum Ev {
     /// What this host's web page calls it.
     Web(Ipv4Addr, String),
     Open(Ipv4Addr, u16),
+    /// A DNS-SD browse went out on the scanner's segment.
+    Browsed,
+    /// What these hosts said over DNS-SD.
+    DnsSd(Vec<(Ipv4Addr, dnssd::Found)>),
 }
 
 /// What the box lists: (targets, addresses), or what's wrong with it.
@@ -196,6 +203,8 @@ pub struct SweepTool {
     runs: u64,
     /// The host open in the inspector, by address.
     picked: Option<Ipv4Addr>,
+    /// The last run sent a DNS-SD browse on the scanner's segment.
+    browsed: bool,
 }
 
 impl Default for SweepTool {
@@ -224,6 +233,7 @@ impl Default for SweepTool {
             revision: 0,
             runs: 0,
             picked: None,
+            browsed: false,
         }
     }
 }
@@ -303,6 +313,15 @@ impl SweepTool {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                         h.checked = true;
                         changed = true;
+                    }
+                }
+                Ev::Browsed => self.browsed = true,
+                Ev::DnsSd(found) => {
+                    for (ip, f) in found {
+                        if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                            h.dnssd = Some(Box::new(f));
+                            changed = true;
+                        }
                     }
                 }
                 Ev::Open(ip, port) => {
@@ -391,7 +410,10 @@ impl SweepTool {
                     .on_hover_text(
                         "Name each device: from DNS, else the name it gives itself over NetBIOS \
                      (Windows, NAS, many printers) or multicast DNS (Apple devices, printers, \
-                     Linux). One small UDP question to each live device; off is quicker",
+                     Linux). One small UDP question to each live device; off is quicker.\n\n\
+                     On this computer's own network it also sends one DNS-SD (Bonjour) browse, \
+                     which printers answer with their model. Multicast stays on this segment: \
+                     routed networks don't answer it",
                     );
                 ui.label("Mgmt ports").on_hover_text(PORTS_TIP);
                 for p in PortCheck::ALL {
@@ -495,6 +517,7 @@ impl SweepTool {
             egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
         );
         let mut pick = None;
+        let nets = self.networks();
         egui::ScrollArea::vertical().auto_shrink(false).show_rows(
             ui,
             row_h,
@@ -556,6 +579,22 @@ impl SweepTool {
                     if resp.clicked() {
                         pick = Some((!on).then_some(h.ip));
                     }
+                    // Right-click: Wake, as on a Map card.
+                    if let Some(t) = wake_target(h, &nets) {
+                        resp.context_menu(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new("Wake (Wake-on-LAN)")
+                                        .min_size(vec2(0.0, theme::TARGET_H)),
+                                )
+                                .on_hover_text(wake_tip(&t))
+                                .clicked()
+                            {
+                                wol::wake_all(vec![t]);
+                                ui.close();
+                            }
+                        });
+                    }
                 }
             },
         );
@@ -587,6 +626,16 @@ impl SweepTool {
         let web = insp::web_url(ip, &ports_open);
         let (checked, ran) = (h.checked, self.ran_ports);
         let web_title = h.web.clone();
+        let found = h.dnssd.clone();
+        let wake = wake_target(h, &self.networks());
+        let wake_tip = wake.as_ref().map_or_else(
+            || {
+                "No MAC to wake it by: Wake-on-LAN needs the card's real MAC, from ARP on this \
+                 network or NetBIOS (a private MAC doesn't wake)"
+                    .to_string()
+            },
+            wake_tip,
+        );
         let also: Vec<String> = h
             .also
             .iter()
@@ -640,6 +689,11 @@ impl SweepTool {
                           joined to Active Directory. Nothing is sent until you press Start",
                     enabled: true,
                 },
+                Act {
+                    label: "Wake",
+                    tip: &wake_tip,
+                    enabled: wake.is_some(),
+                },
             ];
             match insp::actions(ui, &acts) {
                 Some(0) => ask = Some(Ask::Ping(address.clone())),
@@ -648,6 +702,11 @@ impl SweepTool {
                 Some(3) => insp::open(web.clone()),
                 Some(4) => ask = Some(Ask::OnMap(ip)),
                 Some(5) => ask = Some(Ask::Join(address.clone())),
+                Some(6) => {
+                    if let Some(t) = wake {
+                        wol::wake_all(vec![t]);
+                    }
+                }
                 _ => {}
             }
             insp::section(ui, "Details");
@@ -663,6 +722,15 @@ impl SweepTool {
             }
             if let Some(t) = &web_title {
                 insp::row(ui, "Web page", t, false);
+            }
+            if let Some(f) = &found {
+                if let Some(m) = f.model() {
+                    insp::row(ui, "Model", m, false);
+                }
+                if !f.services.is_empty() {
+                    insp::row(ui, "Services", &f.services.join(" "), true);
+                }
+                insp::note(ui, DNSSD_NOTE);
             }
             for m in &also {
                 insp::row(ui, "Also from", m, true);
@@ -776,6 +844,13 @@ impl SweepTool {
             s += "Stopped before it finished: hosts it hadn't reached aren't listed, and ports \
                   it hadn't checked say not checked\n";
         }
+        if self.browsed {
+            let n = self.alive.iter().filter(|h| h.dnssd.is_some()).count();
+            s += &format!(
+                "DNS-SD browse: {n} answered (this computer's own segment only; routed \
+                 networks can't answer it)\n"
+            );
+        }
         let checked = self.alive.iter().filter(|h| h.checked).count();
         match self.ran_ports {
             // Nothing alive: nothing to say about ports.
@@ -807,6 +882,9 @@ impl SweepTool {
             }
             if let Some(t) = &h.web {
                 line += &format!("  \"{t}\"");
+            }
+            if let Some(m) = h.dnssd.as_deref().and_then(dnssd::Found::model) {
+                line += &format!("  model \"{m}\"");
             }
             if !h.also.is_empty() {
                 let also: Vec<String> = h.also.iter().map(mac::fmt).collect();
@@ -879,6 +957,11 @@ impl SweepTool {
                     })).collect::<Vec<_>>()),
                     "other_macs": h.also.iter().map(mac::fmt).collect::<Vec<_>>(),
                     "web_title": h.web,
+                    "dnssd": h.dnssd.as_ref().map(|f| json!({
+                        "services": f.services,
+                        "ty": f.ty,
+                        "product": f.product,
+                    })),
                     "is_gateway": self.local.gateway == Some(h.ip),
                     "is_this_machine": self.local.lan.is_some_and(|(ip, _)| ip == h.ip),
                     "on_scanner_lan": lan.map(|(ip, bits)| same_subnet(ip, h.ip, bits)),
@@ -897,6 +980,7 @@ impl SweepTool {
             },
             "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
             "client_names": clients.label(),
+            "dnssd_browsed": self.browsed,
             "complete": !self.stopped,
             "notes": [
                 "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
@@ -906,6 +990,7 @@ impl SweepTool {
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
+                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse was sent. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
@@ -954,6 +1039,59 @@ impl SweepTool {
     pub fn show_for_shots(&mut self, spec: &str) {
         self.range = spec.into();
         self.detected = true;
+    }
+
+    /// For the screenshot tour: a finished sweep of fictional hosts on a
+    /// documentation network, the printer open in the inspector. Nothing
+    /// is sent.
+    pub fn sample_for_shots(&mut self) {
+        self.clear_results();
+        self.detected = true;
+        self.range = "192.0.2.0/24".into();
+        self.ran = self.range.clone();
+        self.total = 254;
+        self.probed = 254;
+        self.run_started = None;
+        self.browsed = true;
+        let host = |last: u8, name: Option<&str>, mac: Option<Mac>| Host {
+            ip: Ipv4Addr::new(192, 0, 2, last),
+            rtt: Some(0.4 + last as f64 / 100.0),
+            ttl: Some(64),
+            name: name.map(str::to_string),
+            name_from: name.map(|_| "mdns"),
+            mac,
+            mac_from: mac.map(|_| "arp"),
+            open: Vec::new(),
+            checked: false,
+            also: Vec::new(),
+            web: None,
+            dnssd: None,
+        };
+        let mut printer = host(
+            40,
+            Some("NPI0A1B2C.local"),
+            Some([0x00, 0x11, 0x32, 0x00, 0x00, 0x40]),
+        );
+        printer.dnssd = Some(Box::new(dnssd::Found {
+            services: vec![
+                "_http._tcp".into(),
+                "_ipp._tcp".into(),
+                "_pdl-datastream._tcp".into(),
+            ],
+            ty: Some("HP LaserJet Pro M404".into()),
+            product: Some("HP LaserJet Pro M404".into()),
+        }));
+        self.alive = vec![
+            host(1, None, Some([0x00, 0x11, 0x32, 0x00, 0x00, 0x01])),
+            host(
+                20,
+                Some("FRONTDESK-PC"),
+                Some([0x00, 0x11, 0x32, 0x00, 0x00, 0x20]),
+            ),
+            printer,
+        ];
+        self.picked = Some(Ipv4Addr::new(192, 0, 2, 40));
+        self.revision += 1;
     }
 
     /// Start a run with the given target (used by the full scan).
@@ -1022,6 +1160,23 @@ impl SweepTool {
         self.err = None;
         self.revision += 1;
         self.picked = None;
+        self.browsed = false;
+    }
+
+    /// The whole networks the last run swept (10.20.0.0/24, not a range
+    /// like 10.20.0.10-50), for Wake's directed broadcast.
+    pub fn networks(&self) -> Vec<(Ipv4Addr, u32)> {
+        targets::networks(&self.ran)
+    }
+
+    /// Each host found with a MAC Wake can use: its name, MAC, address
+    /// and the swept network holding it (Ping's Wake).
+    pub fn wakeable(&self) -> Vec<(Option<String>, wol::Target)> {
+        let nets = self.networks();
+        self.alive
+            .iter()
+            .filter_map(|h| Some((h.name.clone(), wake_target(h, &nets)?)))
+            .collect()
     }
 
     /// How many sweeps have started (each may be another network).
@@ -1047,6 +1202,14 @@ impl SweepTool {
         self.total = ips.len();
         self.local = HostInfo::local();
         self.ran_ports = self.ports;
+        self.browsed = false;
+        // DNS-SD only where the browse can be heard: with names on, and
+        // only if the sweep covers part of this computer's own segment.
+        let lan = self.local.lan;
+        let browse = (self.resolve_names
+            && lan.is_some_and(|(me, bits)| ips.iter().any(|&ip| same_subnet(me, ip, bits))))
+        .then(|| lan.map(|l| l.0))
+        .flatten();
         let (timeout, threads, rate, names, check_ports) = (
             self.timeout_ms,
             self.threads,
@@ -1062,6 +1225,12 @@ impl SweepTool {
         // A device answers NetBIOS or mDNS within milliseconds on a LAN.
         let ask = Duration::from_millis(timeout.min(400) as u64);
         self.job = Some(Job::spawn(ctx, move |tx| {
+            // Sent first, so devices answer while the pings go out; read
+            // after the ping and ARP phases.
+            let browse = browse.and_then(|via| dnssd::send(Some(via), dnssd::GROUP).ok());
+            if browse.is_some() {
+                tx.send(Ev::Browsed);
+            }
             let alive = Mutex::new(Vec::new());
             // Each live host's MAC as found, for Smart's choice of hosts.
             let macs: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
@@ -1118,6 +1287,7 @@ impl SweepTool {
                         checked: false,
                         also: Vec::new(),
                         web: None,
+                        dnssd: None,
                     }));
                 }
                 tx.send(Ev::Probed);
@@ -1172,9 +1342,22 @@ impl SweepTool {
                     checked: false,
                     also: Vec::new(),
                     web: None,
+                    dnssd: None,
                 }));
             });
             seen.extend(silent.iter().map(|s| s.0));
+            if let Some(b) = browse
+                && !tx.cancelled()
+            {
+                let found: Vec<(Ipv4Addr, dnssd::Found)> = b
+                    .collect(dnssd::WAIT)
+                    .into_iter()
+                    .filter(|(ip, _)| seen.contains(ip))
+                    .collect();
+                if !found.is_empty() {
+                    tx.send(Ev::DnsSd(found));
+                }
+            }
             for (ip, ms) in conflicts(&readings.into_inner().unwrap(), &seen) {
                 tx.send(Ev::Conflict(ip, ms));
             }
@@ -1268,6 +1451,36 @@ fn identify(
     let md = names::mdns(ip, SocketAddr::new(IpAddr::V4(ip), names::MDNS_PORT), wait);
     let from = md.is_some().then_some("mdns");
     (md, from, mac)
+}
+
+/// Under DNS-SD results: where they could come from.
+const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. Multicast stays on this \
+computer's own network segment: devices on routed networks can't answer it.";
+
+/// What Wake sends to for `h`: its MAC (a real card's), its address, and
+/// the swept network holding it.
+fn wake_target(h: &Host, nets: &[(Ipv4Addr, u32)]) -> Option<wol::Target> {
+    let mac = h.mac.filter(wol::wakeable)?;
+    Some(wol::Target {
+        mac,
+        ip: Some(h.ip),
+        net: targets::network_of(nets, h.ip),
+    })
+}
+
+/// Wake's tip: where the packet goes.
+fn wake_tip(t: &wol::Target) -> String {
+    let mut s = format!(
+        "Send a Wake-on-LAN packet to {}, to wake it from sleep or shutdown",
+        mac::fmt(&t.mac)
+    );
+    if let Some((net, bits)) = t.net {
+        s.push_str(&format!(
+            ". Off this computer's network it also goes to {net}/{bits}'s directed broadcast, \
+             which only arrives if the router allows it (off by default on most)"
+        ));
+    }
+    s
 }
 
 /// The table's columns.
@@ -1410,6 +1623,7 @@ mod tests {
             checked: false,
             also: Vec::new(),
             web: None,
+            dnssd: None,
         }
     }
 
@@ -1792,6 +2006,70 @@ mod tests {
             v["ports_checked"].as_array().unwrap().len(),
             ports::INFRA.len()
         );
+    }
+
+    /// A printer's DNS-SD answer reaches the report and the inventory, which
+    /// say the browse only covers the scanner's own segment.
+    #[test]
+    fn dnssd_models_reach_the_report_and_the_inventory() {
+        let mut s = swept(vec![
+            host([10, 0, 0, 40], Some(1.0)),
+            host([10, 0, 0, 41], Some(1.0)),
+        ]);
+        s.apply(vec![
+            Ev::Browsed,
+            Ev::DnsSd(vec![(
+                Ipv4Addr::new(10, 0, 0, 40),
+                dnssd::Found {
+                    services: vec!["_ipp._tcp".into(), "_pdl-datastream._tcp".into()],
+                    ty: Some("HP LaserJet Pro M404".into()),
+                    product: None,
+                },
+            )]),
+        ]);
+        let r = s.report();
+        assert!(
+            r.contains("DNS-SD browse: 1 answered (this computer's own segment only"),
+            "{r}"
+        );
+        assert!(r.contains("model \"HP LaserJet Pro M404\""), "{r}");
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
+        assert_eq!(v["dnssd_browsed"], true);
+        assert_eq!(v["hosts"][0]["dnssd"]["ty"], "HP LaserJet Pro M404");
+        assert_eq!(
+            v["hosts"][0]["dnssd"]["services"][1],
+            "_pdl-datastream._tcp"
+        );
+        assert!(v["hosts"][0]["dnssd"]["product"].is_null());
+        assert!(v["hosts"][1]["dnssd"].is_null());
+        let notes = v["notes"].to_string();
+        assert!(notes.contains("own segment"), "{notes}");
+        // Every top-level key is one the skill names.
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        assert!(skill.contains("`dnssd_browsed`") && skill.contains("`ty`"));
+        // A new sweep forgets it.
+        s.clear_results();
+        assert!(!s.browsed);
+    }
+
+    /// Wake goes to a real card's MAC, with the swept network for its
+    /// directed broadcast; a private MAC or none gets no Wake.
+    #[test]
+    fn wake_targets_carry_the_swept_network() {
+        let mut a = host([10, 20, 0, 5], Some(1.0));
+        a.mac = Some(mac(5));
+        let mut b = host([10, 20, 0, 6], Some(1.0));
+        b.mac = Some([0xDA, 0x11, 0x32, 0, 0, 6]);
+        let mut s = swept(vec![a, b, host([10, 20, 0, 7], Some(1.0))]);
+        s.ran = "10.20.0.0/24".into();
+        let w = s.wakeable();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].1.ip, Some(Ipv4Addr::new(10, 20, 0, 5)));
+        assert_eq!(w[0].1.net, Some((Ipv4Addr::new(10, 20, 0, 0), 24)));
+        assert!(wake_tip(&w[0].1).contains("directed broadcast"));
+        s.ran = "10.20.0.1-50".into();
+        assert_eq!(s.wakeable()[0].1.net, None);
     }
 
     /// Smart checks the gateway, gear, NAS, printers, cameras and makers it

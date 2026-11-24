@@ -1,0 +1,406 @@
+//! DNS-SD (Bonjour) browse: what printers and other devices on the
+//! scanner's own segment say they are. One multicast DNS question packet
+//! goes to 224.0.0.251:5353 asking for the list of service types and for
+//! the printer types, with the unicast-response (QU) bit set. It is sent
+//! from an ordinary ephemeral port, so devices answer straight back to it
+//! (RFC 6762, 5.4 and 6.7); nothing binds or listens on 5353, so it never
+//! competes with the computer's own Bonjour or Avahi.
+//!
+//! Multicast DNS is link-local: routers don't pass it on, so only devices
+//! on the scanner's own segment answer. A routed network's printers say
+//! nothing here, which is not a sign there are none.
+//!
+//! What comes back is the device's own claim: its service types and, for
+//! a printer, the make and model in its TXT record (`ty=`, `product=`).
+//! Instance names ("Front office printer", "Ana's MacBook") are not kept.
+//! Nothing is ever sent to a printer's own ports (no PJL on 9100).
+
+use super::dnsq;
+use std::collections::{BTreeSet, HashMap};
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::time::{Duration, Instant};
+
+/// The multicast DNS group and port.
+pub const GROUP: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353);
+
+/// What's asked: every service type a device offers, and the printer
+/// types (IPP, IPP over TLS, raw "JetDirect" printing, LPD), whose TXT
+/// records carry the model.
+pub const ASKED: &[&str] = &[
+    "_services._dns-sd._udp.local",
+    "_ipp._tcp.local",
+    "_ipps._tcp.local",
+    "_pdl-datastream._tcp.local",
+    "_printer._tcp.local",
+];
+
+/// How long devices get to answer. Responders wait up to half a second
+/// before answering a browse, longer when the segment is busy.
+pub const WAIT: Duration = Duration::from_millis(2500);
+
+const SERVICES: &str = "_services._dns-sd._udp.local";
+
+/// Kept per device, so a chatty one can't grow a report.
+const MAX_SERVICES: usize = 24;
+
+/// What one device said over DNS-SD.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Found {
+    /// Service types it offers, without ".local" ("_ipp._tcp"), sorted.
+    pub services: Vec<String>,
+    /// The printer's make and model (`ty=` in an IPP or LPD TXT record).
+    pub ty: Option<String>,
+    /// The PostScript product name (`product=`), without its brackets.
+    pub product: Option<String>,
+}
+
+impl Found {
+    /// Its model, as best said: `ty`, else `product`.
+    pub fn model(&self) -> Option<&str> {
+        self.ty.as_deref().or(self.product.as_deref())
+    }
+}
+
+/// The browse: one packet, every type asked for, each question with the
+/// QU bit (class IN | 0x8000).
+pub fn query(id: u16) -> Vec<u8> {
+    let mut q = id.to_be_bytes().to_vec();
+    q.extend_from_slice(&[0, 0]);
+    q.extend_from_slice(&(ASKED.len() as u16).to_be_bytes());
+    q.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    for name in ASKED {
+        // The names are fixed and valid.
+        let _ = dnsq::put_name(&mut q, name);
+        q.extend_from_slice(&dnsq::PTR.to_be_bytes());
+        q.extend_from_slice(&0x8001u16.to_be_bytes());
+    }
+    q
+}
+
+/// A browse on its way: the socket answers come back to.
+pub struct Browse {
+    sock: UdpSocket,
+    sent: Instant,
+}
+
+/// Send the browse to `to` (the multicast group; a test's own responder),
+/// out of the card with address `via` when given.
+pub fn send(via: Option<Ipv4Addr>, to: SocketAddrV4) -> io::Result<Browse> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let s = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    s.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)).into())?;
+    if to.ip().is_multicast() {
+        // RFC 6762, 11: multicast DNS goes out with TTL 255.
+        s.set_multicast_ttl_v4(255)?;
+        if let Some(v) = via {
+            s.set_multicast_if_v4(&v)?;
+        }
+    }
+    let sock: UdpSocket = s.into();
+    sock.send_to(&query(super::names::id()), to)?;
+    Ok(Browse {
+        sock,
+        sent: Instant::now(),
+    })
+}
+
+impl Browse {
+    /// Every answer that came within `wait` of sending (those that came
+    /// while the caller was busy are still in the socket), by device.
+    pub fn collect(self, wait: Duration) -> HashMap<Ipv4Addr, Found> {
+        let mut out: HashMap<Ipv4Addr, Acc> = HashMap::new();
+        let mut buf = vec![0u8; 9000];
+        let end = self.sent + wait;
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            // Past the end: only what's already waiting.
+            let r = if left.is_zero() {
+                self.sock
+                    .set_nonblocking(true)
+                    .and_then(|_| self.sock.recv_from(&mut buf))
+            } else {
+                self.sock
+                    .set_read_timeout(Some(left))
+                    .and_then(|_| self.sock.recv_from(&mut buf))
+            };
+            match r {
+                Ok((n, SocketAddr::V4(from))) => read(&buf[..n], *from.ip(), &mut out),
+                Ok(_) => {}
+                Err(_) if left.is_zero() => break,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                // ICMP port unreachable and the like (Windows reports it on
+                // the next read): keep listening, without spinning.
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        out.into_iter().map(|(ip, a)| (ip, a.done())).collect()
+    }
+}
+
+#[derive(Default)]
+struct Acc {
+    services: BTreeSet<String>,
+    ty: Option<String>,
+    product: Option<String>,
+}
+
+impl Acc {
+    fn done(self) -> Found {
+        Found {
+            services: self.services.into_iter().take(MAX_SERVICES).collect(),
+            ty: self.ty,
+            product: self.product,
+        }
+    }
+}
+
+/// "_ipp._tcp.local" → "_ipp._tcp"; None for anything that isn't a
+/// service type.
+fn service_type(name: &str) -> Option<String> {
+    let t = name.strip_suffix(".local")?;
+    let mut parts = t.split('.');
+    let (a, b) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && a.starts_with('_') && a.len() > 1 && (b == "_tcp" || b == "_udp"))
+        .then(|| format!("{a}.{b}"))
+}
+
+/// The type an instance name ends in: "x._ipp._tcp.local" → "_ipp._tcp".
+fn instance_type(name: &str) -> Option<String> {
+    let t = name.strip_suffix(".local")?;
+    let mut it = t.rsplitn(3, '.');
+    let (proto, svc) = (it.next()?, it.next()?);
+    it.next()?;
+    service_type(&format!("{svc}.{proto}.local"))
+}
+
+/// A TXT record's `key=value` strings.
+fn txt_pairs(rd: &[u8]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < rd.len() {
+        let n = rd[k] as usize;
+        let Some(s) = rd.get(k + 1..k + 1 + n) else {
+            break;
+        };
+        let s = String::from_utf8_lossy(s);
+        if let Some((key, v)) = s.split_once('=') {
+            out.push((key.to_ascii_lowercase(), v.to_string()));
+        }
+        k += 1 + n;
+    }
+    out
+}
+
+/// A model string off the wire: cleaned, brackets gone, kept short.
+fn model(v: &str) -> Option<String> {
+    let v = v
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
+    let v: String = super::sanitize(v).chars().take(80).collect();
+    (!v.is_empty() && v != "Unknown").then_some(v)
+}
+
+/// Fold one answer from `from` into `out`. A record about another host
+/// (a sleep proxy answering for a sleeping printer) goes to that host's
+/// address when the answer gives it.
+fn read(r: &[u8], from: Ipv4Addr, out: &mut HashMap<Ipv4Addr, Acc>) {
+    let Ok(rrs) = dnsq::records(r) else { return };
+    // Instance → its host's name; host name → address.
+    let mut target: HashMap<&str, &str> = HashMap::new();
+    let mut addr: HashMap<&str, Ipv4Addr> = HashMap::new();
+    for (rr, _) in &rrs {
+        match &rr.data {
+            dnsq::Data::Srv { target: t, .. } => {
+                target.insert(&rr.name, t);
+            }
+            dnsq::Data::A(a) if rr.rtype == dnsq::A => {
+                addr.entry(&rr.name).or_insert(*a);
+            }
+            _ => {}
+        }
+    }
+    let owner = |instance: &str| -> Ipv4Addr {
+        target
+            .get(instance)
+            .and_then(|t| addr.get(t))
+            .copied()
+            .filter(|a| !a.is_unspecified() && !a.is_loopback())
+            .unwrap_or(from)
+    };
+    for (rr, rd) in &rrs {
+        match rr.rtype {
+            dnsq::PTR if rr.name == SERVICES => {
+                if let dnsq::Data::Name(n) = &rr.data
+                    && let Some(t) = service_type(n)
+                {
+                    out.entry(from).or_default().services.insert(t);
+                }
+            }
+            dnsq::PTR => {
+                if let (Some(t), dnsq::Data::Name(inst)) = (service_type(&rr.name), &rr.data) {
+                    out.entry(owner(inst)).or_default().services.insert(t);
+                }
+            }
+            dnsq::SRV | dnsq::TXT => {
+                let Some(t) = instance_type(&rr.name) else {
+                    continue;
+                };
+                let acc = out.entry(owner(&rr.name)).or_default();
+                acc.services.insert(t);
+                if rr.rtype == dnsq::TXT {
+                    for (k, v) in txt_pairs(rd) {
+                        match k.as_str() {
+                            "ty" if acc.ty.is_none() => acc.ty = model(&v),
+                            "product" if acc.product.is_none() => acc.product = model(&v),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A response as a printer sends it: its service types, and its IPP
+    /// instance with SRV, TXT and A records.
+    fn answer(id: u16, host_ip: [u8; 4]) -> Vec<u8> {
+        fn name(r: &mut Vec<u8>, n: &str) {
+            dnsq::put_name(r, n).unwrap();
+        }
+        fn rr(r: &mut Vec<u8>, n: &str, t: u16, data: &[u8]) {
+            name(r, n);
+            r.extend_from_slice(&t.to_be_bytes());
+            r.extend_from_slice(&[0x80, 0x01, 0, 0, 0, 10]);
+            r.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            r.extend_from_slice(data);
+        }
+        let mut r = id.to_be_bytes().to_vec();
+        r.extend_from_slice(&[0x84, 0x00, 0, 0, 0, 3, 0, 0, 0, 3]);
+        let mut n = Vec::new();
+        name(&mut n, "_ipp._tcp.local");
+        rr(&mut r, SERVICES, dnsq::PTR, &n);
+        let mut n = Vec::new();
+        name(&mut n, "_pdl-datastream._tcp.local");
+        rr(&mut r, SERVICES, dnsq::PTR, &n);
+        let inst = "Front office._ipp._tcp.local";
+        let mut n = Vec::new();
+        name(&mut n, inst);
+        rr(&mut r, "_ipp._tcp.local", dnsq::PTR, &n);
+        let mut srv = vec![0, 0, 0, 0, 0x02, 0x77];
+        name(&mut srv, "npi0a1b2c.local");
+        rr(&mut r, inst, dnsq::SRV, &srv);
+        let mut txt = Vec::new();
+        for s in [
+            "txtvers=1",
+            "ty=HP LaserJet Pro M404\u{202e}",
+            "product=(HP LaserJet Pro M404)",
+            "note=",
+        ] {
+            txt.push(s.len() as u8);
+            txt.extend_from_slice(s.as_bytes());
+        }
+        rr(&mut r, inst, dnsq::TXT, &txt);
+        rr(&mut r, "npi0a1b2c.local", dnsq::A, &host_ip);
+        r
+    }
+
+    #[test]
+    fn the_browse_asks_every_type_with_the_qu_bit() {
+        let q = query(0x1234);
+        assert_eq!(&q[..2], &[0x12, 0x34]);
+        assert_eq!(u16::from_be_bytes([q[4], q[5]]) as usize, ASKED.len());
+        // Every question: PTR, class IN with the unicast-response bit.
+        let mut i = 12;
+        for _ in ASKED {
+            while q[i] != 0 {
+                i += 1 + q[i] as usize;
+            }
+            assert_eq!(&q[i + 1..i + 5], &[0, 12, 0x80, 0x01]);
+            i += 5;
+        }
+        assert_eq!(i, q.len());
+        assert!(!ASKED.iter().any(|a| a.contains("9100")));
+    }
+
+    #[test]
+    fn a_printer_says_its_services_and_model() {
+        let from = Ipv4Addr::new(192, 0, 2, 40);
+        let mut out = HashMap::new();
+        read(&answer(7, [192, 0, 2, 40]), from, &mut out);
+        let f = out.remove(&from).unwrap().done();
+        assert_eq!(f.services, ["_ipp._tcp", "_pdl-datastream._tcp"]);
+        // Cleaned: no direction-changing character from the wire.
+        assert_eq!(f.ty.as_deref(), Some("HP LaserJet Pro M404"));
+        assert_eq!(f.product.as_deref(), Some("HP LaserJet Pro M404"));
+        assert_eq!(f.model(), Some("HP LaserJet Pro M404"));
+    }
+
+    #[test]
+    fn a_sleep_proxy_answer_goes_to_the_printer_it_speaks_for() {
+        let proxy = Ipv4Addr::new(192, 0, 2, 9);
+        let mut out = HashMap::new();
+        read(&answer(7, [192, 0, 2, 41]), proxy, &mut out);
+        let printer = out.remove(&Ipv4Addr::new(192, 0, 2, 41)).unwrap().done();
+        assert_eq!(printer.ty.as_deref(), Some("HP LaserJet Pro M404"));
+        // The proxy's own list of types stays with the proxy.
+        assert!(out.contains_key(&proxy));
+    }
+
+    #[test]
+    fn junk_and_questions_are_ignored() {
+        let mut out = HashMap::new();
+        let from = Ipv4Addr::new(192, 0, 2, 1);
+        read(&[0u8; 5], from, &mut out);
+        read(&query(1), from, &mut out);
+        let mut cut = answer(1, [192, 0, 2, 1]);
+        cut.truncate(cut.len() - 3);
+        read(&cut, from, &mut out);
+        assert!(out.values().all(|a| a.ty.is_none()));
+        assert_eq!(
+            instance_type("a.b._ipp._tcp.local").as_deref(),
+            Some("_ipp._tcp")
+        );
+        assert_eq!(
+            service_type("_ipp._tcp.local").as_deref(),
+            Some("_ipp._tcp")
+        );
+        assert_eq!(service_type("printer.local"), None);
+        assert_eq!(model("(Unknown)"), None);
+    }
+
+    /// Over the wire on loopback: the browse goes out from an ephemeral
+    /// port (never 5353) and the answer sent back to that port is read.
+    #[test]
+    fn a_browse_reads_the_answers_sent_back_to_its_port() {
+        let responder = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let at = match responder.local_addr().unwrap() {
+            SocketAddr::V4(a) => a,
+            _ => unreachable!(),
+        };
+        let b = send(None, at).unwrap();
+        let mut buf = [0u8; 1500];
+        responder
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (n, back) = responder.recv_from(&mut buf).unwrap();
+        assert_ne!(back.port(), 5353, "asked from an ordinary port");
+        assert_eq!(u16::from_be_bytes([buf[4], buf[5]]) as usize, ASKED.len());
+        let _ = n;
+        responder.send_to(&answer(1, [127, 0, 0, 1]), back).unwrap();
+        let found = b.collect(Duration::from_millis(500));
+        let f = &found[&Ipv4Addr::LOCALHOST];
+        assert_eq!(f.model(), Some("HP LaserJet Pro M404"));
+    }
+}

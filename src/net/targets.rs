@@ -40,6 +40,50 @@ pub fn list(spec: &str) -> Vec<String> {
     tokens(spec)
 }
 
+/// The whole networks `spec` names (`10.0.0.0/24`, `10.0.0.0 255.255.255.0`,
+/// `10.0.0.*`), as network address and prefix length: what a directed
+/// broadcast can go to. Ranges and single addresses name no network.
+pub fn networks(spec: &str) -> Vec<(Ipv4Addr, u32)> {
+    let mut v: Vec<(Ipv4Addr, u32)> = tokens(spec)
+        .iter()
+        .filter_map(|t| {
+            let stars = t.split('.').rev().take_while(|o| *o == "*").count();
+            let (base, bits) = if (1..=2).contains(&stars) && t.split('.').count() == 4 {
+                let base = t.replace('*', "0");
+                (base, 32 - 8 * stars as u32)
+            } else {
+                let (b, n) = t.split_once('/')?;
+                let bits = match n.trim().parse::<u32>() {
+                    Ok(b) if b <= 32 => b,
+                    _ => mask_bits(n.trim())?,
+                };
+                (b.to_string(), bits)
+            };
+            let ip = base.trim().parse::<Ipv4Addr>().ok()?;
+            // A /31 or /32 has no broadcast; under /16 is past the sweep's limit.
+            if !(16..=30).contains(&bits) {
+                return None;
+            }
+            let mask = u32::MAX << (32 - bits);
+            Some((Ipv4Addr::from(u32::from(ip) & mask), bits))
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Of `nets`, the narrowest one holding `ip`.
+pub fn network_of(nets: &[(Ipv4Addr, u32)], ip: Ipv4Addr) -> Option<(Ipv4Addr, u32)> {
+    nets.iter()
+        .copied()
+        .filter(|&(a, bits)| {
+            let mask = u32::MAX << (32 - bits.clamp(1, 32));
+            u32::from(a) & mask == u32::from(ip) & mask
+        })
+        .max_by_key(|n| n.1)
+}
+
 /// How many targets `spec` lists and how many addresses they come to
 /// (overlaps counted once), without listing them.
 pub fn count(spec: &str) -> Result<(usize, usize), String> {
@@ -211,6 +255,33 @@ mod tests {
         assert_eq!(subnet_cidr(ip, 28), "10.1.2.0/28");
         assert_eq!(subnet_cidr(ip, 23), "10.1.2.0/23");
         assert_eq!(subnet_cidr(ip, 16), "10.1.0.0/22");
+    }
+
+    #[test]
+    fn whole_networks_are_what_a_directed_broadcast_can_reach() {
+        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        let nets = networks(
+            "10.20.0.77/24, 172.16.0.0 255.255.252.0; 192.168.5.* 10.9.9.1-50 10.8.0.1 10.7.0.0/31",
+        );
+        assert_eq!(
+            nets,
+            [
+                (ip("10.20.0.0"), 24),
+                (ip("172.16.0.0"), 22),
+                (ip("192.168.5.0"), 24)
+            ]
+        );
+        assert_eq!(
+            network_of(&nets, ip("172.16.3.9")),
+            Some((ip("172.16.0.0"), 22))
+        );
+        assert_eq!(network_of(&nets, ip("10.9.9.5")), None);
+        // Overlapping networks: the narrower one.
+        let both = networks("10.20.0.0/16 10.20.4.0/24");
+        assert_eq!(
+            network_of(&both, ip("10.20.4.9")),
+            Some((ip("10.20.4.0"), 24))
+        );
     }
 
     #[test]
