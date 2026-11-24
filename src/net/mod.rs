@@ -13,6 +13,7 @@ pub mod netconf;
 pub mod pmtu;
 pub mod ports;
 pub mod speed;
+pub mod ssdp;
 pub mod subnet;
 pub mod targets;
 pub mod tls;

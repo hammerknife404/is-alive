@@ -224,6 +224,7 @@ mod tests {
                     checked: true,
                     also: vec![],
                     web: None,
+                    multicast: None,
                 })
                 .collect(),
             gateway: Some("10.0.0.1".parse().unwrap()),

@@ -11,12 +11,17 @@
 //! nothing here, which is not a sign there are none.
 //!
 //! What comes back is the device's own claim: its service types and, for
-//! a printer, the make and model in its TXT record (`ty=`, `product=`).
-//! Instance names ("Front office printer", "Ana's MacBook") are not kept.
-//! Nothing is ever sent to a printer's own ports (no PJL on 9100).
+//! a printer, the make and model in its TXT record (`ty=`, `product=`),
+//! its queue (`rp=`) and the page languages it takes (`pdl=`). Instance
+//! names ("Front office printer", "Ana's MacBook") are not kept. Nothing
+//! is ever sent to a printer's own ports (no PJL on 9100).
+//!
+//! A device that answers is a device: the sweep lists one that answered
+//! here but not ping or ARP, when it's inside the swept range and on the
+//! scanner's own segment.
 
 use super::dnsq;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};
@@ -24,15 +29,18 @@ use std::time::{Duration, Instant};
 /// The multicast DNS group and port.
 pub const GROUP: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(224, 0, 0, 251), 5353);
 
-/// What's asked: every service type a device offers, and the printer
-/// types (IPP, IPP over TLS, raw "JetDirect" printing, LPD), whose TXT
-/// records carry the model.
+/// What's asked: every service type a device offers, the printer types
+/// (IPP, IPP over TLS, raw "JetDirect" printing, LPD), whose TXT records
+/// carry the model, and file shares and web pages, which bring in NASes,
+/// computers and gear that don't list their types.
 pub const ASKED: &[&str] = &[
     "_services._dns-sd._udp.local",
     "_ipp._tcp.local",
     "_ipps._tcp.local",
     "_pdl-datastream._tcp.local",
     "_printer._tcp.local",
+    "_smb._tcp.local",
+    "_http._tcp.local",
 ];
 
 /// How long devices get to answer. Responders wait up to half a second
@@ -48,6 +56,8 @@ const DRAIN: Duration = Duration::from_millis(250);
 
 /// Kept per device, so a chatty one can't grow a report.
 const MAX_SERVICES: usize = 24;
+const MAX_QUEUES: usize = 8;
+const MAX_LANGUAGES: usize = 16;
 
 /// What one device said over DNS-SD.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -58,6 +68,12 @@ pub struct Found {
     pub ty: Option<String>,
     /// The PostScript product name (`product=`), without its brackets.
     pub product: Option<String>,
+    /// Its print queues (`rp=`, "ipp/print"), sorted: a printer has one or
+    /// two, a print server one per printer.
+    pub rp: Vec<String>,
+    /// The page languages its printer services take (`pdl=`, MIME types
+    /// such as "application/pdf"), sorted.
+    pub pdl: Vec<String>,
 }
 
 impl Found {
@@ -118,42 +134,69 @@ impl Browse {
     /// while the caller was busy are still in the socket), by device. A
     /// record about another host is moved to it only when that host is on
     /// `lan` (the scanner's own segment: address and prefix length).
-    pub fn collect(self, wait: Duration, lan: Option<(Ipv4Addr, u32)>) -> HashMap<Ipv4Addr, Found> {
+    ///
+    /// Also returns the addresses that answered for themselves: the UDP
+    /// source of an answer with a record of its own. Only those are
+    /// devices heard from; an address named in another device's A record
+    /// (a sleep proxy's, or a forged list of hundreds) may label a host
+    /// the sweep found some other way, never add one.
+    pub fn collect(
+        self,
+        wait: Duration,
+        lan: Option<(Ipv4Addr, u32)>,
+    ) -> (HashMap<Ipv4Addr, Found>, HashSet<Ipv4Addr>) {
         let mut out: HashMap<Ipv4Addr, Acc> = HashMap::new();
-        let mut buf = vec![0u8; 9000];
-        let end = self.sent + wait;
-        // Hard stop, whatever keeps arriving.
-        let stop = Instant::now().max(end) + DRAIN;
-        for _ in 0..MAX_ANSWERS {
-            if Instant::now() >= stop {
-                break;
+        let mut answered = HashSet::new();
+        gather(&self.sock, self.sent, wait, |r, from| {
+            if read(r, from, lan, &mut out) {
+                answered.insert(from);
             }
-            let left = end.saturating_duration_since(Instant::now());
-            // Past the end: only what's already waiting.
-            let r = if left.is_zero() {
-                self.sock
-                    .set_nonblocking(true)
-                    .and_then(|_| self.sock.recv_from(&mut buf))
-            } else {
-                self.sock
-                    .set_read_timeout(Some(left))
-                    .and_then(|_| self.sock.recv_from(&mut buf))
-            };
-            match r {
-                Ok((n, SocketAddr::V4(from))) => read(&buf[..n], *from.ip(), lan, &mut out),
-                Ok(_) => {}
-                Err(_) if left.is_zero() => break,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) => {}
-                // ICMP port unreachable and the like (Windows reports it on
-                // the next read): keep listening, without spinning.
-                Err(_) => std::thread::sleep(Duration::from_millis(10)),
-            }
+        });
+        let found = out.into_iter().map(|(ip, a)| (ip, a.done())).collect();
+        (found, answered)
+    }
+}
+
+/// Read what comes back to `sock` within `wait` of `sent`, handing each
+/// datagram and its sender to `f`. A hostile segment can't hold the
+/// sweep: at most `MAX_ANSWERS` are read, and past `wait` only what is
+/// already queued, for `DRAIN` at most. Shared with the SSDP search.
+pub(super) fn gather(
+    sock: &UdpSocket,
+    sent: Instant,
+    wait: Duration,
+    mut f: impl FnMut(&[u8], Ipv4Addr),
+) {
+    let mut buf = vec![0u8; 9000];
+    let end = sent + wait;
+    // Hard stop, whatever keeps arriving.
+    let stop = Instant::now().max(end) + DRAIN;
+    for _ in 0..MAX_ANSWERS {
+        if Instant::now() >= stop {
+            break;
         }
-        out.into_iter().map(|(ip, a)| (ip, a.done())).collect()
+        let left = end.saturating_duration_since(Instant::now());
+        // Past the end: only what's already waiting.
+        let r = if left.is_zero() {
+            sock.set_nonblocking(true)
+                .and_then(|_| sock.recv_from(&mut buf))
+        } else {
+            sock.set_read_timeout(Some(left))
+                .and_then(|_| sock.recv_from(&mut buf))
+        };
+        match r {
+            Ok((n, SocketAddr::V4(from))) => f(&buf[..n], *from.ip()),
+            Ok(_) => {}
+            Err(_) if left.is_zero() => break,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            // ICMP port unreachable and the like (Windows reports it on
+            // the next read): keep listening, without spinning.
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
     }
 }
 
@@ -163,6 +206,8 @@ struct Acc {
     /// Every model each of its printer services gave.
     ty: BTreeSet<String>,
     product: BTreeSet<String>,
+    rp: BTreeSet<String>,
+    pdl: BTreeSet<String>,
 }
 
 /// The one value given, or None when there were none or they disagree
@@ -177,6 +222,8 @@ impl Acc {
             services: self.services.into_iter().take(MAX_SERVICES).collect(),
             ty: only(self.ty),
             product: only(self.product),
+            rp: self.rp.into_iter().take(MAX_QUEUES).collect(),
+            pdl: self.pdl.into_iter().take(MAX_LANGUAGES).collect(),
         }
     }
 }
@@ -229,17 +276,45 @@ fn model(v: &str) -> Option<String> {
     (!v.is_empty() && v != "Unknown").then_some(v)
 }
 
+/// A queue name off the wire ("ipp/print"): cleaned and kept short.
+fn queue(v: &str) -> Option<String> {
+    let v: String = super::sanitize(v.trim()).chars().take(80).collect();
+    (!v.is_empty()).then_some(v)
+}
+
+/// The languages in a `pdl=` list: each cleaned, kept short.
+fn languages(v: &str) -> impl Iterator<Item = String> + '_ {
+    v.split(',')
+        .map(|l| {
+            super::sanitize(l.trim())
+                .chars()
+                .take(60)
+                .collect::<String>()
+        })
+        .filter(|l| !l.is_empty())
+        .take(MAX_LANGUAGES)
+}
+
 /// Fold one answer from `from` into `out`. A record about another host
 /// (a sleep proxy answering for a sleeping printer) goes to that host's
 /// address when the answer gives it and it's on `lan` (any, without one).
-fn read(r: &[u8], from: Ipv4Addr, lan: Option<(Ipv4Addr, u32)>, out: &mut HashMap<Ipv4Addr, Acc>) {
+/// True when the answer gave `from` a record of its own.
+fn read(
+    r: &[u8],
+    from: Ipv4Addr,
+    lan: Option<(Ipv4Addr, u32)>,
+    out: &mut HashMap<Ipv4Addr, Acc>,
+) -> bool {
     let on_lan = |a: Ipv4Addr| {
         lan.is_none_or(|(me, bits)| {
             let mask = u32::MAX.checked_shl(32 - bits.min(32)).unwrap_or(0);
             u32::from(me) & mask == u32::from(a) & mask
         })
     };
-    let Ok(rrs) = dnsq::records(r) else { return };
+    let Ok(rrs) = dnsq::records(r) else {
+        return false;
+    };
+    let mut own = false;
     // Instance → its host's name; host name → address.
     let mut target: HashMap<&str, &str> = HashMap::new();
     let mut addr: HashMap<&str, Ipv4Addr> = HashMap::new();
@@ -269,33 +344,40 @@ fn read(r: &[u8], from: Ipv4Addr, lan: Option<(Ipv4Addr, u32)>, out: &mut HashMa
                     && let Some(t) = service_type(n)
                 {
                     out.entry(from).or_default().services.insert(t);
+                    own = true;
                 }
             }
             dnsq::PTR => {
                 if let (Some(t), dnsq::Data::Name(inst)) = (service_type(&rr.name), &rr.data) {
-                    out.entry(owner(inst)).or_default().services.insert(t);
+                    let at = owner(inst);
+                    own |= at == from;
+                    out.entry(at).or_default().services.insert(t);
                 }
             }
             dnsq::SRV | dnsq::TXT => {
                 let Some(t) = instance_type(&rr.name) else {
                     continue;
                 };
-                let acc = out.entry(owner(&rr.name)).or_default();
+                let at = owner(&rr.name);
+                own |= at == from;
+                let acc = out.entry(at).or_default();
                 acc.services.insert(t);
                 if rr.rtype == dnsq::TXT {
                     for (k, v) in txt_pairs(rd) {
-                        let set = match k.as_str() {
-                            "ty" => &mut acc.ty,
-                            "product" => &mut acc.product,
-                            _ => continue,
-                        };
-                        set.extend(model(&v));
+                        match k.as_str() {
+                            "ty" => acc.ty.extend(model(&v)),
+                            "product" => acc.product.extend(model(&v)),
+                            "rp" if acc.rp.len() < MAX_QUEUES => acc.rp.extend(queue(&v)),
+                            "pdl" if acc.pdl.len() < MAX_LANGUAGES => acc.pdl.extend(languages(&v)),
+                            _ => {}
+                        }
                     }
                 }
             }
             _ => {}
         }
     }
+    own
 }
 
 #[cfg(test)]
@@ -335,6 +417,8 @@ mod tests {
             "txtvers=1",
             "ty=HP LaserJet Pro M404\u{202e}",
             "product=(HP LaserJet Pro M404)",
+            "rp=ipp/print",
+            "pdl=application/pdf, image/urf,application/vnd.hp-PCL,",
             "note=",
         ] {
             txt.push(s.len() as u8);
@@ -374,6 +458,46 @@ mod tests {
         assert_eq!(f.ty.as_deref(), Some("HP LaserJet Pro M404"));
         assert_eq!(f.product.as_deref(), Some("HP LaserJet Pro M404"));
         assert_eq!(f.model(), Some("HP LaserJet Pro M404"));
+        assert_eq!(f.rp, ["ipp/print"]);
+        assert_eq!(
+            f.pdl,
+            ["application/pdf", "application/vnd.hp-PCL", "image/urf"]
+        );
+    }
+
+    #[test]
+    fn file_shares_and_web_pages_are_asked_for_too() {
+        for t in ["_smb._tcp.local", "_http._tcp.local", "_ipp._tcp.local"] {
+            assert!(ASKED.contains(&t), "{t}");
+        }
+    }
+
+    /// Whatever a device on the segment sends, reading it can't panic, and
+    /// what's kept stays small.
+    #[test]
+    fn hostile_answers_cant_panic() {
+        let from = Ipv4Addr::new(192, 0, 2, 40);
+        let lan = Some((from, 24));
+        crate::hostile::each(&answer(7, [192, 0, 2, 40]), |r| {
+            let mut out = HashMap::new();
+            read(r, from, lan, &mut out);
+            for (_, a) in out {
+                let f = a.done();
+                assert!(f.services.len() <= MAX_SERVICES);
+                assert!(f.rp.len() <= MAX_QUEUES && f.pdl.len() <= MAX_LANGUAGES);
+            }
+        });
+        // A direction-changing character in a queue is cleaned away, and a
+        // language list far too long is cut short.
+        let mut out = HashMap::new();
+        let mut a = answer(7, [192, 0, 2, 40]);
+        let at = a.windows(12).position(|w| w == b"rp=ipp/print").unwrap();
+        a[at + 3..at + 12].copy_from_slice(b"\xe2\x80\xaexxxxxx");
+        read(&a, from, lan, &mut out);
+        let f = out.remove(&from).unwrap().done();
+        assert!(f.rp.iter().all(|q| !q.contains('\u{202e}')));
+        assert!(languages(&"x,".repeat(500)).count() <= MAX_LANGUAGES);
+        assert!(languages("a".repeat(500).as_str()).all(|l| l.len() <= 60));
     }
 
     #[test]
@@ -455,7 +579,7 @@ mod tests {
             }
         });
         let t0 = Instant::now();
-        let found = b.collect(Duration::from_millis(200), None);
+        let (found, _) = b.collect(Duration::from_millis(200), None);
         let took = t0.elapsed();
         done.store(true, std::sync::atomic::Ordering::Relaxed);
         t.join().unwrap();
@@ -482,8 +606,54 @@ mod tests {
         assert_eq!(u16::from_be_bytes([buf[4], buf[5]]) as usize, ASKED.len());
         let _ = n;
         responder.send_to(&answer(1, [127, 0, 0, 1]), back).unwrap();
-        let found = b.collect(Duration::from_millis(500), None);
+        let (found, answered) = b.collect(Duration::from_millis(500), None);
         let f = &found[&Ipv4Addr::LOCALHOST];
         assert_eq!(f.model(), Some("HP LaserJet Pro M404"));
+        assert!(answered.contains(&Ipv4Addr::LOCALHOST));
+    }
+
+    /// One answer naming the addresses of many instances' hosts: the
+    /// sender answered for none of its own, so it adds no device; the
+    /// addresses named may only label hosts found another way.
+    #[test]
+    fn a_packet_naming_many_owners_answers_for_none_of_them() {
+        fn name(r: &mut Vec<u8>, n: &str) {
+            dnsq::put_name(r, n).unwrap();
+        }
+        fn rr(r: &mut Vec<u8>, n: &str, t: u16, data: &[u8]) {
+            name(r, n);
+            r.extend_from_slice(&t.to_be_bytes());
+            r.extend_from_slice(&[0x80, 0x01, 0, 0, 0, 10]);
+            r.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            r.extend_from_slice(data);
+        }
+        let n = 100u8;
+        let mut r = vec![0, 1, 0x84, 0, 0, 0, 0, 2 * n, 0, 0, 0, 0];
+        for i in 0..n {
+            let inst = format!("p{i}._ipp._tcp.local");
+            let host = format!("h{i}.local");
+            let mut srv = vec![0, 0, 0, 0, 0x02, 0x77];
+            name(&mut srv, &host);
+            rr(&mut r, &inst, dnsq::SRV, &srv);
+            rr(&mut r, &host, dnsq::A, &[192, 0, 2, 100 + i]);
+        }
+        let from = Ipv4Addr::new(192, 0, 2, 9);
+        let mut out = HashMap::new();
+        assert!(!read(&r, from, Some((from, 24)), &mut out));
+        assert!(out.len() >= n as usize, "the owners may be labelled");
+        assert!(!out.contains_key(&from));
+
+        // Over the wire: nothing counts as having answered.
+        let responder = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let at = match responder.local_addr().unwrap() {
+            SocketAddr::V4(a) => a,
+            _ => unreachable!(),
+        };
+        let b = send(None, at).unwrap();
+        let mut buf = [0u8; 1500];
+        let (_, back) = responder.recv_from(&mut buf).unwrap();
+        responder.send_to(&r, back).unwrap();
+        let (_, answered) = b.collect(Duration::from_millis(300), None);
+        assert!(answered.is_empty(), "{answered:?}");
     }
 }
