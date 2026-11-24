@@ -127,7 +127,7 @@ impl PingTool {
         let running = self.poll();
 
         let mut enter = false;
-        // Wraps on a narrow window (CLAUDE.md): TCP mode's Port box would
+        // Wraps on a narrow window (docs/dev/ui-layout.md): TCP mode's Port box would
         // be cut off at 620 wide.
         ui.horizontal_wrapped(|ui| {
             enter |= widgets::field(

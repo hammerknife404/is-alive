@@ -1,8 +1,8 @@
 //! The inspector: one panel on the right for whatever is picked (a host in
 //! Sweep, a card on the Map; Results' runs use its pieces), so a device
 //! reads the same wherever it's picked. Docked beside the content on a wide
-//! window, floating over it on a small one, where Esc closes it (CLAUDE.md,
-//! "UI: built for a field laptop first").
+//! window, floating over it on a small one, where Esc closes it (docs/dev/ui-layout.md,
+//! "Breakpoints").
 
 use crate::{theme, widgets};
 use eframe::egui::{self, Color32, Rect, RichText, Ui, Vec2, vec2};

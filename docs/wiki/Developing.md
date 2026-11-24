@@ -43,7 +43,7 @@ On Linux, ICMP uses unprivileged ping sockets (`SOCK_DGRAM`/`IPPROTO_ICMP`) — 
 
 CI builds the `.exe` and the `.AppImage` on every push/PR (Actions artifacts).
 
-Versions: a release with new features bumps the minor number (0.11.0); fixes and polish between feature releases bump the patch (0.11.1, 0.11.2, …).
+Versions: every pull request that changes what users get is its own release, and one pull request can carry several features or fixes. The version goes up once per pull request, by its size as a whole. A large change bumps the minor number (0.30.5 → 0.31.0): one that goes deep (reworks how a tool works underneath, or changes a file, bundle or settings format), one that goes broad (several tools or the shared window layout), or several large pieces together. Everything else bumps the patch (0.30.5 → 0.30.6). 1.0.0 is the owner's call.
 
 To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) in a PR and merge it to `main`: CI attests both binaries (`gh attestation verify <file> --repo hammerknife404/is-alive` checks one), tags `v<version>`, publishes a GitHub release with both binaries and checksums, and generates release notes from the PRs merged since the last release. Pushing a `v*` tag by hand does the same, as long as it matches `Cargo.toml`.
 

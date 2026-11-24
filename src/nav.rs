@@ -12,12 +12,12 @@ use eframe::egui::{self, Align2, FontId, Rect, Sense, Vec2, vec2};
 pub const OPEN: f32 = 216.0;
 pub const RAIL: f32 = 56.0;
 /// Below this window width the nav folds to the rail on its own: the
-/// window where panels float over the content (CLAUDE.md), 620 at the least.
+/// window where panels float over the content (docs/dev/ui-layout.md), 620 at the least.
 pub const OPEN_FROM: f32 = 1100.0;
 
 /// From this window width up, panels dock beside the content (inspector
 /// 360, the Map's side panel flush); below it the inspector narrows or
-/// floats. CLAUDE.md's breakpoints: 1440 and 1100 (`OPEN_FROM`).
+/// floats. Breakpoints (docs/dev/ui-layout.md): 1440 and 1100 (`OPEN_FROM`).
 pub const WIDE_FROM: f32 = 1440.0;
 
 /// Whether the nav is open: what the user pinned, or else open on any
