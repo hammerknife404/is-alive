@@ -290,7 +290,7 @@ Files dropped while Config Export is still reading others wait their turn and ar
 
 ### Waking a device (Wake-on-LAN)
 
-Type a device's MAC in **Host** (`00:11:32:ab:cd:ef`, or with dashes) and the button becomes **Wake**: it sends a Wake-on-LAN packet that turns on a computer that's asleep or shut down, if its network card is set up for it. A name works too when the last sweep or the Map saw that device with a MAC (`FRONTDESK-PC`, `frontdesk-pc.local`); to ping such a device without waking it, type its address instead.
+Type a device's MAC in **Host** (`00:11:32:ab:cd:ef`, or with dashes) and the button becomes **Wake**: it sends a Wake-on-LAN packet that turns on a computer that's asleep or shut down, if its network card is set up for it. Only a MAC does that. A name the last sweep or the Map saw with a MAC (`FRONTDESK-PC`, `frontdesk-pc.local`) stays a normal ping on **Start** and **Enter**, and gets a separate **Wake** button beside it that wakes it and then waits, the same as **Wake & wait** below.
 
 With an address known the button reads **Wake & wait**: after the packet it pings that address every 5 seconds for up to 3 minutes and ends with *is up after N s* or *No answer*. The address is the one typed after the MAC (`00:11:32:ab:cd:ef 192.168.1.50`), else where the last sweep or the Map saw that MAC. With none it only sends the packet; ping it yourself a minute later.
 

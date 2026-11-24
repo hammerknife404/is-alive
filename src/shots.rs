@@ -260,6 +260,17 @@ const SCENES: &[Scene] = &[
         |a, _| a.ping.show_for_shots("00:11:32:00:00:01 192.0.2.50"),
         at_once,
     ),
+    // A name the sample sweep saw with a MAC: Start still pings it, with
+    // Wake beside it. Nothing is sent.
+    scene(
+        "ping-wake-name",
+        Tab::Ping,
+        |a, _| {
+            a.sweep.sample_for_shots();
+            a.ping.show_for_shots("FRONTDESK-PC");
+        },
+        at_once,
+    ),
     scene("traceroute", Tab::Trace, nothing, at_once),
     scene(
         "subnet-sweep",
