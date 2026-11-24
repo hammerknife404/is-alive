@@ -166,8 +166,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   technician's laptop it's the technician's own, so say which it was before
   using it. A join that's broken (`DeviceAuthStatus` not SUCCESS,
   `AzureAdPrt` NO on a joined PC) is a finding. Host info's `dhcp_server`,
-  `dns_servers` and `dns_suffix` are what that computer was given: context,
-  not findings. A DHCP server that isn't the gateway is normal (a domain
+  `lease_obtained`, `lease_expires` (local time on the scanner, or
+  `unknown`/`none`), `dns_servers` and `dns_suffix` are what that computer
+  was given: context, not findings; a lease length is a site setting, not a
+  problem. A DHCP server that isn't the gateway is normal (a domain
   controller often hands out addresses), and one run can't show a rogue
   DHCP server, so never report either from these rows.
   `Network checks` rows (`check`, `status`, `detail`): a `Captive portal`
@@ -176,13 +178,25 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   not the site's internet: say so rather than reporting them. `Path MTU`
   `ok` covers *path MTU found* (a router said fragmentation needed; 1492
   on PPPoE is normal); `warn` is *silence above N bytes*, an MTU black
-  hole and a finding. `Wi-Fi` is one snapshot of the network the scanner
+  hole and a finding. Its `detail` names the exact largest packet that
+  passed between 1400 and 1500 bytes (*1492 bytes is the largest packet
+  that passes (1493 doesn't)*); *nothing from 1400 bytes up* means the
+  path is under 1400, not that it was unmeasured. `Wi-Fi` is one snapshot of the network the scanner
   was on: its `detail` names the SSID, the access point's BSSID, band,
-  channel and signal. The BSSID is that access point's radio MAC: match it
+  channel and its width, signal and the link's Tx/Rx rates. The BSSID is that access point's radio MAC: match it
   to an AP in the configs or inventory to say which AP the technician was
   near, but never claim roaming or coverage from one snapshot. A weak
   signal there is a note about where the scan ran, not a site finding on
-  its own.
+  its own. `Nearby Wi-Fi` lists the other access points heard there (SSID,
+  BSSID, channel, signal), those on the connection's channel first: its
+  co-channel interference. It's the list the system already had (it says
+  how old where it can), reported, not judged: BSSIDs of the site's own
+  SSIDs help place APs from the configs, and several strong ones sharing a
+  channel can back a channel-planning note, but never call it a fault from
+  one list. A `Wi-Fi scan` run (`ssid`, `bssid`, `band`, `channel`,
+  `signal_dbm` or `signal_pct`, `connected` = `yes` on the scanner's own
+  AP) is the same list from an active scan the technician asked for, so it
+  is fresher; read it the same way.
   A `Domain join (others)` run is different: each row is another computer
   on the network, asked without credentials (`host` as typed, `computer`,
   `domain`, `dns_domain`, `dns_name`, `verdict`, `port`, `detail`). A

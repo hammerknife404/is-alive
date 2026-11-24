@@ -69,6 +69,7 @@ pub fn summarise(e: &log::Entry) -> String {
         "Traceroute" => plural(t.rows.len(), "hop", "hops"),
         "Subnet Sweep" => format!("{} alive", t.rows.len()),
         "Network checks" => crate::tools::netcheck::summary(&t.rows),
+        crate::tools::netcheck::SCAN => crate::tools::netcheck::scan_summary(&t.rows),
         // "2 of 5 in Active Directory".
         "Domain join (others)" => {
             let col = t.columns.iter().position(|c| *c == "verdict");
@@ -691,6 +692,16 @@ impl App {
                 });
             });
         }
+        if tool == "Network checks"
+            && done.is_some_and(|i| {
+                self.log.entries[i]
+                    .table
+                    .as_ref()
+                    .is_some_and(|t| crate::tools::netcheck::on_wifi(&t.rows))
+            })
+        {
+            self.scan_wifi_row(ui);
+        }
         ui.separator();
         if let Some((d, before, after, _)) = &diff {
             if compare_view(ui, d, before, after) {
@@ -718,6 +729,34 @@ impl App {
                     });
             }
         }
+    }
+
+    /// Under a Network checks run that looked at Wi-Fi: Scan Wi-Fi, an
+    /// active scan logged as its own run. Never while anything else runs:
+    /// the radio hopping channels would disturb it.
+    fn scan_wifi_row(&mut self, ui: &mut Ui) {
+        let busy = self.any_running();
+        ui.horizontal_wrapped(|ui| {
+            let b = ui
+                .add_enabled(
+                    !busy,
+                    egui::Button::new("Scan Wi-Fi").min_size(egui::vec2(56.0, widgets::TARGET_H)),
+                )
+                .on_hover_text(
+                    "Ask the Wi-Fi adapter to scan now, for an up-to-date list of the access \
+                     points nearby. For a few seconds it sends probe requests and hops channels, \
+                     and the connection can pause. Logged as a Wi-Fi scan run of its own",
+                )
+                .on_disabled_hover_text(
+                    "Wait for the tests running now to finish: a scan makes the radio hop \
+                     channels, which would disturb them",
+                );
+            if b.clicked() {
+                self.netcheck.scan_wifi(ui.ctx());
+                self.result_pick = Some(RunKey::Running(crate::tools::netcheck::SCAN));
+            }
+            ui.weak("Nearby Wi-Fi is the list the system already had; this scans now.");
+        });
     }
 
     /// Compare ▾: the other runs of this run's tool, newest first, those

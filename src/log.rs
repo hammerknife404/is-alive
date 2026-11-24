@@ -205,6 +205,10 @@ pub(crate) const TOOLS: &[(&str, &[&str])] = &[
     ("Lookup", crate::tools::dns::COLUMNS),
     ("Domain Health", crate::tools::advanced::COLUMNS),
     ("Network checks", crate::tools::netcheck::COLUMNS),
+    (
+        crate::tools::netcheck::SCAN,
+        crate::tools::netcheck::SCAN_COLUMNS,
+    ),
     ("Domain join", crate::net::join::COLUMNS),
     (crate::tools::join::OTHERS, crate::net::joined::COLUMNS),
 ];

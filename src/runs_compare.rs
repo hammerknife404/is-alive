@@ -90,6 +90,8 @@ fn spec(tool: &str) -> Option<Spec> {
         "Lookup" => s(&["lookup", "source", "type", "value"], &[]),
         "Domain Health" => s(&["section", "check", "kind"], &["status", "text"]),
         "Network checks" => s(&["check"], &["status"]),
+        // Access points new, gone or moved; signal changes every time.
+        crate::tools::netcheck::SCAN => s(&["bssid"], &["ssid", "channel"]),
         "Domain join" => s(&["section", "field"], &["value"]),
         "Domain join (others)" => s(&["host"], &["verdict", "computer", "dns_domain"]),
         "Speed Test" => s(

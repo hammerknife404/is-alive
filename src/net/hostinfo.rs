@@ -1,5 +1,6 @@
 //! This machine: name, LAN address and MAC, gateway, what its adapter was
-//! given (DHCP server, DNS servers, DNS suffix) and public (WAN) address.
+//! given (DHCP server and lease, DNS servers, DNS suffix) and public (WAN)
+//! address.
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
@@ -85,6 +86,16 @@ impl HostInfo {
             // normal (a domain controller), and one snapshot can't show a
             // second server answering.
             f.push(("DHCP", n.dhcp_text()));
+            if matches!(n.dhcp, super::netconf::Dhcp::Server(_)) {
+                f.push((
+                    "Lease",
+                    format!(
+                        "obtained {}, expires {}",
+                        n.lease_text(n.lease_obtained),
+                        n.lease_text(n.lease_expires)
+                    ),
+                ));
+            }
             f.push(("DNS", n.dns_text()));
             f.push(("Suffix", n.suffix_text()));
         }
@@ -109,6 +120,14 @@ impl HostInfo {
                 row(
                     "dhcp_server",
                     crate::log::cell(self.net.as_ref().map(|n| n.dhcp_text())),
+                ),
+                row(
+                    "lease_obtained",
+                    crate::log::cell(self.net.as_ref().map(|n| n.lease_text(n.lease_obtained))),
+                ),
+                row(
+                    "lease_expires",
+                    crate::log::cell(self.net.as_ref().map(|n| n.lease_text(n.lease_expires))),
                 ),
                 row(
                     "dns_servers",
