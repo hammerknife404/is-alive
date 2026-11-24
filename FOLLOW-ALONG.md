@@ -15,7 +15,7 @@ This guide is for anyone attending the is-alive demo. You don't need any technic
 3. Open it:
    - **Windows:** double-click `is-alive.exe`. If a blue box says *"Windows protected your PC"*, click **More info**, then **Run anyway**. Windows shows this for any new program that isn't from a large publisher.
    - **Linux:** right-click the file → **Properties** → **Permissions** → tick **Allow executing file as program**, then double-click it.
-4. Check the version: the bottom right corner of the window says `v0.30.32` (or newer), and so does the title bar.
+4. Check the version: the bottom right corner of the window says `v0.31.0` (or newer), and so does the title bar.
 5. If a green **Update: v…** link shows in that corner, a newer version is out. Clicking it opens the download page for that version; nothing is installed for you.
 
 > **Nothing opens, or the window stays blank?** See [The .exe doesn't open](docs/manual/MANUAL.md#the-exe-doesnt-open) in the manual: what to try, and where the app writes down why.
@@ -32,7 +32,7 @@ The presenter clicks **Full scan** at the top of the left side. Several checks s
 
 | Result | What it tells you |
 |---|---|
-| **Host info** | Your computer's address, your router's address and your public internet address |
+| **Host info** | Your computer's address, your router's address, where it got its address and name servers (DHCP and DNS), and your public internet address |
 | **Ping** | Your router answers, and how fast (in milliseconds; lower is better) |
 | **Port Check** | Which services the router offers (for example, web pages on 443) |
 | **Traceroute** | Every stop your traffic makes on the way to the internet |

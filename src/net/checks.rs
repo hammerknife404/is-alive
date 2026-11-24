@@ -1,5 +1,6 @@
 //! What's between this computer and the internet that a ping or a port
-//! can't show: whether HTTPS is inspected (a firewall or security software
+//! can't show: whether a captive portal answers in the internet's place,
+//! whether HTTPS is inspected (a firewall or security software
 //! decrypting it and re-signing every site's certificate), and whether
 //! this computer's clock is right (Active Directory sign-in fails past five
 //! minutes off; TLS and sign-in codes before that).
@@ -35,6 +36,112 @@ pub struct Item {
     pub check: &'static str,
     pub status: Status,
     pub detail: String,
+}
+
+// ------------------------------------------------------------- portal
+
+/// Cloudflare's connectivity check: plain HTTP, answered with an empty
+/// 204 No Content. A portal (or a filter's block page) answers anything
+/// else: its sign-in page, or a redirect to it.
+pub const PORTAL_HOST: &str = "cp.cloudflare.com";
+pub const PORTAL_PATH: &str = "/generate_204";
+
+/// What the connectivity check got.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Portal {
+    /// 204, as Cloudflare sends it.
+    Open,
+    /// Something else answered: its status, where it redirected to (host
+    /// only) and its page's title.
+    Intercepted {
+        status: u16,
+        to: Option<String>,
+        title: Option<String>,
+    },
+    /// No answer (no internet, HTTP blocked): nothing to judge from.
+    Unreached(String),
+}
+
+impl Portal {
+    pub fn intercepted(&self) -> bool {
+        matches!(self, Portal::Intercepted { .. })
+    }
+}
+
+/// The host a `Location` points to, else the path it gives.
+fn location_host(loc: &str) -> String {
+    let rest = loc.split_once("://").map_or(loc, |(_, r)| r);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    if host.is_empty() { loc } else { host }.to_string()
+}
+
+/// Read a reply to the connectivity check.
+pub fn portal_from(page: &web::Page) -> Portal {
+    if page.status == 204 {
+        return Portal::Open;
+    }
+    Portal::Intercepted {
+        status: page.status,
+        to: page.location.as_deref().map(location_host),
+        title: page.title.clone(),
+    }
+}
+
+/// One plain-HTTP GET of the connectivity check.
+pub fn portal(timeout: Duration) -> Portal {
+    let addr = match (PORTAL_HOST, 80).to_socket_addrs() {
+        Ok(mut a) => match a.find(SocketAddr::is_ipv4) {
+            Some(a) => a,
+            None => return Portal::Unreached("no IPv4 address".into()),
+        },
+        Err(e) => return Portal::Unreached(e.to_string()),
+    };
+    match web::get(addr, PORTAL_HOST, false, PORTAL_PATH, timeout) {
+        Ok(page) => portal_from(&page),
+        Err(e) => Portal::Unreached(e.to_string()),
+    }
+}
+
+/// The captive portal check.
+pub fn judge_portal(p: &Portal) -> Item {
+    let check = "Captive portal";
+    match p {
+        Portal::Open => Item {
+            check,
+            status: Status::Ok,
+            detail: format!(
+                "None: http://{PORTAL_HOST}{PORTAL_PATH} came back 204 No Content, as it should."
+            ),
+        },
+        Portal::Intercepted { status, to, title } => {
+            let mut what = format!("HTTP {status}");
+            if let Some(t) = to {
+                what += &format!(", redirected to {t}");
+            }
+            if let Some(t) = title {
+                what += &format!(", page \"{t}\"");
+            }
+            Item {
+                check,
+                status: Status::Fail,
+                detail: format!(
+                    "Something answered in place of {PORTAL_HOST} ({what}): a captive portal \
+                     (a guest network's sign-in or terms page) or a web filter's block page. \
+                     Open a browser and sign in or accept the terms, then run Full scan again: \
+                     until then the internet-side checks are judging the portal, not the \
+                     internet."
+                ),
+            }
+        }
+        Portal::Unreached(e) => Item {
+            check,
+            status: Status::Unknown,
+            detail: format!(
+                "{PORTAL_HOST} didn't answer over HTTP ({e}), so it couldn't be checked."
+            ),
+        },
+    }
 }
 
 // ------------------------------------------------------------- HTTPS
@@ -95,8 +202,32 @@ pub struct Seen {
 }
 
 /// HTTPS inspection, judged from what each site presented (Err: not
-/// reached).
-pub fn judge_https(seen: &[Result<Seen, String>]) -> Item {
+/// reached). Behind a captive portal the sites' certificates are the
+/// portal's own, so a portal is reported instead of inspection.
+pub fn judge_https(seen: &[Result<Seen, String>], portal: &Portal) -> Item {
+    let check = "HTTPS inspection";
+    let r = judge_certs(seen);
+    if portal.intercepted() && r.status != Status::Ok {
+        let fail = seen.iter().filter(|s| s.is_err()).count();
+        let s = seen.iter().filter_map(|s| s.as_ref().ok()).next();
+        let what = match s {
+            Some(s) => format!("{}'s certificate came from \"{}\"", s.site, s.issuer),
+            None => format!("{fail} of the test sites didn't answer"),
+        };
+        return Item {
+            check,
+            status: Status::Unknown,
+            detail: format!(
+                "Not judged: a captive portal is answering in the internet's place ({what}, \
+                 most likely the portal's own). That isn't HTTPS inspection, and there's no \
+                 certificate to install: sign in to the portal, then run Full scan again."
+            ),
+        };
+    }
+    r
+}
+
+fn judge_certs(seen: &[Result<Seen, String>]) -> Item {
     let check = "HTTPS inspection";
     let got: Vec<&Seen> = seen.iter().filter_map(|s| s.as_ref().ok()).collect();
     if got.is_empty() {
@@ -391,7 +522,7 @@ mod tests {
                 true,
             ),
         ];
-        let r = judge_https(&own);
+        let r = judge_https(&own, &Portal::Open);
         assert_eq!(r.status, Status::Ok, "{}", r.detail);
         assert!(r.detail.contains("github.com by Sectigo"));
         // A SonicWall re-signing, trusted (its CA installed): a warning.
@@ -404,7 +535,7 @@ mod tests {
                 true,
             ),
         ];
-        let r = judge_https(&dpi);
+        let r = judge_https(&dpi, &Portal::Open);
         assert_eq!(r.status, Status::Warn);
         assert!(r.detail.contains("SonicWall Firewall DPI-SSL") && r.detail.contains("public CA"));
         // An unknown product, but one issuer on two unrelated sites, and
@@ -414,7 +545,7 @@ mod tests {
             seen("github.com", "Acme Gateway CA", false),
             Err("refused".into()),
         ];
-        let r = judge_https(&odd);
+        let r = judge_https(&odd, &Portal::Open);
         assert_eq!(r.status, Status::Fail);
         assert!(
             r.detail.contains("same issuer signed 2 unrelated sites"),
@@ -423,11 +554,71 @@ mod tests {
         );
         assert!(r.detail.contains("doesn't trust"));
         // Untrusted but each its own CA: the clock or the store, not inspection.
-        let r = judge_https(&[seen("github.com", "Sectigo", false)]);
+        let r = judge_https(&[seen("github.com", "Sectigo", false)], &Portal::Open);
         assert_eq!(r.status, Status::Warn);
         assert!(r.detail.contains("clock"));
         // Nothing reached.
-        assert_eq!(judge_https(&[Err("x".into())]).status, Status::Unknown);
+        assert_eq!(
+            judge_https(&[Err("x".into())], &Portal::Unreached("x".into())).status,
+            Status::Unknown
+        );
+    }
+
+    /// Behind a captive portal every test site shows the portal's own
+    /// certificate: one issuer on three unrelated sites, untrusted. That's
+    /// the portal, not inspection, and there's no certificate to install.
+    #[test]
+    fn a_captive_portal_isnt_https_inspection() {
+        let portal_cert = [
+            seen("www.cloudflare.com", "guest.example.net", false),
+            seen("github.com", "guest.example.net", false),
+            seen("www.microsoft.com", "guest.example.net", false),
+        ];
+        // Without the portal check this reads as inspection.
+        let r = judge_https(&portal_cert, &Portal::Unreached("timed out".into()));
+        assert_eq!(r.status, Status::Fail);
+        let page = web::parse(
+            b"HTTP/1.1 302 Found\r\nLocation: https://guest.example.net/login?u=x\r\n\r\n",
+        )
+        .unwrap();
+        let portal = portal_from(&page);
+        assert_eq!(
+            portal,
+            Portal::Intercepted {
+                status: 302,
+                to: Some("guest.example.net".into()),
+                title: None
+            }
+        );
+        let p = judge_portal(&portal);
+        assert_eq!(p.status, Status::Fail);
+        assert!(p.detail.contains("captive portal") && p.detail.contains("guest.example.net"));
+        let r = judge_https(&portal_cert, &portal);
+        assert_ne!(r.status, Status::Fail);
+        assert!(r.detail.contains("captive portal"), "{}", r.detail);
+        assert!(!r.detail.contains("HTTPS is inspected"), "{}", r.detail);
+        assert!(!r.detail.contains("install the inspection certificate"));
+        // The real thing: 204 No Content.
+        let ok = web::parse(b"HTTP/1.1 204 No Content\r\nServer: cloudflare\r\n\r\n").unwrap();
+        assert_eq!(portal_from(&ok), Portal::Open);
+        assert_eq!(judge_portal(&Portal::Open).status, Status::Ok);
+        // A portal that lets HTTPS through untouched: the sites are judged.
+        let own = [seen(
+            "github.com",
+            "Sectigo ECC Domain Validation Secure Server CA",
+            true,
+        )];
+        assert_eq!(judge_https(&own, &portal).status, Status::Ok);
+        // A 200 sign-in page names itself.
+        let login =
+            web::parse(b"HTTP/1.1 200 OK\r\n\r\n<html><title>Guest Wi-Fi terms</title></html>")
+                .unwrap();
+        assert!(
+            judge_portal(&portal_from(&login))
+                .detail
+                .contains("Guest Wi-Fi terms")
+        );
+        assert_eq!(location_host("/login"), "/login");
     }
 
     #[test]
@@ -461,7 +652,9 @@ mod tests {
             .map(|s| present(s, Duration::from_secs(5)))
             .collect();
         println!("{seen:#?}");
-        println!("{:#?}", judge_https(&seen));
+        let portal = portal(Duration::from_secs(4));
+        println!("{:#?}", judge_portal(&portal));
+        println!("{:#?}", judge_https(&seen, &portal));
         let off = offset(Duration::from_secs(4));
         println!("{:#?}", judge_clock(off.as_ref(), None));
     }
