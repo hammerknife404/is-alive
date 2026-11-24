@@ -220,8 +220,21 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   whose interface MAC is its uplink MAC, else the one whose LAN subnet holds
   its IP; two sites often share a subnet like 192.168.1.0/24, so where the
   subnet doesn't decide it, go by the controller site the device is at.
-- **`inventory.json` hosts:** `found_by: "arp"` means it answered ARP but drops
-  ping (a firewall default, not a fault). `open_ports` is role evidence for the
+- **`inventory.json` hosts:** `found_by` lists every way the host answered
+  the sweep: `ping`, `arp` (the scanner's ARP table confirmed it, own segment
+  only), `mdns` (it answered the DNS-SD browse) and `ssdp` (it answered the
+  SSDP search). Several together are normal (`["ping", "arp", "mdns"]` for a
+  printer). `["arp"]` without `ping` means it answered ARP but drops ping (a
+  firewall default, not a fault). A list with only `mdns` and/or `ssdp`
+  (`rtt_ms` null) is a device silent to ping and ARP that answered the
+  multicast browse: a real device on the scanner's own segment (it is only
+  listed when it answered from its own address, inside the swept range,
+  with `on_scanner_lan: true`; an address merely named in another device's
+  answer is never added), often a
+  cast target, TV, speaker or IoT device. Draw it like any other host; a
+  routed network can never produce one. (Inventories from before 0.33.0 have
+  `found_by` as a single string, `"ping"` or `"arp"`: read it as a one-item
+  list.) `open_ports` is role evidence for the
   infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera). It is
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
@@ -247,9 +260,30 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   evidence; it is the device's own claim, not proof. The browse is
   multicast, so it only reaches the scanner's own segment: only hosts with
   `on_scanner_lan: true` can answer, and a routed host's `null` means
-  nothing. `dnssd_browsed` (top level) says whether the browse was sent at
-  all (it isn't with names off, or when no swept range is on the scanner's
-  segment).
+  nothing. `dnssd_browsed` (top level) says whether the browse ran and its answers
+  were read (it doesn't with names off, when no swept range is on the
+  scanner's segment, or when the sweep was stopped first: then no `dnssd`
+  means nothing). `dnssd` also carries `rp`, the printer's queues (`ipp/print`; a
+  print server lists one per printer it shares, so several queues are a hint
+  it's a computer or server, not the printer), and `pdl`, the page languages
+  its printer services take (MIME types: `application/pdf`,
+  `application/vnd.hp-PCL`, `image/urf` for AirPrint); both `[]` when not
+  given. `_smb._tcp` is a file share (a NAS, a Windows or Mac computer) and
+  `_http._tcp` a web page the device advertises.
+  `ssdp` is what the host said over SSDP (UPnP discovery), `null` if it said
+  nothing: `server` is its `SERVER` header (OS, UPnP stack, often the
+  product: a NAS's, a TV's, a router's), `st` the search targets it answered
+  for (`upnp:rootdevice`, `urn:schemas-upnp-org:device:MediaRenderer:1` a
+  media player or TV, `urn:schemas-upnp-org:device:InternetGatewayDevice:1`
+  a router with UPnP on, `urn:dial-multiscreen-org:device:dial:1` a cast
+  target), `uuids` its device UUIDs from the `USN` headers (match one device
+  across visits by them), and `locations` its description URL, kept as text:
+  is-alive never fetches it. Role hints, the device's own claim, not proof.
+  An `InternetGatewayDevice` that isn't the gateway is a second router on
+  the LAN: worth a finding. `ssdp_searched` (top level) says whether the
+  search ran and its replies were read, in the same cases as
+  `dnssd_browsed`. It goes out with TTL 1, multicast on the scanner's own
+  segment only, so `null` on a routed host means nothing.
   `other_macs` lists any other MAC the address answered from during the
   sweep: two devices on one IP (a duplicate address), or a failover
   mid-sweep. Flag it on that node and in `ACTIONS` (med).
@@ -278,7 +312,7 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
-  `open_ports`, `other_macs`, `web_title`, `dnssd`, `is_gateway`,
+  `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `is_gateway`,
   `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).

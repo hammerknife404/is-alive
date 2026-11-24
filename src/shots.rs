@@ -286,6 +286,17 @@ const SCENES: &[Scene] = &[
         |a, _| a.sweep.sample_for_shots(),
         at_once,
     ),
+    // The same sweep, the TV picked: silent to ping and ARP, found only
+    // by its DNS-SD and SSDP answers.
+    scene(
+        "subnet-sweep-multicast",
+        Tab::Sweep,
+        |a, _| {
+            a.sweep.sample_for_shots();
+            a.sweep.pick_for_shots(75);
+        },
+        at_once,
+    ),
     scene(
         "dns-lookup",
         Tab::Dns,

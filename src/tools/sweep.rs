@@ -4,7 +4,7 @@ use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
-use crate::net::{self, TcpState, dnssd, names, ports, subnet, targets, wol};
+use crate::net::{self, TcpState, dnssd, names, ports, ssdp, subnet, targets, wol};
 use crate::theme;
 use crate::unifi::Clients;
 use crate::widgets::{self, Action};
@@ -56,6 +56,82 @@ struct Host {
     /// What it said over DNS-SD (its service types, a printer's model):
     /// only devices on the scanner's own segment can answer.
     dnssd: Option<Box<dnssd::Found>>,
+    /// What it said over SSDP (UPnP): same segment only.
+    ssdp: Option<Box<ssdp::Found>>,
+    /// Every way it answered the sweep.
+    via: Via,
+}
+
+/// How a host was found: every way it answered. A host that answered
+/// only DNS-SD or SSDP (silent to ping and ARP) is still listed, when
+/// it's in the swept range and on the scanner's own segment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Via {
+    /// It answered ping.
+    ping: bool,
+    /// This machine's ARP table confirmed it during the sweep.
+    arp: bool,
+    /// It answered the DNS-SD browse (multicast DNS).
+    mdns: bool,
+    /// It answered the SSDP search.
+    ssdp: bool,
+}
+
+impl Via {
+    const PING: Via = Via {
+        ping: true,
+        arp: false,
+        mdns: false,
+        ssdp: false,
+    };
+    const ARP: Via = Via {
+        ping: false,
+        arp: true,
+        mdns: false,
+        ssdp: false,
+    };
+
+    /// As the inventory and CSV say it: "ping", "arp", "mdns", "ssdp".
+    fn list(self) -> Vec<&'static str> {
+        [
+            (self.ping, "ping"),
+            (self.arp, "arp"),
+            (self.mdns, "mdns"),
+            (self.ssdp, "ssdp"),
+        ]
+        .into_iter()
+        .filter_map(|(on, s)| on.then_some(s))
+        .collect()
+    }
+
+    /// Found only by a multicast browse: no ping reply, no ARP entry.
+    fn multicast_only(self) -> bool {
+        !self.ping && !self.arp && (self.mdns || self.ssdp)
+    }
+
+    /// Which multicast it answered, for a label: "mDNS", "SSDP" or both.
+    fn multicast(self) -> &'static str {
+        match (self.mdns, self.ssdp) {
+            (true, true) => "mDNS and SSDP",
+            (true, false) => "mDNS",
+            (false, true) => "SSDP",
+            (false, false) => "",
+        }
+    }
+
+    /// For the inspector: "ping, ARP, mDNS (DNS-SD)".
+    fn words(self) -> String {
+        self.list()
+            .iter()
+            .map(|v| match *v {
+                "ping" => "ping",
+                "arp" => "ARP",
+                "mdns" => "mDNS (DNS-SD)",
+                _ => "SSDP (UPnP)",
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// Ports a device's own web page may be on.
@@ -159,10 +235,16 @@ enum Ev {
     /// What this host's web page calls it.
     Web(Ipv4Addr, String),
     Open(Ipv4Addr, u16),
-    /// A DNS-SD browse went out on the scanner's segment.
-    Browsed,
-    /// What these hosts said over DNS-SD.
+    /// The multicast discovery went out on the scanner's segment: the
+    /// DNS-SD browse, the SSDP search.
+    Browsed {
+        dnssd: bool,
+        ssdp: bool,
+    },
+    /// What these hosts (already found) said over DNS-SD.
     DnsSd(Vec<(Ipv4Addr, dnssd::Found)>),
+    /// What these hosts (already found) said over SSDP.
+    Ssdp(Vec<(Ipv4Addr, ssdp::Found)>),
 }
 
 /// What the box lists: (targets, addresses), or what's wrong with it.
@@ -205,6 +287,8 @@ pub struct SweepTool {
     picked: Option<Ipv4Addr>,
     /// The last run sent a DNS-SD browse on the scanner's segment.
     browsed: bool,
+    /// The last run sent an SSDP search on the scanner's segment.
+    searched: bool,
 }
 
 impl Default for SweepTool {
@@ -234,6 +318,7 @@ impl Default for SweepTool {
             runs: 0,
             picked: None,
             browsed: false,
+            searched: false,
         }
     }
 }
@@ -287,6 +372,7 @@ impl SweepTool {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                         h.mac = Some(m);
                         h.mac_from = Some("arp");
+                        h.via.arp = true;
                         changed = true;
                     }
                 }
@@ -315,11 +401,24 @@ impl SweepTool {
                         changed = true;
                     }
                 }
-                Ev::Browsed => self.browsed = true,
+                Ev::Browsed { dnssd, ssdp } => {
+                    self.browsed |= dnssd;
+                    self.searched |= ssdp;
+                }
                 Ev::DnsSd(found) => {
                     for (ip, f) in found {
                         if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
                             h.dnssd = Some(Box::new(f));
+                            h.via.mdns = true;
+                            changed = true;
+                        }
+                    }
+                }
+                Ev::Ssdp(found) => {
+                    for (ip, f) in found {
+                        if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
+                            h.ssdp = Some(Box::new(f));
+                            h.via.ssdp = true;
                             changed = true;
                         }
                     }
@@ -412,8 +511,9 @@ impl SweepTool {
                      (Windows, NAS, many printers) or multicast DNS (Apple devices, printers, \
                      Linux). One small UDP question to each live device; off is quicker.\n\n\
                      On this computer's own network it also sends one DNS-SD (Bonjour) browse, \
-                     which printers answer with their model. Multicast stays on this segment: \
-                     routed networks don't answer it",
+                     which printers answer with their model, and one SSDP (UPnP) search. A \
+                     device that answers only those, not ping or ARP, is listed too. Multicast \
+                     stays on this segment: routed networks don't answer it",
                     );
                 ui.label("Mgmt ports").on_hover_text(PORTS_TIP);
                 for p in PortCheck::ALL {
@@ -438,6 +538,11 @@ impl SweepTool {
                     if arp > 0 {
                         ui.label(RichText::new(format!("({arp} ARP only)")).weak())
                             .on_hover_text(ARP_TIP);
+                    }
+                    let mc = self.multicast_only();
+                    if mc > 0 {
+                        ui.label(RichText::new(format!("({mc} multicast only)")).weak())
+                            .on_hover_text(MULTICAST_TIP);
                     }
                     ui.label(format!("· {} / {} probed", self.probed, self.total));
                 }
@@ -472,7 +577,7 @@ impl SweepTool {
                 widgets::empty_state(
                     ui,
                     "No hosts answered",
-                    "Nothing answered ping or ARP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host.",
+                    "Nothing answered ping, ARP, DNS-SD or SSDP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host.",
                     &[],
                 );
             } else {
@@ -571,7 +676,9 @@ impl SweepTool {
                         };
                         cell(ui.painter(), r, &s, f, colour);
                     }
-                    let resp = if h.rtt.is_none() {
+                    let resp = if h.via.multicast_only() {
+                        resp.on_hover_text(MULTICAST_TIP)
+                    } else if h.rtt.is_none() {
                         resp.on_hover_text(ARP_TIP)
                     } else {
                         resp
@@ -609,14 +716,18 @@ impl SweepTool {
         let h = self.alive.iter().find(|h| Some(h.ip) == self.picked)?;
         let ip = h.ip;
         let kind = if self.local.gateway == Some(ip) {
-            "Gateway"
+            "Gateway".to_string()
         } else if self.local.lan.is_some_and(|(me, _)| me == ip) {
-            "This machine"
+            "This machine".to_string()
+        } else if h.via.multicast_only() {
+            format!("Host · {} only", h.via.multicast())
         } else if h.rtt.is_none() {
-            "Host · ARP only"
+            "Host · ARP only".to_string()
         } else {
-            "Host"
+            "Host".to_string()
         };
+        let via = h.via;
+        let upnp = h.ssdp.clone();
         let title = h.name.clone().unwrap_or_else(|| ip.to_string());
         let named = h.name.is_some();
         let mac = h.mac.as_ref().map(mac::fmt);
@@ -651,7 +762,7 @@ impl SweepTool {
         insp::show(ui, "sweep_inspector", &mut open, |ui, open| {
             insp::header(
                 ui,
-                kind,
+                &kind,
                 &title,
                 named.then_some(address.as_str()),
                 Some(open),
@@ -723,14 +834,34 @@ impl SweepTool {
             if let Some(t) = &web_title {
                 insp::row(ui, "Web page", t, false);
             }
+            insp::row(ui, "Found by", &via.words(), false);
+            if via.multicast_only() {
+                insp::note(ui, MULTICAST_NOTE);
+            }
             if let Some(f) = &found {
                 if let Some(m) = f.model() {
                     insp::row(ui, "Model", m, false);
+                }
+                if !f.rp.is_empty() {
+                    insp::row(ui, "Queue", &f.rp.join(", "), true);
+                }
+                if !f.pdl.is_empty() {
+                    insp::row(ui, "Languages", &languages(&f.pdl), false);
                 }
                 if !f.services.is_empty() {
                     insp::row(ui, "Services", &f.services.join(" "), true);
                 }
                 insp::note(ui, DNSSD_NOTE);
+            }
+            if let Some(u) = &upnp {
+                if let Some(sv) = &u.server {
+                    insp::row(ui, "UPnP", sv, false);
+                }
+                let kinds = upnp_kinds(&u.types);
+                if !kinds.is_empty() {
+                    insp::row(ui, "UPnP types", &kinds, false);
+                }
+                insp::note(ui, SSDP_NOTE);
             }
             for m in &also {
                 insp::row(ui, "Also from", m, true);
@@ -756,7 +887,13 @@ impl SweepTool {
             }
             match rtt {
                 Some(t) => insp::row(ui, "Ping", &widgets::fmt_ms(t), true),
-                None => insp::row(ui, "Ping", "no reply; it answered ARP", false),
+                None if via.arp => insp::row(ui, "Ping", "no reply; it answered ARP", false),
+                None => insp::row(
+                    ui,
+                    "Ping",
+                    &format!("no reply; it answered {} only", via.multicast()),
+                    false,
+                ),
             }
             if let Some(t) = ttl {
                 insp::row(ui, "TTL", &t.to_string(), true);
@@ -793,8 +930,17 @@ impl SweepTool {
         ask
     }
 
+    /// Hosts that answered ARP but not ping.
     fn arp_only(&self) -> usize {
-        self.alive.iter().filter(|h| h.rtt.is_none()).count()
+        self.alive
+            .iter()
+            .filter(|h| h.via.arp && !h.via.ping)
+            .count()
+    }
+
+    /// Hosts that answered only the multicast browse (DNS-SD or SSDP).
+    fn multicast_only(&self) -> usize {
+        self.alive.iter().filter(|h| h.via.multicast_only()).count()
     }
 
     /// Vendor, or what the host is to this machine when it has no MAC here.
@@ -829,9 +975,21 @@ impl SweepTool {
 
     fn report(&self) -> String {
         let mut s = format!("Sweep of {}: {} alive", self.ran, self.alive.len());
+        let mut only = Vec::new();
         match self.arp_only() {
-            0 => s += "\n",
-            n => s += &format!(" ({n} found by ARP only, no ping reply)\n"),
+            0 => {}
+            n => only.push(format!("{n} found by ARP only, no ping reply")),
+        }
+        match self.multicast_only() {
+            0 => {}
+            n => only.push(format!(
+                "{n} found by mDNS or SSDP only, no ping or ARP reply"
+            )),
+        }
+        if only.is_empty() {
+            s += "\n";
+        } else {
+            s += &format!(" ({})\n", only.join("; "));
         }
         let dup = self.alive.iter().filter(|h| !h.also.is_empty()).count();
         if dup > 0 {
@@ -844,11 +1002,21 @@ impl SweepTool {
             s += "Stopped before it finished: hosts it hadn't reached aren't listed, and ports \
                   it hadn't checked say not checked\n";
         }
-        if self.browsed {
-            let n = self.alive.iter().filter(|h| h.dnssd.is_some()).count();
+        if self.browsed || self.searched {
+            let mut said = Vec::new();
+            if self.browsed {
+                let n = self.alive.iter().filter(|h| h.dnssd.is_some()).count();
+                said.push(format!("DNS-SD browse: {n} answered"));
+            }
+            if self.searched {
+                let n = self.alive.iter().filter(|h| h.ssdp.is_some()).count();
+                said.push(format!("SSDP search: {n} answered"));
+            }
             s += &format!(
-                "DNS-SD browse: {n} answered (this computer's own segment only; routed \
-                 networks can't answer it)\n"
+                "{}; {} found only this way (this computer's own segment only; routed \
+                 networks can't answer it)\n",
+                said.join(", "),
+                self.multicast_only()
             );
         }
         let checked = self.alive.iter().filter(|h| h.checked).count();
@@ -867,7 +1035,12 @@ impl SweepTool {
         for h in &self.alive {
             let rtt = match h.rtt {
                 Some(r) => format!("{r:.1} ms"),
-                None => "ARP only".into(),
+                None if h.via.arp => "ARP only".into(),
+                None => match (h.via.mdns, h.via.ssdp) {
+                    (true, true) => "mDNS+SSDP".into(),
+                    (true, false) => "mDNS only".into(),
+                    _ => "SSDP only".into(),
+                },
             };
             let mut line = format!(
                 "{:<15}  {:>9}  {:<17}  {:<24}  {}",
@@ -886,10 +1059,14 @@ impl SweepTool {
             if let Some(m) = h.dnssd.as_deref().and_then(dnssd::Found::model) {
                 line += &format!("  model \"{m}\"");
             }
+            if let Some(sv) = h.ssdp.as_deref().and_then(|u| u.server.as_deref()) {
+                line += &format!("  UPnP \"{sv}\"");
+            }
             if !h.also.is_empty() {
                 let also: Vec<String> = h.also.iter().map(mac::fmt).collect();
                 line += &format!("  ⚠ also from {}", also.join(", "));
             }
+            line += &format!("  (found by {})", h.via.list().join(", "));
             s += line.trim_end();
             s += "\n";
         }
@@ -915,7 +1092,7 @@ impl SweepTool {
                     } else {
                         log::NOT_CHECKED.into()
                     },
-                    found_by(h).into(),
+                    found_by(h).join(" "),
                 ]
             })
             .collect();
@@ -961,6 +1138,14 @@ impl SweepTool {
                         "services": f.services,
                         "ty": f.ty,
                         "product": f.product,
+                        "rp": f.rp,
+                        "pdl": f.pdl,
+                    })),
+                    "ssdp": h.ssdp.as_ref().map(|u| json!({
+                        "server": u.server,
+                        "st": u.types,
+                        "uuids": u.uuids,
+                        "locations": u.locations,
                     })),
                     "is_gateway": self.local.gateway == Some(h.ip),
                     "is_this_machine": self.local.lan.is_some_and(|(ip, _)| ip == h.ip),
@@ -981,16 +1166,18 @@ impl SweepTool {
             "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
             "client_names": clients.label(),
             "dnssd_browsed": self.browsed,
+            "ssdp_searched": self.searched,
             "complete": !self.stopped,
             "notes": [
-                "Hosts that answered ping (found_by ping) or, on the scanner's own segment, answered ARP but dropped ping (found_by arp, rtt_ms null). A host that does neither is missed, so absence is not proof.",
+                "found_by lists every way the host answered: ping (an echo reply, rtt_ms set), arp (this machine's ARP table confirmed it during the sweep, on the scanner's own segment), mdns (it answered the DNS-SD browse) and ssdp (it answered the SSDP search). Several are usual: a printer is often [\"ping\", \"arp\", \"mdns\"]. Without ping, rtt_ms is null: [\"arp\"] answered ARP but drops ping (a firewall default); a list with only mdns and/or ssdp is a device silent to ping and ARP that answered the multicast browse, listed only because it answered from its own address, inside the swept range and on the scanner's own segment (on_scanner_lan true); an address merely named in another device's answer is never added. A host that answers none of these is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "client_names says what became of the names of hosts that look like a phone, laptop or PC (not the gateway, and no maker, port or web page that says network gear, NAS, printer or camera), names that are often people's: full keeps them; anonymized replaces each with a client-xxxxxxxx token made from its MAC (else its IP), the same token the UniFi export's client table uses for that MAC; none leaves name null. name_from still says where the real name came from. Other hosts keep their names.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
-                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse was sent. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
+                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse ran and its answers were read: false with names off, when no swept range is on the scanner's segment, or when the sweep was stopped first. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
+                "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search ran and its replies were read (false in the same cases as dnssd_browsed); it is sent with TTL 1, and like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
@@ -1066,6 +1253,11 @@ impl SweepTool {
             also: Vec::new(),
             web: None,
             dnssd: None,
+            ssdp: None,
+            via: Via {
+                arp: mac.is_some(),
+                ..Via::PING
+            },
         };
         let mut printer = host(
             40,
@@ -1080,6 +1272,38 @@ impl SweepTool {
             ],
             ty: Some("HP LaserJet Pro M404".into()),
             product: Some("HP LaserJet Pro M404".into()),
+            rp: vec!["ipp/print".into()],
+            pdl: vec![
+                "application/pdf".into(),
+                "application/vnd.hp-PCL".into(),
+                "image/urf".into(),
+            ],
+        }));
+        printer.via.mdns = true;
+        // Silent to ping and ARP: found only by its multicast answers.
+        let mut tv = host(75, Some("Lobby-TV.local"), None);
+        (tv.rtt, tv.ttl, tv.via) = (
+            None,
+            None,
+            Via {
+                mdns: true,
+                ssdp: true,
+                ..Via::default()
+            },
+        );
+        tv.dnssd = Some(Box::new(dnssd::Found {
+            services: vec!["_googlecast._tcp".into(), "_http._tcp".into()],
+            ..Default::default()
+        }));
+        tv.ssdp = Some(Box::new(ssdp::Found {
+            server: Some("Linux/4.9 UPnP/1.0 ExampleCast/1.0".into()),
+            types: vec![
+                "upnp:rootdevice".into(),
+                "urn:dial-multiscreen-org:device:dial:1".into(),
+                "urn:schemas-upnp-org:device:MediaRenderer:1".into(),
+            ],
+            uuids: vec!["uuid:00000000-0000-4000-8000-000000000075".into()],
+            locations: vec!["http://192.0.2.75:8008/ssdp/device-desc.xml".into()],
         }));
         self.alive = vec![
             host(1, None, Some([0x00, 0x11, 0x32, 0x00, 0x00, 0x01])),
@@ -1089,9 +1313,16 @@ impl SweepTool {
                 Some([0x00, 0x11, 0x32, 0x00, 0x00, 0x20]),
             ),
             printer,
+            tv,
         ];
         self.picked = Some(Ipv4Addr::new(192, 0, 2, 40));
         self.revision += 1;
+    }
+
+    /// For the screenshot tour: the sample sweep with the host at
+    /// 192.0.2.`last` open in the inspector.
+    pub fn pick_for_shots(&mut self, last: u8) {
+        self.picked = Some(Ipv4Addr::new(192, 0, 2, last));
     }
 
     /// Start a run with the given target (used by the full scan).
@@ -1135,6 +1366,10 @@ impl SweepTool {
                 checked: h.checked,
                 also: h.also.clone(),
                 web: h.web.clone(),
+                multicast: h
+                    .via
+                    .multicast_only()
+                    .then(|| h.via.multicast().to_string()),
             })
             .collect()
     }
@@ -1161,6 +1396,7 @@ impl SweepTool {
         self.revision += 1;
         self.picked = None;
         self.browsed = false;
+        self.searched = false;
     }
 
     /// The whole networks the last run swept (10.20.0.0/24, not a range
@@ -1203,7 +1439,8 @@ impl SweepTool {
         self.local = HostInfo::local();
         self.ran_ports = self.ports;
         self.browsed = false;
-        // DNS-SD only where the browse can be heard: with names on, and
+        self.searched = false;
+        // DNS-SD and SSDP only where they can be heard: with names on, and
         // only if the sweep covers part of this computer's own segment.
         let lan = self.local.lan;
         let browse = (self.resolve_names
@@ -1225,12 +1462,10 @@ impl SweepTool {
         // A device answers NetBIOS or mDNS within milliseconds on a LAN.
         let ask = Duration::from_millis(timeout.min(400) as u64);
         self.job = Some(Job::spawn(ctx, move |tx| {
-            // Sent first, so devices answer while the pings go out; read
-            // after the ping and ARP phases.
+            // Sent first and together, so devices answer while the pings
+            // go out; read after the ping and ARP phases.
+            let search = browse.and_then(|via| ssdp::send(Some(via), ssdp::GROUP).ok());
             let browse = browse.and_then(|via| dnssd::send(Some(via), dnssd::GROUP).ok());
-            if browse.is_some() {
-                tx.send(Ev::Browsed);
-            }
             let alive = Mutex::new(Vec::new());
             // Each live host's MAC as found, for Smart's choice of hosts.
             let macs: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
@@ -1288,6 +1523,11 @@ impl SweepTool {
                         also: Vec::new(),
                         web: None,
                         dnssd: None,
+                        ssdp: None,
+                        via: Via {
+                            arp: mac.is_some(),
+                            ..Via::PING
+                        },
                     }));
                 }
                 tx.send(Ev::Probed);
@@ -1343,20 +1583,107 @@ impl SweepTool {
                     also: Vec::new(),
                     web: None,
                     dnssd: None,
+                    ssdp: None,
+                    via: Via::ARP,
                 }));
             });
             seen.extend(silent.iter().map(|s| s.0));
-            if let Some(b) = browse
-                && !tx.cancelled()
-            {
-                let found: Vec<(Ipv4Addr, dnssd::Found)> = b
-                    .collect(dnssd::WAIT, lan)
-                    .into_iter()
-                    .filter(|(ip, _)| seen.contains(ip))
+            let mut macs = macs.into_inner().unwrap();
+            macs.extend(silent.iter().copied());
+
+            // What answered the multicast discovery: labels for hosts
+            // already found on this segment, and the hosts silent to ping
+            // and ARP. Only a device's own UDP answer adds a host: an
+            // address named in another's A record only labels one.
+            let go = !tx.cancelled();
+            let browse = browse.filter(|_| go);
+            let search = search.filter(|_| go);
+            let (browsed, searched) = (browse.is_some(), search.is_some());
+            let (mut heard, answered) = browse
+                .map(|b| b.collect(dnssd::WAIT, lan))
+                .unwrap_or_default();
+            let mut upnp = search.map(|s| s.collect(ssdp::WAIT)).unwrap_or_default();
+            // Said only once the answers were read: a sweep stopped
+            // before then didn't browse, rather than heard nothing.
+            if browsed || searched {
+                tx.send(Ev::Browsed {
+                    dnssd: browsed,
+                    ssdp: searched,
+                });
+            }
+            let new = multicast_new(answered.iter().chain(upnp.keys()), &seen, &swept, lan, me);
+            let here = |ip: &Ipv4Addr| {
+                seen.contains(ip) && lan.is_some_and(|(at, bits)| same_subnet(at, *ip, bits))
+            };
+            let known: Vec<(Ipv4Addr, dnssd::Found)> = heard
+                .iter()
+                .filter(|(ip, _)| here(ip))
+                .map(|(ip, f)| (*ip, f.clone()))
+                .collect();
+            if !known.is_empty() {
+                tx.send(Ev::DnsSd(known));
+            }
+            let known: Vec<(Ipv4Addr, ssdp::Found)> = upnp
+                .iter()
+                .filter(|(ip, _)| here(ip))
+                .map(|(ip, f)| (*ip, f.clone()))
+                .collect();
+            if !known.is_empty() {
+                tx.send(Ev::Ssdp(known));
+            }
+            if !new.is_empty() && !tx.cancelled() {
+                // A MAC only from an entry the OS confirmed, as for ARP.
+                let table = mac::confirmed();
+                let found: Vec<Heard> = new
+                    .iter()
+                    .map(|ip| {
+                        (
+                            *ip,
+                            table.get(ip).copied(),
+                            heard.remove(ip),
+                            upnp.remove(ip),
+                        )
+                    })
                     .collect();
-                if !found.is_empty() {
-                    tx.send(Ev::DnsSd(found));
+                net::par_for(&found, threads, rate, tx.cancel_flag(), |(ip, m, d, u)| {
+                    let (name, name_from, own_mac) = if names {
+                        identify(*ip, m.is_some(), ask)
+                    } else {
+                        (None, None, None)
+                    };
+                    let mac_from = match (m, own_mac) {
+                        (Some(_), _) => Some("arp"),
+                        (None, Some(_)) => Some("netbios"),
+                        (None, None) => None,
+                    };
+                    tx.send(Ev::Alive(Host {
+                        ip: *ip,
+                        rtt: None,
+                        ttl: None,
+                        name,
+                        name_from,
+                        mac: m.or(own_mac),
+                        mac_from,
+                        open: Vec::new(),
+                        checked: false,
+                        also: Vec::new(),
+                        web: None,
+                        dnssd: d.clone().map(Box::new),
+                        ssdp: u.clone().map(Box::new),
+                        via: Via {
+                            arp: m.is_some(),
+                            mdns: d.is_some(),
+                            ssdp: u.is_some(),
+                            ..Via::default()
+                        },
+                    }));
+                });
+                for (ip, m, ..) in &found {
+                    if let Some(m) = m {
+                        macs.insert(*ip, *m);
+                    }
                 }
+                seen.extend(new);
             }
             for (ip, ms) in conflicts(&readings.into_inner().unwrap(), &seen) {
                 tx.send(Ev::Conflict(ip, ms));
@@ -1367,8 +1694,6 @@ impl SweepTool {
             }
             // Only now, with every host and its MAC known, pick the ones to
             // check. Hosts left out stay as the sweep found them.
-            let mut macs = macs.into_inner().unwrap();
-            macs.extend(silent.iter().copied());
             let hosts: Vec<(Ipv4Addr, Option<Mac>)> = seen
                 .iter()
                 .map(|&ip| (ip, macs.get(&ip).copied()))
@@ -1451,6 +1776,75 @@ fn identify(
     let md = names::mdns(ip, SocketAddr::new(IpAddr::V4(ip), names::MDNS_PORT), wait);
     let from = md.is_some().then_some("mdns");
     (md, from, mac)
+}
+
+const MULTICAST_TIP: &str = "Answered only the multicast browse (DNS-SD or SSDP), not ping or \
+ARP. Listed because it's inside the swept range and on this computer's own segment, the only one \
+multicast reaches.";
+
+const MULTICAST_NOTE: &str = "Found only by the multicast browse (DNS-SD or SSDP): it didn't \
+answer ping or ARP. Multicast stays on this computer's own segment, so only devices here can be \
+found this way.";
+
+const SSDP_NOTE: &str = "From SSDP (UPnP), the device's own claim. Its description URL is kept \
+in the Inventory as text and never opened. Multicast stays on this computer's own segment.";
+
+/// UPnP search targets as a person reads them: the device types
+/// ("MediaRenderer", "InternetGatewayDevice", "dial"), not services.
+fn upnp_kinds(types: &[String]) -> String {
+    let mut v: Vec<&str> = types
+        .iter()
+        .filter_map(|t| {
+            let mut p = t.split(':');
+            (p.next()? == "urn").then_some(())?;
+            p.next()?;
+            (p.next()? == "device").then_some(())?;
+            p.next().filter(|n| !n.is_empty())
+        })
+        .collect();
+    v.dedup();
+    v.join(", ")
+}
+
+/// Page languages as a person reads them: "pdf, vnd.hp-PCL, urf".
+fn languages(pdl: &[String]) -> String {
+    pdl.iter()
+        .map(|l| l.split_once('/').map_or(l.as_str(), |(_, t)| t))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A host found only by the multicast browse: its address, a MAC from a
+/// confirmed ARP entry, and what it said over DNS-SD and SSDP.
+type Heard = (
+    Ipv4Addr,
+    Option<Mac>,
+    Option<dnssd::Found>,
+    Option<ssdp::Found>,
+);
+
+/// Of the addresses that answered the multicast browse, the ones to add
+/// as hosts: not found yet, inside the swept range and on the scanner's
+/// own segment (`lan`), and not this machine. Sorted.
+fn multicast_new<'a>(
+    heard: impl Iterator<Item = &'a Ipv4Addr>,
+    seen: &HashSet<Ipv4Addr>,
+    swept: &HashSet<Ipv4Addr>,
+    lan: Option<(Ipv4Addr, u32)>,
+    me: Option<Ipv4Addr>,
+) -> Vec<Ipv4Addr> {
+    let mut v: Vec<Ipv4Addr> = heard
+        .copied()
+        .filter(|ip| {
+            !seen.contains(ip)
+                && swept.contains(ip)
+                && lan.is_some_and(|(at, bits)| same_subnet(at, *ip, bits))
+                && Some(*ip) != me
+        })
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
 }
 
 /// Under DNS-SD results: where they could come from.
@@ -1590,8 +1984,8 @@ fn cell(p: &egui::Painter, r: Rect, text: &str, font: &FontId, colour: egui::Col
     p.galley(pos2(r.min.x, r.center().y - g.size().y / 2.0), g, colour);
 }
 
-fn found_by(h: &Host) -> &'static str {
-    if h.rtt.is_some() { "ping" } else { "arp" }
+fn found_by(h: &Host) -> Vec<&'static str> {
+    h.via.list()
 }
 
 fn port_list(open: &[u16]) -> String {
@@ -1625,6 +2019,8 @@ mod tests {
             also: Vec::new(),
             web: None,
             dnssd: None,
+            ssdp: None,
+            via: if rtt.is_some() { Via::PING } else { Via::ARP },
         }
     }
 
@@ -1932,7 +2328,8 @@ mod tests {
         let hosts = v["hosts"].as_array().unwrap();
         assert_eq!(hosts[0]["is_gateway"], true);
         assert_eq!(hosts[1]["is_this_machine"], true);
-        assert_eq!(hosts[1]["found_by"], "arp");
+        assert_eq!(hosts[1]["found_by"], json!(["arp"]));
+        assert_eq!(hosts[0]["found_by"], json!(["ping"]));
         assert!(hosts[1]["rtt_ms"].is_null());
         assert!(hosts[0]["open_ports"].is_null(), "ports weren't checked");
         assert_eq!(v["scanner"]["lan"], "10.0.0.50/24");
@@ -2018,19 +2415,26 @@ mod tests {
             host([10, 0, 0, 41], Some(1.0)),
         ]);
         s.apply(vec![
-            Ev::Browsed,
+            Ev::Browsed {
+                dnssd: true,
+                ssdp: false,
+            },
             Ev::DnsSd(vec![(
                 Ipv4Addr::new(10, 0, 0, 40),
                 dnssd::Found {
                     services: vec!["_ipp._tcp".into(), "_pdl-datastream._tcp".into()],
                     ty: Some("HP LaserJet Pro M404".into()),
                     product: None,
+                    rp: vec!["ipp/print".into()],
+                    pdl: vec!["application/pdf".into()],
                 },
             )]),
         ]);
         let r = s.report();
         assert!(
-            r.contains("DNS-SD browse: 1 answered (this computer's own segment only"),
+            r.contains(
+                "DNS-SD browse: 1 answered; 0 found only this way (this computer's own segment only"
+            ),
             "{r}"
         );
         assert!(r.contains("model \"HP LaserJet Pro M404\""), "{r}");
@@ -2043,12 +2447,19 @@ mod tests {
             "_pdl-datastream._tcp"
         );
         assert!(v["hosts"][0]["dnssd"]["product"].is_null());
+        assert_eq!(v["hosts"][0]["dnssd"]["rp"], json!(["ipp/print"]));
+        assert_eq!(v["hosts"][0]["dnssd"]["pdl"], json!(["application/pdf"]));
+        assert_eq!(v["hosts"][0]["found_by"], json!(["ping", "mdns"]));
         assert!(v["hosts"][1]["dnssd"].is_null());
+        assert_eq!(v["ssdp_searched"], false);
         let notes = v["notes"].to_string();
         assert!(notes.contains("own segment"), "{notes}");
         // Every top-level key is one the skill names.
         let skill = include_str!("../../skills/mapnetwork/SKILL.md");
         assert!(skill.contains("`dnssd_browsed`") && skill.contains("`ty`"));
+        for k in ["rp", "pdl", "ssdp_searched"] {
+            assert!(skill.contains(&format!("`{k}`")), "{k}");
+        }
         // A new sweep forgets it.
         s.clear_results();
         assert!(!s.browsed);
@@ -2248,5 +2659,125 @@ mod tests {
                 .iter()
                 .all(|ip| r.contains(ip))
         );
+    }
+
+    /// A device silent to ping and ARP that answered the multicast
+    /// browse is added, but only inside the swept range, on the
+    /// scanner's own segment, and not this machine.
+    #[test]
+    fn only_in_range_on_segment_multicast_answers_become_hosts() {
+        let ip = |l: u8| Ipv4Addr::new(192, 0, 2, l);
+        let heard = [
+            ip(40),
+            ip(75),
+            ip(75),
+            ip(99),
+            ip(50),
+            Ipv4Addr::new(198, 51, 100, 7),
+        ];
+        let seen: HashSet<Ipv4Addr> = [ip(40)].into();
+        // The sweep covered .1-.80 of the scanner's /24 (and the routed
+        // 198.51.100.0/24, which multicast can't reach).
+        let mut swept: HashSet<Ipv4Addr> = (1..=80).map(ip).collect();
+        swept.insert(Ipv4Addr::new(198, 51, 100, 7));
+        let lan = Some((ip(50), 24));
+        assert_eq!(
+            multicast_new(heard.iter(), &seen, &swept, lan, Some(ip(50))),
+            [ip(75)]
+        );
+        // No known segment: nothing is added.
+        assert!(multicast_new(heard.iter(), &seen, &swept, None, None).is_empty());
+    }
+
+    /// A multicast-only host says how it was found everywhere: the report,
+    /// the CSV, the inventory and the Map.
+    #[test]
+    fn a_multicast_only_host_says_how_it_was_found() {
+        let mut s = swept(vec![host([10, 0, 0, 40], Some(1.0))]);
+        s.local = HostInfo {
+            lan: Some((Ipv4Addr::new(10, 0, 0, 50), 24)),
+            ..Default::default()
+        };
+        let mut tv = host([10, 0, 0, 75], None);
+        tv.via = Via {
+            mdns: true,
+            ssdp: true,
+            ..Via::default()
+        };
+        tv.ssdp = Some(Box::new(ssdp::Found {
+            server: Some("Linux/4.9 UPnP/1.0 ExampleCast/1.0".into()),
+            types: vec!["urn:schemas-upnp-org:device:MediaRenderer:1".into()],
+            uuids: vec!["uuid:00000000-0000-4000-8000-000000000075".into()],
+            locations: vec!["http://10.0.0.75:8008/desc.xml".into()],
+        }));
+        s.apply(vec![
+            Ev::Browsed {
+                dnssd: true,
+                ssdp: true,
+            },
+            Ev::Alive(tv),
+            Ev::Ssdp(vec![(
+                Ipv4Addr::new(10, 0, 0, 40),
+                ssdp::Found {
+                    server: Some("HP HTTP Server".into()),
+                    ..Default::default()
+                },
+            )]),
+        ]);
+        assert_eq!(s.arp_only(), 0);
+        assert_eq!(s.multicast_only(), 1);
+        let r = s.report();
+        assert!(r.contains("1 found by mDNS or SSDP only"), "{r}");
+        assert!(
+            r.contains(
+                "SSDP search: 2 answered; 1 found only this way (this computer's own segment"
+            ),
+            "{r}"
+        );
+        assert!(
+            r.contains("mDNS+SSDP") && r.contains("(found by mdns, ssdp)"),
+            "{r}"
+        );
+        assert!(r.contains("(found by ping, ssdp)"), "{r}");
+        let t = s.table().unwrap();
+        assert_eq!(t.rows[1].last().unwrap(), "mdns ssdp");
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
+        let h = &v["hosts"][1];
+        assert_eq!(h["found_by"], json!(["mdns", "ssdp"]));
+        assert!(h["rtt_ms"].is_null());
+        assert_eq!(h["on_scanner_lan"], true);
+        assert_eq!(
+            h["ssdp"]["st"][0],
+            "urn:schemas-upnp-org:device:MediaRenderer:1"
+        );
+        assert_eq!(v["ssdp_searched"], true);
+        let notes = v["notes"].to_string();
+        assert!(notes.contains("never fetches"), "{notes}");
+        // Every field of the ssdp and dnssd records is one the skill names.
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        for key in h["ssdp"].as_object().unwrap().keys() {
+            assert!(skill.contains(&format!("`{key}`")), "ssdp.{key}");
+        }
+        for key in v["hosts"][0].as_object().unwrap().keys() {
+            assert!(skill.contains(&format!("`{key}`")), "{key}");
+        }
+        let seen = s.seen();
+        assert_eq!(seen[1].multicast.as_deref(), Some("mDNS and SSDP"));
+        assert_eq!(seen[0].multicast, None);
+        assert_eq!(upnp_kinds(&h_types()), "MediaRenderer, dial");
+        assert_eq!(
+            languages(&["application/pdf".into(), "image/urf".into()]),
+            "pdf, urf"
+        );
+    }
+
+    fn h_types() -> Vec<String> {
+        vec![
+            "upnp:rootdevice".into(),
+            "urn:schemas-upnp-org:device:MediaRenderer:1".into(),
+            "urn:schemas-upnp-org:service:AVTransport:1".into(),
+            "urn:dial-multiscreen-org:device:dial:1".into(),
+        ]
     }
 }

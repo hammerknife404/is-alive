@@ -593,8 +593,37 @@ pub fn turned(yaw: f32, dir: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use eframe::egui::pos2;
     use std::f32::consts::TAU;
+
+    /// A drag to the right in 3D lowers the yaw (view::exploded `orbit`):
+    /// that has to carry the near side of the map right, with the hand,
+    /// and the far side left, as a turntable does under a finger.
+    #[test]
+    fn a_lower_yaw_carries_the_near_side_right() {
+        let proj = |yaw: f32| Proj {
+            about: Pos2::ZERO,
+            sin: yaw.sin(),
+            cos: yaw.cos(),
+            tilt: TILT,
+            spread: 1.0,
+        };
+        let (near, far) = (pos2(0.0, 100.0), pos2(0.0, -100.0));
+        let (still, turned) = (proj(0.0), proj(-0.2));
+        assert!(
+            proj(0.0).depth(near) > proj(0.0).depth(far),
+            "near is nearer"
+        );
+        assert!(
+            turned.at(near, 0.0).x > still.at(near, 0.0).x,
+            "near goes right"
+        );
+        assert!(
+            turned.at(far, 0.0).x < still.at(far, 0.0).x,
+            "far goes left"
+        );
+    }
 
     fn card(x: f32, y: f32) -> Rect {
         Rect::from_min_size(pos2(x, y), CARD)

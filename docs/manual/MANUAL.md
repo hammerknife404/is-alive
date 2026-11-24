@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.33.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.34.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -484,7 +484,7 @@ How to read it:
 | **Ranges** | What to sweep: one network or several. Filled in with this computer's subnet the first time you open the tab. Each can be a subnet (`192.168.1.0/24`, `192.168.1.0 255.255.255.0` or `192.168.1.*`), a short range (`192.168.1.1-254`), a full range (`10.0.0.10-10.0.1.20`, or `10.0.0.10 to 10.0.1.20`) or one address. Separate them with spaces, commas, semicolons or new lines: `10.10.10.0/24 192.168.100.1-50 172.20.5.12 10.0.0.0/28` sweeps all four. Spaces around `-` and `/` and a dash pasted from a document are fine. Beside **Start** it says how many targets and addresses that is (overlaps are swept once), or what's wrong with an entry. Up to 65,536 addresses in all |
 | **Timeout** | How long to wait for each address (default 750 ms) |
 | **Speed** | As in [Port Check](#5-port-check) |
-| **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below) |
+| **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below). On this computer's own segment it also sends the DNS-SD browse and SSDP search, which find and describe more devices (below) |
 | **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
 | **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run), every name as the table shows it. The Claude Handoff's copy follows its **Client names** instead |
 
@@ -496,7 +496,11 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **Name** comes from DNS (the device's PTR record) when there is one. Most small sites have none, so a device DNS can't name is asked for its own: over **NetBIOS** (UDP port 137: Windows, Samba, most NAS boxes and many printers answer with their computer name) and, failing that, over **multicast DNS** (UDP port 5353: Apple devices, printers, cast devices and Linux with Avahi answer with a name ending `.local`). Each is one small question to that device and one answer, from an ordinary port: no admin rights, nothing broadcast. A device that answers neither keeps a blank name. The name is the device's own claim, like its DNS name.
 
-**DNS-SD** (Bonjour): with **Resolve names** on and the sweep covering part of this computer's own network, the sweep also sends one multicast DNS question to the segment, asking which services devices offer and which are printers. It's sent from an ordinary port, never port 5353, and devices answer straight back to it. Printers answer with their make and model (`ty=` and `product=` in their DNS-SD record), which the inspector shows as **Model**, with **Services** listing what the device offers (`_ipp._tcp` printing, `_airplay._tcp`, `_googlecast._tcp` and so on). Multicast doesn't cross a router, so **only devices on this computer's own segment can answer**: a device on a routed network with no model isn't a sign of anything. The report says how many answered. Nothing is sent to a printer's own ports.
+**DNS-SD** (Bonjour): with **Resolve names** on and the sweep covering part of this computer's own network, the sweep also sends one multicast DNS question to the segment, asking which services devices offer, which are printers, and which offer file shares (`_smb._tcp`) or a web page (`_http._tcp`). It's sent from an ordinary port, never port 5353, and devices answer straight back to it. Printers answer with their make and model (`ty=` and `product=` in their DNS-SD record), their print queue (`rp=`, such as `ipp/print`) and the page languages they take (`pdl=`, such as PDF or PCL), which the inspector shows as **Model**, **Queue** and **Languages**, with **Services** listing what the device offers (`_ipp._tcp` printing, `_smb._tcp` file sharing, `_airplay._tcp`, `_googlecast._tcp` and so on). Nothing is sent to a printer's own ports.
+
+**SSDP** (UPnP): at the same moment, the sweep sends one SSDP search to the segment, asking every device to say what it is. It's sent from an ordinary port, never port 1900, and devices answer straight back to it. The inspector shows a device's answer as **UPnP** (its server: operating system and often its product, such as a NAS's) and **UPnP types** (*MediaRenderer* for a TV or speaker, *InternetGatewayDevice* for a router with UPnP on). A device also gives the address of its description page: it's kept in the Inventory as text and never opened.
+
+**Found by multicast:** a device that ignores ping and ARP but answers DNS-SD or SSDP (TVs, cast devices and smart speakers often do) is added to the list, as long as it's inside the range you swept and on this computer's own segment. Its **Time** says *no ping*, the status row counts it as *multicast only*, and its inspector says *Host · mDNS only* (or *SSDP only*, or both), with a note. Every device's inspector has **Found by**, every way it answered (*ping*, *ARP*, *mDNS (DNS-SD)*, *SSDP (UPnP)*); the report ends each line with the same, and the Inventory and CSV have it as `found_by`. Multicast doesn't cross a router, so **only devices on this computer's own segment can answer**: a device on a routed network with no model or UPnP answer isn't a sign of anything, and none is ever added from there. The report says how many answered each and how many were found only this way.
 
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
 
@@ -512,7 +516,7 @@ Every device the sweep found stays in the list and on the Map whether its ports 
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, or *ARP only* when it didn't answer ping), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. **Model** and **Services** are what it said over DNS-SD (above), with a note that only this segment's devices can answer. A computer or print server that shares a printer shows that printer's model; one sharing several different printers shows none. Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, *ARP only* when it didn't answer ping, or *mDNS only* / *SSDP only* when only the multicast browse found it), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. **Found by** says every way it answered. **Model**, **Queue**, **Languages** and **Services** are what it said over DNS-SD, and **UPnP** and **UPnP types** what it said over SSDP (above), each with a note that only this segment's devices can answer. A computer or print server that shares a printer shows that printer's model; one sharing several different printers shows none. Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
@@ -547,7 +551,7 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 
 - **"invalid IPv4 address"** beside Start: one of the ranges has a typo; it's named, the rest are fine.
 
-**CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (`ping` or `arp`).
+**CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (every way the device answered, space-separated: `ping`, `arp`, `mdns`, `ssdp`).
 
 ---
 
@@ -880,7 +884,7 @@ While the map is opened up, a row of controls sits beside **Explode**:
 
 | Control | What it does |
 |---|---|
-| **⟲ / ⟳** | Turn the view an eighth of a turn left or right (also **[** and **]**). **Alt+drag** on the map turns it freely |
+| **⟲ / ⟳** | Turn the view an eighth of a turn left or right (also **[** and **]**). **Alt+drag** on the map turns it freely, the near side following your hand |
 | **Explode** slider | How far the plates are pulled apart. All the way left is the flat map, and leaves the view |
 | **Split** slider | Pulls each branch of the network away from the others, onto plates of its own: a switch and everything under it, or each site's firewall and its network. The branches are the ones under the first card the tree forks at |
 
@@ -911,7 +915,7 @@ With **Animate** off the view opens, turns and closes at once.
 
 | To | Do |
 |---|---|
-| Turn it and tip it | **Drag** the map: across turns it, up and down tips it, from nearly edge on to nearly straight down |
+| Turn it and tip it | **Drag** the map: across turns it, the near side following your hand, up and down tips it, from nearly edge on to nearly straight down |
 | Move it | **Shift+drag**, or the arrow keys |
 | Zoom | Scroll or pinch, **+** and **−**; **Fit** frames it again |
 | Turn it a step | **⟲ / ⟳**, or **[** and **]** |

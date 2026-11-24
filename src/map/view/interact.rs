@@ -470,7 +470,8 @@ impl MapView {
                 // In 3D a drag turns and tips the view; Shift+drag moves it.
                 self.orbit(d);
             } else if self.ex_on && ui.input(|i| i.modifiers.alt) {
-                self.ex.yaw += d.x * 0.008;
+                // The same way as a drag in 3D: the near side follows the hand.
+                self.ex.yaw -= d.x * 0.008;
                 self.ex_now.yaw = self.ex.yaw;
             } else {
                 self.pan += d;

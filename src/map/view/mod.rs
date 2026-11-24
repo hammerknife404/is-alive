@@ -3717,8 +3717,11 @@ mod tests {
             frame(&ctx, &mut v, vec![egui::Event::PointerMoved(to)]);
         }
         frame(&ctx, &mut v, vec![press(false)]);
+        // Dragged right: the yaw goes down, which carries the near side of
+        // the map right, with the hand (explode's
+        // a_lower_yaw_carries_the_near_side_right).
         assert!(
-            v.ex.yaw > cam.yaw + 0.2,
+            v.ex.yaw < cam.yaw - 0.2,
             "turned: {} from {}",
             v.ex.yaw,
             cam.yaw
