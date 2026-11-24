@@ -6,8 +6,9 @@
 //! Nothing binds or listens on 1900, so it never competes with the
 //! computer's own SSDP service, and NOTIFY announcements aren't heard.
 //!
-//! SSDP is multicast on the local link (routers don't pass it on), so
-//! only devices on the scanner's own segment answer.
+//! The search goes out with TTL 1, so routers (multicast routers and
+//! IGMP proxies too) don't pass it on: only devices on the scanner's own
+//! segment answer.
 //!
 //! What's kept of a reply is the device's own claim: `SERVER` (its OS and
 //! UPnP stack, "Linux/4.4 UPnP/1.0 Synology/DSM"), the `ST` search
@@ -69,8 +70,10 @@ pub fn send(via: Option<Ipv4Addr>, to: SocketAddrV4) -> io::Result<Search> {
     // An ephemeral port, never 1900.
     s.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)).into())?;
     if to.ip().is_multicast() {
-        // UPnP Device Architecture 1.1: TTL 2 by default.
-        s.set_multicast_ttl_v4(2)?;
+        // TTL 1: the scanner's own segment only, never past a multicast
+        // router or IGMP proxy (UPnP suggests 2; this keeps the promise
+        // that only this segment answers).
+        s.set_multicast_ttl_v4(1)?;
         if let Some(v) = via {
             s.set_multicast_if_v4(&v)?;
         }
@@ -122,7 +125,9 @@ impl Acc {
         if self.server.is_none() {
             self.server = r.server;
         }
-        if let Some(t) = r.st
+        // ssdp:all brings an answer for the device's own UUID too: that's
+        // in `uuids`, not a type.
+        if let Some(t) = r.st.filter(|t| uuid(t).is_none())
             && self.types.len() < MAX_TYPES
         {
             self.types.insert(t);
@@ -241,6 +246,18 @@ USN: uuid:73796e6f-6c6f-6779-0000-00000000a1b2::upnp:rootdevice\r\n\
             )
             .replace("SERVER:", "server:");
         a.add(parse(other.as_bytes()).unwrap());
+        // The answer for its own UUID is no type.
+        a.add(
+            parse(
+                REPLY
+                    .replace(
+                        "ST: upnp:rootdevice",
+                        "ST: uuid:73796e6f-6c6f-6779-0000-00000000a1b2",
+                    )
+                    .as_bytes(),
+            )
+            .unwrap(),
+        );
         let f = a.done();
         assert_eq!(
             f.types,

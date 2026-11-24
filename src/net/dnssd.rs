@@ -21,7 +21,7 @@
 //! scanner's own segment.
 
 use super::dnsq;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};
@@ -134,12 +134,26 @@ impl Browse {
     /// while the caller was busy are still in the socket), by device. A
     /// record about another host is moved to it only when that host is on
     /// `lan` (the scanner's own segment: address and prefix length).
-    pub fn collect(self, wait: Duration, lan: Option<(Ipv4Addr, u32)>) -> HashMap<Ipv4Addr, Found> {
+    ///
+    /// Also returns the addresses that answered for themselves: the UDP
+    /// source of an answer with a record of its own. Only those are
+    /// devices heard from; an address named in another device's A record
+    /// (a sleep proxy's, or a forged list of hundreds) may label a host
+    /// the sweep found some other way, never add one.
+    pub fn collect(
+        self,
+        wait: Duration,
+        lan: Option<(Ipv4Addr, u32)>,
+    ) -> (HashMap<Ipv4Addr, Found>, HashSet<Ipv4Addr>) {
         let mut out: HashMap<Ipv4Addr, Acc> = HashMap::new();
+        let mut answered = HashSet::new();
         gather(&self.sock, self.sent, wait, |r, from| {
-            read(r, from, lan, &mut out)
+            if read(r, from, lan, &mut out) {
+                answered.insert(from);
+            }
         });
-        out.into_iter().map(|(ip, a)| (ip, a.done())).collect()
+        let found = out.into_iter().map(|(ip, a)| (ip, a.done())).collect();
+        (found, answered)
     }
 }
 
@@ -284,14 +298,23 @@ fn languages(v: &str) -> impl Iterator<Item = String> + '_ {
 /// Fold one answer from `from` into `out`. A record about another host
 /// (a sleep proxy answering for a sleeping printer) goes to that host's
 /// address when the answer gives it and it's on `lan` (any, without one).
-fn read(r: &[u8], from: Ipv4Addr, lan: Option<(Ipv4Addr, u32)>, out: &mut HashMap<Ipv4Addr, Acc>) {
+/// True when the answer gave `from` a record of its own.
+fn read(
+    r: &[u8],
+    from: Ipv4Addr,
+    lan: Option<(Ipv4Addr, u32)>,
+    out: &mut HashMap<Ipv4Addr, Acc>,
+) -> bool {
     let on_lan = |a: Ipv4Addr| {
         lan.is_none_or(|(me, bits)| {
             let mask = u32::MAX.checked_shl(32 - bits.min(32)).unwrap_or(0);
             u32::from(me) & mask == u32::from(a) & mask
         })
     };
-    let Ok(rrs) = dnsq::records(r) else { return };
+    let Ok(rrs) = dnsq::records(r) else {
+        return false;
+    };
+    let mut own = false;
     // Instance → its host's name; host name → address.
     let mut target: HashMap<&str, &str> = HashMap::new();
     let mut addr: HashMap<&str, Ipv4Addr> = HashMap::new();
@@ -321,18 +344,23 @@ fn read(r: &[u8], from: Ipv4Addr, lan: Option<(Ipv4Addr, u32)>, out: &mut HashMa
                     && let Some(t) = service_type(n)
                 {
                     out.entry(from).or_default().services.insert(t);
+                    own = true;
                 }
             }
             dnsq::PTR => {
                 if let (Some(t), dnsq::Data::Name(inst)) = (service_type(&rr.name), &rr.data) {
-                    out.entry(owner(inst)).or_default().services.insert(t);
+                    let at = owner(inst);
+                    own |= at == from;
+                    out.entry(at).or_default().services.insert(t);
                 }
             }
             dnsq::SRV | dnsq::TXT => {
                 let Some(t) = instance_type(&rr.name) else {
                     continue;
                 };
-                let acc = out.entry(owner(&rr.name)).or_default();
+                let at = owner(&rr.name);
+                own |= at == from;
+                let acc = out.entry(at).or_default();
                 acc.services.insert(t);
                 if rr.rtype == dnsq::TXT {
                     for (k, v) in txt_pairs(rd) {
@@ -349,6 +377,7 @@ fn read(r: &[u8], from: Ipv4Addr, lan: Option<(Ipv4Addr, u32)>, out: &mut HashMa
             _ => {}
         }
     }
+    own
 }
 
 #[cfg(test)]
@@ -550,7 +579,7 @@ mod tests {
             }
         });
         let t0 = Instant::now();
-        let found = b.collect(Duration::from_millis(200), None);
+        let (found, _) = b.collect(Duration::from_millis(200), None);
         let took = t0.elapsed();
         done.store(true, std::sync::atomic::Ordering::Relaxed);
         t.join().unwrap();
@@ -577,8 +606,54 @@ mod tests {
         assert_eq!(u16::from_be_bytes([buf[4], buf[5]]) as usize, ASKED.len());
         let _ = n;
         responder.send_to(&answer(1, [127, 0, 0, 1]), back).unwrap();
-        let found = b.collect(Duration::from_millis(500), None);
+        let (found, answered) = b.collect(Duration::from_millis(500), None);
         let f = &found[&Ipv4Addr::LOCALHOST];
         assert_eq!(f.model(), Some("HP LaserJet Pro M404"));
+        assert!(answered.contains(&Ipv4Addr::LOCALHOST));
+    }
+
+    /// One answer naming the addresses of many instances' hosts: the
+    /// sender answered for none of its own, so it adds no device; the
+    /// addresses named may only label hosts found another way.
+    #[test]
+    fn a_packet_naming_many_owners_answers_for_none_of_them() {
+        fn name(r: &mut Vec<u8>, n: &str) {
+            dnsq::put_name(r, n).unwrap();
+        }
+        fn rr(r: &mut Vec<u8>, n: &str, t: u16, data: &[u8]) {
+            name(r, n);
+            r.extend_from_slice(&t.to_be_bytes());
+            r.extend_from_slice(&[0x80, 0x01, 0, 0, 0, 10]);
+            r.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            r.extend_from_slice(data);
+        }
+        let n = 100u8;
+        let mut r = vec![0, 1, 0x84, 0, 0, 0, 0, 2 * n, 0, 0, 0, 0];
+        for i in 0..n {
+            let inst = format!("p{i}._ipp._tcp.local");
+            let host = format!("h{i}.local");
+            let mut srv = vec![0, 0, 0, 0, 0x02, 0x77];
+            name(&mut srv, &host);
+            rr(&mut r, &inst, dnsq::SRV, &srv);
+            rr(&mut r, &host, dnsq::A, &[192, 0, 2, 100 + i]);
+        }
+        let from = Ipv4Addr::new(192, 0, 2, 9);
+        let mut out = HashMap::new();
+        assert!(!read(&r, from, Some((from, 24)), &mut out));
+        assert!(out.len() >= n as usize, "the owners may be labelled");
+        assert!(!out.contains_key(&from));
+
+        // Over the wire: nothing counts as having answered.
+        let responder = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let at = match responder.local_addr().unwrap() {
+            SocketAddr::V4(a) => a,
+            _ => unreachable!(),
+        };
+        let b = send(None, at).unwrap();
+        let mut buf = [0u8; 1500];
+        let (_, back) = responder.recv_from(&mut buf).unwrap();
+        responder.send_to(&r, back).unwrap();
+        let (_, answered) = b.collect(Duration::from_millis(300), None);
+        assert!(answered.is_empty(), "{answered:?}");
     }
 }

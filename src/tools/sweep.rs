@@ -1169,15 +1169,15 @@ impl SweepTool {
             "ssdp_searched": self.searched,
             "complete": !self.stopped,
             "notes": [
-                "found_by lists every way the host answered: ping (an echo reply, rtt_ms set), arp (this machine's ARP table confirmed it during the sweep, on the scanner's own segment), mdns (it answered the DNS-SD browse) and ssdp (it answered the SSDP search). Several are usual: a printer is often [\"ping\", \"arp\", \"mdns\"]. Without ping, rtt_ms is null: [\"arp\"] answered ARP but drops ping (a firewall default); a list with only mdns and/or ssdp is a device silent to ping and ARP that answered the multicast browse, listed only because it is inside the swept range and on the scanner's own segment (on_scanner_lan true). A host that answers none of these is missed, so absence is not proof.",
+                "found_by lists every way the host answered: ping (an echo reply, rtt_ms set), arp (this machine's ARP table confirmed it during the sweep, on the scanner's own segment), mdns (it answered the DNS-SD browse) and ssdp (it answered the SSDP search). Several are usual: a printer is often [\"ping\", \"arp\", \"mdns\"]. Without ping, rtt_ms is null: [\"arp\"] answered ARP but drops ping (a firewall default); a list with only mdns and/or ssdp is a device silent to ping and ARP that answered the multicast browse, listed only because it answered from its own address, inside the swept range and on the scanner's own segment (on_scanner_lan true); an address merely named in another device's answer is never added. A host that answers none of these is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "client_names says what became of the names of hosts that look like a phone, laptop or PC (not the gateway, and no maker, port or web page that says network gear, NAS, printer or camera), names that are often people's: full keeps them; anonymized replaces each with a client-xxxxxxxx token made from its MAC (else its IP), the same token the UniFi export's client table uses for that MAC; none leaves name null. name_from still says where the real name came from. Other hosts keep their names.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
-                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse was sent. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
-                "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search was sent; like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
+                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse ran and its answers were read: false with names off, when no swept range is on the scanner's segment, or when the sweep was stopped first. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
+                "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search ran and its replies were read (false in the same cases as dnssd_browsed); it is sent with TTL 1, and like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
@@ -1466,12 +1466,6 @@ impl SweepTool {
             // go out; read after the ping and ARP phases.
             let search = browse.and_then(|via| ssdp::send(Some(via), ssdp::GROUP).ok());
             let browse = browse.and_then(|via| dnssd::send(Some(via), dnssd::GROUP).ok());
-            if browse.is_some() || search.is_some() {
-                tx.send(Ev::Browsed {
-                    dnssd: browse.is_some(),
-                    ssdp: search.is_some(),
-                });
-            }
             let alive = Mutex::new(Vec::new());
             // Each live host's MAC as found, for Smart's choice of hosts.
             let macs: Mutex<HashMap<Ipv4Addr, Mac>> = Mutex::new(HashMap::new());
@@ -1598,19 +1592,32 @@ impl SweepTool {
             macs.extend(silent.iter().copied());
 
             // What answered the multicast discovery: labels for hosts
-            // already found, and the hosts silent to ping and ARP.
-            let mut heard = browse
-                .filter(|_| !tx.cancelled())
+            // already found on this segment, and the hosts silent to ping
+            // and ARP. Only a device's own UDP answer adds a host: an
+            // address named in another's A record only labels one.
+            let go = !tx.cancelled();
+            let browse = browse.filter(|_| go);
+            let search = search.filter(|_| go);
+            let (browsed, searched) = (browse.is_some(), search.is_some());
+            let (mut heard, answered) = browse
                 .map(|b| b.collect(dnssd::WAIT, lan))
                 .unwrap_or_default();
-            let mut upnp = search
-                .filter(|_| !tx.cancelled())
-                .map(|s| s.collect(ssdp::WAIT))
-                .unwrap_or_default();
-            let new = multicast_new(heard.keys().chain(upnp.keys()), &seen, &swept, lan, me);
+            let mut upnp = search.map(|s| s.collect(ssdp::WAIT)).unwrap_or_default();
+            // Said only once the answers were read: a sweep stopped
+            // before then didn't browse, rather than heard nothing.
+            if browsed || searched {
+                tx.send(Ev::Browsed {
+                    dnssd: browsed,
+                    ssdp: searched,
+                });
+            }
+            let new = multicast_new(answered.iter().chain(upnp.keys()), &seen, &swept, lan, me);
+            let here = |ip: &Ipv4Addr| {
+                seen.contains(ip) && lan.is_some_and(|(at, bits)| same_subnet(at, *ip, bits))
+            };
             let known: Vec<(Ipv4Addr, dnssd::Found)> = heard
                 .iter()
-                .filter(|(ip, _)| seen.contains(ip))
+                .filter(|(ip, _)| here(ip))
                 .map(|(ip, f)| (*ip, f.clone()))
                 .collect();
             if !known.is_empty() {
@@ -1618,7 +1625,7 @@ impl SweepTool {
             }
             let known: Vec<(Ipv4Addr, ssdp::Found)> = upnp
                 .iter()
-                .filter(|(ip, _)| seen.contains(ip))
+                .filter(|(ip, _)| here(ip))
                 .map(|(ip, f)| (*ip, f.clone()))
                 .collect();
             if !known.is_empty() {
@@ -1771,7 +1778,6 @@ fn identify(
     (md, from, mac)
 }
 
-/// Under DNS-SD results: where they could come from.
 const MULTICAST_TIP: &str = "Answered only the multicast browse (DNS-SD or SSDP), not ping or \
 ARP. Listed because it's inside the swept range and on this computer's own segment, the only one \
 multicast reaches.";
@@ -1841,6 +1847,7 @@ fn multicast_new<'a>(
     v
 }
 
+/// Under DNS-SD results: where they could come from.
 const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. A computer or print \
 server that shares a printer shows that printer's model. Multicast stays on this computer's own \
 network segment: devices on routed networks can't answer it.";
