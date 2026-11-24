@@ -1,0 +1,7 @@
+# Generated release notes list every PR merged since the last tag. PRs
+# labelled `internal` (docs, CI or tests only: no release of their own)
+# are left out, so only what users get reaches the notes.
+changelog:
+  exclude:
+    labels:
+      - internal
