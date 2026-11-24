@@ -17,6 +17,8 @@ pub const HIGH: u16 = 1500;
 pub const LOW: u16 = 1400;
 /// IPv4 (20) and ICMP (8) headers: the payload is the size less these.
 const HEADERS: u16 = 28;
+/// IPv4 (20) and TCP (20) headers: TCP's MSS is the MTU less these.
+const TCP_HEADERS: u16 = 40;
 /// A packet every path passes: 84 bytes, like a plain ping.
 pub const BASELINE: u16 = 84;
 /// 1.1.1.1 rate-limits ICMP: a size is lost only after this many tries.
@@ -99,15 +101,45 @@ pub fn search(mut probe: impl FnMut(u16) -> Probe, stop: &dyn Fn() -> bool) -> V
         return tried;
     }
     let (mut lo, mut hi) = (LOW, HIGH);
-    while hi - lo > 1 {
-        let mid = lo + (hi - lo) / 2;
-        match go(mid, &mut tried) {
-            Some(true) => lo = mid,
-            Some(false) => hi = mid,
-            None => break,
+    let mut rechecked = false;
+    loop {
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            match go(mid, &mut tried) {
+                Some(true) => lo = mid,
+                Some(false) => hi = mid,
+                None => return tried,
+            }
+        }
+        // The size just above the largest that passed, silent every try:
+        // look once more before it names a black hole at that exact size
+        // (1.1.1.1's rate limit, a traceroute running at the same time).
+        let silent = tried
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == hi)
+            .is_some_and(|(_, p)| *p == Probe::Lost);
+        if rechecked || !silent {
+            return tried;
+        }
+        rechecked = true;
+        match go(hi, &mut tried) {
+            Some(true) => {
+                lo = hi;
+                // The smallest size above that has failed (HIGH always has).
+                hi = tried
+                    .iter()
+                    .filter(|(s, p)| *s > lo && *p != Probe::Through)
+                    .map(|(s, _)| *s)
+                    .min()
+                    .unwrap_or(lo);
+                if hi <= lo {
+                    return tried;
+                }
+            }
+            _ => return tried,
         }
     }
-    tried
 }
 
 /// Probe the baseline, then search for the largest size that passes;
@@ -120,6 +152,13 @@ pub fn measure(stop: &dyn Fn() -> bool) -> (Probe, Vec<(u16, Probe)>) {
     }
     let sizes = search(|s| try_size(send(s), TRIES, stop), stop);
     (base, sizes)
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 /// The verdict. `vpn`: the VPN adapter the route to 1.1.1.1 goes through.
@@ -180,6 +219,7 @@ pub fn judge(base: &Probe, sizes: &[(u16, Probe)], vpn: Option<&str>) -> Item {
         .map(|(s, _)| *s)
         .collect();
     silent.sort_unstable();
+    silent.dedup();
     let errors: Vec<String> = above(floor)
         .filter_map(|(s, p)| match p {
             Probe::Error(e) => Some(format!("{s}: {e}")),
@@ -195,7 +235,22 @@ pub fn judge(base: &Probe, sizes: &[(u16, Probe)], vpn: Option<&str>) -> Item {
             )
         }
         Some(n) => format!("{n}-byte packets pass"),
-        None => format!("nothing from {LOW} bytes up passed (a {BASELINE}-byte ping did)"),
+        None => format!("nothing from {LOW} bytes up passed (the small {BASELINE}-byte ping did)"),
+    };
+    // Where silence starts, and what to set: MSS is the MTU less the IPv4
+    // and TCP headers (40 bytes).
+    let (silence, set) = match largest {
+        Some(n) => (
+            format!("Silence above {n} bytes"),
+            format!("lower the MTU to {n} (TCP MSS {})", n - TCP_HEADERS),
+        ),
+        None => (
+            format!("Silence from {LOW} bytes up"),
+            format!(
+                "lower the MTU below {LOW} (TCP MSS below {})",
+                LOW - TCP_HEADERS
+            ),
+        ),
     };
     if let Some((size, mtu, from)) = told {
         let who = match from {
@@ -219,12 +274,12 @@ pub fn judge(base: &Probe, sizes: &[(u16, Probe)], vpn: Option<&str>) -> Item {
                 check,
                 status: Status::Warn,
                 detail: format!(
-                    "Silence above {floor} bytes: {passes}; at {size} bytes \"fragmentation \
+                    "{silence}: {passes}; at {size} bytes \"fragmentation \
                      needed\" came back ({who}{named}), but {hidden:?}-byte packets, within that \
                      MTU, vanish with no answer after {TRIES} tries each. A hop past it drops \
                      them without saying so: an MTU black hole further along. Connections that \
-                     send full-size packets can stall; lower the MTU or clamp TCP MSS to \
-                     {floor} or below.{via}"
+                     send full-size packets can stall: {set} on the router or tunnel, or clamp \
+                     TCP MSS there.{via}"
                 ),
             };
         }
@@ -248,11 +303,12 @@ pub fn judge(base: &Probe, sizes: &[(u16, Probe)], vpn: Option<&str>) -> Item {
             check,
             status: Status::Warn,
             detail: format!(
-                "Silence above {floor} bytes: {passes}, but {silent:?}-byte packets vanish with \
-                 no \"fragmentation needed\" coming back, after {TRIES} tries each. That's an \
-                 MTU black hole: connections that send full-size packets can stall (pages that \
-                 half-load, VPNs, file copies). Lower the MTU or clamp TCP MSS on the router or \
-                 tunnel, or let ICMP \"fragmentation needed\" through the firewall.{via}"
+                "{silence}: {passes}, but {silent:?}-byte packets vanish with no \
+                 \"fragmentation needed\" coming back, after {TRIES} tries each. That's an MTU \
+                 black hole: connections that send full-size packets can stall (pages that \
+                 half-load, VPNs, file copies). {} on the router or tunnel (or clamp TCP MSS \
+                 there), or let ICMP \"fragmentation needed\" through the firewall.{via}",
+                capitalise(&set)
             ),
         };
     }
@@ -433,6 +489,22 @@ mod tests {
         let r = judge(&Probe::Through, &t, None);
         assert_eq!(r.status, Status::Warn, "{}", r.detail);
         assert!(r.detail.contains("Silence above 1472"), "{}", r.detail);
+        // The advice names the MTU and the MSS that goes with it.
+        let t = search(path(None, Some(1437)), &|| false);
+        let d = judge(&Probe::Through, &t, None).detail;
+        assert!(d.contains("ower the MTU to 1437 (TCP MSS 1397)"), "{d}");
+        // Silent from 1400 up: no "MSS 84", the advice is below 1400.
+        let t = search(path(None, Some(1300)), &|| false);
+        let r = judge(&Probe::Through, &t, None);
+        assert_eq!(r.status, Status::Warn, "{}", r.detail);
+        assert!(
+            r.detail.contains("Silence from 1400 bytes up")
+                && r.detail
+                    .contains("Lower the MTU below 1400 (TCP MSS below 1360)")
+                && !r.detail.contains("MSS 84"),
+            "{}",
+            r.detail
+        );
         // Under 1400: the search stops at its floor and says so.
         let t = search(path(Some(1380), None), &|| false);
         assert_eq!(t.len(), 2);
@@ -444,6 +516,37 @@ mod tests {
         );
         // Stopped: nothing is tried.
         assert!(search(path(None, None), &|| true).is_empty());
+    }
+
+    #[test]
+    fn a_size_silent_every_try_is_looked_at_once_more() {
+        // 1493 goes unanswered on its first three tries only (traceroute
+        // hitting 1.1.1.1 at the same time): the recheck finds it passes,
+        // and the search carries on up to the router's 1496.
+        let real = path(Some(1496), None);
+        let mut misses = 3;
+        let t = search(
+            |size| {
+                if size == 1493 && misses > 0 {
+                    misses -= 3;
+                    return Probe::Lost;
+                }
+                real(size)
+            },
+            &|| false,
+        );
+        let r = judge(&Probe::Through, &t, None);
+        assert_eq!(r.status, Status::Ok, "{t:?} {}", r.detail);
+        assert!(
+            r.detail.contains("1496 bytes is the largest"),
+            "{}",
+            r.detail
+        );
+        // A real black hole stays one, the recheck said once.
+        let t = search(path(None, Some(1437)), &|| false);
+        assert_eq!(t.iter().filter(|(s, _)| *s == 1438).count(), 2, "{t:?}");
+        let d = judge(&Probe::Through, &t, None).detail;
+        assert!(d.contains("[1438,") || d.contains("[1438]"), "{d}");
     }
 
     #[test]

@@ -220,13 +220,7 @@ pub fn read(ip: Ipv4Addr) -> NetConf {
     let Ok(text) = std::fs::read_to_string(&path) else {
         return NetConf::unknown();
     };
-    // networkd rewrites the file when it gets or renews the lease.
-    let written = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
-    parse_networkd_lease(&text, written)
+    parse_networkd_lease(&text)
 }
 
 #[cfg(target_os = "linux")]
@@ -321,13 +315,12 @@ pub(crate) fn parse_nmcli(text: &str) -> Option<NetConf> {
 }
 
 /// A systemd-networkd lease file (`/run/systemd/netif/leases/<ifindex>`):
-/// KEY=value lines. `written`: when the file was last written (Unix
-/// seconds), which is when the lease was obtained or renewed; with its
-/// LIFETIME, when it runs out.
+/// KEY=value lines. Its lease times stay unknown: the file holds only the
+/// lease's length, and networkd rewrites it on other link changes too, so
+/// the file's own time isn't when the lease was obtained.
 #[cfg(any(target_os = "linux", test))]
-pub(crate) fn parse_networkd_lease(text: &str, written: Option<i64>) -> NetConf {
+pub(crate) fn parse_networkd_lease(text: &str) -> NetConf {
     let mut conf = NetConf::unknown();
-    let mut lifetime: Option<i64> = None;
     for line in text.lines() {
         let Some((k, v)) = line.split_once('=') else {
             continue;
@@ -346,13 +339,8 @@ pub(crate) fn parse_networkd_lease(text: &str, written: Option<i64>) -> NetConf 
                     .collect()
             }
             "DOMAINNAME" if !v.is_empty() => conf.suffix = Some(super::sanitize(v)),
-            "LIFETIME" => lifetime = v.parse().ok(),
             _ => {}
         }
-    }
-    if matches!(conf.dhcp, Dhcp::Server(_)) {
-        conf.lease_obtained = written;
-        conf.lease_expires = written.zip(lifetime).and_then(|(w, l)| w.checked_add(l));
     }
     conf
 }
@@ -601,13 +589,10 @@ mod tests {
         let lease = "# This is private data. Do not parse.\nADDRESS=192.0.2.50\n\
                      ROUTER=192.0.2.1\nSERVER_ADDRESS=192.0.2.2\nDNS=192.0.2.2 192.0.2.3\n\
                      DOMAINNAME=office.example.net\nLIFETIME=3600\n";
-        let c = parse_networkd_lease(lease, Some(1_795_000_000));
-        assert_eq!(c.lease_obtained, Some(1_795_000_000));
-        assert_eq!(c.lease_expires, Some(1_795_003_600));
-        assert!(c.lease_text(c.lease_expires).starts_with("2026-"));
-        // No file time: the lease is unknown, the rest still read.
-        let c = parse_networkd_lease(lease, None);
+        let c = parse_networkd_lease(lease);
+        // Only the lease's length is there: when it was obtained isn't.
         assert_eq!(c.lease_text(c.lease_obtained), "unknown");
+        assert_eq!(c.lease_text(c.lease_expires), "unknown");
         assert_eq!(c.dhcp_text(), "192.0.2.2");
         assert_eq!(c.dns.len(), 2);
         assert_eq!(c.suffix.as_deref(), Some("office.example.net"));
@@ -632,7 +617,7 @@ mod tests {
         crate::hostile::each_text(
             "SERVER_ADDRESS=192.0.2.1\nDNS=192.0.2.1\nLIFETIME=60\n",
             |t| {
-                let _ = parse_networkd_lease(t, Some(i64::MAX));
+                let _ = parse_networkd_lease(t);
             },
         );
     }

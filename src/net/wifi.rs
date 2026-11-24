@@ -238,7 +238,7 @@ pub fn judge_nearby(n: &Neighbours, here: Option<&Snapshot>) -> Item {
     };
     let age = match n.age_secs {
         Some(s) if !n.scanned => format!(", the newest heard {s} s ago"),
-        None if !n.scanned => format!("; {system} doesn't say how old it is"),
+        None if !n.scanned => "; its age is unknown".to_string(),
         _ => String::new(),
     };
     if n.aps.is_empty() {
@@ -655,7 +655,8 @@ pub fn nearby(adapter: &Adapter, scan: bool) -> Neighbours {
         }),
         Ok(o) => {
             let e = super::sanitize(String::from_utf8_lossy(&o.stderr).trim());
-            Neighbours::Unknown(format!("nmcli: {}", e.trim_start_matches("Error: ")))
+            let e = e.trim_start_matches("Error: ").trim_end_matches('.');
+            Neighbours::Unknown(format!("nmcli: {e}"))
         }
         Err(e) => Neighbours::Unknown(format!("nmcli: {e}")),
     }
@@ -782,19 +783,28 @@ mod win {
             let total = (*bss).dwTotalSize as usize;
             let n = (*bss).dwNumberOfItems as usize;
             let base = bss.cast::<u8>();
-            let first = std::ptr::addr_of!((*bss).wlanBssEntries).cast::<WLAN_BSS_ENTRY>();
-            let mut out = Vec::with_capacity(n);
+            let first = std::ptr::addr_of!((*bss).wlanBssEntries).cast::<u8>();
+            let head = first.offset_from(base) as usize;
+            let size = std::mem::size_of::<WLAN_BSS_ENTRY>();
+            let mut out = Vec::new();
             for i in 0..n {
-                let p = first.add(i);
-                let at = p.cast::<u8>().offset_from(base) as usize;
-                if at + std::mem::size_of::<WLAN_BSS_ENTRY>() > total {
-                    break;
-                }
+                // Bounded before any pointer is made: a count larger than
+                // the buffer stops here.
+                let at = match i.checked_mul(size).and_then(|o| o.checked_add(head)) {
+                    Some(at) if at.checked_add(size).is_some_and(|end| end <= total) => at,
+                    _ => break,
+                };
+                let p = base.add(at).cast::<WLAN_BSS_ENTRY>();
                 let e = std::ptr::read_unaligned(p);
                 // The elements sit ulIeOffset bytes from the entry's start,
                 // within the list's own buffer.
                 let (off, len) = (e.ulIeOffset as usize, e.ulIeSize as usize);
-                let ies = if len > 0 && at + off + len <= total {
+                let ies = if len > 0
+                    && at
+                        .checked_add(off)
+                        .and_then(|v| v.checked_add(len))
+                        .is_some_and(|end| end <= total)
+                {
                     std::slice::from_raw_parts(p.cast::<u8>().add(off), len).to_vec()
                 } else {
                     Vec::new()
@@ -1105,7 +1115,7 @@ mod tests {
             ..Default::default()
         });
         let d = judge_nearby(&many, None).detail;
-        assert!(d.contains("doesn't say how old"), "{d}");
+        assert!(d.contains("its age is unknown"), "{d}");
         assert!(d.contains("and 18 more"), "{d}");
         assert_eq!(
             judge_nearby(&Neighbours::Denied, None).status,
