@@ -1367,7 +1367,7 @@ impl NotesTool {
             ui.add_space(2.0);
         }
 
-        // By the window, as every layout is (CLAUDE.md: under 1100 Split
+        // By the window, as every layout is (docs/dev/ui-layout.md: under 1100 Split
         // falls back to Edit); and never two panes under 280 each, which a
         // wide window with the outline open could leave.
         let narrow =

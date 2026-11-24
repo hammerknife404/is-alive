@@ -1353,7 +1353,7 @@ fn columns(width: f32, ports: bool) -> Cols {
         all.push(Col::Ports);
     }
     let need = |cols: &[Col]| cols.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
-    // Vendor, then MAC (CLAUDE.md), then TTL: at 620 wide with ports
+    // Vendor, then MAC (docs/dev/ui-layout.md), then TTL: at 620 wide with ports
     // checked, Ports would be cut off. The inspector shows all three.
     for drop in [Col::Vendor, Col::Mac, Col::Ttl] {
         if need(&all) > width {

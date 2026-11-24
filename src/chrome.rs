@@ -7,7 +7,7 @@ use crate::{App, TABS, VERSION, theme, widgets};
 use eframe::egui;
 
 /// The title bar's and the status bar's heights. With a tool's run bar
-/// they stay under 130 points of a 720-point window (CLAUDE.md), and
+/// they stay under 130 points of a 720-point window (docs/dev/ui-layout.md), and
 /// every button in them is `TARGET_H` tall.
 const TITLE_H: f32 = 34.0;
 const STATUS_H: f32 = 28.0;

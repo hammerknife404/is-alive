@@ -1,41 +1,39 @@
 # is-alive: notes for Claude
 
+The rules here apply to every change. Reference specs live in `docs/dev/`; they aren't loaded on their own, so read the one named before working in its area.
+
 ## Releases: small and often
 
-The owner wants point releases: each finished change ships on its own, not in a big batch.
+One change, one PR, one release, straight into `main` (no `release-*` branches). Merging publishes it: `build.yml` tags `v<version>` and uploads both binaries with checksums. Build, CI and wiki mechanics: `docs/wiki/Developing.md`.
 
-- **One change, one PR, one release.** A PR that changes what users get (a fix, a feature, wording in the app) bumps the patch version in that same PR: `version` in `Cargo.toml` from 0.25.0 to 0.25.1, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). The same number goes in the first line of `docs/manual/MANUAL.md` and step 4 of `FOLLOW-ALONG.md`; `the_manual_and_the_guide_name_this_version` (src/manual.rs) fails otherwise. Merging it to `main` publishes the release: `build.yml` tags `v<version>` and uploads both binaries with their checksums.
-- **PRs go straight into `main`.** No `release-*` branch collecting several PRs.
-- **Take the next free number when merging.** If another release landed first, merge `main` into the branch and bump to the next patch (0.25.2).
-- **No bump** for what users don't get: docs, the wiki, CI, tests only.
-- **x.y.0 only when the owner asks** for a feature release.
-- **The PR title is the release note.** GitHub builds the notes from merged PR titles, so write them for users ("Sweep: several networks in one box").
+- **Bump the patch in the same PR** when users get something different (a fix, a feature, wording in the app): `version` in `Cargo.toml`, then `cargo check` so `Cargo.lock` follows (CI builds with `--locked`). The same number goes in the manual's intro paragraph (`**is-alive X.Y.Z**`, the only place `docs/manual/MANUAL.md` may name it) and step 4 of `FOLLOW-ALONG.md`. `the_manual_and_the_guide_name_this_version` (src/manual.rs) checks all three.
+- **No bump** for docs, the wiki, CI or tests only. **x.y.0 only when the owner asks** for a feature release.
+- **Another release landed first?** Merge `main` into the branch and take the next free patch.
+- **The PR title is the release note** (GitHub builds the notes from merged PR titles), so write it for users: "Sweep: several networks in one box".
 - **Before asking to merge:** `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`.
-- **After merging:** check the `build` run on `main` passed and the release has `is-alive.exe`, `is-alive-x86_64.AppImage` and both `.sha256` files.
-- **Wiki:** the app's Help (F1) opens the wiki (`is-alive.wiki`). Its pages live in `docs/wiki/`: add the release to `Release-notes.md` and update any page the release changes, in the same PR, as with the manual's text (`docs/manual/MANUAL.md`). Merging to `main` publishes them (`.github/workflows/wiki.yml`, `scripts/wiki_sync.py`): what changed since the last sync is merged into the wiki page by page, so an edit made on the wiki itself is kept. Where both changed the same lines, the run fails and writes nothing: bring the wiki's version into `docs/wiki/` and push again. Don't clone the wiki to edit it or hand out patches: a cloud session can't push it, and the workflow can.
-- **The manual is text only**: no screenshots. Every PR that changes what a chapter of `docs/manual/MANUAL.md` describes updates that chapter. Say what's on screen in words, with the names the app shows and a table where it helps; an emoji or the app's own symbols (⋯ ▶ ■ ⟲ 📌 🔑) only where it makes a line quicker to find. `the_manual_has_no_pictures` (src/manual.rs) fails on an image link.
-- **Checking the window by eye:** the scene tour (`IS_ALIVE_SHOTS=<dir> IS_ALIVE_SHOTS_SCENES=1`, src/shots.rs) saves a picture of each tool after a run, the Map with cards picked, Settings and Help, at the window size in the settings file (`size=1280x720`). A cloud sandbox has no ping, DNS or speed test: those scenes show their errors.
+- **After merging:** the `build` run on `main` passed, and the release has `is-alive.exe`, `is-alive-x86_64.AppImage` and both `.sha256` files.
 
-## UI: built for a field laptop first
+## Docs that change with the code
 
-Techs run this on site, on small laptops. Every UI change, and every step of the side-panel rework (mocks: https://claude.ai/artifact/6JjJnabWUj1QjwaVfc65zh), has to work there before it looks good on a big monitor.
+- **Manual** (`docs/manual/MANUAL.md`, built into the app): a PR that changes what a chapter describes updates that chapter. Text only, no screenshots (`the_manual_has_no_pictures`): say what's on screen in words, with the names the app shows and a table where it helps; an emoji or the app's own symbols (⋯ ▶ ■ ⟲ 📌 🔑) only where it makes a line quicker to find.
+- **Wiki** (`docs/wiki/`, opened by Help/F1): add the release to `Release-notes.md` and update any page it changes, in the same PR. The `wiki` workflow publishes on merge and keeps edits made on the wiki itself. Don't clone the wiki or hand out patches for it: a cloud session can't push it. If the sync reports a conflict, bring the wiki's version into `docs/wiki/` and push again.
 
-- **Target 1280 × 720 points**: a 1080p laptop at 150% scaling. The app already opens at 1120 × 720 and allows 620 × 400; those have to keep working too.
-- **Lay out by window width, not screen size.** Half a 4K monitor gets the same layout as a small laptop.
-  - **1440 and up:** nav open (216), inspector docked (360), side panel docked (272).
-  - **1100–1439:** nav open (216), the Map too. Inspector docked at 320 on tool pages; on the Map it floats over the canvas. Opening the Map's side panel closes the inspector.
-  - **Under 1100:** nav folds to the icon rail (56). Inspector and side panels float over the content and close on Esc. Run-bar options wrap. Notes' Split falls back to Edit.
-- **Height is the tighter limit.** At 720, the title bar, status bar and run bar together stay under 130 points, so results get most of the window.
-- **The Map keeps its zoom** when a panel opens over it. Panels float over the canvas; they don't shrink it.
-- **Columns drop in a fixed order** as the window narrows (Vendor first, then MAC, then TTL). Anything a row loses still shows in the inspector.
-- **Click targets stay at least 28 points tall**, for a trackpad on a tailgate.
-- **Check every UI change at 1280 × 720 and at 1120 × 720** before asking to merge, and say in the PR that you did.
+## UI: field laptop first
 
-## Bundled skills: keep them in step with the app
+Techs run this on site, on small laptops. It has to work there before it looks good on a big monitor.
 
-`skills/unifidump` and `skills/mapnetwork` ship inside every Site Bundle, and the Map opens their example maps. They're how Claude reads what is-alive writes, so they're part of the change, not docs to catch up on later.
+- **Target 1280 × 720 points** (1080p at 150%). The default 1120 × 720 and the minimum 620 × 400 keep working too.
+- **Lay out by window width, never screen size.** Height is the tighter limit.
+- **Click targets at least 28 points tall**, for a trackpad on a tailgate.
+- Breakpoints, docked vs floating panels, the 130-point chrome budget, the Map's zoom, the column drop order and the side-panel rework mocks: **`docs/dev/ui-layout.md`**. Read it before touching layout.
+- **Check every UI change at 1280 × 720 and 1120 × 720** with the scene tour (`IS_ALIVE_SHOTS=<dir> IS_ALIVE_SHOTS_SCENES=1`, window size from `size=` in the settings file), and say in the PR that you did. A cloud sandbox has no ping, DNS or speed test, so those scenes show errors; that's expected.
 
-- **Same PR.** A change to what a bundle carries or means updates `skills/` in that PR: a file in the zip, a manifest key, an `inventory.json` field or what one now holds (a MAC that can come from somewhere new), what `results.json` spans, or what is-alive reads back from a `/mapnetwork` map. Also update the matching `*_WHAT` text in `src/tools/bundle.rs` (the manifest's description of each file) and the inventory's `notes` in `src/tools/sweep.rs`.
-- **Tests hold the line.** `the_bundled_mapnetwork_skill_knows_every_file` (src/bundle.rs) fails when a bundle file or manifest key isn't named in `skills/mapnetwork/SKILL.md`, and the inventory test in src/tools/sweep.rs fails when a host field isn't. Explain new things there; don't loosen the tests. `skills/mapnetwork/scripts/test_engine_contract.py` (CI) covers the map engine.
-- **The bundled copies are Claude's to keep current; the owner keeps the source.** `skills/` is a scrubbed copy that `scripts/sync-skills.py` makes from the owner's own skills. The owner patches their source copy themselves; don't hand them patches for it unless they ask. If a sync brings older text back into `skills/`, the tests above fail: restore the bundled text from git (and point it out), don't loosen the tests.
-- **Scrub.** Text added to `skills/` is public: no real site, client or person names, no full MACs in any form: colon or dash pairs, dotted quads, a serial that is a MAC, or bare in an id (fictional names and documentation addresses only). `the_bundled_skills_carry_no_full_macs` (src/skills.rs) and `scripts/sync-skills.py` both check every form.
+## Bundled skills ship with the app
+
+`skills/unifidump` and `skills/mapnetwork` go in every Site Bundle and are how Claude reads what is-alive writes. They're part of the change, not docs to catch up on later.
+
+- **Same PR.** Changing what a bundle carries or means updates `skills/`, the `*_WHAT` text in `src/tools/bundle.rs` and the inventory's `notes` in `src/tools/sweep.rs`.
+- **Never loosen the tests** that guard this; explain the new thing in the skill instead. If a sync brought older text back, restore the bundled text from git and point it out.
+- **The owner keeps the source.** `skills/` is a scrubbed copy (`scripts/sync-skills.py`); don't hand the owner patches for their copy unless asked.
+- **Public text.** Fictional names and documentation addresses only, and no full MAC in any form.
+- What counts as a bundle change, which test checks what, and every MAC form the scrub catches: **`docs/dev/bundled-skills.md`**.
