@@ -884,7 +884,7 @@ While the map is opened up, a row of controls sits beside **Explode**:
 
 | Control | What it does |
 |---|---|
-| **⟲ / ⟳** | Turn the view an eighth of a turn left or right (also **[** and **]**). **Alt+drag** on the map turns it freely |
+| **⟲ / ⟳** | Turn the view an eighth of a turn left or right (also **[** and **]**). **Alt+drag** on the map turns it freely, the near side following your hand |
 | **Explode** slider | How far the plates are pulled apart. All the way left is the flat map, and leaves the view |
 | **Split** slider | Pulls each branch of the network away from the others, onto plates of its own: a switch and everything under it, or each site's firewall and its network. The branches are the ones under the first card the tree forks at |
 
@@ -915,7 +915,7 @@ With **Animate** off the view opens, turns and closes at once.
 
 | To | Do |
 |---|---|
-| Turn it and tip it | **Drag** the map: across turns it, up and down tips it, from nearly edge on to nearly straight down |
+| Turn it and tip it | **Drag** the map: across turns it, the near side following your hand, up and down tips it, from nearly edge on to nearly straight down |
 | Move it | **Shift+drag**, or the arrow keys |
 | Zoom | Scroll or pinch, **+** and **−**; **Fit** frames it again |
 | Turn it a step | **⟲ / ⟳**, or **[** and **]** |

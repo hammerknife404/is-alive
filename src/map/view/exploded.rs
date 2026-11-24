@@ -112,9 +112,11 @@ impl MapView {
     }
 
     /// A drag by `d` on the map in 3D turns the view: across turns it
-    /// about its upright axis, up and down tips it.
+    /// about its upright axis, the near side following the hand (a drag
+    /// to the right lowers the yaw, which carries the front of the map to
+    /// the right); up and down tips it.
     pub(super) fn orbit(&mut self, d: Vec2) {
-        self.ex.yaw += d.x * ORBIT;
+        self.ex.yaw -= d.x * ORBIT;
         self.ex.pitch =
             (self.ex.pitch + d.y * ORBIT * 0.75).clamp(explode::PITCH_MIN, explode::PITCH_MAX);
         // Under the hand, not easing after it; and the zoom is the user's
