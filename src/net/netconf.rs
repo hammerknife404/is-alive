@@ -1,7 +1,8 @@
 //! How this computer's network adapter is set up: which adapter carries
 //! the route to an address (and whether it's Wi-Fi or a VPN), and what it
-//! was given: DHCP server, DNS servers and DNS suffix. Read from the
-//! system, nothing sent. Windows: GetAdaptersAddresses. Linux:
+//! was given: DHCP server and lease times, DNS servers and DNS suffix.
+//! Read from the system, nothing sent. Windows: GetAdaptersAddresses (and
+//! GetAdaptersInfo for the lease times, which it alone keeps). Linux:
 //! NetworkManager, else systemd-networkd's lease file, else unknown.
 
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
@@ -38,6 +39,10 @@ pub struct NetConf {
     pub dns: Vec<IpAddr>,
     /// The connection's DNS suffix (search domain), when it has one.
     pub suffix: Option<String>,
+    /// When the DHCP lease was obtained (or last renewed) and when it
+    /// runs out, as Unix seconds. Reported, not judged.
+    pub lease_obtained: Option<i64>,
+    pub lease_expires: Option<i64>,
 }
 
 impl NetConf {
@@ -46,6 +51,18 @@ impl NetConf {
             dhcp: Dhcp::Unknown,
             dns: Vec::new(),
             suffix: None,
+            lease_obtained: None,
+            lease_expires: None,
+        }
+    }
+
+    /// A lease time in local time ("2026-11-24 08:02"); "none" with a
+    /// static address, else "unknown".
+    pub fn lease_text(&self, at: Option<i64>) -> String {
+        match (at.and_then(local_time), &self.dhcp) {
+            (Some(t), _) => t,
+            (None, Dhcp::Static) => "none".into(),
+            (None, _) => "unknown".into(),
         }
     }
 
@@ -75,6 +92,17 @@ impl NetConf {
             (None, ..) => "none".into(),
         }
     }
+}
+
+/// Unix seconds as local time, to the minute; None for 0 (Windows' "no
+/// lease") or a time chrono can't hold.
+fn local_time(secs: i64) -> Option<String> {
+    use chrono::TimeZone;
+    if secs <= 0 {
+        return None;
+    }
+    let t = chrono::Local.timestamp_opt(secs, 0).single()?;
+    Some(t.format("%Y-%m-%d %H:%M").to_string())
 }
 
 /// The local address the system would send from to reach `dest`: a UDP
@@ -183,15 +211,22 @@ pub fn read(ip: Ipv4Addr) -> NetConf {
     if let Some(c) = nmcli(&name) {
         return c;
     }
-    let lease = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
+    let Some(path) = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
         .ok()
-        .and_then(|i| {
-            std::fs::read_to_string(format!("/run/systemd/netif/leases/{}", i.trim())).ok()
-        });
-    lease
-        .as_deref()
-        .map(parse_networkd_lease)
-        .unwrap_or_else(NetConf::unknown)
+        .map(|i| format!("/run/systemd/netif/leases/{}", i.trim()))
+    else {
+        return NetConf::unknown();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return NetConf::unknown();
+    };
+    // networkd rewrites the file when it gets or renews the lease.
+    let written = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    parse_networkd_lease(&text, written)
 }
 
 #[cfg(target_os = "linux")]
@@ -221,6 +256,7 @@ pub(crate) fn parse_nmcli(text: &str) -> Option<NetConf> {
     let mut managed = false;
     let mut dhcp_seen = false;
     let mut dhcp_domain = None;
+    let mut lease_time: Option<i64> = None;
     for line in text.lines() {
         let Some((k, v)) = line.split_once(':') else {
             continue;
@@ -258,6 +294,9 @@ pub(crate) fn parse_nmcli(text: &str) -> Option<NetConf> {
                     "domain_name" if !val.is_empty() => {
                         dhcp_domain = Some(super::sanitize(val));
                     }
+                    // Unix seconds, and the lease's length.
+                    "expiry" => conf.lease_expires = val.parse().ok(),
+                    "dhcp_lease_time" => lease_time = val.parse().ok(),
                     _ => {}
                 }
             }
@@ -274,14 +313,21 @@ pub(crate) fn parse_nmcli(text: &str) -> Option<NetConf> {
     if conf.suffix.is_none() {
         conf.suffix = dhcp_domain;
     }
+    conf.lease_obtained = conf
+        .lease_expires
+        .zip(lease_time)
+        .and_then(|(e, l)| e.checked_sub(l));
     Some(conf)
 }
 
 /// A systemd-networkd lease file (`/run/systemd/netif/leases/<ifindex>`):
-/// KEY=value lines.
+/// KEY=value lines. `written`: when the file was last written (Unix
+/// seconds), which is when the lease was obtained or renewed; with its
+/// LIFETIME, when it runs out.
 #[cfg(any(target_os = "linux", test))]
-pub(crate) fn parse_networkd_lease(text: &str) -> NetConf {
+pub(crate) fn parse_networkd_lease(text: &str, written: Option<i64>) -> NetConf {
     let mut conf = NetConf::unknown();
+    let mut lifetime: Option<i64> = None;
     for line in text.lines() {
         let Some((k, v)) = line.split_once('=') else {
             continue;
@@ -300,8 +346,13 @@ pub(crate) fn parse_networkd_lease(text: &str) -> NetConf {
                     .collect()
             }
             "DOMAINNAME" if !v.is_empty() => conf.suffix = Some(super::sanitize(v)),
+            "LIFETIME" => lifetime = v.parse().ok(),
             _ => {}
         }
+    }
+    if matches!(conf.dhcp, Dhcp::Server(_)) {
+        conf.lease_obtained = written;
+        conf.lease_expires = written.zip(lifetime).and_then(|(w, l)| w.checked_add(l));
     }
     conf
 }
@@ -411,6 +462,37 @@ mod win {
         None
     }
 
+    /// When the adapter named `guid` got its DHCP lease and when it runs
+    /// out: GetAdaptersAddresses doesn't keep these, GetAdaptersInfo does
+    /// (Unix seconds, 0 for none).
+    fn lease_times(guid: &str) -> (Option<i64>, Option<i64>) {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{GetAdaptersInfo, IP_ADAPTER_INFO};
+        let mut len: u32 = 0;
+        unsafe { GetAdaptersInfo(std::ptr::null_mut(), &mut len) };
+        if len == 0 || guid.is_empty() {
+            return (None, None);
+        }
+        // u64s keep the buffer aligned for IP_ADAPTER_INFO.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let first = buf.as_mut_ptr().cast::<IP_ADAPTER_INFO>();
+        if unsafe { GetAdaptersInfo(first, &mut len) } != 0 {
+            return (None, None);
+        }
+        let mut a = first.cast_const();
+        while !a.is_null() {
+            let info = unsafe { &*a };
+            let raw = &info.AdapterName;
+            let n = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+            // CHARs: i8 on Windows.
+            if raw[..n].iter().map(|&b| b as u8).eq(guid.bytes()) {
+                let t = |v: i64| (v > 0).then_some(v);
+                return (t(info.LeaseObtained), t(info.LeaseExpires));
+            }
+            a = info.Next;
+        }
+        (None, None)
+    }
+
     pub fn adapter_to(dest: Ipv4Addr) -> Option<Adapter> {
         let ip = super::source_for(dest)?;
         with_adapter(ip, |ad| {
@@ -451,10 +533,17 @@ mod win {
                 d = e.Next;
             }
             let suffix = unsafe { wide(ad.DnsSuffix) };
+            let (lease_obtained, lease_expires) = if matches!(dhcp, Dhcp::Server(_)) {
+                lease_times(&unsafe { narrow(ad.AdapterName) })
+            } else {
+                (None, None)
+            };
             NetConf {
                 dhcp,
                 dns,
                 suffix: Some(crate::net::sanitize(suffix.trim())).filter(|s| !s.is_empty()),
+                lease_obtained,
+                lease_expires,
             }
         })
         .unwrap_or_else(NetConf::unknown)
@@ -486,8 +575,12 @@ mod tests {
                    IP4.DOMAIN[1]:corp.example.com\n\
                    DHCP4.OPTION[1]:broadcast_address = 192.0.2.255\n\
                    DHCP4.OPTION[2]:dhcp_server_identifier = 192.0.2.10\n\
-                   DHCP4.OPTION[3]:domain_name = corp.example.com\n";
+                   DHCP4.OPTION[3]:domain_name = corp.example.com\n\
+                   DHCP4.OPTION[4]:dhcp_lease_time = 86400\n\
+                   DHCP4.OPTION[5]:expiry = 1795000000\n";
         let c = parse_nmcli(out).unwrap();
+        assert_eq!(c.lease_expires, Some(1_795_000_000));
+        assert_eq!(c.lease_obtained, Some(1_795_000_000 - 86_400));
         assert_eq!(c.dhcp, Dhcp::Server("192.0.2.10".parse().unwrap()));
         assert_eq!(c.dns_text(), "192.0.2.10, 192.0.2.11");
         assert_eq!(c.suffix_text(), "corp.example.com");
@@ -496,6 +589,7 @@ mod tests {
         // Set by hand: DNS, no lease.
         let c = parse_nmcli("GENERAL.STATE:100 (connected)\nIP4.DNS[1]:1.1.1.1\n").unwrap();
         assert_eq!(c.dhcp, Dhcp::Static);
+        assert_eq!(c.lease_text(c.lease_obtained), "none");
         assert_eq!(c.suffix_text(), "none");
         // Not NetworkManager's: the lease file is asked instead.
         assert_eq!(parse_nmcli("GENERAL.STATE:10 (unmanaged)\n"), None);
@@ -506,8 +600,14 @@ mod tests {
     fn a_networkd_lease_names_the_server() {
         let lease = "# This is private data. Do not parse.\nADDRESS=192.0.2.50\n\
                      ROUTER=192.0.2.1\nSERVER_ADDRESS=192.0.2.2\nDNS=192.0.2.2 192.0.2.3\n\
-                     DOMAINNAME=office.example.net\n";
-        let c = parse_networkd_lease(lease);
+                     DOMAINNAME=office.example.net\nLIFETIME=3600\n";
+        let c = parse_networkd_lease(lease, Some(1_795_000_000));
+        assert_eq!(c.lease_obtained, Some(1_795_000_000));
+        assert_eq!(c.lease_expires, Some(1_795_003_600));
+        assert!(c.lease_text(c.lease_expires).starts_with("2026-"));
+        // No file time: the lease is unknown, the rest still read.
+        let c = parse_networkd_lease(lease, None);
+        assert_eq!(c.lease_text(c.lease_obtained), "unknown");
         assert_eq!(c.dhcp_text(), "192.0.2.2");
         assert_eq!(c.dns.len(), 2);
         assert_eq!(c.suffix.as_deref(), Some("office.example.net"));
@@ -516,20 +616,25 @@ mod tests {
             (none.dhcp_text(), none.dns_text(), none.suffix_text()),
             ("unknown".into(), "unknown".into(), "unknown".into())
         );
+        assert_eq!(none.lease_text(none.lease_expires), "unknown");
     }
 
     #[test]
     fn hostile_netconf_text_never_panics() {
         crate::hostile::each_text(
             "GENERAL.STATE:100 (connected)\nIP4.DNS[1]:192.0.2.1\n\
-             DHCP4.OPTION[2]:dhcp_server_identifier = 192.0.2.1\n",
+             DHCP4.OPTION[2]:dhcp_server_identifier = 192.0.2.1\n\
+             DHCP4.OPTION[3]:expiry = 1795000000\nDHCP4.OPTION[4]:dhcp_lease_time = 60\n",
             |t| {
                 let _ = parse_nmcli(t);
             },
         );
-        crate::hostile::each_text("SERVER_ADDRESS=192.0.2.1\nDNS=192.0.2.1\n", |t| {
-            let _ = parse_networkd_lease(t);
-        });
+        crate::hostile::each_text(
+            "SERVER_ADDRESS=192.0.2.1\nDNS=192.0.2.1\nLIFETIME=60\n",
+            |t| {
+                let _ = parse_networkd_lease(t, Some(i64::MAX));
+            },
+        );
     }
 
     #[test]

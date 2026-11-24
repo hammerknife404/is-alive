@@ -373,6 +373,27 @@ const SCENES: &[Scene] = &[
         |a| over(a.join.is_running(), None),
     ),
     scene("results", Tab::Results, nothing, at_once),
+    // A Network checks run on Wi-Fi, made up (a sandbox has no Wi-Fi), to
+    // show Scan Wi-Fi under its buttons.
+    scene(
+        "results-wifi",
+        Tab::Results,
+        |a, _| {
+            let (started, text, table) = crate::tools::netcheck::sample_for_shots();
+            a.log.push(crate::log::Entry {
+                tool: "Network checks",
+                started: started.clone(),
+                ended: started.clone(),
+                text,
+                table,
+            });
+            a.result_pick = Some(crate::results_ui::RunKey::Done {
+                tool: "Network checks",
+                started,
+            });
+        },
+        at_once,
+    ),
     // Over the Map, not the Results log: what's behind the window then
     // doesn't depend on the network the tour ran on.
     scene(

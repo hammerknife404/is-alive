@@ -1178,6 +1178,7 @@ impl App {
             || self.dns.is_running()
             || self.advanced.is_running()
             || self.netcheck.running_since().is_some()
+            || self.netcheck.scan_running_since().is_some()
             || self.info_log.is_some()
             // A logged check (not the quiet one on start) and other
             // computers: their answers go to Results when they end, so a
@@ -1248,6 +1249,7 @@ impl App {
             ("Lookup", self.dns.take_finished()),
             ("Domain Health", self.advanced.take_finished()),
             ("Network checks", self.netcheck.take_finished()),
+            (tools::netcheck::SCAN, self.netcheck.take_finished_scan()),
             ("Domain join", self.join.take_finished()),
             (tools::join::OTHERS, self.join.take_finished_others()),
         ];
@@ -1359,6 +1361,11 @@ impl App {
                 "Network checks",
                 self.netcheck.running_since(),
                 self.netcheck.output(),
+            ),
+            (
+                tools::netcheck::SCAN,
+                self.netcheck.scan_running_since(),
+                None,
             ),
             ("Domain join", self.join.running_since(), None),
             (

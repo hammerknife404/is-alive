@@ -125,10 +125,13 @@ const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DN
 start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
 and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network; \
-Host info's dhcp_server, dns_servers and dns_suffix are what that computer was given, recorded, not judged. \
-Network checks: a failing Captive portal row means a portal answered in the internet's place, so that run's \
-internet-side checks judged the portal; a Path MTU warning is an MTU black hole; the Wi-Fi row is one snapshot \
-of the access point the scanner was on (its BSSID), not roaming. A Domain join (others) run is about other computers: one row each, saying whether it named an Active \
+Host info's dhcp_server, lease_obtained, lease_expires, dns_servers and dns_suffix are what that computer was \
+given, recorded, not judged. Network checks: a failing Captive portal row means a portal answered in the \
+internet's place, so that run's internet-side checks judged the portal; a Path MTU warning is an MTU black hole; \
+the Wi-Fi row is one snapshot of the access point the scanner was on (its BSSID), with channel width and link \
+rates, not roaming; Nearby Wi-Fi lists other access points heard there (BSSIDs), those on its channel first, \
+reported, not judged. A Wi-Fi scan run is the same list from an active scan, one row per access point \
+(connected = yes on the scanner's own). A Domain join (others) run is about other computers: one row each, saying whether it named an Active \
 Directory domain when asked without credentials (an Entra ID join doesn't show that way).";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
