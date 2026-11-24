@@ -60,8 +60,9 @@ pub fn networks(spec: &str) -> Vec<(Ipv4Addr, u32)> {
                 (b.to_string(), bits)
             };
             let ip = base.trim().parse::<Ipv4Addr>().ok()?;
-            // A /31 or /32 has no broadcast; under /16 is past the sweep's limit.
-            if !(16..=30).contains(&bits) {
+            // A /31 or /32 has no broadcast. A range wider than /22 is
+            // rarely one subnet, and its "broadcast" would be a guess.
+            if !(22..=30).contains(&bits) {
                 return None;
             }
             let mask = u32::MAX << (32 - bits);
@@ -276,11 +277,17 @@ mod tests {
             Some((ip("172.16.0.0"), 22))
         );
         assert_eq!(network_of(&nets, ip("10.9.9.5")), None);
+        // Wider than /22: no broadcast to guess at.
+        assert!(networks("10.20.0.0/16 10.30.0.0/21").is_empty());
         // Overlapping networks: the narrower one.
-        let both = networks("10.20.0.0/16 10.20.4.0/24");
+        let both = networks("10.20.0.0/22 10.20.0.0/24");
         assert_eq!(
-            network_of(&both, ip("10.20.4.9")),
-            Some((ip("10.20.4.0"), 24))
+            network_of(&both, ip("10.20.0.9")),
+            Some((ip("10.20.0.0"), 24))
+        );
+        assert_eq!(
+            network_of(&both, ip("10.20.3.9")),
+            Some((ip("10.20.0.0"), 22))
         );
     }
 

@@ -888,7 +888,7 @@ impl App {
                 // last sweep first (freshest address), then the Map.
                 let mut known = self.sweep.wakeable();
                 known.extend(self.map.wakeable());
-                self.ping.ui(ui, &known);
+                self.ping.ui(ui, &known, &self.sweep.networks());
             }
             Tab::Ports => self.ports.ui(ui),
             Tab::Trace => self.trace.ui(ui),

@@ -513,13 +513,13 @@ impl MapTabs {
             .collect()
     }
 
-    /// Show the live map with the card at `ip` selected (from another
-    /// tab's inspector): next time the Map is drawn.
     /// The live map's cards with a MAC Wake can use, by name (Ping's Wake).
     pub fn wakeable(&self) -> Vec<crate::tools::ping::Known> {
         self.live.wakeable()
     }
 
+    /// Show the live map with the card at `ip` selected (from another
+    /// tab's inspector): next time the Map is drawn.
     pub fn find(&mut self, ip: std::net::Ipv4Addr) {
         self.shown = None;
         self.live.pick_ip = Some(ip);

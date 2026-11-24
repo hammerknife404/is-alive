@@ -45,13 +45,21 @@ pub struct Target {
     pub net: Option<(Ipv4Addr, u32)>,
 }
 
+/// A directed broadcast: the address sent to, and the swept range
+/// (network, prefix length) it is the broadcast of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Directed {
+    pub to: Ipv4Addr,
+    pub range: (Ipv4Addr, u32),
+}
+
 /// Where the packets go: each send, whether the card's IP is on one of
 /// this computer's networks, and the directed broadcast sent to, if any.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
     pub sends: Vec<Send>,
     pub local: bool,
-    pub directed: Option<Ipv4Addr>,
+    pub directed: Option<Directed>,
 }
 
 /// The broadcast address of `net` (address, prefix length) when it has
@@ -122,11 +130,14 @@ pub fn plan(
             from: Ipv4Addr::UNSPECIFIED,
             to: ip,
         });
-        far = net.and_then(|n| directed(n, ip)).filter(|&d| d != ip);
-        if let Some(to) = far {
+        far = net.and_then(|n| {
+            let to = directed(n, ip).filter(|&d| d != ip)?;
+            Some(Directed { to, range: n })
+        });
+        if let Some(d) = far {
             out.push(Send {
                 from: Ipv4Addr::UNSPECIFIED,
-                to,
+                to: d.to,
             });
         }
     }
@@ -143,7 +154,7 @@ pub fn plan(
 pub struct Sent {
     pub packets: usize,
     pub local: bool,
-    pub directed: Option<Ipv4Addr>,
+    pub directed: Option<Directed>,
 }
 
 /// This computer's IPv4 networks: address and mask.
@@ -202,7 +213,7 @@ pub fn report(mac: &Mac, r: &io::Result<Sent>) -> (String, bool) {
                 "Wake-on-LAN sent to {m}, but it isn't on this computer's network: \
                  it only gets there if the router passes it on."
             );
-            if let Some(d) = s.directed {
+            if let Some(d) = &s.directed {
                 t.push_str(&format!(" {}", directed_note(d)));
             }
             (t, true)
@@ -211,11 +222,16 @@ pub fn report(mac: &Mac, r: &io::Result<Sent>) -> (String, bool) {
     }
 }
 
-/// What a directed broadcast needs from the router, for the toast.
-pub fn directed_note(to: Ipv4Addr) -> String {
+/// What a directed broadcast is and needs, for the toast. It's the
+/// broadcast of the range that was swept, which is only the device's own
+/// subnet's if the sweep's range matched it.
+pub fn directed_note(d: &Directed) -> String {
+    let (net, bits) = d.range;
     format!(
-        "It also went to {to}, that network's directed broadcast, which only arrives if its \
-         router allows directed broadcast (off by default on most routers)."
+        "It also went to {}, the broadcast of the range you swept ({net}/{bits}): that only \
+         helps if the range is the device's real subnet and its router forwards directed \
+         broadcasts (off by default on most routers).",
+        d.to
     )
 }
 
@@ -248,8 +264,9 @@ fn report_all(rs: &[io::Result<Sent>]) -> (String, bool) {
         .any(|r| matches!(r, Ok(s) if s.directed.is_some()))
     {
         t.push_str(
-            " Those found by a sweep of their network also got its directed broadcast, which only \
-             arrives if the router allows directed broadcast (off by default on most routers).",
+            " Those inside a swept range also got that range's broadcast, which only helps if the \
+             range is their real subnet and the router forwards directed broadcasts (off by \
+             default on most routers).",
         );
     }
     if sent > 0 {
@@ -367,7 +384,7 @@ mod tests {
         let swept = Some((ip("10.20.0.0"), 24));
         let p = plan(&nets, Some(ip("10.20.0.5")), swept);
         assert!(!p.local);
-        assert_eq!(p.directed, Some(ip("10.20.0.255")));
+        assert_eq!(p.directed.map(|d| d.to), Some(ip("10.20.0.255")));
         let to: Vec<Ipv4Addr> = p.sends.iter().map(|s| s.to).collect();
         assert_eq!(
             to,
@@ -375,7 +392,7 @@ mod tests {
         );
         // A wider swept range: its own broadcast.
         let p = plan(&nets, Some(ip("10.20.3.5")), Some((ip("10.20.0.0"), 22)));
-        assert_eq!(p.directed, Some(ip("10.20.3.255")));
+        assert_eq!(p.directed.map(|d| d.to), Some(ip("10.20.3.255")));
         // On this computer's network the local broadcast already reaches it.
         let p = plan(
             &nets,
@@ -420,11 +437,16 @@ mod tests {
         let swept = Ok(Sent {
             packets: 4,
             local: false,
-            directed: Some(ip("10.20.0.255")),
+            directed: Some(Directed {
+                to: ip("10.20.0.255"),
+                range: (ip("10.20.0.0"), 24),
+            }),
         });
         let (t, _) = report(&MAC, &swept);
         assert!(
-            t.contains("10.20.0.255") && t.contains("allows directed broadcast"),
+            t.contains("10.20.0.255")
+                && t.contains("range you swept (10.20.0.0/24)")
+                && t.contains("real subnet"),
             "{t}"
         );
         let err = Err(io::Error::other("no route"));

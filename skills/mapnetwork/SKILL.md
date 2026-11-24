@@ -206,8 +206,13 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   nothing: `services` lists the service types it offers (`_ipp._tcp` and
   `_pdl-datastream._tcp` are printing, `_airplay._tcp` and `_googlecast._tcp`
   cast targets, `_smb._tcp` a file share), and `ty` and `product` are a
-  printer's make and model from its TXT record (`null` when it gave none).
-  Label a printer node with its model and use the services as role
+  printer's make and model from its TXT record (`null` when it gave none,
+  or when one host advertised several different printers). A model belongs
+  to the printer service, not necessarily the host: a Mac, a Windows PC or
+  a CUPS print server that shares a printer advertises that printer's
+  model. Label a node with it only when the rest says printer (a printer
+  maker, 9100 open, no `_smb._tcp` or `_airplay._tcp`); on a computer it
+  means "shares a printer", worth a detail line. Use the services as role
   evidence; it is the device's own claim, not proof. The browse is
   multicast, so it only reaches the scanner's own segment: only hosts with
   `on_scanner_lan: true` can answer, and a routed host's `null` means

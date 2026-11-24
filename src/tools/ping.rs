@@ -34,7 +34,10 @@ pub type Known = (Option<String>, wol::Target);
 /// MAC typed (optionally with its IP after it: "00:11:32:ab:cd:ef
 /// 192.168.1.50"), or a name the site has already seen with a MAC. The
 /// IP, when not typed, is where the site last saw that MAC.
-fn wake_of(text: &str, known: &[Known]) -> Option<wol::Target> {
+/// `nets` are the ranges the last sweep covered whole: an address inside
+/// one also gets its broadcast, whether or not it answered the sweep.
+fn wake_of(text: &str, known: &[Known], nets: &[(Ipv4Addr, u32)]) -> Option<wol::Target> {
+    let net = |ip: Option<Ipv4Addr>| ip.and_then(|ip| crate::net::targets::network_of(nets, ip));
     let words: Vec<&str> = text
         .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
         .filter(|w| !w.is_empty())
@@ -50,12 +53,11 @@ fn wake_of(text: &str, known: &[Known]) -> Option<wol::Target> {
             return None;
         }
         let ip = typed.or(seen.and_then(|s| s.ip));
-        // The network it was swept on, while it's the same address.
-        let net = known
-            .iter()
-            .find(|k| k.1.ip.is_some() && k.1.ip == ip)
-            .and_then(|k| k.1.net);
-        return Some(wol::Target { mac: m, ip, net });
+        return Some(wol::Target {
+            mac: m,
+            ip,
+            net: net(ip),
+        });
     }
     if words.len() != 1 || first.parse::<IpAddr>().is_ok() {
         return None;
@@ -69,7 +71,10 @@ fn wake_of(text: &str, known: &[Known]) -> Option<wol::Target> {
     known
         .iter()
         .find(|(n, _)| n.as_deref().is_some_and(|n| bare(n) == want))
-        .map(|k| k.1)
+        .map(|k| wol::Target {
+            net: net(k.1.ip),
+            ..k.1
+        })
 }
 
 /// Beside Wake: what it will do.
@@ -189,9 +194,10 @@ impl PingTool {
 
     /// The tab. `known` is every device the site has seen with a MAC, for
     /// a name typed in the box to be woken by.
-    pub fn ui(&mut self, ui: &mut Ui, known: &[Known]) {
+    /// `nets` are the ranges the last sweep covered whole.
+    pub fn ui(&mut self, ui: &mut Ui, known: &[Known], nets: &[(Ipv4Addr, u32)]) {
         let running = self.poll();
-        let wake = wake_of(&self.host, known);
+        let wake = wake_of(&self.host, known, nets);
 
         let mut enter = false;
         // Wraps on a narrow window (docs/dev/ui-layout.md): TCP mode's Port box would
@@ -457,12 +463,8 @@ impl PingTool {
             let text = text
                 .replace(" Give it a minute, then Ping it.", "")
                 .replace(" Give it a minute, then Ping it", "");
+            // Its directed-broadcast sentence, if any, is already in it.
             tx.send(Ev::Note(true, text));
-            if let Ok(s) = &sent
-                && let Some(d) = s.directed
-            {
-                tx.send(Ev::Note(true, wol::directed_note(d)));
-            }
             let Some(ip) = t.ip else {
                 return tx.send(Ev::Note(
                     true,
@@ -707,20 +709,25 @@ mod tests {
                 net: Some((ip("10.20.0.0"), 24)),
             },
         )];
+        let nets = [(ip("10.20.0.0"), 24)];
         // A MAC alone: where the site last saw it, with its swept network.
-        let t = wake_of("00:11:32:ab:cd:ef", &known).unwrap();
+        let t = wake_of("00:11:32:ab:cd:ef", &known, &nets).unwrap();
         assert_eq!(
             (t.ip, t.net),
             (Some(ip("10.20.0.5")), Some((ip("10.20.0.0"), 24)))
         );
-        // A MAC and an IP typed: that IP; not the swept one, so no network.
-        let t = wake_of("00-11-32-AB-CD-EF 192.168.1.50", &known).unwrap();
+        // A MAC and an IP typed: that IP; outside the swept range, so no network.
+        let t = wake_of("00-11-32-AB-CD-EF 192.168.1.50", &known, &nets).unwrap();
         assert_eq!((t.ip, t.net), (Some(ip("192.168.1.50")), None));
+        // A sleeping PC didn't answer the sweep, but its address is in the
+        // swept range: that range's broadcast too.
+        let t = wake_of("00:11:32:00:00:09 10.20.0.50", &known, &nets).unwrap();
+        assert_eq!(t.net, Some((ip("10.20.0.0"), 24)));
         // A MAC never seen: nothing to wait for.
-        let t = wake_of("00:11:32:00:00:01", &known).unwrap();
+        let t = wake_of("00:11:32:00:00:01", &known, &nets).unwrap();
         assert_eq!((t.mac[5], t.ip), (1, None));
         // A name the site saw with a MAC, any case, .local or not.
-        assert_eq!(wake_of("frontdesk-pc.local", &known).unwrap().mac, m);
+        assert_eq!(wake_of("frontdesk-pc.local", &known, &nets).unwrap().mac, m);
         // Everything else is a ping.
         for text in [
             "10.20.0.5",
@@ -729,9 +736,9 @@ mod tests {
             "00:11:32:ab:cd:ef x",
             "",
         ] {
-            assert_eq!(wake_of(text, &known), None, "{text}");
+            assert_eq!(wake_of(text, &known, &nets), None, "{text}");
         }
-        assert!(wake_hint(&wake_of("00:11:32:00:00:01", &known).unwrap()).contains("no IP"));
+        assert!(wake_hint(&wake_of("00:11:32:00:00:01", &known, &nets).unwrap()).contains("no IP"));
         assert!(wake_gave_up(ip("10.20.0.5"), 180).contains("Fast Startup"));
     }
 

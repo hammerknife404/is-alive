@@ -990,7 +990,7 @@ impl SweepTool {
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
-                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse was sent. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
+                "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse was sent. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
@@ -1350,7 +1350,7 @@ impl SweepTool {
                 && !tx.cancelled()
             {
                 let found: Vec<(Ipv4Addr, dnssd::Found)> = b
-                    .collect(dnssd::WAIT)
+                    .collect(dnssd::WAIT, lan)
                     .into_iter()
                     .filter(|(ip, _)| seen.contains(ip))
                     .collect();
@@ -1454,8 +1454,9 @@ fn identify(
 }
 
 /// Under DNS-SD results: where they could come from.
-const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. Multicast stays on this \
-computer's own network segment: devices on routed networks can't answer it.";
+const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. A computer or print \
+server that shares a printer shows that printer's model. Multicast stays on this computer's own \
+network segment: devices on routed networks can't answer it.";
 
 /// What Wake sends to for `h`: its MAC (a real card's), its address, and
 /// the swept network holding it.
