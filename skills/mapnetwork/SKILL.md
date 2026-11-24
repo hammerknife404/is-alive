@@ -165,7 +165,24 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   client's own PC that names the client's AD domain or Entra tenant; on the
   technician's laptop it's the technician's own, so say which it was before
   using it. A join that's broken (`DeviceAuthStatus` not SUCCESS,
-  `AzureAdPrt` NO on a joined PC) is a finding.
+  `AzureAdPrt` NO on a joined PC) is a finding. Host info's `dhcp_server`,
+  `dns_servers` and `dns_suffix` are what that computer was given: context,
+  not findings. A DHCP server that isn't the gateway is normal (a domain
+  controller often hands out addresses), and one run can't show a rogue
+  DHCP server, so never report either from these rows.
+  `Network checks` rows (`check`, `status`, `detail`): a `Captive portal`
+  that fails means a portal answered instead of the internet, so that
+  run's `HTTPS inspection`, `Clock` and `Path MTU` describe the portal,
+  not the site's internet: say so rather than reporting them. `Path MTU`
+  `ok` covers *path MTU found* (a router said fragmentation needed; 1492
+  on PPPoE is normal); `warn` is *silence above N bytes*, an MTU black
+  hole and a finding. `Wi-Fi` is one snapshot of the network the scanner
+  was on: its `detail` names the SSID, the access point's BSSID, band,
+  channel and signal. The BSSID is that access point's radio MAC: match it
+  to an AP in the configs or inventory to say which AP the technician was
+  near, but never claim roaming or coverage from one snapshot. A weak
+  signal there is a note about where the scan ran, not a site finding on
+  its own.
   A `Domain join (others)` run is different: each row is another computer
   on the network, asked without credentials (`host` as typed, `computer`,
   `domain`, `dns_domain`, `dns_name`, `verdict`, `port`, `detail`). A

@@ -22,16 +22,35 @@ pub struct EchoResult {
     pub rtt_ms: f64,
     pub ttl: Option<u8>,
     pub status: EchoStatus,
+    /// The MTU a "packet too big" named (the next hop's, or this
+    /// computer's own), when it named one.
+    pub mtu: Option<u16>,
 }
 
 impl EchoResult {
     pub fn is_reply(&self) -> bool {
         self.status == EchoStatus::Reply
     }
+
+    /// "Fragmentation needed" came back (or this computer wouldn't send
+    /// it): too big for the path with Don't Fragment set.
+    pub fn too_big(&self) -> bool {
+        matches!(&self.status, EchoStatus::Error(m) if m == TOO_BIG)
+    }
 }
 
+/// The error a probe too big for the path gets.
+const TOO_BIG: &str = "packet too big";
+
 pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
-    imp::echo(dest, ttl, timeout_ms, size)
+    imp::echo(dest, ttl, timeout_ms, size, false)
+}
+
+/// One IPv4 echo with Don't Fragment set, `size` bytes of payload: for the
+/// path MTU. A router that can't pass it answers "fragmentation needed"
+/// (`too_big`) instead of splitting it.
+pub fn echo_df(dest: std::net::Ipv4Addr, timeout_ms: u32, size: u16) -> EchoResult {
+    imp::echo(IpAddr::V4(dest), 64, timeout_ms, size, true)
 }
 
 #[cfg(windows)]
@@ -57,7 +76,7 @@ mod imp {
             11003 => EchoStatus::Unreachable("destination host unreachable".into()),
             11004 => EchoStatus::Unreachable("destination protocol unreachable".into()),
             11005 => EchoStatus::Unreachable("destination port unreachable".into()),
-            11009 => EchoStatus::Error("packet too big".into()),
+            11009 => EchoStatus::Error(super::TOO_BIG.into()),
             11050 => EchoStatus::Error("general failure".into()),
             other => EchoStatus::Error(format!("ICMP status {other}")),
         }
@@ -69,12 +88,15 @@ mod imp {
         vec![0u64; bytes.div_ceil(8)]
     }
 
-    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
+    /// IP_FLAG_DF in ipexport.h: set Don't Fragment.
+    const IP_FLAG_DF: u8 = 0x2;
+
+    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16, df: bool) -> EchoResult {
         let payload = vec![b'a'; size as usize];
         let opts = IP_OPTION_INFORMATION {
             Ttl: ttl,
             Tos: 0,
-            Flags: 0,
+            Flags: if df { IP_FLAG_DF } else { 0 },
             OptionsSize: 0,
             OptionsData: null_mut(),
         };
@@ -125,6 +147,7 @@ mod imp {
                 .then(|| IpAddr::V4(Ipv4Addr::from(reply.Address.to_ne_bytes())));
             let ttl = (status == EchoStatus::Reply).then_some(reply.Options.Ttl);
             EchoResult {
+                mtu: None,
                 from,
                 rtt_ms: elapsed,
                 ttl,
@@ -184,6 +207,7 @@ mod imp {
             };
             let from = (!addr.is_unspecified()).then_some(IpAddr::V6(addr));
             EchoResult {
+                mtu: None,
                 from,
                 rtt_ms: elapsed,
                 ttl: None,
@@ -194,6 +218,7 @@ mod imp {
 
     fn fail(msg: String) -> EchoResult {
         EchoResult {
+            mtu: None,
             from: None,
             rtt_ms: 0.0,
             ttl: None,
@@ -218,9 +243,9 @@ mod imp {
     static NO_PING_SOCKET: AtomicBool = AtomicBool::new(false);
     static SEQ: AtomicU16 = AtomicU16::new(1);
 
-    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
+    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16, df: bool) -> EchoResult {
         if !NO_PING_SOCKET.load(Ordering::Relaxed) {
-            match socket_echo(dest, ttl, timeout_ms, size) {
+            match socket_echo(dest, ttl, timeout_ms, size, df) {
                 Ok(r) => return r,
                 Err(e) if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EPERM)) => {
                     NO_PING_SOCKET.store(true, Ordering::Relaxed);
@@ -228,7 +253,7 @@ mod imp {
                 Err(e) => return fail(e.to_string()),
             }
         }
-        super::cmd::echo(dest, ttl, timeout_ms, size)
+        super::cmd::echo(dest, ttl, timeout_ms, size, df)
     }
 
     fn cvt(r: libc::c_int) -> io::Result<libc::c_int> {
@@ -252,7 +277,13 @@ mod imp {
         .map(drop)
     }
 
-    fn socket_echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> io::Result<EchoResult> {
+    fn socket_echo(
+        dest: IpAddr,
+        ttl: u8,
+        timeout_ms: u32,
+        size: u16,
+        df: bool,
+    ) -> io::Result<EchoResult> {
         let v6 = dest.is_ipv6();
         let (domain, proto) = if v6 {
             (libc::AF_INET6, libc::IPPROTO_ICMPV6)
@@ -270,6 +301,16 @@ mod imp {
             setopt(&fd, libc::IPPROTO_IP, libc::IP_TTL, ttl as i32)?;
             setopt(&fd, libc::IPPROTO_IP, libc::IP_RECVERR, 1)?;
             setopt(&fd, libc::IPPROTO_IP, libc::IP_RECVTTL, 1)?;
+            if df {
+                // Don't Fragment, and never fall back to fragmenting: a
+                // router that can't pass it says so.
+                setopt(
+                    &fd,
+                    libc::IPPROTO_IP,
+                    libc::IP_MTU_DISCOVER,
+                    libc::IP_PMTUDISC_DO,
+                )?;
+            }
         }
 
         // The kernel fills in the identifier and checksum.
@@ -304,7 +345,17 @@ mod imp {
                 Some(libc::EPERM) => Ok(fail(
                     "not sent: blocked by a firewall on this computer".into(),
                 )),
+                // Bigger than this computer's own link, or than the path
+                // MTU an earlier "fragmentation needed" taught it.
+                Some(libc::EMSGSIZE) => Ok(EchoResult {
+                    mtu: path_mtu(&fd, &addr, alen),
+                    from: None,
+                    rtt_ms: 0.0,
+                    ttl: None,
+                    status: EchoStatus::Error(super::TOO_BIG.into()),
+                }),
                 Some(libc::ENETUNREACH | libc::EHOSTUNREACH) => Ok(EchoResult {
+                    mtu: None,
                     from: None,
                     rtt_ms: 0.0,
                     ttl: None,
@@ -347,6 +398,33 @@ mod imp {
                 return Ok(r);
             }
         }
+    }
+
+    /// The MTU this computer now holds for the route to `addr` (its link's,
+    /// or one a router reported): asked of the socket once connected.
+    fn path_mtu(fd: &OwnedFd, addr: &libc::sockaddr_storage, alen: libc::socklen_t) -> Option<u16> {
+        let ok = unsafe {
+            libc::connect(
+                fd.as_raw_fd(),
+                (addr as *const libc::sockaddr_storage).cast(),
+                alen,
+            )
+        };
+        if ok < 0 {
+            return None;
+        }
+        let mut v: libc::c_int = 0;
+        let mut len = size_of::<libc::c_int>() as libc::socklen_t;
+        let r = unsafe {
+            libc::getsockopt(
+                fd.as_raw_fd(),
+                libc::IPPROTO_IP,
+                libc::IP_MTU,
+                (&mut v as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        (r == 0).then(|| u16::try_from(v).ok()).flatten()
     }
 
     fn rtt(start: Instant) -> f64 {
@@ -397,6 +475,7 @@ mod imp {
             }
         }
         Some(EchoResult {
+            mtu: None,
             from: Some(dest),
             rtt_ms: elapsed,
             ttl,
@@ -446,7 +525,14 @@ mod imp {
                     }
                     let from = offender(ee_ptr);
                     let status = classify(&ee, v6);
+                    // "Fragmentation needed" carries the next hop's MTU;
+                    // a local "message too long" this computer's.
+                    let mtu = (status == EchoStatus::Error(super::TOO_BIG.into()))
+                        .then(|| u16::try_from(ee.ee_info).ok())
+                        .flatten()
+                        .filter(|&m| m > 0);
                     return Some(EchoResult {
+                        mtu,
                         from,
                         rtt_ms: elapsed,
                         ttl: None,
@@ -497,7 +583,7 @@ mod imp {
                 1 | 7 | 12 => unreach("destination host unreachable"),
                 2 => unreach("destination protocol unreachable"),
                 3 => unreach("destination port unreachable"),
-                4 => EchoStatus::Error("packet too big".into()),
+                4 => EchoStatus::Error(super::TOO_BIG.into()),
                 9 | 10 | 13 => unreach("communication administratively prohibited"),
                 c => unreach(&format!("destination unreachable (code {c})")),
             },
@@ -508,7 +594,10 @@ mod imp {
                 4 => unreach("destination port unreachable"),
                 c => unreach(&format!("destination unreachable (code {c})")),
             },
-            (libc::SO_EE_ORIGIN_ICMP6, true, 2, _) => EchoStatus::Error("packet too big".into()),
+            (libc::SO_EE_ORIGIN_ICMP6, true, 2, _) => EchoStatus::Error(super::TOO_BIG.into()),
+            (libc::SO_EE_ORIGIN_LOCAL, ..) if ee.ee_errno == libc::EMSGSIZE as u32 => {
+                EchoStatus::Error(super::TOO_BIG.into())
+            }
             (libc::SO_EE_ORIGIN_LOCAL, ..) => unreach(
                 &io::Error::from_raw_os_error(ee.ee_errno as i32)
                     .to_string()
@@ -546,6 +635,7 @@ mod imp {
 
     fn timeout(start: Instant) -> EchoResult {
         EchoResult {
+            mtu: None,
             from: None,
             rtt_ms: rtt(start),
             ttl: None,
@@ -555,6 +645,7 @@ mod imp {
 
     fn fail(msg: String) -> EchoResult {
         EchoResult {
+            mtu: None,
             from: None,
             rtt_ms: 0.0,
             ttl: None,
@@ -576,10 +667,11 @@ mod cmd {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16) -> EchoResult {
+    pub fn echo(dest: IpAddr, ttl: u8, timeout_ms: u32, size: u16, df: bool) -> EchoResult {
         let start = Instant::now();
         let Some(prog) = crate::net::system_tool(program(dest)) else {
             return EchoResult {
+                mtu: None,
                 from: None,
                 rtt_ms: 0.0,
                 ttl: None,
@@ -590,10 +682,12 @@ mod cmd {
         let child = Command::new(prog)
             .env("LC_ALL", "C")
             .args(args(dest, ttl, timeout_ms))
+            .args(df_args(df))
             .args(["-s", &size.to_string(), &dest.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Where a "message too long" from this computer goes.
+            .stderr(Stdio::piped())
             .spawn();
         // Not every ping takes a per-reply timeout (BSD ping6 has none, iputils
         // rounds up to whole seconds), so enforce the deadline here.
@@ -611,9 +705,13 @@ mod cmd {
         });
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         let out = match out {
-            Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
+            Ok(o) => {
+                String::from_utf8_lossy(&o.stdout).into_owned()
+                    + &String::from_utf8_lossy(&o.stderr)
+            }
             Err(e) => {
                 return EchoResult {
+                    mtu: None,
                     from: None,
                     rtt_ms: 0.0,
                     ttl: None,
@@ -650,6 +748,15 @@ mod cmd {
         a
     }
 
+    /// Don't Fragment: iputils `-M do`, BSD and macOS `-D`.
+    pub(super) fn df_args(df: bool) -> Vec<&'static str> {
+        match (df, cfg!(target_os = "linux")) {
+            (false, _) => vec![],
+            (true, true) => vec!["-M", "do"],
+            (true, false) => vec!["-D"],
+        }
+    }
+
     fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         let i = line.find(key)? + key.len();
         line[i..]
@@ -666,10 +773,36 @@ mod cmd {
         a.parse().ok()
     }
 
+    /// The number after "mtu" in "(mtu = 1400)", "mtu=1400" or "(MTU 1400)".
+    fn mtu_in(lower: &str) -> Option<u16> {
+        let rest = &lower[lower.find("mtu")? + 3..];
+        let rest = rest.trim_start_matches([' ', '=', ':']);
+        let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        n.parse().ok()
+    }
+
     pub(super) fn parse(out: &str, dest: IpAddr, elapsed: f64) -> EchoResult {
         for line in out.lines() {
+            let lower = line.to_lowercase();
+            // Don't Fragment and too big: a router's "Frag needed and DF
+            // set (mtu = 1400)", or this computer's "message too long".
+            if lower.contains("frag needed") || lower.contains("message too long") {
+                let from = if line.starts_with("From ") {
+                    addr(line, "From ")
+                } else {
+                    addr(line, " bytes from ")
+                };
+                return EchoResult {
+                    mtu: mtu_in(&lower),
+                    from,
+                    rtt_ms: elapsed,
+                    ttl: None,
+                    status: EchoStatus::Error(super::TOO_BIG.into()),
+                };
+            }
             if let Some(t) = field(line, "time=") {
                 return EchoResult {
+                    mtu: None,
                     from: Some(dest),
                     rtt_ms: t.parse().unwrap_or(elapsed),
                     ttl: field(line, "ttl=").and_then(|v| v.parse().ok()),
@@ -701,6 +834,7 @@ mod cmd {
                 EchoStatus::Unreachable(lower)
             };
             return EchoResult {
+                mtu: None,
                 from: addr(line, key),
                 rtt_ms: elapsed,
                 ttl: None,
@@ -708,6 +842,7 @@ mod cmd {
             };
         }
         EchoResult {
+            mtu: None,
             from: None,
             rtt_ms: elapsed,
             ttl: None,
@@ -752,6 +887,26 @@ mod tests {
         ee.ee_origin = libc::SO_EE_ORIGIN_ICMP6;
         ee.ee_type = 137;
         assert!(super::imp::advice(&ee, true));
+    }
+
+    /// Don't Fragment through the system ping: a router's "Frag needed"
+    /// and this computer's own "message too long" are both too big, with
+    /// the MTU they name.
+    #[test]
+    fn ping_says_too_big_with_df() {
+        let dest = "192.0.2.1".parse().unwrap();
+        let r = super::cmd::parse(
+            "From 192.0.2.254 icmp_seq=1 Frag needed and DF set (mtu = 1492)\n",
+            dest,
+            5.0,
+        );
+        assert!(r.too_big(), "{r:?}");
+        assert_eq!(r.mtu, Some(1492));
+        assert_eq!(r.from, "192.0.2.254".parse().ok());
+        let r = super::cmd::parse("ping: local error: message too long, mtu=1420\n", dest, 5.0);
+        assert!(r.too_big() && r.mtu == Some(1420) && r.from.is_none());
+        assert_eq!(super::cmd::df_args(true), ["-M", "do"]);
+        assert!(super::cmd::df_args(false).is_empty());
     }
 
     #[test]
@@ -824,5 +979,8 @@ mod tests {
         let r = super::echo("127.0.0.1".parse().unwrap(), 64, 1000, 32);
         assert!(r.is_reply(), "{r:?}");
         assert!(r.ttl.is_some());
+        // Don't Fragment, full size: loopback's MTU is far larger.
+        let r = super::echo_df(std::net::Ipv4Addr::LOCALHOST, 1000, 1472);
+        assert!(r.is_reply(), "{r:?}");
     }
 }

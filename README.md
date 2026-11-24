@@ -26,7 +26,7 @@ A native network tester for site visits, written in Rust. One portable `.exe` on
 | [Domain join](https://github.com/hammerknife404/is-alive/wiki/Domain-join) | How this computer is joined (Active Directory, Entra ID, hybrid or workgroup) and to which domain, from `dsregcmd /status`; also in the status bar |
 | [Results](https://github.com/hammerknife404/is-alive/wiki/Results) | Every finished run in a list, each one open beside it with Run again; kept with its site from one visit to the next, with Filter and Export to CSV, JSON, Markdown or HTML |
 
-**Full scan** (top of the nav, under **VISIT**) pings and port-checks the gateway, traces to the internet, tests DNS and sweeps the LAN in one go. **Report** under it puts the visit on one web page for the client or the ticket: the map, its findings, what changed since the last visit, every device and the notes, ready to print to PDF. **Settings** is at the foot of the nav on the left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
+**Full scan** (top of the nav, under **VISIT**) pings and port-checks the gateway, traces to the internet, tests DNS, sweeps the LAN and checks for a captive portal, HTTPS inspection, the clock, the path MTU and the Wi-Fi signal in one go. **Report** under it puts the visit on one web page for the client or the ticket: the map, its findings, what changed since the last visit, every device and the notes, ready to print to PDF. **Settings** is at the foot of the nav on the left: the themes, the Miami backdrop and the network options. See [Settings and themes](https://github.com/hammerknife404/is-alive/wiki/Settings-and-themes).
 
 ## With Claude
 
