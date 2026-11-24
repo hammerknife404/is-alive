@@ -12,7 +12,7 @@ CSV export uses each tool's own columns, one row per result, with the run's star
 | Port Check | host, ip, port, state, service, rtt_ms, error (closed/filtered included) |
 | Traceroute | host, ip, hop, address, name, rtt1_ms, rtt2_ms, rtt3_ms, note |
 | Speed Test | server, ip, phase (idle/download/upload), mbps, mb, seconds, streams, probe, probes, lost, latency_avg_ms, latency_min_ms, latency_max_ms, jitter_ms, loss_pct, added_ms, mos |
-| Subnet Sweep | range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (alive hosts; `arp` rows have no rtt_ms) |
+| Subnet Sweep | range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (alive hosts; how each was found, space-separated: `ping`, `arp`, `mdns`, `ssdp`; rows without `ping` have no rtt_ms) |
 | DNS Lookup | lookup, source, type, value (Compare notes as type `note`) |
 | Advanced | domain, resolver, section, check, check_status, kind (finding/record), status, text |
 | Host info | field, value |

@@ -726,6 +726,9 @@ pub struct Seen {
     pub also: Vec<Mac>,
     /// What its own web page calls it (its title or server).
     pub web: Option<String>,
+    /// Found only by the multicast browse (no ping, no ARP): which one
+    /// it answered, "mDNS", "SSDP" or "mDNS and SSDP".
+    pub multicast: Option<String>,
 }
 
 /// A backup or export open in Config Export: its file's name and the JSON
@@ -1861,17 +1864,25 @@ impl B {
             !about.is_some_and(|l| {
                 l.starts_with("Answered ping in ")
                     || l.starts_with("Answered ARP, not ping")
+                    || l.starts_with("Answered only ")
                     || ((s.checked || !s.open.is_empty()) && l.starts_with(OPEN_PORTS))
             })
         });
-        n.detail(at(match s.rtt {
-            Some(r) => format!("Answered ping in {}", crate::widgets::fmt_ms(r)),
-            None => "Answered ARP, not ping (firewalled or ICMP off)".into(),
+        n.detail(at(match (s.rtt, &s.multicast) {
+            (Some(r), _) => format!("Answered ping in {}", crate::widgets::fmt_ms(r)),
+            (None, Some(m)) => {
+                format!("Answered only {m}, not ping or ARP (multicast, this segment only)")
+            }
+            (None, None) => "Answered ARP, not ping (firewalled or ICMP off)".into(),
         }));
         // About the card's own address: another one answering only ARP
         // doesn't make the card ARP only.
         if s.rtt.is_none() && own {
-            n.chip("ARP only");
+            n.chip(if s.multicast.is_some() {
+                "Multicast only"
+            } else {
+                "ARP only"
+            });
         }
         if let Some(name) = &s.name {
             let line = format!("DNS name {name}");
@@ -3295,6 +3306,7 @@ mod tests {
             checked: true,
             also: vec![],
             web: None,
+            multicast: None,
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -3374,6 +3386,7 @@ mod tests {
                 checked: true,
                 also: vec![],
                 web: Some("UniFi OS".into()),
+                multicast: None,
             }],
             ..Default::default()
         };
@@ -3403,6 +3416,7 @@ mod tests {
                 checked: true,
                 also: vec![mac::parse_mac("02:00:00:00:00:02").unwrap()],
                 web: None,
+                multicast: None,
             }],
             gateway: Some("192.168.1.1".parse().unwrap()),
             ..Default::default()
@@ -3518,6 +3532,7 @@ mod tests {
             checked: true,
             also: vec![],
             web: None,
+            multicast: None,
         };
         let input = Input {
             sweep: vec![
@@ -3620,6 +3635,7 @@ mod tests {
                 checked: true,
                 also: vec![],
                 web: None,
+                multicast: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -3911,6 +3927,7 @@ mod tests {
                 checked: true,
                 also: vec![],
                 web: None,
+                multicast: None,
             })
             .collect();
         let make = |clients, reveal| {
@@ -4051,6 +4068,7 @@ mod tests {
             checked: true,
             also: vec![],
             web: None,
+            multicast: None,
         };
         let at_office = build(&Input {
             unifi: one(&j),
