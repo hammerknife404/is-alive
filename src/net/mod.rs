@@ -9,12 +9,15 @@ pub mod join;
 pub mod joined;
 pub mod mac;
 pub mod names;
+pub mod netconf;
+pub mod pmtu;
 pub mod ports;
 pub mod speed;
 pub mod subnet;
 pub mod targets;
 pub mod tls;
 pub mod web;
+pub mod wifi;
 pub mod wol;
 
 use socket2::{Domain, Protocol, Socket, Type};

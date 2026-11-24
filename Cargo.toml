@@ -1,6 +1,6 @@
 [package]
 name = "is-alive"
-version = "0.31.0"
+version = "0.32.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, speed test with jitter, subnet sweep, DNS, domain/mail health, network map"
 license-file = "LICENSE.md"
@@ -54,6 +54,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_WiFi",
     "Win32_Networking_WinSock",
     "Win32_System_IO",
     "Win32_System_Power",

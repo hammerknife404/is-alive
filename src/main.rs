@@ -52,7 +52,7 @@ const DNS_TEST_NAME: &str = "cloudflare.com";
 /// Shown in the window title, the status bar and the full scan's Host info entry,
 /// so a screenshot or pasted log always says which build produced it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN, and check whether HTTPS is inspected, this computer's clock is right and how it's joined to a domain. Results opens to show them. (Speed Test runs from its own tab.)";
+const FULL_SCAN_TIP: &str = "Full scan: ping and port-check the gateway, trace to the internet, test DNS, sweep the LAN, and check for a captive portal, whether HTTPS is inspected, this computer's clock, the path MTU, the Wi-Fi signal and how it's joined to a domain. Results opens to show them. (Speed Test runs from its own tab.)";
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Tab {
@@ -163,6 +163,9 @@ struct App {
     log_saved: u64,
     info: HostInfo,
     info_job: Option<Job<HostInfo>>,
+    /// A full scan's Host info entry, waiting for `info_job` (its start
+    /// time): logged with the WAN address and adapter setup it reads.
+    info_log: Option<String>,
     /// The public address has been asked for: on start (unless Settings
     /// turns that off), on Refresh or by a full scan.
     wan_asked: bool,
@@ -373,6 +376,7 @@ impl App {
             log_saved: 0,
             info: HostInfo::local(),
             info_job: None,
+            info_log: None,
             wan_asked: false,
             was_sweeping: false,
             scanning: Vec::new(),
@@ -608,6 +612,9 @@ impl App {
         self.keep_results();
         self.dropped_files(ctx);
         pump(&mut self.info_job, |i| self.info = i);
+        if self.info_job.is_none() {
+            self.log_host_info();
+        }
         let mut found = None;
         pump(&mut self.update_job, |f| found = Some(f));
         if let Some(f) = found {
@@ -1171,6 +1178,7 @@ impl App {
             || self.dns.is_running()
             || self.advanced.is_running()
             || self.netcheck.running_since().is_some()
+            || self.info_log.is_some()
             // A logged check (not the quiet one on start) and other
             // computers: their answers go to Results when they end, so a
             // site switch waits for them like any run.
@@ -1186,14 +1194,8 @@ impl App {
         self.info.gateway = local.gateway;
         self.refresh_info(ctx);
 
-        let now = log::now();
-        self.log.push(log::Entry {
-            tool: "Host info",
-            started: now.clone(),
-            ended: now,
-            text: format!("is-alive {VERSION}\n{}", self.info.summary()),
-            table: Some(self.info.table(VERSION)),
-        });
+        // Logged once the fetch is back, with what it read.
+        self.info_log = Some(log::now());
 
         let gw = local.gateway.map(|g| g.to_string());
         self.ping.run(ctx, gw.as_deref().unwrap_or(WAN_TARGET), 4);
@@ -1219,6 +1221,20 @@ impl App {
         // view may be scrolled up on older ones.
         self.filter.clear();
         self.jump_to_new = true;
+    }
+
+    /// A full scan's Host info entry, once its fetch is done (or gone).
+    fn log_host_info(&mut self) {
+        let Some(started) = self.info_log.take() else {
+            return;
+        };
+        self.log.push(log::Entry {
+            tool: "Host info",
+            started,
+            ended: log::now(),
+            text: format!("is-alive {VERSION}\n{}", self.info.summary()),
+            table: Some(self.info.table(VERSION)),
+        });
     }
 
     /// Move finished runs into the log.

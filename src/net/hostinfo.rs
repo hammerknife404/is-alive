@@ -1,4 +1,5 @@
-//! This machine: name, LAN address and MAC, gateway and public (WAN) address.
+//! This machine: name, LAN address and MAC, gateway, what its adapter was
+//! given (DHCP server, DNS servers, DNS suffix) and public (WAN) address.
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
@@ -18,6 +19,9 @@ pub struct HostInfo {
     pub domain: Option<String>,
     /// MAC of the LAN interface.
     pub mac: Option<String>,
+    /// DHCP server, DNS servers and suffix of the LAN interface; read with
+    /// the WAN address (`fetch`), not on every `local`.
+    pub net: Option<super::netconf::NetConf>,
 }
 
 impl HostInfo {
@@ -31,6 +35,7 @@ impl HostInfo {
             name: computer_name(),
             domain: domain(),
             mac: lan.and_then(|(ip, _)| mac_of(ip)),
+            net: None,
         }
     }
 
@@ -75,6 +80,14 @@ impl HostInfo {
             "Gateway",
             self.gateway.map_or("unknown".into(), |g| g.to_string()),
         ));
+        if let Some(n) = &self.net {
+            // Reported, not judged: a DHCP server other than the gateway is
+            // normal (a domain controller), and one snapshot can't show a
+            // second server answering.
+            f.push(("DHCP", n.dhcp_text()));
+            f.push(("DNS", n.dns_text()));
+            f.push(("Suffix", n.suffix_text()));
+        }
         f.push((
             "WAN",
             self.wan.map_or("not looked up".into(), |w| w.to_string()),
@@ -93,16 +106,31 @@ impl HostInfo {
                     crate::log::cell(self.lan.map(|(ip, bits)| format!("{ip}/{bits}"))),
                 ),
                 row("gateway", crate::log::cell(self.gateway)),
+                row(
+                    "dhcp_server",
+                    crate::log::cell(self.net.as_ref().map(|n| n.dhcp_text())),
+                ),
+                row(
+                    "dns_servers",
+                    crate::log::cell(self.net.as_ref().map(|n| n.dns_text())),
+                ),
+                row(
+                    "dns_suffix",
+                    crate::log::cell(self.net.as_ref().map(|n| n.suffix_text())),
+                ),
                 row("wan", crate::log::cell(self.wan)),
             ],
         }
     }
 
-    /// Everything, including one DNS query for the public address.
+    /// Everything: the adapter's setup, and one DNS query for the public
+    /// address.
     pub fn fetch() -> Self {
+        let local = Self::local();
         Self {
             wan: wan(),
-            ..Self::local()
+            net: local.lan.map(|(ip, _)| super::netconf::read(ip)),
+            ..local
         }
     }
 }
