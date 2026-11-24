@@ -56,7 +56,8 @@ impl NetCheck {
             // Wi-Fi snapshot at once, reported in that order.
             let route = netconf::adapter_to(pmtu::TARGET);
             std::thread::scope(|s| {
-                let mtu = s.spawn(pmtu::measure);
+                let stop = || tx.cancelled();
+                let mtu = s.spawn(move || pmtu::measure(&stop));
                 let air = route
                     .as_ref()
                     .filter(|a| a.wifi)
@@ -145,7 +146,10 @@ pub fn summary(rows: &[Vec<String>]) -> String {
             ("Captive portal", _) => "captive portal".to_string(),
             ("HTTPS inspection", _) => "HTTPS inspected".to_string(),
             ("Path MTU", _) => "MTU black hole".to_string(),
-            ("Wi-Fi", _) => "weak Wi-Fi".to_string(),
+            ("Wi-Fi", _) if r.get(2).is_some_and(|d| d.contains("weak:")) => {
+                "weak Wi-Fi".to_string()
+            }
+            ("Wi-Fi", _) => "fair Wi-Fi".to_string(),
             ("Clock", "fail") => "clock way off".to_string(),
             ("Clock", _) => "clock drifting".to_string(),
             (c, s) => format!("{c} {s}"),
@@ -206,6 +210,15 @@ mod tests {
                 row("Path MTU", "warn")
             ]),
             "captive portal · MTU black hole"
+        );
+        let wifi = |d: &str| vec!["Wi-Fi".to_string(), "warn".into(), d.to_string()];
+        assert_eq!(
+            summary(&[wifi("signal -79 dBm (weak: expect drops")]),
+            "weak Wi-Fi"
+        );
+        assert_eq!(
+            summary(&[wifi("signal -71 dBm (fair: fine for")]),
+            "fair Wi-Fi"
         );
         assert_eq!(summary(&[row("Clock", "fail")]), "clock way off");
         assert_eq!(

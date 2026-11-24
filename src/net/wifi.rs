@@ -37,7 +37,9 @@ pub fn band_channel(mhz: u32) -> Option<(&'static str, u32)> {
         2484 => Some(("2.4 GHz", 14)),
         2412..=2472 => Some(("2.4 GHz", (mhz - 2407) / 5)),
         5150..=5895 => Some(("5 GHz", (mhz - 5000) / 5)),
-        5925..=7125 => Some(("6 GHz", (mhz - 5950) / 5)),
+        // 6 GHz: channel 2 sits alone at 5935; the rest count up from 5950.
+        5935 => Some(("6 GHz", 2)),
+        5955..=7115 => Some(("6 GHz", (mhz - 5950) / 5)),
         _ => None,
     }
 }
@@ -364,6 +366,14 @@ mod tests {
         assert_eq!(band_channel(2484), Some(("2.4 GHz", 14)));
         assert_eq!(band_channel(5745), Some(("5 GHz", 149)));
         assert_eq!(band_channel(5955), Some(("6 GHz", 1)));
+        assert_eq!(band_channel(5935), Some(("6 GHz", 2)));
+        assert_eq!(band_channel(7115), Some(("6 GHz", 233)));
+        // Every frequency a driver could report: no panic, no wrap.
+        for mhz in 0..=8000 {
+            if let Some((_, ch)) = band_channel(mhz) {
+                assert!((1..=233).contains(&ch), "{mhz} MHz → {ch}");
+            }
+        }
         assert_eq!(band_channel(900), None);
     }
 

@@ -38,10 +38,17 @@ pub enum Probe {
 }
 
 /// One size, tried up to `tries` times by `send` (silence is tried again;
-/// any answer is final).
-pub fn try_size(mut send: impl FnMut() -> icmp::EchoResult, tries: usize) -> Probe {
+/// any answer is final). Gives up between tries once `stop` says so.
+pub fn try_size(
+    mut send: impl FnMut() -> icmp::EchoResult,
+    tries: usize,
+    stop: &dyn Fn() -> bool,
+) -> Probe {
     let mut last_err = None;
     for i in 0..tries {
+        if stop() {
+            return Probe::Error("stopped".into());
+        }
         if i > 0 {
             std::thread::sleep(GAP);
         }
@@ -65,16 +72,17 @@ pub fn try_size(mut send: impl FnMut() -> icmp::EchoResult, tries: usize) -> Pro
     last_err.map_or(Probe::Lost, Probe::Error)
 }
 
-/// Probe the baseline, then each size.
-pub fn measure() -> (Probe, Vec<(u16, Probe)>) {
+/// Probe the baseline, then each size; nothing more is sent once `stop`
+/// says so (a dropped or replaced run).
+pub fn measure(stop: &dyn Fn() -> bool) -> (Probe, Vec<(u16, Probe)>) {
     let send = |size: u16| move || icmp::echo_df(TARGET, WAIT_MS, size - HEADERS);
-    let base = try_size(send(BASELINE), TRIES);
+    let base = try_size(send(BASELINE), TRIES, stop);
     if base != Probe::Through {
         return (base, Vec::new());
     }
     let sizes = SIZES
         .iter()
-        .map(|&s| (s, try_size(send(s), TRIES)))
+        .map(|&s| (s, try_size(send(s), TRIES, stop)))
         .collect();
     (base, sizes)
 }
@@ -159,6 +167,27 @@ pub fn judge(base: &Probe, sizes: &[(u16, Probe)], vpn: Option<&str>) -> Item {
                 .into(),
         };
         let named = mtu.map(|m| format!(" (MTU {m})")).unwrap_or_default();
+        // Silent at a size the reported MTU allows: a hop past that router
+        // drops it without saying so. Discovery only half works.
+        let hidden: Vec<u16> = silent
+            .iter()
+            .copied()
+            .filter(|&s| mtu.is_some_and(|m| s <= m))
+            .collect();
+        if !hidden.is_empty() {
+            return Item {
+                check,
+                status: Status::Warn,
+                detail: format!(
+                    "Silence above {floor} bytes: {passes}; at {size} bytes \"fragmentation \
+                     needed\" came back ({who}{named}), but {hidden:?}-byte packets, within that \
+                     MTU, vanish with no answer after {TRIES} tries each. A hop past it drops \
+                     them without saying so: an MTU black hole further along. Connections that \
+                     send full-size packets can stall; lower the MTU or clamp TCP MSS to \
+                     {floor} or below.{via}"
+                ),
+            };
+        }
         let extra = if silent.is_empty() {
             String::new()
         } else {
@@ -222,13 +251,29 @@ mod tests {
                 }
             },
             3,
+            &|| false,
         );
         assert_eq!(p, Probe::Through);
         assert_eq!(n, 3);
-        assert_eq!(try_size(|| res(EchoStatus::Timeout, None), 2), Probe::Lost);
+        assert_eq!(
+            try_size(|| res(EchoStatus::Timeout, None), 2, &|| false),
+            Probe::Lost
+        );
+        // Stopped: nothing is sent.
+        let mut sent = 0;
+        let p = try_size(
+            || {
+                sent += 1;
+                res(EchoStatus::Timeout, None)
+            },
+            3,
+            &|| true,
+        );
+        assert!(matches!(p, Probe::Error(_)) && sent == 0);
         let big = try_size(
             || res(EchoStatus::Error("packet too big".into()), Some(1492)),
             3,
+            &|| false,
         );
         assert_eq!(
             big,
@@ -276,6 +321,17 @@ mod tests {
             "{}",
             r.detail
         );
+        // Told to shrink to 1492, yet 1492 itself vanishes: a hop past the
+        // router that answered is a black hole. Not "found".
+        let half = vec![
+            (1500, too_big(1492)),
+            (1492, Probe::Lost),
+            (1472, Probe::Through),
+            (1400, Probe::Through),
+        ];
+        let r = judge(&Probe::Through, &half, None);
+        assert_eq!(r.status, Status::Warn, "{}", r.detail);
+        assert!(r.detail.contains("Silence above 1472") && r.detail.contains("[1492]"));
         // Through a VPN: said, whatever the result.
         let r = judge(&Probe::Through, &pppoe, Some("wg0"));
         assert!(r.detail.contains("VPN adapter (wg0)"));

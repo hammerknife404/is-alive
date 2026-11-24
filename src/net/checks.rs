@@ -201,12 +201,33 @@ pub struct Seen {
     pub trusted: bool,
 }
 
+/// Whether a certificate's issuer (or its chain's top) names an
+/// inspection product.
+fn inspector(issuer: &str, top: &str) -> bool {
+    let both = format!("{issuer} {top}").to_ascii_lowercase();
+    INSPECTORS.iter().any(|w| both.contains(w))
+}
+
 /// HTTPS inspection, judged from what each site presented (Err: not
 /// reached). Behind a captive portal the sites' certificates are the
 /// portal's own, so a portal is reported instead of inspection.
 pub fn judge_https(seen: &[Result<Seen, String>], portal: &Portal) -> Item {
     let check = "HTTPS inspection";
     let r = judge_issuers(seen);
+    // A known inspection product's issuer is inspection, portal or not (a
+    // FortiGate can ask for sign-in and inspect HTTPS): keep that verdict
+    // and say the portal is there too.
+    let named = seen
+        .iter()
+        .filter_map(|s| s.as_ref().ok())
+        .any(|s| inspector(&s.issuer, &s.top));
+    if portal.intercepted() && named {
+        return Item {
+            detail: r.detail
+                + " A captive portal is answering too: sign in to it, then run Full scan again.",
+            ..r
+        };
+    }
     if portal.intercepted() && r.status != Status::Ok {
         let fail = seen.iter().filter(|s| s.is_err()).count();
         let s = seen.iter().filter_map(|s| s.as_ref().ok()).next();
@@ -238,10 +259,7 @@ fn judge_issuers(seen: &[Result<Seen, String>]) -> Item {
                 .into(),
         };
     }
-    let named = |s: &Seen| {
-        let both = format!("{} {}", s.issuer, s.top).to_ascii_lowercase();
-        INSPECTORS.iter().any(|w| both.contains(w))
-    };
+    let named = |s: &Seen| inspector(&s.issuer, &s.top);
     let shared = got
         .iter()
         .copied()
@@ -619,6 +637,20 @@ mod tests {
                 .contains("Guest Wi-Fi terms")
         );
         assert_eq!(location_host("/login"), "/login");
+        // A FortiGate asking for sign-in and inspecting HTTPS: its own CA on
+        // the sites is inspection, and the certificate advice stays.
+        let forti = [
+            seen("www.cloudflare.com", "Fortinet_CA_SSL", false),
+            seen("github.com", "Fortinet_CA_SSL", false),
+        ];
+        let r = judge_https(&forti, &portal);
+        assert_eq!(r.status, Status::Fail);
+        assert!(r.detail.contains("HTTPS is inspected") && r.detail.contains("install"));
+        assert!(
+            r.detail.contains("captive portal is answering too"),
+            "{}",
+            r.detail
+        );
     }
 
     #[test]

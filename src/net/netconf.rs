@@ -431,7 +431,10 @@ mod win {
         with_adapter(ip, |ad| {
             let dhcp_on = unsafe { ad.Anonymous2.Flags } & IP_ADAPTER_DHCP_ENABLED != 0;
             let dhcp = match unsafe { addr(&ad.Dhcpv4Server) } {
-                Some(IpAddr::V4(s)) if dhcp_on && !s.is_unspecified() => Dhcp::Server(s),
+                // No lease yet reads as 0.0.0.0 or 255.255.255.255.
+                Some(IpAddr::V4(s)) if dhcp_on && !s.is_unspecified() && !s.is_broadcast() => {
+                    Dhcp::Server(s)
+                }
                 _ if !dhcp_on => Dhcp::Static,
                 _ => Dhcp::Unknown,
             };
