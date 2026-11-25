@@ -703,7 +703,7 @@ impl BundleTool {
         );
         widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
         edit.response.context_menu(|ui| {
-            if widgets::text_edit_menu(ui, id, true) {
+            if widgets::text_edit_menu(ui, id, crate::clip::EDITABLE, self.notes.is_empty()) {
                 ui.close();
             }
         });

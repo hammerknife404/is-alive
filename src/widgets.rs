@@ -29,6 +29,17 @@ fn hash(s: &str) -> u64 {
 /// than a copy that would land in history unmarked. On Linux it's marked
 /// for clipboard managers to leave out of their history.
 pub fn copy(ctx: &egui::Context, text: String) {
+    if let Some(t) = put(text) {
+        // The window's own clipboard: let it through unrouted.
+        crate::clip::pass_through(&t);
+        ctx.copy_text(t);
+    }
+}
+
+/// `copy`'s work: put `text` on the clipboard, marked; or give it back when
+/// only the window's own clipboard can take it (macOS, which keeps no
+/// history; Linux with no X11).
+pub(crate) fn put(text: String) -> Option<String> {
     if let Ok(mut l) = LAST_COPY.lock() {
         *l = Some(hash(&text));
     }
@@ -41,15 +52,15 @@ pub fn copy(ctx: &egui::Context, text: String) {
             let done = arboard::Clipboard::new()
                 .and_then(|mut c| c.set().exclude_from_monitoring().text(text.clone()));
             if done.is_ok() {
-                return;
+                return None;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let _ = ctx;
         toast(
             "Not copied: another program is holding the clipboard. Try again",
             false,
         );
+        None
     }
     // Linux: marked for clipboard managers to leave out of their history
     // (KDE's password-manager hint, which Klipper and others honour). The
@@ -59,21 +70,20 @@ pub fn copy(ctx: &egui::Context, text: String) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         use arboard::SetExtLinux;
-        static CLIP: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
-        let mut held = CLIP.lock().unwrap_or_else(|e| e.into_inner());
+        let mut held = crate::clip::held();
         if held.is_none() {
             *held = arboard::Clipboard::new().ok();
         }
         if let Some(c) = held.as_mut()
             && c.set().exclude_from_history().text(text.clone()).is_ok()
         {
-            return;
+            return None;
         }
-        ctx.copy_text(text);
+        Some(text)
     }
     // macOS keeps no clipboard history of its own.
     #[cfg(target_os = "macos")]
-    ctx.copy_text(text);
+    Some(text)
 }
 
 /// On exit: clear the clipboard if it still holds what this app copied.
@@ -753,7 +763,7 @@ pub fn area(
     tidy(ui.ctx(), &r, kind, value);
     restore_selection(ui.ctx(), id, &r, keep);
     r.context_menu(|ui| {
-        if text_edit_menu(ui, id, true) || more(ui) {
+        if text_edit_menu(ui, id, crate::clip::EDITABLE, value.is_empty()) || more(ui) {
             ui.close();
         }
     });
@@ -818,6 +828,15 @@ pub fn num<T: egui::emath::Numeric>(
 ) {
     lead(ui, label);
     ui.add(egui::DragValue::new(v).range(range).suffix(suffix));
+}
+
+/// `s` cut to `max` characters, the last an ellipsis: a value shown
+/// beside a menu item.
+pub fn short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
 }
 
 pub fn copy_button(ui: &mut Ui, text: impl FnOnce() -> String) {
@@ -1225,26 +1244,6 @@ pub fn compact_title(ctx: &egui::Context, show: impl FnOnce()) {
     }
 }
 
-/// Send every copy egui made this frame (Ctrl+C or Ctrl+X in any text box,
-/// a selectable label) through `copy`, as the app's own Copy buttons go:
-/// kept out of Windows clipboard history and cloud sync, and cleared on
-/// exit if it's still there. Call once, after the UI.
-pub fn route_copies(ctx: &egui::Context) {
-    let mut texts = Vec::new();
-    ctx.output_mut(|o| {
-        o.commands.retain(|c| match c {
-            egui::OutputCommand::CopyText(t) => {
-                texts.push(t.clone());
-                false
-            }
-            _ => true,
-        })
-    });
-    for t in texts {
-        copy(ctx, t);
-    }
-}
-
 /// The selection in text box `id` as a right-click lands: egui's text box
 /// moves the cursor on a press of any button, which would leave the menu's
 /// Cut, Copy and Redact nothing to work on. Pair with `restore_selection`.
@@ -1290,25 +1289,51 @@ pub fn add_text_edit_with_id(
     id: egui::Id,
     edit: egui::TextEdit<'_>,
 ) -> egui::Response {
+    add_text_box(ui, id, edit, crate::clip::EDITABLE)
+}
+
+/// A box that hides what's typed (`.password(true)`): its menu has Paste
+/// and Select all, never Cut or Copy, as Ctrl+C and Ctrl+X do nothing in it.
+pub fn add_masked_text_edit(ui: &mut Ui, edit: egui::TextEdit<'_>) -> egui::Response {
+    let id = ui.next_auto_id();
+    add_text_box(ui, id, edit.password(true), crate::clip::MASKED)
+}
+
+fn add_text_box(
+    ui: &mut Ui,
+    id: egui::Id,
+    edit: egui::TextEdit<'_>,
+    b: crate::clip::TextBox,
+) -> egui::Response {
     let keep = selection_before_right_click(ui.ctx(), id);
-    let r = ui.add(edit);
+    let out = edit.show(ui);
+    let r = out.response.response;
+    let empty = out.galley.text().is_empty();
     restore_selection(ui.ctx(), r.id, &r, keep);
     r.context_menu(|ui| {
-        if text_edit_menu(ui, r.id, true) {
+        if text_edit_menu(ui, r.id, b, empty) {
             ui.close();
         }
     });
     r
 }
 
-/// A right-click menu for a text box: Cut, Copy, Paste and Select all, as
-/// the keyboard shortcuts do them (Paste and Cut only when `editable`).
+/// A right-click menu for text box `id`: Cut, Copy, Paste and Select all,
+/// as the keyboard shortcuts do them, each offered and enabled as
+/// `clip::items` says for a box like `b` (holding nothing when `empty`).
 /// Returns true when an item was picked.
-pub fn text_edit_menu(ui: &mut Ui, id: egui::Id, editable: bool) -> bool {
+pub fn text_edit_menu(ui: &mut Ui, id: egui::Id, b: crate::clip::TextBox, empty: bool) -> bool {
+    use crate::clip::shortcut;
     let ctx = ui.ctx().clone();
     let selected = egui::TextEdit::load_state(&ctx, id)
         .and_then(|s| s.cursor.char_range())
         .is_some_and(|r| r.primary != r.secondary);
+    let clipboard = if b.editable {
+        crate::clip::clipboard_has_text()
+    } else {
+        None
+    };
+    let items = crate::clip::items(b, selected, clipboard, empty);
     let mut picked = false;
     // The command reaches the box on the next frame, so it gets the focus
     // back (and keeps its selection) first.
@@ -1316,33 +1341,25 @@ pub fn text_edit_menu(ui: &mut Ui, id: egui::Id, editable: bool) -> bool {
         ctx.memory_mut(|m| m.request_focus(id));
         ctx.send_viewport_cmd(cmd);
     };
-    if editable
-        && ui
-            .add_enabled(selected, egui::Button::new("Cut").shortcut_text("Ctrl+X"))
-            .clicked()
-    {
+    let item = |ui: &mut Ui, on: Option<bool>, name: &str, key: &str| {
+        on.is_some_and(|on| {
+            ui.add_enabled(on, egui::Button::new(name).shortcut_text(shortcut(key)))
+                .clicked()
+        })
+    };
+    if item(ui, items.cut, "Cut", "X") {
         send(egui::ViewportCommand::RequestCut);
         picked = true;
     }
-    if ui
-        .add_enabled(selected, egui::Button::new("Copy").shortcut_text("Ctrl+C"))
-        .clicked()
-    {
+    if item(ui, items.copy, "Copy", "C") {
         send(egui::ViewportCommand::RequestCopy);
         picked = true;
     }
-    if editable
-        && ui
-            .add(egui::Button::new("Paste").shortcut_text("Ctrl+V"))
-            .clicked()
-    {
+    if item(ui, items.paste, "Paste", "V") {
         send(egui::ViewportCommand::RequestPaste);
         picked = true;
     }
-    if ui
-        .add(egui::Button::new("Select all").shortcut_text("Ctrl+A"))
-        .clicked()
-    {
+    if item(ui, items.select_all, "Select all", "A") {
         let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
         // The far end is clamped to the text's length when it's drawn.
         let all = egui::text::CCursorRange::two(

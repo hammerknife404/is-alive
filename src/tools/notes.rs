@@ -2314,7 +2314,8 @@ impl NotesTool {
     fn editor_menu(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let id = egui::Id::new(EDITOR_ID);
-        if widgets::text_edit_menu(ui, id, true) {
+        let empty = self.text.is_empty();
+        if widgets::text_edit_menu(ui, id, crate::clip::EDITABLE, empty) {
             ui.close();
             return;
         }
@@ -2410,6 +2411,8 @@ impl NotesTool {
                     ui.weak("Formatted, as saved.");
                     return;
                 }
+                // Right-click in it: Copy what's selected, or Copy all.
+                crate::clip::block(ui.ctx(), ui.clip_rect(), &clean);
                 // Line numbers match the raw text, so a ticked box maps back.
                 if let Some(line) = markdown::render(ui, &clean, font) {
                     markdown::toggle_task(&mut self.text, line);
@@ -2527,7 +2530,7 @@ fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
                 );
                 widgets::restore_selection(ui.ctx(), id, &r, keep);
                 r.context_menu(|ui| {
-                    if widgets::text_edit_menu(ui, id, false) {
+                    if widgets::text_edit_menu(ui, id, crate::clip::READ_ONLY, text.is_empty()) {
                         ui.close();
                     }
                 });

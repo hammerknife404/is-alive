@@ -206,12 +206,18 @@ pub fn header_with(
             buttons(ui);
         });
     });
-    ui.add(egui::Label::new(RichText::new(title).heading().strong()).wrap());
+    let r = ui.add(
+        egui::Label::new(RichText::new(title).heading().strong())
+            .wrap()
+            .selectable(true),
+    );
+    crate::clip::value_menu(&r, title);
 }
 
-/// An address under the name, in the accent colour, selectable to copy.
+/// An address under the name, in the accent colour, selectable to copy;
+/// right-click copies it.
 pub fn address(ui: &mut Ui, a: &str) {
-    ui.add(egui::Label::new(RichText::new(a).monospace().color(theme::accent())).selectable(true));
+    crate::clip::value(ui, RichText::new(a).monospace().color(theme::accent()), a);
 }
 
 /// A header button: frameless, `ICON` square.
@@ -268,7 +274,8 @@ pub fn section(ui: &mut Ui, label: &str) {
 }
 
 /// One detail: its name on the left, the value beside it (monospace for
-/// an address, a MAC or a port), selectable to copy.
+/// an address, a MAC or a port), selectable to copy; right-click copies
+/// the selection or the whole value.
 pub fn row(ui: &mut Ui, key: &str, value: &str, mono: bool) {
     ui.horizontal_top(|ui| {
         let weak = ui.visuals().weak_text_color();
@@ -285,7 +292,8 @@ pub fn row(ui: &mut Ui, key: &str, value: &str, mono: bool) {
         } else {
             RichText::new(value)
         };
-        ui.add(egui::Label::new(text).wrap().selectable(true));
+        let r = ui.add(egui::Label::new(text).wrap().selectable(true));
+        crate::clip::value_menu(&r, value);
     });
 }
 
@@ -305,7 +313,7 @@ pub fn chips(ui: &mut Ui, items: &[String]) {
                 .corner_radius(crate::theme::R_PILL)
                 .inner_margin(egui::Margin::symmetric(6, 1))
                 .show(ui, |ui| {
-                    ui.label(RichText::new(c).monospace().small());
+                    crate::clip::value(ui, RichText::new(c).monospace().small(), c);
                 });
         }
     });

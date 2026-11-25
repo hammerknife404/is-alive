@@ -237,7 +237,7 @@ impl Manual {
                 drop(s);
                 // This window's links and copies, as the app's own go.
                 widgets::open_requested_links(&ctx);
-                widgets::route_copies(&ctx);
+                crate::clip::label_menu(&ctx);
             },
         );
     }
