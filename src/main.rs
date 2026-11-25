@@ -4,6 +4,7 @@ mod ais;
 mod backdrop;
 mod bundle;
 mod chrome;
+mod clip;
 mod connect;
 mod fonts;
 mod help;
@@ -303,7 +304,7 @@ impl eframe::App for App {
         // Links (Help, the update notice, a card's Web) open through the
         // app's own launcher: egui's needs a feature this build leaves out.
         widgets::open_requested_links(ui.ctx());
-        widgets::route_copies(ui.ctx());
+        clip::label_menu(ui.ctx());
         widgets::note_esc_owners(ui.ctx());
     }
 
@@ -1567,6 +1568,7 @@ fn main() {
             cc.egui_ctx.set_fonts(fonts::definitions());
             theme::apply(&cc.egui_ctx, look.theme);
             widgets::init(&cc.egui_ctx);
+            clip::install(&cc.egui_ctx);
             net::clock::warm();
             // The screenshot tour only sees the app's window: the manual
             // stays over it there.

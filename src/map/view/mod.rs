@@ -33,6 +33,7 @@ use interact::title_above;
 use panel::card_text;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::net::Ipv4Addr;
 pub use tabs::MapTabs;
 
 /// What the tab asks the app to do.
@@ -631,13 +632,14 @@ impl MapView {
 
     fn input<'a>(&'a self, src: &'a Sources) -> Input<'a> {
         let sw = src.sweep;
+        let (gateway, this, wan) = here(src.info, sw.imported());
         Input {
             sweep: sw.seen(),
             range: sw.finished().map(|f| f.0),
             ports_checked: sw.checked_ports(),
-            gateway: src.info.gateway,
-            this: src.info.lan.map(|l| l.0),
-            wan: src.info.wan,
+            gateway,
+            this,
+            wan,
             unifi: src
                 .export
                 .unifis()
@@ -1914,10 +1916,65 @@ pub(super) fn keys_taken(ctx: &egui::Context) -> bool {
         || ctx.memory(|m| m.top_modal_layer().is_some())
 }
 
+/// This computer's gateway, address and WAN, for placing the hosts: none
+/// when the hosts are an imported scan from another computer, which may be
+/// another network altogether (a client's scan imported at home must not
+/// hang off the home router, nor make a host at this laptop's address
+/// "This machine").
+fn here(info: &HostInfo, imported: bool) -> (Option<Ipv4Addr>, Option<Ipv4Addr>, Option<Ipv4Addr>) {
+    if imported {
+        return (None, None, None);
+    }
+    (info.gateway, info.lan.map(|l| l.0), info.wan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::map::Node;
+
+    /// An imported scan is placed by nothing of this computer's network:
+    /// no gateway, no "This machine", no WAN, even where its addresses
+    /// collide with this laptop's.
+    #[test]
+    fn an_imported_scan_is_not_placed_around_this_computer() {
+        let info = HostInfo {
+            lan: Some((Ipv4Addr::new(192, 0, 2, 20), 24)),
+            gateway: Some(Ipv4Addr::new(192, 0, 2, 1)),
+            wan: Some(Ipv4Addr::new(203, 0, 113, 9)),
+            ..Default::default()
+        };
+        assert_eq!(
+            here(&info, false),
+            (info.gateway, Some(Ipv4Addr::new(192, 0, 2, 20)), info.wan)
+        );
+        assert_eq!(here(&info, true), (None, None, None));
+        let mut sweep = SweepTool::default();
+        sweep.sample_import_for_shots();
+        let (gateway, this, wan) = here(&info, sweep.imported());
+        let m = super::super::build(&Input {
+            sweep: sweep.seen(),
+            range: sweep.finished().map(|f| f.0),
+            ports_checked: true,
+            gateway,
+            this,
+            wan,
+            ..Default::default()
+        });
+        // 192.0.2.20 is the imported PC, not this laptop.
+        let pc = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == Some(Ipv4Addr::new(192, 0, 2, 20)))
+            .unwrap();
+        assert_ne!(pc.label, "This machine");
+        assert!(!m.nodes.iter().any(|n| n.label == "This machine"));
+        assert!(
+            !m.nodes
+                .iter()
+                .any(|n| n.ip == Some(Ipv4Addr::new(203, 0, 113, 9)))
+        );
+    }
 
     fn view(n: usize) -> MapView {
         let mut v = MapView::new(None);
@@ -3074,7 +3131,8 @@ mod tests {
         ] {
             assert!(!has(&menu, item), "{item:?} in {menu:?}");
         }
-        assert!(has(&menu, "Copy details"));
+        assert!(has(&menu, "Copy name"));
+        assert!(has(&menu, "Copy all details"));
         // A client with an IP and a MAC: the tests, both copies (showing
         // what they copy), no web admin.
         v.map.nodes[7].ip = ip(7);
@@ -3254,19 +3312,54 @@ mod tests {
     #[test]
     fn copy_ip_and_mac_give_a_line_for_each_card_that_has_one() {
         let mut v = view(3);
+        for (k, name) in ["Core switch", "Spare", "Printer"].iter().enumerate() {
+            v.map.nodes[k].label = name.to_string();
+        }
         v.map.nodes[0].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 5));
         v.map.nodes[0].mac = Some([0xaa, 0xbb, 0xcc, 0, 0, 1]);
         v.map.nodes[2].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 7));
-        let [(ip, ips), (mac, macs)] = v.copy_lists(&[0]);
-        assert_eq!((ip, mac), ("IP", "MAC"));
+        let [(name, names), (ip, ips), (mac, macs)] = v.copy_lists(&[0]);
+        assert_eq!((name, ip, mac), ("name", "IP", "MAC"));
+        assert_eq!(names, ["Core switch"]);
         assert_eq!(ips, ["10.0.0.5"]);
         assert_eq!(macs, ["aa:bb:cc:00:00:01"]);
         // Several: one per line, in the menu's order, skipping the card
         // without one.
-        let [(_, ips), (_, macs)] = v.copy_lists(&[2, 1, 0]);
+        let [(_, names), (_, ips), (_, macs)] = v.copy_lists(&[2, 1, 0]);
+        assert_eq!(names.join("\n"), "Printer\nSpare\nCore switch");
         assert_eq!(ips.join("\n"), "10.0.0.7\n10.0.0.5");
         assert_eq!(macs.join("\n"), "aa:bb:cc:00:00:01");
+        let [_, rest @ ..] = v.copy_lists(&[1]);
+        assert!(rest.iter().all(|(_, l)| l.is_empty()));
+        // A card with no name offers no Copy name.
+        v.map.nodes[1].label = "  ".into();
         assert!(v.copy_lists(&[1]).iter().all(|(_, l)| l.is_empty()));
+    }
+
+    /// Copy all details: each card's name and role, what's under it, its
+    /// flags, details and note, the cards one after another.
+    #[test]
+    fn copy_all_details_carries_each_card_whole() {
+        let mut v = view(3);
+        v.map.nodes[0].label = "Lobby AP".into();
+        v.map.nodes[0].flags = vec!["Weak signal".into()];
+        v.map.nodes[0].details = vec!["Firmware 6.5.62".into()];
+        v.map.nodes[0].note = "Behind the ceiling tile".into();
+        v.map.nodes[2].label = "Front desk".into();
+        let one = v.details_text(&[0]);
+        let kind = v.map.nodes[0].kind.to_string();
+        assert!(one.starts_with(&format!("Lobby AP ({kind})\n")), "{one}");
+        for part in [
+            "Flag: Weak signal",
+            "Firmware 6.5.62",
+            "Note:\n  Behind the ceiling tile",
+        ] {
+            assert!(one.contains(part), "{part:?} in {one}");
+        }
+        // Two: the first card whole, then the second.
+        let two = v.details_text(&[0, 2]);
+        assert!(two.starts_with(&one), "{two}");
+        assert!(two[one.len()..].contains("Front desk"), "{two}");
     }
 
     #[test]
@@ -3355,7 +3448,8 @@ mod tests {
     #[test]
     fn the_card_menu_sets_sections_apart_with_one_separator() {
         // A card on its own (no uplink, nothing below), no IP: Pin and
-        // Select, Add note…, then Copy details, with one separator under
+        // Select, Add note…, then Copy name and Copy all details, with one
+        // separator under
         // the title and one between each, none for the empty sections in
         // between.
         let ctx = egui::Context::default();
@@ -3365,7 +3459,14 @@ mod tests {
         let shown = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
         assert_eq!(
             words(&shown.canvas),
-            ["card 4", "Pin", "Select", "Add note…", "Copy details"]
+            [
+                "card 4",
+                "Pin",
+                "Select",
+                "Add note…",
+                "Copy name",
+                "Copy all details"
+            ]
         );
         assert_eq!(shown.canvas_lines, 3);
     }

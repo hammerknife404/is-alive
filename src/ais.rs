@@ -4,12 +4,16 @@
 //! The file comes from a tech's laptop but it describes a client's network,
 //! and the window takes whatever is dropped or picked: it's read with a size
 //! cap, no DTD, a node limit and a row limit, and nothing in it can panic.
+//! Before the XML parser sees it, one linear pass refuses nesting deeper than
+//! `MAX_DEPTH` (the parser recurses, and a job thread's stack is small) and
+//! elements with more than `MAX_ATTRS` attributes (its duplicate check is
+//! quadratic in them).
 //!
 //! Privacy: the `user` attribute (who is logged on) is never read, and
 //! shares and printers are counted, never named.
 
 use crate::net::mac::{self, Mac};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 /// The largest file read: a real export is about 1 KB a row, so this is
@@ -21,6 +25,12 @@ pub const MAX_ROWS: usize = 65_536;
 
 /// Nodes the XML may hold: a row and its few children, with room to spare.
 const MAX_NODES: u32 = 4_000_000;
+
+/// The deepest nesting read: an export is rows › row › share, three.
+const MAX_DEPTH: usize = 16;
+
+/// The most attributes one element may have: a row has about 30.
+const MAX_ATTRS: usize = 128;
 
 /// The longest text kept from any attribute, in characters.
 const MAX_TEXT: usize = 160;
@@ -95,6 +105,7 @@ pub fn parse(data: &[u8]) -> Result<Scan, String> {
         ));
     }
     let text = decode(data);
+    shape(&text)?;
     let opt = roxmltree::ParsingOptions {
         allow_dtd: false,
         nodes_limit: MAX_NODES,
@@ -113,11 +124,22 @@ pub fn parse(data: &[u8]) -> Result<Scan, String> {
     read(&doc)
 }
 
+/// A row's status as the scanner wrote it.
+#[derive(Clone, Copy, PartialEq)]
+enum Status {
+    Alive,
+    Dead,
+    Unknown,
+}
+
 fn read(doc: &roxmltree::Document) -> Result<Scan, String> {
     let mut scan = Scan::default();
-    let mut seen: HashSet<Ipv4Addr> = HashSet::new();
-    let mut all: Vec<u32> = Vec::new();
+    let mut status: HashMap<Ipv4Addr, Status> = HashMap::new();
     let mut any = false;
+    // The newest date that reads (its time in seconds, and as written);
+    // else the first row's, as written.
+    let mut newest: Option<(i64, String)> = None;
+    let mut first_date: Option<String> = None;
     for row in doc.descendants().filter(|n| n.has_tag_name("row")) {
         any = true;
         if scan.rows() >= MAX_ROWS {
@@ -128,28 +150,168 @@ fn read(doc: &roxmltree::Document) -> Result<Scan, String> {
             .attribute("ip")
             .and_then(|s| s.trim().parse::<Ipv4Addr>().ok())
             .filter(|ip| !ip.is_unspecified() && !ip.is_broadcast());
-        let Some(ip) = ip.filter(|ip| seen.insert(*ip)) else {
+        let Some(ip) = ip else {
             scan.skipped += 1;
             continue;
         };
-        all.push(ip.into());
-        if let Some(d) = text(row.attribute("date"))
-            && scan.date.as_ref().is_none_or(|have| d > *have)
-        {
-            scan.date = Some(d);
+        let now = match row.attribute("status").map(str::trim) {
+            Some(s) if s.eq_ignore_ascii_case("alive") => Status::Alive,
+            Some(s) if s.eq_ignore_ascii_case("dead") => Status::Dead,
+            _ => Status::Unknown,
+        };
+        match status.get(&ip).copied() {
+            // A second row for one address: one of them is skipped, and an
+            // alive one wins over a dead or unknown one.
+            Some(Status::Alive) => {
+                scan.skipped += 1;
+                continue;
+            }
+            Some(was) if now == Status::Alive => {
+                scan.skipped += 1;
+                match was {
+                    Status::Dead => scan.dead -= 1,
+                    _ => scan.unknown -= 1,
+                }
+            }
+            Some(_) => {
+                scan.skipped += 1;
+                continue;
+            }
+            None => {}
         }
-        match row.attribute("status").map(str::trim) {
-            Some(s) if s.eq_ignore_ascii_case("alive") => scan.hosts.push(host(&row, ip)),
-            Some(s) if s.eq_ignore_ascii_case("dead") => scan.dead += 1,
-            _ => scan.unknown += 1,
+        status.insert(ip, now);
+        if let Some(d) = text(row.attribute("date")) {
+            match when(&d) {
+                Some(t) if newest.as_ref().is_none_or(|(have, _)| t > *have) => {
+                    newest = Some((t, d));
+                }
+                Some(_) => {}
+                None if first_date.is_none() => first_date = Some(d),
+                None => {}
+            }
+        }
+        match now {
+            Status::Alive => scan.hosts.push(host(&row, ip)),
+            Status::Dead => scan.dead += 1,
+            Status::Unknown => scan.unknown += 1,
         }
     }
     if !any {
         return Err("no <row> elements: not an Advanced IP Scanner XML export".into());
     }
+    scan.date = newest.map(|n| n.1).or(first_date);
     scan.hosts.sort_by_key(|h| h.ip);
-    scan.ranges = ranges(all);
+    scan.ranges = ranges(status.into_keys().map(u32::from).collect());
     Ok(scan)
+}
+
+/// One linear pass over the markup before the parser sees it: nesting
+/// deeper than `MAX_DEPTH`, or an element with more than `MAX_ATTRS`
+/// attributes, is refused. Comments, CDATA, processing instructions and
+/// quoted values are stepped over, so a `>` inside one doesn't count.
+fn shape(text: &str) -> Result<(), String> {
+    let b = text.as_bytes();
+    let skip_to = |from: usize, end: &[u8]| -> usize {
+        b[from.min(b.len())..]
+            .windows(end.len())
+            .position(|w| w == end)
+            .map_or(b.len(), |p| from + p + end.len())
+    };
+    let (mut i, mut depth) = (0, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i + 1..];
+        if rest.starts_with(b"!--") {
+            i = skip_to(i + 4, b"-->");
+        } else if rest.starts_with(b"![CDATA[") {
+            i = skip_to(i + 9, b"]]>");
+        } else if rest.starts_with(b"?") || rest.starts_with(b"!") {
+            i = skip_to(i + 1, b">");
+        } else if rest.starts_with(b"/") {
+            depth = depth.saturating_sub(1);
+            i = skip_to(i + 1, b">");
+        } else {
+            // A start tag: its attributes counted by their `=`, outside
+            // quoted values.
+            let (mut j, mut quote, mut attrs) = (i + 1, None, 0);
+            while j < b.len() {
+                match (quote, b[j]) {
+                    (Some(q), c) if c == q => quote = None,
+                    (Some(_), _) => {}
+                    (None, c @ (b'"' | b'\'')) => quote = Some(c),
+                    (None, b'=') => attrs += 1,
+                    (None, b'>') => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if attrs > MAX_ATTRS {
+                return Err(format!(
+                    "an element with more than {MAX_ATTRS} attributes: not an Advanced IP \
+                     Scanner export"
+                ));
+            }
+            if b.get(j.wrapping_sub(1)) != Some(&b'/') {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    return Err(format!(
+                        "nested more than {MAX_DEPTH} deep: not an Advanced IP Scanner export"
+                    ));
+                }
+            }
+            i = j + 1;
+        }
+    }
+    Ok(())
+}
+
+/// A row's `date` ("2026-11-24 13:05:10 UTC-05:00", the offset optional)
+/// as seconds since 1970 in UTC, to find the newest; None if it doesn't
+/// read that way.
+fn when(d: &str) -> Option<i64> {
+    let (date, rest) = d.trim().split_once(' ')?;
+    let mut ymd = date.split('-').map(|x| x.parse::<i64>().ok());
+    let (y, m, day) = (ymd.next()??, ymd.next()??, ymd.next()??);
+    let (time, zone) = rest.split_once(' ').unwrap_or((rest, ""));
+    let mut hms = time.split(':').map(|x| x.parse::<i64>().ok());
+    let (h, mi, sec) = (
+        hms.next()??,
+        hms.next()??,
+        hms.next().flatten().unwrap_or(0),
+    );
+    if !(1..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&h)
+        || !(0..=59).contains(&mi)
+        || !(0..=60).contains(&sec)
+    {
+        return None;
+    }
+    let off = match zone.trim().strip_prefix("UTC").or(Some(zone.trim())) {
+        Some("") => 0,
+        Some(z) => {
+            let (sign, hhmm) = match z.as_bytes().first()? {
+                b'+' => (1, &z[1..]),
+                b'-' => (-1, &z[1..]),
+                _ => return None,
+            };
+            let (oh, om) = hhmm.split_once(':').unwrap_or((hhmm, "0"));
+            sign * (oh.parse::<i64>().ok()?.min(14) * 3600 + om.parse::<i64>().ok()?.min(59) * 60)
+        }
+        None => 0,
+    };
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + sec - off)
 }
 
 /// One alive row. `user` is never read; shares and printers only counted.
@@ -195,6 +357,7 @@ fn host(row: &roxmltree::Node, ip: Ipv4Addr) -> Row {
         netbios_name: at("netbiosname"),
         netbios_group: at("netbiosgroup"),
         os: at("os_version"),
+        // Its page's title only: the HTTPS banner is kept as https.
         web: at("http_title").or_else(|| at("http_title_full")),
         tls,
         https,
@@ -276,32 +439,60 @@ fn strip_prolog(text: &str) -> &str {
     }
 }
 
-/// The addresses as sweep ranges, one per /24 they fall in: the lowest to
-/// the highest there, or the whole /24 when that runs .1 to .254.
+/// Most ranges written per /24 before they're summarised per /16.
+const MAX_RANGES: usize = 32;
+
+/// The addresses as sweep ranges: one per /24 they fall in, the lowest to
+/// the highest there (the whole /24 when that runs .1 to .254). Past
+/// `MAX_RANGES` of those, one span per /16, lowest to highest; past that
+/// many /16s, one span from the lowest address to the highest.
 fn ranges(mut all: Vec<u32>) -> String {
     all.sort_unstable();
     all.dedup();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < all.len() {
-        let net = all[i] & 0xffff_ff00;
-        let mut j = i;
-        while j + 1 < all.len() && all[j + 1] & 0xffff_ff00 == net {
-            j += 1;
+    let groups = |mask: u32| -> Vec<(u32, u32)> {
+        let mut v: Vec<(u32, u32)> = Vec::new();
+        for &a in &all {
+            match v.last_mut() {
+                Some(g) if g.0 & mask == a & mask => g.1 = a,
+                _ => v.push((a, a)),
+            }
         }
-        let (lo, hi) = (all[i] & 0xff, all[j] & 0xff);
-        let base = Ipv4Addr::from(net);
-        let o = base.octets();
-        out.push(if lo <= 1 && hi >= 254 {
-            format!("{base}/24")
-        } else if lo == hi {
-            format!("{}.{}.{}.{lo}", o[0], o[1], o[2])
+        v
+    };
+    let span = |(lo, hi): (u32, u32)| {
+        if lo == hi {
+            Ipv4Addr::from(lo).to_string()
         } else {
-            format!("{}.{}.{}.{lo}-{hi}", o[0], o[1], o[2])
-        });
-        i = j + 1;
+            format!("{}-{}", Ipv4Addr::from(lo), Ipv4Addr::from(hi))
+        }
+    };
+    let by24 = groups(0xffff_ff00);
+    if by24.len() <= MAX_RANGES {
+        return by24
+            .into_iter()
+            .map(|(lo, hi)| {
+                let base = Ipv4Addr::from(lo & 0xffff_ff00);
+                let o = base.octets();
+                let (l, h) = (lo & 0xff, hi & 0xff);
+                if l <= 1 && h >= 254 {
+                    format!("{base}/24")
+                } else if l == h {
+                    format!("{}.{}.{}.{l}", o[0], o[1], o[2])
+                } else {
+                    format!("{}.{}.{}.{l}-{h}", o[0], o[1], o[2])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
     }
-    out.join(", ")
+    let by16 = groups(0xffff_0000);
+    if by16.len() <= MAX_RANGES {
+        return by16.into_iter().map(span).collect::<Vec<_>>().join(", ");
+    }
+    match (all.first(), all.last()) {
+        (Some(&lo), Some(&hi)) => span((lo, hi)),
+        _ => String::new(),
+    }
 }
 
 /// A fictional export (documentation addresses, made-up names, the
@@ -456,6 +647,129 @@ mod tests {
         assert_eq!(t("TLSv"), (None, Some("TLSv".into())));
     }
 
+    /// Deep nesting is refused before the parser (which recurses) sees
+    /// it, on a stack as small as a job thread's: 4,000 levels used to
+    /// abort the app.
+    #[test]
+    fn deep_nesting_is_refused_on_a_small_stack() {
+        for depth in [17, 4_000, 200_000] {
+            let x = "<a>".repeat(depth) + &"</a>".repeat(depth);
+            let r = std::thread::Builder::new()
+                .stack_size(2 << 20)
+                .spawn(move || parse(x.as_bytes()))
+                .unwrap()
+                .join()
+                .unwrap();
+            assert!(r.unwrap_err().contains("nested"), "{depth}");
+        }
+        // Self-closed elements, comments and quoted `>` don't count.
+        let ok = "<rows><!-- <a><a> --><row status='alive' ip='192.0.2.9' name='a>b'/>\
+                  <![CDATA[<a><a><a>]]></rows>";
+        assert_eq!(parse(ok.as_bytes()).unwrap().hosts.len(), 1);
+        let ok = "<a>".repeat(MAX_DEPTH - 1)
+            + "<row status='alive' ip='192.0.2.9'/>"
+            + &"</a>".repeat(MAX_DEPTH - 1);
+        assert_eq!(parse(ok.as_bytes()).unwrap().hosts.len(), 1);
+    }
+
+    /// An element with thousands of attributes (quadratic for the parser:
+    /// 80,000 took seconds) is refused at once.
+    #[test]
+    fn too_many_attributes_are_refused() {
+        let mut row = String::from("<row status='alive' ip='192.0.2.9'");
+        for i in 0..80_000 {
+            row += &format!(" a{i}='x'");
+        }
+        row += "/>";
+        let t = std::time::Instant::now();
+        assert!(parse(row.as_bytes()).unwrap_err().contains("attributes"));
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        // A real row's 30-odd, and an `=` inside a value, are fine.
+        assert!(parse(SAMPLE.as_bytes()).is_ok());
+        let eq = format!(
+            "<row status='alive' ip='192.0.2.9' name='{}'/>",
+            "=".repeat(500)
+        );
+        assert!(parse(eq.as_bytes()).is_ok());
+    }
+
+    /// Two rows for one address: one is skipped, and the alive one wins
+    /// whichever comes first.
+    #[test]
+    fn a_second_row_for_an_address_is_skipped_alive_winning() {
+        let s = parse(
+            b"<rows><row status='dead' ip='192.0.2.5'/><row status='alive' ip='192.0.2.5' name='late'/>\
+              <row status='alive' ip='192.0.2.6' name='first'/><row status='unknown' ip='192.0.2.6'/></rows>",
+        )
+        .unwrap();
+        assert_eq!(s.hosts.len(), 2);
+        assert_eq!(s.hosts[0].name.as_deref(), Some("late"));
+        assert_eq!((s.dead, s.unknown, s.skipped), (0, 0, 2));
+    }
+
+    /// The scan's date is the newest by time, not by text: a later hour in
+    /// another offset, a day past the 9th; one that won't read only when
+    /// none do.
+    #[test]
+    fn the_scan_date_is_the_newest_by_time() {
+        let rows = |dates: &[&str]| {
+            let mut x = String::from("<rows>");
+            for (i, d) in dates.iter().enumerate() {
+                x += &format!("<row status='alive' ip='192.0.2.{}' date='{d}'/>", i + 1);
+            }
+            parse((x + "</rows>").as_bytes()).unwrap().date
+        };
+        assert_eq!(
+            rows(&[
+                "2026-11-24 13:05:10 UTC-05:00",
+                "2026-11-24 14:00:00 UTC+02:00"
+            ])
+            .as_deref(),
+            Some("2026-11-24 13:05:10 UTC-05:00"),
+            "14:00 at +2 is 12:00 UTC, before 18:05"
+        );
+        assert_eq!(
+            rows(&["2026-11-9 23:00:00", "2026-11-10 01:00:00"]).as_deref(),
+            Some("2026-11-10 01:00:00")
+        );
+        assert_eq!(rows(&["yesterday", "later"]).as_deref(), Some("yesterday"));
+        assert_eq!(
+            rows(&["yesterday", "2026-01-01 00:00:00"]).as_deref(),
+            Some("2026-01-01 00:00:00")
+        );
+        assert_eq!(when("2026-11-24 13:05:10 UTC"), when("2026-11-24 13:05:10"));
+        assert_eq!(when("1970-01-01 00:00:00 UTC+01:00"), Some(-3600));
+        for bad in [
+            "",
+            " ",
+            "2026-13-01 00:00:00",
+            "2026-11-24",
+            "2026-11-24 25:00:00",
+            "2026-11-24 13:05:10 EST",
+        ] {
+            assert_eq!(when(bad), None, "{bad}");
+        }
+    }
+
+    /// Past 32 /24s the ranges are summarised per /16, and past 32 of
+    /// those as one span: never a list as long as the file.
+    #[test]
+    fn ranges_past_32_networks_are_summarised() {
+        let a = |x: [u8; 4]| u32::from(Ipv4Addr::from(x));
+        assert_eq!(
+            ranges(vec![a([10, 0, 0, 5]), a([10, 0, 1, 9])]),
+            "10.0.0.5, 10.0.1.9"
+        );
+        let many: Vec<u32> = (0..40u8)
+            .map(|n| a([10, 1, n, 7]))
+            .chain([a([10, 2, 0, 1])])
+            .collect();
+        assert_eq!(ranges(many), "10.1.0.7-10.1.39.7, 10.2.0.1");
+        let huge: Vec<u32> = (0..40u8).map(|n| a([10, n, 0, 1])).collect();
+        assert_eq!(ranges(huge), "10.0.0.1-10.39.0.1");
+        assert_eq!(ranges(vec![]), "");
+    }
+
     /// Hostile files: the sample cut, corrupted and noise, and text with
     /// characters that trip byte slicing. None may panic.
     #[test]
@@ -478,5 +792,29 @@ mod tests {
         let _ = decode(&[0xff, 0xfe, 0x41]);
         let _ = decode(&[0xfe, 0xff]);
         let _ = ranges(vec![0, u32::MAX, 255, 256]);
+        for d in [
+            "99999999999999999-1-1 0:0:0",
+            "2026-1-1 -5:0:0",
+            "2026-\u{e9}-1 0:0:0",
+            "-9999999999-1-1 0:0:0",
+            "2026-11-24 13:05:10 UTC+",
+            "2026-11-24 13:05:10 UTC-99:99",
+            "x y z",
+        ] {
+            let _ = when(d);
+        }
+        for t in [
+            "<",
+            "<a",
+            "<a '",
+            "</",
+            "<!--",
+            "<![CDATA[",
+            "<?",
+            "<a/",
+            "<<<>>>",
+        ] {
+            let _ = shape(t);
+        }
     }
 }

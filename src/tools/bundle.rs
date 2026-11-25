@@ -131,7 +131,9 @@ MAC, maker, name, NetBIOS name and workgroup, OS, web title, the FTP, HTTP, HTTP
 and banners) and how many shares and printers each has (never their names); dead and unknown rows only counted, \
 logged-on users never imported.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
-start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
+start and end times. A Subnet Sweep run may be an imported Advanced IP Scanner scan (its text starts \
+\"Advanced IP Scanner scan of\"): its start time is when it was imported, not when that scan ran, which its \
+text gives. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
 and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network; \
 Host info's dhcp_server, lease_obtained, lease_expires, dns_servers and dns_suffix are what that computer was \
@@ -708,7 +710,7 @@ impl BundleTool {
         );
         widgets::restore_selection(ui.ctx(), id, &edit.response, keep);
         edit.response.context_menu(|ui| {
-            if widgets::text_edit_menu(ui, id, true) {
+            if widgets::text_edit_menu(ui, id, crate::clip::EDITABLE, self.notes.is_empty()) {
                 ui.close();
             }
         });

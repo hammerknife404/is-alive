@@ -724,11 +724,12 @@ impl App {
                     .auto_shrink(false)
                     .stick_to_bottom(running.is_some())
                     .show(ui, |ui| {
-                        ui.add(
+                        let out = ui.add(
                             egui::Label::new(RichText::new(text.trim_end()).monospace())
                                 .selectable(true)
                                 .extend(),
                         );
+                        crate::clip::block_menu(&out, text.trim_end());
                     });
             }
         }
@@ -998,6 +999,12 @@ fn run_row(
     resp.on_hover_text(line)
 }
 
+/// A table row as one line: its cells, tab-separated (pastes into a
+/// spreadsheet's columns).
+fn row_line(cells: &[String]) -> String {
+    cells.join("\t")
+}
+
 /// A run's table: its columns and rows, the rows drawn as they scroll in.
 fn table_view(ui: &mut Ui, t: &log::Table) {
     let cols = t.columns.len().max(1);
@@ -1014,10 +1021,19 @@ fn table_view(ui: &mut Ui, t: &log::Table) {
                         } else {
                             RichText::new(c).monospace()
                         };
-                        ui.add_sized(
+                        let r = ui.add_sized(
                             vec2(w, row_h),
                             egui::Label::new(text).truncate().selectable(true),
                         );
+                        // A cut-short cell copies whole; its row as one line.
+                        r.context_menu(|ui| {
+                            crate::clip::value_items(ui, c);
+                            if ui.button("Copy row").clicked() {
+                                widgets::copy(ui.ctx(), row_line(cells));
+                                widgets::toast("Copied to the clipboard", true);
+                                ui.close();
+                            }
+                        });
                     }
                 });
             };

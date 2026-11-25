@@ -125,19 +125,30 @@ impl App {
                             format!("{w} ")
                         }
                     };
-                    ui.label(format!(
-                        "{}{}",
-                        word("LAN"),
-                        i.lan.map_or_else(na, |(ip, bits)| format!("{ip}/{bits}"))
-                    ))
-                    .on_hover_text("This computer's LAN address");
+                    // Each address copies bare from its right-click menu.
+                    let lan = i.lan.map(|(ip, bits)| format!("{ip}/{bits}"));
+                    let r = ui
+                        .label(format!(
+                            "{}{}",
+                            word("LAN"),
+                            lan.clone().unwrap_or_else(na)
+                        ))
+                        .on_hover_text("This computer's LAN address");
+                    if let Some(v) = &lan {
+                        crate::clip::value_menu(&r, v);
+                    }
                     ui.separator();
-                    ui.label(format!(
-                        "{}{}",
-                        word("Gateway"),
-                        i.gateway.map_or_else(na, |g| g.to_string())
-                    ))
-                    .on_hover_text("Default gateway");
+                    let gw = i.gateway.map(|g| g.to_string());
+                    let r = ui
+                        .label(format!(
+                            "{}{}",
+                            word("Gateway"),
+                            gw.clone().unwrap_or_else(na)
+                        ))
+                        .on_hover_text("Default gateway");
+                    if let Some(v) = &gw {
+                        crate::clip::value_menu(&r, v);
+                    }
                     ui.separator();
                     // What the right-hand side will take: measured first, so
                     // the domain gives way to it rather than overlap it.
@@ -194,7 +205,11 @@ impl App {
                         (None, false, true) => na(),
                         (None, false, false) => "not looked up".into(),
                     };
-                    ui.label(format!("{}{wan}", word("WAN"))).on_hover_text(
+                    let r = ui.label(format!("{}{wan}", word("WAN")));
+                    if let Some(w) = i.wan {
+                        crate::clip::value_menu(&r, &w.to_string());
+                    }
+                    r.on_hover_text(
                         "Public IP, looked up via OpenDNS on start (unless Settings turns it off), \
                          on Refresh or a full scan",
                     );

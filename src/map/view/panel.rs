@@ -330,7 +330,8 @@ impl MapView {
             {
                 ui.horizontal_top(|ui| {
                     ui.weak("·");
-                    ui.add(egui::Label::new(d).wrap().selectable(true));
+                    let r = ui.add(egui::Label::new(d).wrap().selectable(true));
+                    crate::clip::value_menu(&r, d);
                 });
             }
             if facts.is_empty()
@@ -739,11 +740,13 @@ pub(super) fn run_section(ui: &mut Ui, card: &str, r: &Run, busy: bool) -> Optio
         State::Failed(_) => widgets::bad(),
         _ => ui.visuals().text_color(),
     };
-    ui.add(
-        egui::Label::new(RichText::new(r.summary()).monospace().small().color(colour))
+    let summary = r.summary();
+    let line = ui.add(
+        egui::Label::new(RichText::new(&summary).monospace().small().color(colour))
             .wrap()
             .selectable(true),
     );
+    crate::clip::value_menu(&line, &summary);
     ui.add_space(4.0);
     out
 }
@@ -799,9 +802,12 @@ pub(super) fn run_detail(ui: &mut Ui, r: &Run) {
                         (Some(a), None) => a.to_string(),
                         (None, _) => "*".into(),
                     };
-                    ui.add(
-                        egui::Label::new(RichText::new(at).monospace().small()).selectable(true),
+                    let hop = ui.add(
+                        egui::Label::new(RichText::new(&at).monospace().small()).selectable(true),
                     );
+                    if let Some(a) = h.addr {
+                        crate::clip::value_menu(&hop, &a.to_string());
+                    }
                     cell(ui, h.best.map(widgets::fmt_ms).unwrap_or_default());
                     ui.end_row();
                 }

@@ -21,8 +21,10 @@ impl Whois {
         });
         ui.horizontal_wrapped(|ui| {
             ui.label("Domain or IP");
-            let field =
-                ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("example.com"));
+            let field = widgets::add_text_edit(
+                ui,
+                egui::TextEdit::singleline(&mut self.query).hint_text("example.com"),
+            );
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(!running, egui::Button::new("Look up"))

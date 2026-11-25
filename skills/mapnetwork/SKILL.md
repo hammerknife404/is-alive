@@ -372,32 +372,35 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
   only from the host itself (below) — a missing one there is **expected**,
   not an unidentified device.
-- **An imported Advanced IP Scanner scan** (`imported` set at the top
-  level; `null` for a sweep is-alive ran itself): the hosts come from an
-  Advanced IP Scanner XML export the tech brought in (`imported.from`),
-  scanned on another computer at `imported.scanned_at` (as that scanner
-  wrote it). Every host
-  has `found_by: ["ais"]`: the scanner found it alive, is-alive did not
-  ping it, so `rtt_ms` and `ttl` are null. `mac_from` is `ais` (the
+- **An imported Advanced IP Scanner scan** (`imported` set at the top level;
+  `null` for a sweep is-alive ran itself): the hosts come from an Advanced
+  IP Scanner XML export the tech brought in (`imported.from`), scanned on
+  another computer at `imported.scanned_at` (as that scanner wrote it).
+  Every host has `found_by: ["ais"]`: the scanner found it alive, is-alive
+  did not ping it, so `rtt_ms` and `ttl` are null. `mac_from` is `ais` (the
   scanner's reading), `name_from` is `ais` (the name it resolved, usually
   DNS) or `netbios`, and `vendor` is the maker the scanner named, else the
-  IEEE registry's. Only rows it marked alive are hosts: `imported.dead`
-  and `imported.unknown` count the rest, `imported.skipped` rows with no
-  IPv4 address. `ranges` are every address a row named, per /24, not a
-  range typed in. `scanner` and `on_scanner_lan` are null: the scanning
-  computer's segment isn't known, so a missing MAC means nothing.
-  `open_ports` is what its service flags found among `ports_checked` (FTP
-  21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it checks, so `[]` doesn't
-  rule out anything else), null where a row carried no flags. Each host's
-  `ais` holds the rest (`null` on a swept host): `netbios_name` and
-  `netbios_group` (the computer name and workgroup or domain it reported;
-  `netbios_name` follows `client_names`), `os`, `tls` (the TLS or SSL
-  version its HTTPS answered with: `TLSv1`, `TLSv1.1` or `SSLv3` is
-  outdated, a med finding on infrastructure), `https_server`, `ftp` and
-  `rdp` (banners: role hints, the device's own claim), and `shares` and
-  `printers` (how many it shares: counts only, never names). Logged-on
-  users are never imported. A host sharing files or with RDP open is a
-  server or PC; a NAS login page in `web_title` is a NAS.
+  IEEE registry's. Only rows it marked alive are hosts: `imported.dead` and
+  `imported.unknown` count the rest, `imported.skipped` rows with no IPv4
+  address and the second row for an address already read (an alive row wins
+  over a dead or unknown one). `imported.scanned_at` is the newest row date
+  that reads as a date, else the first row's. `ranges` are every address a
+  row named, not a range typed in: one per /24, summarised past 32 as one
+  span per /16 and past 32 of those as one span overall, so a summarised
+  span may hold addresses never tried. `scanner` and `on_scanner_lan` are
+  null: the scanning computer's segment isn't known, so a missing MAC means
+  nothing. `open_ports` is what its service flags found among
+  `ports_checked` (FTP 21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it
+  checks, so `[]` doesn't rule out anything else), null where a row carried
+  no flags. Each host's `ais` holds the rest (`null` on a swept host):
+  `netbios_name` and `netbios_group` (the computer name and workgroup or
+  domain it reported; `netbios_name` follows `client_names`), `os`, `tls`
+  (the TLS or SSL version its HTTPS answered with: `TLSv1`, `TLSv1.1` or
+  `SSLv3` is outdated, a med finding on infrastructure), `https_server`,
+  `ftp` and `rdp` (banners: role hints, the device's own claim), and
+  `shares` and `printers` (how many it shares: counts only, never names).
+  Logged-on users are never imported. A host sharing files or with RDP open
+  is a server or PC; a NAS login page in `web_title` is a NAS.
 - **Where a host's `name` and `mac` came from:** `name_from` is `dns` (its
   PTR record), `netbios` (the computer name a Windows, Samba or NAS host
   reports) or `mdns` (a `name.local` an Apple device, printer, cast device or

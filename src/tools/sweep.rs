@@ -797,22 +797,36 @@ impl SweepTool {
                     if resp.clicked() {
                         pick = Some((!on).then_some(h.ip));
                     }
-                    // Right-click: Wake, as on a Map card.
-                    if let Some(t) = wake_target(h, &nets) {
-                        resp.context_menu(|ui| {
+                    // Right-click: its copies (only what it has), then
+                    // Wake, as on a Map card.
+                    let copies = row_copies(h, &self.vendor(h));
+                    let wake = wake_target(h, &nets);
+                    resp.context_menu(|ui| {
+                        for (what, value) in &copies {
+                            let b = egui::Button::new(format!("Copy {what}"))
+                                .shortcut_text(widgets::short(value, 24))
+                                .min_size(vec2(0.0, theme::TARGET_H));
+                            if ui.add(b).clicked() {
+                                widgets::copy(ui.ctx(), value.clone());
+                                widgets::toast("Copied to the clipboard", true);
+                                ui.close();
+                            }
+                        }
+                        if let Some(t) = &wake {
+                            ui.separator();
                             if ui
                                 .add(
                                     egui::Button::new("Wake (Wake-on-LAN)")
                                         .min_size(vec2(0.0, theme::TARGET_H)),
                                 )
-                                .on_hover_text(wake_tip(&t))
+                                .on_hover_text(wake_tip(t))
                                 .clicked()
                             {
-                                wol::wake_all(vec![t]);
+                                wol::wake_all(vec![*t]);
                                 ui.close();
                             }
-                        });
-                    }
+                        }
+                    });
                 }
             },
         );
@@ -1452,11 +1466,12 @@ impl SweepTool {
                 .unwrap_or_else(log::now),
             "range": self.ran,
             "ranges": targets::list(&self.ran),
-            "scanner": {
+            // An imported scan ran on a computer whose network isn't known.
+            "scanner": here.then(|| json!({
                 "lan": lan.map(|(ip, bits)| format!("{ip}/{bits}")),
-                "gateway": self.local.gateway.or(info.gateway.filter(|_| here)).map(|g| g.to_string()),
-                "wan": info.wan.filter(|_| here).map(|w| w.to_string()),
-            },
+                "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
+                "wan": info.wan.map(|w| w.to_string()),
+            })),
             "imported": im.map(|i| json!({
                 "from": "Advanced IP Scanner",
                 "scanned_at": i.date,
@@ -1489,7 +1504,7 @@ impl SweepTool {
                 "An ip in 169.254.0.0/16 is self-assigned: DHCP didn't answer that device (check the DHCP server/scope and the switch port). ports_checked includes 21 (ftp): printers and NAS often leave FTP on, which sends logins in clear text.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
-                "imported is null for a sweep is-alive ran itself. Otherwise the hosts come from an Advanced IP Scanner XML export the tech imported, scanned on another computer at imported.scanned_at (as that scanner wrote it; scanned_at matches): every host has found_by [\"ais\"] (Advanced IP Scanner found it alive; is-alive did not ping it, so rtt_ms and ttl are null), mac_from ais (the scanner's own reading), name_from ais (the name the scanner resolved, usually DNS) or netbios, and vendor is the maker the scanner named (else the IEEE registry's). Only rows it marked alive become hosts: imported.dead and imported.unknown count the rest, imported.skipped the rows with no IPv4 address. range and ranges are every address a row named, per /24, not a range typed in; scanner and on_scanner_lan are null because the scanning computer's segment isn't known. open_ports is what its service flags found among ports_checked (FTP 21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it checks, so [] is not proof nothing else is open), null when the row carried no flags. ais holds the rest: netbios_name and netbios_group (the computer name and workgroup or domain it reported; netbios_name follows client_names), os, tls (the TLS or SSL version its HTTPS answered with: TLSv1 or SSLv3 is outdated), https_server, ftp and rdp (banners), and shares and printers (how many it shares: counts only, names are never imported). Logged-on users are never imported.",
+                "imported is null for a sweep is-alive ran itself. Otherwise the hosts come from an Advanced IP Scanner XML export the tech imported, scanned on another computer at imported.scanned_at (as that scanner wrote it; scanned_at matches): every host has found_by [\"ais\"] (Advanced IP Scanner found it alive; is-alive did not ping it, so rtt_ms and ttl are null), mac_from ais (the scanner's own reading), name_from ais (the name the scanner resolved, usually DNS) or netbios, and vendor is the maker the scanner named (else the IEEE registry's). Only rows it marked alive become hosts: imported.dead and imported.unknown count the rest, imported.skipped the rows with no IPv4 address and the second row for an address already read (an alive row wins over a dead or unknown one). imported.scanned_at is the newest row date that reads as a date, else the first row's, as written. range and ranges are every address a row named, not a range typed in: one per /24 (lowest to highest there, or the whole /24), summarised past 32 as one span per /16, and past 32 of those as one span from the lowest address to the highest, so a summarised span may include addresses the scan never tried; scanner and on_scanner_lan are null because the scanning computer's segment isn't known. open_ports is what its service flags found among ports_checked (FTP 21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it checks, so [] is not proof nothing else is open), null when the row carried no flags. ais holds the rest: netbios_name and netbios_group (the computer name and workgroup or domain it reported; netbios_name follows client_names), os, tls (the TLS or SSL version its HTTPS answered with: TLSv1 or SSLv3 is outdated), https_server, ftp and rdp (banners), and shares and printers (how many it shares: counts only, names are never imported). Logged-on users are never imported.",
             ],
             "hosts": hosts,
         });
@@ -1657,6 +1672,17 @@ impl SweepTool {
         self.job.is_some()
     }
 
+    /// Import scan…'s file dialog is open, or the file is being read: what
+    /// it brings would land in whatever site is open by then.
+    pub fn importing(&self) -> bool {
+        self.importing.is_some()
+    }
+
+    /// The last run is an imported scan from another computer.
+    pub fn imported(&self) -> bool {
+        self.imported.is_some()
+    }
+
     /// Import scan…: pick an Advanced IP Scanner XML export and read it,
     /// off the UI thread. Nothing goes on the network.
     fn import_dialog(&mut self, ctx: &egui::Context) {
@@ -1781,6 +1807,8 @@ impl SweepTool {
         self.browsed = false;
         self.searched = false;
         self.imported = None;
+        // An import still being picked or read is dropped with the rest.
+        self.importing = None;
     }
 
     /// The whole networks the last run swept (10.20.0.0/24, not a range
@@ -1805,6 +1833,9 @@ impl SweepTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
+        // An import still being picked or read would cancel this sweep and
+        // lose its Results entry when it lands: Start drops it.
+        self.importing = None;
         // A range that won't read leaves the last sweep as it was: a typo
         // doesn't wipe 40 hosts.
         let ips = match targets::parse_range(&self.range) {
@@ -2202,7 +2233,7 @@ fn imported_host(r: ais::Row) -> Option<Host> {
         open: r.open.clone(),
         checked: r.checked,
         also: Vec::new(),
-        web: r.web.clone().or_else(|| r.https.clone()),
+        web: r.web.clone(),
         dnssd: None,
         ssdp: None,
         via: Via::AIS,
@@ -2303,6 +2334,20 @@ fn multicast_new<'a>(
 const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. A computer or print \
 server that shares a printer shows that printer's model. Multicast stays on this computer's own \
 network segment: devices on routed networks can't answer it.";
+
+/// What a host's right-click menu can copy, in order, each only when the
+/// host has it: its address, name, MAC and vendor.
+fn row_copies(h: &Host, vendor: &str) -> Vec<(&'static str, String)> {
+    [
+        ("IP", Some(h.ip.to_string())),
+        ("name", h.name.clone()),
+        ("MAC", h.mac.as_ref().map(mac::fmt)),
+        ("vendor", Some(vendor.to_string())),
+    ]
+    .into_iter()
+    .filter_map(|(w, v)| Some((w, v.filter(|v| !v.trim().is_empty())?)))
+    .collect()
+}
 
 /// What Wake sends to for `h`: its MAC (a real card's), its address, and
 /// the swept network holding it.
@@ -2483,6 +2528,23 @@ mod tests {
 
     fn mac(last: u8) -> Mac {
         [0x00, 0x11, 0x32, 0x00, 0x00, last]
+    }
+
+    /// A row's right-click copies only what the host has, address first.
+    #[test]
+    fn a_rows_menu_copies_only_what_the_host_has() {
+        let bare = host([192, 0, 2, 20], None);
+        let got = row_copies(&bare, "");
+        assert_eq!(got, [("IP", "192.0.2.20".to_string())]);
+        let mut full = host([192, 0, 2, 21], Some(1.0));
+        full.name = Some("FRONT-DESK".into());
+        full.mac = Some(mac(7));
+        let got: Vec<&str> = row_copies(&full, "Synology")
+            .into_iter()
+            .map(|(w, _)| w)
+            .collect();
+        assert_eq!(got, ["IP", "name", "MAC", "vendor"]);
+        assert_eq!(row_copies(&full, "  ")[2].1, mac::fmt(&mac(7)));
     }
 
     /// The Site Bundle's Clients setting reaches the inventory: a phone,
@@ -3479,9 +3541,48 @@ mod tests {
             card.chips
         );
 
+        // The HTTPS banner is its own row, never the web page's title.
+        assert_eq!(s.alive[0].web, None);
+        assert_eq!(v["hosts"][0]["ais"]["https_server"], "Web-Server httpd 3.0");
+        // The scanner's network is unknown: null, not an object of nulls.
+        assert!(v["scanner"].is_null());
+        assert!(!swept_v["scanner"].is_null());
+
         // A new sweep, or Clear map, forgets it was an import.
         s.clear_results();
         assert!(s.imported.is_none() && s.alive.is_empty());
+    }
+
+    /// An import still being picked or read never lands after Clear map
+    /// or a new sweep: it would cancel the sweep and lose its Results
+    /// entry, or (after a site switch, which waits for it) fill the
+    /// wrong site.
+    #[test]
+    fn an_import_in_progress_is_dropped_by_clear_and_start() {
+        let ctx = egui::Context::default();
+        let pending = |ctx: &egui::Context| {
+            Some(Job::spawn(ctx, |tx: crate::job::Tx<Picked>| {
+                tx.sleep(Duration::from_millis(50));
+                tx.send(Ok((
+                    "late.xml".into(),
+                    ais::parse(ais::SAMPLE.as_bytes()).unwrap(),
+                )));
+            }))
+        };
+        let mut s = swept(vec![host([10, 0, 0, 1], Some(1.0))]);
+        s.importing = pending(&ctx);
+        assert!(s.importing());
+        s.clear_results();
+        assert!(!s.importing());
+        // Start drops it, even with a range that won't read (so nothing
+        // is sent from a test).
+        s.importing = pending(&ctx);
+        s.range = "10.0.0.1/2x".into();
+        s.start(&ctx);
+        assert!(!s.importing() && s.job.is_none());
+        std::thread::sleep(Duration::from_millis(150));
+        s.poll();
+        assert!(!s.imported(), "the late file never landed");
     }
 
     /// A PC's NetBIOS name is often a person's: it follows the Site
