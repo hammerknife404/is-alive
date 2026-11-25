@@ -29,7 +29,7 @@ vello_cpu = { version = "0.1", default-features = false, features = ["std", "u8_
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # Advanced IP Scanner's XML export (Sweep › Import scan…); tests also check
 # the SVG and draw.io exports parse as XML.
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [dev-dependencies]
 # Tests make a CA and a server certificate to read back, so no key is kept
