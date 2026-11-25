@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.35.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.36.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -502,21 +502,21 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **Found by multicast:** a device that ignores ping and ARP but answers DNS-SD or SSDP (TVs, cast devices and smart speakers often do) is added to the list, as long as it's inside the range you swept and on this computer's own segment. Its **Time** says *no ping*, the status row counts it as *multicast only*, and its inspector says *Host · mDNS only* (or *SSDP only*, or both), with a note. Every device's inspector has **Found by**, every way it answered (*ping*, *ARP*, *mDNS (DNS-SD)*, *SSDP (UPnP)*); the report ends each line with the same, and the Inventory and CSV have it as `found_by`. Multicast doesn't cross a router, so **only devices on this computer's own segment can answer**: a device on a routed network with no model or UPnP answer isn't a sign of anything, and none is ever added from there. The report says how many answered each and how many were found only this way.
 
-**MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine.
+**MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine. Some network gear makes a virtual MAC from its own: a SonicWall answers on its LAN with its interface MAC, one bit changed. When the gateway, or a device showing gear of its own (telnet, 541, 4433 or 8291 open, or a web page that names gear), has a MAC like that from a network-gear maker's range, **Vendor** names the maker with *(virtual MAC)* after it (*SonicWall (virtual MAC)*), and the device counts as gear, not a phone. The gateway is never called private; with no maker to name it reads *(virtual MAC)*. **HP** covers HP printers, HP PCs and Poly desk phones alike, so its role comes from its web page, not the vendor.
 
 **Mgmt ports** tries ports 21, 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, FTP (21, which printers and NAS often leave on), plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Each is a connect only: nothing is sent to the port. Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
 
 | Mgmt ports | Checks |
 |---|---|
 | **Off** | Nothing: only what answers ping and ARP |
-| **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. Fewer probes for intrusion detection to notice |
+| **Smart** (default) | The gateway, network gear, NAS, printers and cameras (their admin pages, a telnet left open), and devices from makers it doesn't know (open ports are what tell their role). It skips what's clearly someone's phone or laptop: a private MAC, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung. That includes a gear maker's virtual MAC, so off the gateway one is named only by **All hosts** (or by matching a SonicWall export on the Map). Fewer probes for intrusion detection to notice |
 | **All hosts** | Every live device, phones and laptops too |
 
 Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open (while the ports are being tried it says *checking…*). A sweep stopped part way says so in its report and in the Inventory (`complete: false`), and hosts whose ports it hadn't finished say *not checked*. Full scan uses the same choice: set **Off** where you mustn't port-scan.
 
 ### A device's details
 
-Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, *ARP only* when it didn't answer ping, or *mDNS only* / *SSDP only* when only the multicast browse found it), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. **Found by** says every way it answered. **Model**, **Queue**, **Languages** and **Services** are what it said over DNS-SD, and **UPnP** and **UPnP types** what it said over SSDP (above), each with a note that only this segment's devices can answer. A computer or print server that shares a printer shows that printer's model; one sharing several different printers shows none. Its buttons:
+Click a device's row to open it in the **inspector** on the right: what it is (*Gateway*, *This machine*, *Host*, *ARP only* when it didn't answer ping, or *mDNS only* / *SSDP only* when only the multicast browse found it), its name and address, then its MAC, vendor, where its name came from (*DNS*, or the device itself over NetBIOS or multicast DNS), ping time, TTL and, when its ports were checked, its open ports with what each is for (or that **Smart** skipped it). **Web page** is what the device's own page calls it (its title, such as *UniFi OS* or *SonicWall - Authentication*, else its server's name; a title that says nothing, such as *Loading...*, *Login*, *Redirecting* or *Please wait*, counts as none, so the server's name shows instead): one read of its page where a web port answered, no login; it also tells the Map what a device of an unknown maker is. **Also from** lists any other MAC the address answered from during the sweep, with a warning: two devices may share the address (a duplicate IP), or it failed over mid-sweep; the Map makes it a finding. **Found by** says every way it answered. **Model**, **Queue**, **Languages** and **Services** are what it said over DNS-SD, and **UPnP** and **UPnP types** what it said over SSDP (above), each with a note that only this segment's devices can answer. A computer or print server that shares a printer shows that printer's model; one sharing several different printers shows none. Its buttons:
 
 - **Ping**, **Ports**, **Trace**: run that tool against it in its own tab.
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
@@ -806,6 +806,23 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | A MAC in a card's text | Only from its `mac` field, its sub line, or a line that is the MAC; never from a *candidate* or *unconfirmed* one, so a sweep doesn't merge another device into it |
 
 A switch the map marks *inferred* or *scan-only* never wins over a confirmed one when a sweep's hosts are placed by subnet. A UniFi client at the address of a card with no MAC, or of the firewall (seen with another interface's MAC), joins that card instead of making a second.
+
+**How a sweep's role is worked out**, first match wins:
+
+| Evidence | Role |
+|---|---|
+| Its web page names a desk phone (*Poly*, *VVX*, *Yealink*, *IP Phone*…) | Phone (client) |
+| A network-gear maker, including carrier and voice edge boxes (Adtran, EdgeMarc, AudioCodes, Ribbon, Patton) | That maker's device |
+| A NAS maker | NAS |
+| A printer maker (Brother, Canon, Epson, Konica Minolta, Kyocera, Lexmark, Ricoh and its Lanier and Savin lines, Sharp, Toshiba TEC, Xerox, Zebra…), a printer's web page, or a printer's DNS-SD answer from a device that isn't a laptop or phone (nor on a private MAC) | Printer |
+| A desk-phone maker (Poly, Yealink, Snom…). Grandstream, Mitel and Avaya also make access points and PBXs: theirs are network gear when telnet, 541, 4433 or 8291 is open or the page names gear | Phone (client), or that maker's device |
+| 9100 (raw printing) open, without 5000 (a NAS serving a USB printer opens both) | Printer |
+| Telnet, or 8291, 541 or 4433 open | Network device |
+| Port 5000 | NAS |
+| A camera maker, or 554 | Camera |
+| Anything else | A client, named by its maker; then its web page can still place it |
+
+So a copier that leaves telnet open is a printer, not a network device, and an HP-range Poly phone with its own page is a phone, not an HP PC.
 
 A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Claude Handoff for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
 
