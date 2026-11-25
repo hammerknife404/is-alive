@@ -155,7 +155,14 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   looks like a credential or a person's or patient's details may be real, so
   never repeat it in the map, its findings or your reply.
   `results.json` (test runs) becomes a finding only where a run shows a problem
-  (loss, a closed port that should be open, a failing mail check). A site
+  (loss, a closed port that should be open, a failing mail check). A check
+  that **passed** still belongs on the map, as one short `details` line on
+  the node it tested (`Ping 0% loss, 1.2 ms avg (is-alive, <date>)`,
+  `HTTPS inspection: none`): otherwise the next visit can't tell "checked,
+  fine" from "never checked". A `Traceroute` run names the hops from the
+  scanner out: the first hop is the LAN's gateway, and the first public
+  address is the ISP's edge; use it to say which WAN the LAN leaves by, and
+  put the hop list in the internet/WAN node's `details`. A site
   keeps its runs from one visit to the next, so they can span visits: judge
   each check by its **newest** run (`started`); an older failure that a later
   run of the same check doesn't repeat is history, not a finding.
@@ -168,7 +175,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `AzureAdPrt` NO on a joined PC) is a finding. Host info's `dhcp_server`,
   `lease_obtained`, `lease_expires` (local time on the scanner, or
   `unknown`/`none`), `dns_servers` and `dns_suffix` are what that computer
-  was given: context, not findings; a lease length is a site setting, not a
+  was given: context, not findings (put `dns_servers` on the gateway or the
+  DNS server's node as a `details` line, `DNS handed out: …`, so the map
+  says which resolver the LAN uses); a lease length is a site setting, not a
   problem. A DHCP server that isn't the gateway is normal (a domain
   controller often hands out addresses), and one run can't show a rogue
   DHCP server, so never report either from these rows.
@@ -353,7 +362,12 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   network gear, often answering only ARP: the provider's demarc, not a
   client.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
-  is the default gateway. `ranges` lists every network swept;
+  is the default gateway. The top-level `scanner` (`lan`, `gateway`, `wan`)
+  says where the sweep ran from: the scanner's address and prefix, its
+  default gateway, and the public address it left by. Use it to say which
+  WAN this LAN leaves by (with several WANs or firewalls, the one whose LAN
+  holds `scanner.lan` and whose public address is `scanner.wan`), and put
+  `wan` on the internet node (`sub: 'WAN 203.0.113.7'`). `ranges` lists every network swept;
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
   only from the host itself (below) — a missing one there is **expected**,
   not an unidentified device.
@@ -381,13 +395,75 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
   Its `inferred` list says what about that card is-alive worked out and did
-  not read or measure: `role` (from the vendor and open ports alone) or
-  `uplink` (it answered, but no backup or config says which port it's on).
+  not read or measure: `role` (from the vendor, open ports or web page
+  alone) or `uplink` (no backup or config says which port it's on).
   Empty means both were read. Treat an inferred value as a lead to confirm
   from the other files, and keep the `inferred` chip on the node until one
   does.
 - **Fill `ip` and `mac` on every node** you can (Step 2's schema): is-alive
   reopens the map and matches devices, sweeps and notes by them.
+
+## How is-alive reads the map back
+
+The technician opens your `.dc.html` in is-alive, which redraws it and
+merges this visit's sweep and UniFi clients into it. It reads only the
+data, by these rules, so write it to be read:
+
+- **Put a role word in every `kind`**: `FIREWALL`, `ROUTER`, `SWITCH`,
+  `AP`, `SERVER`, `NAS`, `PRINTER`, `COPIER`, `CAMERA`, `PHONE`, `PBX`,
+  `UPS`, `ACCESS CONTROL`, `WORKSTATION`. The role comes from the `kind`
+  first, then the zone's key and name, and the `label` last. A `kind` with
+  no role word (`TA900`, `IPC-427`) leaves it to the zone.
+- **Zone words on re-import:** `gateway`/`edge`/`routing`/`firewall` →
+  gateway; `distribution`/`switch` → switch (switch words win over edge
+  words: `EDGE SWITCH`, `USW EDGE` are switches); `access` (whatever
+  its name, unless the name says switches), `wifi`/`wireless` → access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
+  printers, cameras, IoT; `workstations`/`trusted`/`guest` → clients;
+  `voip`/`voice` → voice gear (a PBX, ATA or voice router), **not** a client
+  unless its `kind` says `PHONE`; `external` → unidentified unless the
+  `kind` names the role. Network words win over voice words, so a "voice
+  edge" zone's router is a gateway. A carrier's router: `kind:'CARRIER
+  ROUTER'` (or `ISP ROUTER`), never a client zone.
+- **`dashed:true` has one meaning on re-import: this link isn't confirmed.**
+  Say why in the edge's `label`, since is-alive shows the reason: `·
+  reciprocal` (uplink data points both ways), `last seen` (where the
+  controller last saw it, not live), or nothing extra (you inferred it).
+  A dashed edge whose label names a port keeps that port, but stays
+  unconfirmed: draw a link you read from a backup or a config solid.
+  `wifi` links are wireless whether dashed or not. A tunnel is not dashed:
+  `cls:'wired'`, `label:'IPsec to Branch'`.
+- **An edge `label` is the parent's port** (`Port 7`, `Gi1/0/7`, `1/1/7`,
+  `X2`, or just `7`). A range (`port 1-24`) or a size (`LAG x 4`) isn't
+  one.
+  When you know both ends, write the parent's first: `X2 → Port 24`. A
+  label that isn't a port (`21 wired`, `VLAN 10 gw`, `LAG`) is kept as a
+  note, not a port; put a VLAN after the port (`Port 14 · VLAN 40`).
+- **Backbone** (`cls:'backbone'`) from the internet is the WAN; a backbone
+  from the firewall's LAN port to the core switch is read as LAN backbone
+  with its port: label it with the firewall's port (`X0 → Port 24`).
+- **Every node needs an edge into it.** A gateway with none is put on the
+  internet; anything else goes under *Not linked*, placement unknown (under
+  the gateway only when it is confirmed and at the same site). Hang
+  a device whose uplink you can't find under its likely parent with a
+  dashed edge rather than leaving it unlinked.
+- **A MAC belongs in `mac`** (or the `sub` line). A MAC in `details` or a
+  chip counts only on a line that is the MAC outright: `MAC aa:bb:…`,
+  `MAC address: aa-bb-…`, `LAN MAC: …`, or the address alone
+  (`aabb.ccdd.eeff` too), then at most a tag (`· ARP only`).
+  One inside a sentence (`Uplink: Core port 7 (…)`) is someone else's;
+  write a candidate's, an HA peer's or an old one's as "candidate",
+  "unconfirmed", "HA peer", "old MAC" so it's never taken for the node's own.
+  Speculative infrastructure carries the `inferred` (or `scan-only`) chip:
+  is-alive never places a sweep's hosts under it ahead of a confirmed
+  switch.
+- **"+N more" cards:** one `details` line per device, name first, then
+  what's known, `·`-separated: `client-0a1b2c3d · Hikvision · guest`,
+  `front-desk · 192.0.2.40`. Each line becomes its own client card with
+  that vendor and guest tag; only a maker's name counts as the vendor
+  (`VLAN 20`, `5GHz`, `Win11` don't). Devices you only count go in one line, `…and 121 more`,
+  kept as a count; a per-kind count (`Wireless · 8`) is read as a note, not
+  a device. Never repeat a device on two lines; two names on one address
+  are two devices.
 
 ## Step 1 — one pre-build ask
 

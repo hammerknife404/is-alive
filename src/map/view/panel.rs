@@ -407,20 +407,22 @@ impl MapView {
                 insp::section(ui, "Connections");
             }
             if let Some((p, link, port)) = &n.up {
-                let how = match link {
-                    Link::Backbone => "uplink · WAN".to_string(),
-                    Link::Wired => format!("uplink · {}", port.as_deref().unwrap_or("wired")),
-                    Link::Wireless => "uplink · wireless".into(),
-                    Link::Assumed => format!("uplink · {}", crate::inferred::WORD),
-                };
+                // WAN only off the internet; a firewall's LAN to its core
+                // switch is backbone too, and keeps its port.
+                let wan = self
+                    .map
+                    .nodes
+                    .get(*p)
+                    .is_some_and(|u| u.zone == Zone::Internet);
+                let how = uplink_text(*link, port.as_deref(), wan);
                 let tip = match link {
-                    Link::Assumed => {
-                        "Show it (Ctrl+click adds it). Its uplink is inferred: it answered \
-                         here, but no backup or config says which port it's on"
-                    }
-                    _ => SHOW_IT,
+                    Link::Assumed => format!(
+                        "Show it (Ctrl+click adds it). {}",
+                        crate::inferred::uplink_why(&n.details)
+                    ),
+                    _ => SHOW_IT.to_string(),
                 };
-                if let Some(go) = self.link_row(ui, *p, &how, tip) {
+                if let Some(go) = self.link_row(ui, *p, &how, &tip) {
                     *pick = Some(go);
                 }
             }
@@ -919,5 +921,40 @@ mod tests {
             frame(vec![]);
             assert_eq!(open(&ctx, id), !was, "a click on the name flips it");
         }
+    }
+}
+
+/// How a card's link up reads in Connections. WAN only off the internet:
+/// a firewall's LAN to its core switch is backbone too, and keeps its port.
+fn uplink_text(link: Link, port: Option<&str>, wan: bool) -> String {
+    match (link, port) {
+        (Link::Backbone, Some(port)) if wan => format!("uplink · WAN · {port}"),
+        (Link::Backbone, None) if wan => "uplink · WAN".to_string(),
+        (Link::Backbone, port) => format!("uplink · {}", port.unwrap_or("backbone")),
+        (Link::Wired, port) => format!("uplink · {}", port.unwrap_or("wired")),
+        (Link::Wireless, _) => "uplink · wireless".into(),
+        (Link::Assumed, _) => format!("uplink · {}", crate::inferred::WORD),
+    }
+}
+
+#[cfg(test)]
+mod uplink_tests {
+    use super::*;
+
+    #[test]
+    fn backbone_is_wan_only_off_the_internet() {
+        assert_eq!(uplink_text(Link::Backbone, None, true), "uplink · WAN");
+        assert_eq!(
+            uplink_text(Link::Backbone, Some("ISP A"), true),
+            "uplink · WAN · ISP A"
+        );
+        assert_eq!(
+            uplink_text(Link::Backbone, Some("X2"), false),
+            "uplink · X2"
+        );
+        assert_eq!(
+            uplink_text(Link::Backbone, None, false),
+            "uplink · backbone"
+        );
     }
 }

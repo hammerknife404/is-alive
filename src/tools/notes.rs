@@ -480,7 +480,7 @@ impl NotesTool {
     }
 
     /// The redaction cache brought up to date; its key.
-    fn clean_key(&self) -> u64 {
+    pub fn clean_key(&self) -> u64 {
         let h = hash_with(&self.text, &self.ov);
         let mut c = self.clean.borrow_mut();
         if c.0 != h {
