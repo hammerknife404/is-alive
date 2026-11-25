@@ -33,6 +33,7 @@ use interact::title_above;
 use panel::card_text;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::net::Ipv4Addr;
 pub use tabs::MapTabs;
 
 /// What the tab asks the app to do.
@@ -631,13 +632,14 @@ impl MapView {
 
     fn input<'a>(&'a self, src: &'a Sources) -> Input<'a> {
         let sw = src.sweep;
+        let (gateway, this, wan) = here(src.info, sw.imported());
         Input {
             sweep: sw.seen(),
             range: sw.finished().map(|f| f.0),
             ports_checked: sw.checked_ports(),
-            gateway: src.info.gateway,
-            this: src.info.lan.map(|l| l.0),
-            wan: src.info.wan,
+            gateway,
+            this,
+            wan,
             unifi: src
                 .export
                 .unifis()
@@ -1914,10 +1916,65 @@ pub(super) fn keys_taken(ctx: &egui::Context) -> bool {
         || ctx.memory(|m| m.top_modal_layer().is_some())
 }
 
+/// This computer's gateway, address and WAN, for placing the hosts: none
+/// when the hosts are an imported scan from another computer, which may be
+/// another network altogether (a client's scan imported at home must not
+/// hang off the home router, nor make a host at this laptop's address
+/// "This machine").
+fn here(info: &HostInfo, imported: bool) -> (Option<Ipv4Addr>, Option<Ipv4Addr>, Option<Ipv4Addr>) {
+    if imported {
+        return (None, None, None);
+    }
+    (info.gateway, info.lan.map(|l| l.0), info.wan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::map::Node;
+
+    /// An imported scan is placed by nothing of this computer's network:
+    /// no gateway, no "This machine", no WAN, even where its addresses
+    /// collide with this laptop's.
+    #[test]
+    fn an_imported_scan_is_not_placed_around_this_computer() {
+        let info = HostInfo {
+            lan: Some((Ipv4Addr::new(192, 0, 2, 20), 24)),
+            gateway: Some(Ipv4Addr::new(192, 0, 2, 1)),
+            wan: Some(Ipv4Addr::new(203, 0, 113, 9)),
+            ..Default::default()
+        };
+        assert_eq!(
+            here(&info, false),
+            (info.gateway, Some(Ipv4Addr::new(192, 0, 2, 20)), info.wan)
+        );
+        assert_eq!(here(&info, true), (None, None, None));
+        let mut sweep = SweepTool::default();
+        sweep.sample_import_for_shots();
+        let (gateway, this, wan) = here(&info, sweep.imported());
+        let m = super::super::build(&Input {
+            sweep: sweep.seen(),
+            range: sweep.finished().map(|f| f.0),
+            ports_checked: true,
+            gateway,
+            this,
+            wan,
+            ..Default::default()
+        });
+        // 192.0.2.20 is the imported PC, not this laptop.
+        let pc = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == Some(Ipv4Addr::new(192, 0, 2, 20)))
+            .unwrap();
+        assert_ne!(pc.label, "This machine");
+        assert!(!m.nodes.iter().any(|n| n.label == "This machine"));
+        assert!(
+            !m.nodes
+                .iter()
+                .any(|n| n.ip == Some(Ipv4Addr::new(203, 0, 113, 9)))
+        );
+    }
 
     fn view(n: usize) -> MapView {
         let mut v = MapView::new(None);

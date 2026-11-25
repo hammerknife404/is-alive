@@ -1,3 +1,4 @@
+use crate::ais;
 use crate::input::Field;
 use crate::job::{Job, pump};
 use crate::log::{self, Table};
@@ -58,6 +59,9 @@ struct Host {
     dnssd: Option<Box<dnssd::Found>>,
     /// What it said over SSDP (UPnP): same segment only.
     ssdp: Option<Box<ssdp::Found>>,
+    /// What Advanced IP Scanner said about it, for a host from an
+    /// imported scan.
+    ais: Option<Box<ais::Row>>,
     /// Every way it answered the sweep.
     via: Via,
 }
@@ -75,6 +79,8 @@ struct Via {
     mdns: bool,
     /// It answered the SSDP search.
     ssdp: bool,
+    /// Advanced IP Scanner found it alive: a host from an imported scan.
+    ais: bool,
 }
 
 impl Via {
@@ -83,21 +89,32 @@ impl Via {
         arp: false,
         mdns: false,
         ssdp: false,
+        ais: false,
     };
     const ARP: Via = Via {
         ping: false,
         arp: true,
         mdns: false,
         ssdp: false,
+        ais: false,
+    };
+    const AIS: Via = Via {
+        ping: false,
+        arp: false,
+        mdns: false,
+        ssdp: false,
+        ais: true,
     };
 
-    /// As the inventory and CSV say it: "ping", "arp", "mdns", "ssdp".
+    /// As the inventory and CSV say it: "ping", "arp", "mdns", "ssdp",
+    /// "ais".
     fn list(self) -> Vec<&'static str> {
         [
             (self.ping, "ping"),
             (self.arp, "arp"),
             (self.mdns, "mdns"),
             (self.ssdp, "ssdp"),
+            (self.ais, "ais"),
         ]
         .into_iter()
         .filter_map(|(on, s)| on.then_some(s))
@@ -127,6 +144,7 @@ impl Via {
                 "ping" => "ping",
                 "arp" => "ARP",
                 "mdns" => "mDNS (DNS-SD)",
+                "ais" => "Advanced IP Scanner (imported)",
                 _ => "SSDP (UPnP)",
             })
             .collect::<Vec<_>>()
@@ -256,6 +274,26 @@ enum Ev {
 /// What the box lists: (targets, addresses), or what's wrong with it.
 type Plan = Result<(usize, usize), String>;
 
+/// An Advanced IP Scanner export brought in as the last run: what it said
+/// beyond its alive hosts.
+#[derive(Clone, Debug, Default)]
+struct Imported {
+    /// The file's name, for the tab only: it may name the client, so it
+    /// stays out of the report and the inventory.
+    file: String,
+    /// When Advanced IP Scanner ran, as it wrote it.
+    date: Option<String>,
+    dead: usize,
+    unknown: usize,
+    /// Rows with no address to read, or a second row for one address.
+    skipped: usize,
+    /// More rows than a sweep covers: the rest weren't read.
+    cut: bool,
+}
+
+/// What reading a picked export gave: the file's name and the scan.
+type Picked = Result<(String, ais::Scan), String>;
+
 pub struct SweepTool {
     range: String,
     /// The range the last run swept, as typed then: what its report,
@@ -295,6 +333,10 @@ pub struct SweepTool {
     browsed: bool,
     /// The last run sent an SSDP search on the scanner's segment.
     searched: bool,
+    /// The last run was an imported Advanced IP Scanner export, not a sweep.
+    imported: Option<Imported>,
+    /// Import scan…: the file dialog, then the read, off the UI thread.
+    importing: Option<Job<Picked>>,
 }
 
 impl Default for SweepTool {
@@ -325,6 +367,8 @@ impl Default for SweepTool {
             picked: None,
             browsed: false,
             searched: false,
+            imported: None,
+            importing: None,
         }
     }
 }
@@ -333,6 +377,12 @@ impl Default for SweepTool {
 /// an entry REACHABLE for 15–45 s, so this catches every one the sweep's
 /// own ARP requests produce.
 const ARP_EVERY: Duration = Duration::from_secs(3);
+
+const IMPORT_TIP: &str = "Bring in an Advanced IP Scanner scan: its XML export (File › Export \
+› Export to XML), or rows pasted into a file. Its alive hosts take this tab's place as the last \
+run, with names, MACs, makers, NetBIOS, OS, web titles and the services it found, and go to the \
+Map, Results, the report and the Site Bundle like a sweep. Dead and unknown rows are counted, \
+not imported. Logged-on users are never imported; shares and printers are counted, never named.";
 
 const ARP_TIP: &str = "Answered this machine's ARP request but not ping (a firewall or an \
 endpoint that drops ICMP). Only entries the OS has just confirmed count, not stale ones.";
@@ -354,6 +404,13 @@ impl SweepTool {
     /// Drain worker messages. Called every frame so results stay current
     /// while another tab is shown.
     pub fn poll(&mut self) -> bool {
+        let mut picked = None;
+        pump(&mut self.importing, |p| picked = Some(p));
+        match picked {
+            Some(Ok((file, scan))) => self.load_import(&file, scan),
+            Some(Err(e)) => self.err = Some(e),
+            None => {}
+        }
         let was = self.job.is_some();
         let mut evs = Vec::new();
         let running = pump(&mut self.job, |ev| evs.push(ev));
@@ -532,6 +589,7 @@ impl SweepTool {
         widgets::error(ui, &self.err);
         ui.separator();
 
+        let mut import = false;
         widgets::status_row(
             ui,
             |ui| {
@@ -551,7 +609,28 @@ impl SweepTool {
                         ui.label(RichText::new(format!("({mc} multicast only)")).weak())
                             .on_hover_text(MULTICAST_TIP);
                     }
-                    ui.label(format!("· {} / {} probed", self.probed, self.total));
+                    match &self.imported {
+                        Some(im) => {
+                            // One count: a real scan has hundreds, and the
+                            // buttons share this row at 1120 wide.
+                            ui.label(format!("· imported · {} not alive", im.dead + im.unknown))
+                                .on_hover_text(format!(
+                                    "Imported from Advanced IP Scanner: {}{}. Only rows it \
+                                     marked alive become hosts; {} dead and {} unknown are \
+                                     counted, not imported.",
+                                    im.file,
+                                    im.date
+                                        .as_ref()
+                                        .map(|d| format!(", scanned {d}"))
+                                        .unwrap_or_default(),
+                                    im.dead,
+                                    im.unknown
+                                ));
+                        }
+                        None => {
+                            ui.label(format!("· {} / {} probed", self.probed, self.total));
+                        }
+                    }
                 }
             },
             |ui| {
@@ -574,27 +653,48 @@ impl SweepTool {
                     widgets::save_button(ui, "sweep", || self.report());
                     widgets::copy_button(ui, || self.report());
                 });
+                ui.add_enabled_ui(!running && self.importing.is_none(), |ui| {
+                    if ui
+                        .button("Import scan…")
+                        .on_hover_text(IMPORT_TIP)
+                        .clicked()
+                    {
+                        import = true;
+                    }
+                });
             },
         );
+        if import {
+            self.import_dialog(ui.ctx());
+        }
         if running && self.total > 0 {
             widgets::progress(ui, self.probed, self.total, self.started_at);
         }
         if self.alive.is_empty() && !running {
-            if self.total > 0 {
+            if self.imported.is_some() {
+                widgets::empty_state(
+                    ui,
+                    "No alive hosts in the scan",
+                    "Advanced IP Scanner marked none of its rows alive; the dead and unknown ones aren't imported.",
+                    &[],
+                );
+            } else if self.total > 0 {
                 widgets::empty_state(
                     ui,
                     "No hosts answered",
                     "Nothing answered ping, ARP, DNS-SD or SSDP. Past a router only ping counts, and firewalls often drop it; try Port Check on a known host.",
                     &[],
                 );
-            } else {
-                widgets::empty_state(
-                    ui,
-                    "Find what's on a network",
-                    "Enter one or more subnets, ranges or addresses and press Enter. Every address is pinged and ARPed, with names, MACs and vendors.",
-                    &[],
-                );
-            }
+            } else if widgets::empty_state(
+                ui,
+                "Find what's on a network",
+                    "Enter one or more subnets, ranges or addresses and press Enter. Every address is pinged and ARPed, with names, MACs and vendors. Scanned with Advanced IP Scanner? Import scan… brings in its XML export.",
+                    &[("Import scan…", IMPORT_TIP, self.importing.is_none())],
+                )
+                .is_some()
+                {
+                    self.import_dialog(ui.ctx());
+                }
             return ask;
         }
 
@@ -613,7 +713,8 @@ impl SweepTool {
     /// table gets too narrow: both are in the inspector.
     fn hosts_table(&mut self, ui: &mut Ui) {
         let width = ui.available_width();
-        let cols = columns(width, self.ran_ports != PortCheck::Off);
+        // An imported scan has no TTL: the column goes, so MAC fits.
+        let cols = columns(width, self.checked_ports(), self.imported.is_none());
         let row_h = theme::TARGET_H;
         let font = FontId::proportional(crate::theme::BODY);
         let mono = FontId::monospace(crate::theme::MONO);
@@ -657,6 +758,7 @@ impl SweepTool {
                             Col::Address => (h.ip.to_string(), &mono, text),
                             Col::Time => match h.rtt {
                                 Some(t) => (widgets::fmt_ms(t), &mono, text),
+                                None if h.via.ais => ("imported".to_string(), &font, weak),
                                 None => ("no ping".to_string(), &font, weak),
                             },
                             Col::Ttl => (
@@ -683,7 +785,9 @@ impl SweepTool {
                         };
                         cell(ui.painter(), r, &s, f, colour);
                     }
-                    let resp = if h.via.multicast_only() {
+                    let resp = if h.via.ais {
+                        resp.on_hover_text(AIS_TIP)
+                    } else if h.via.multicast_only() {
                         resp.on_hover_text(MULTICAST_TIP)
                     } else if h.rtt.is_none() {
                         resp.on_hover_text(ARP_TIP)
@@ -740,6 +844,8 @@ impl SweepTool {
             "Gateway".to_string()
         } else if self.local.lan.is_some_and(|(me, _)| me == ip) {
             "This machine".to_string()
+        } else if h.via.ais {
+            "Host · imported".to_string()
         } else if h.via.multicast_only() {
             format!("Host · {} only", h.via.multicast())
         } else if h.rtt.is_none() {
@@ -759,6 +865,8 @@ impl SweepTool {
         let (checked, ran) = (h.checked, self.ran_ports);
         let web_title = h.web.clone();
         let found = h.dnssd.clone();
+        let scanned = h.ais.clone();
+        let scan_date = self.imported.as_ref().and_then(|i| i.date.clone());
         let wake = wake_target(h, &self.networks());
         let wake_tip = wake.as_ref().map_or_else(
             || {
@@ -856,6 +964,8 @@ impl SweepTool {
                 insp::row(ui, "MAC", m, true);
                 if mac_from == Some("netbios") {
                     insp::row(ui, "MAC from", "the device, over NetBIOS", false);
+                } else if mac_from == Some("ais") {
+                    insp::row(ui, "MAC from", "Advanced IP Scanner", false);
                 }
             }
             if !vendor.is_empty() {
@@ -867,6 +977,29 @@ impl SweepTool {
             insp::row(ui, "Found by", &via.words(), false);
             if via.multicast_only() {
                 insp::note(ui, MULTICAST_NOTE);
+            }
+            if let Some(a) = &scanned {
+                if let Some(d) = &scan_date {
+                    insp::row(ui, "Scanned", d, false);
+                }
+                for (k, v) in [
+                    ("OS", &a.os),
+                    ("NetBIOS", &a.netbios_name),
+                    ("Workgroup", &a.netbios_group),
+                    ("TLS", &a.tls),
+                    ("HTTPS server", &a.https),
+                    ("FTP", &a.ftp),
+                    ("RDP", &a.rdp),
+                ] {
+                    if let Some(v) = v {
+                        insp::row(ui, k, v, false);
+                    }
+                }
+                let sh = shared(a);
+                if !sh.is_empty() {
+                    insp::row(ui, "Shared", &format!("{sh} (names not imported)"), false);
+                }
+                insp::note(ui, AIS_NOTE);
             }
             if let Some(f) = &found {
                 if let Some(m) = f.model() {
@@ -909,6 +1042,7 @@ impl SweepTool {
                     Some("dns") => "DNS",
                     Some("netbios") => "the device, over NetBIOS",
                     Some("mdns") => "the device, over multicast DNS",
+                    Some("ais") => "Advanced IP Scanner",
                     _ => "",
                 };
                 if !from.is_empty() {
@@ -917,6 +1051,12 @@ impl SweepTool {
             }
             match rtt {
                 Some(t) => insp::row(ui, "Ping", &widgets::fmt_ms(t), true),
+                None if via.ais => insp::row(
+                    ui,
+                    "Ping",
+                    "not pinged from here; Advanced IP Scanner found it alive",
+                    false,
+                ),
                 None if via.arp => insp::row(ui, "Ping", "no reply; it answered ARP", false),
                 None => insp::row(
                     ui,
@@ -929,7 +1069,19 @@ impl SweepTool {
                 insp::row(ui, "TTL", &t.to_string(), true);
             }
             insp::section(ui, "Open ports");
-            if !checked && ran == PortCheck::Smart {
+            if via.ais && !checked {
+                insp::note(
+                    ui,
+                    "Advanced IP Scanner didn't record its service checks for this host. Use \
+                     Ports to check it from here.",
+                );
+            } else if via.ais && ports_open.is_empty() {
+                insp::note(
+                    ui,
+                    "Advanced IP Scanner found none of FTP, HTTP, HTTPS or RDP. It checks only \
+                     those: use Ports for the rest.",
+                );
+            } else if !checked && ran == PortCheck::Smart {
                 insp::note(
                     ui,
                     "Not checked: Smart skips phones and laptops (a private MAC, or a laptop or \
@@ -952,6 +1104,13 @@ impl SweepTool {
                     })
                     .collect();
                 insp::chips(ui, &chips);
+                if via.ais {
+                    insp::note(
+                        ui,
+                        "As Advanced IP Scanner found them: it checks FTP, HTTP, HTTPS and RDP \
+                         only.",
+                    );
+                }
             }
         });
         if !open {
@@ -983,8 +1142,13 @@ impl SweepTool {
         h.mac.map(|m| crate::map::maker(&m, gateway, gear))
     }
 
-    /// Vendor, or what the host is to this machine when it has no MAC here.
+    /// Vendor (an imported host's maker as Advanced IP Scanner named it,
+    /// else the registry's), or what the host is to this machine when it
+    /// has no MAC here.
     fn vendor(&self, h: &Host) -> String {
+        if let Some(m) = h.ais.as_ref().and_then(|a| a.maker.clone()) {
+            return m;
+        }
         match self.maker(h) {
             Some(m) => crate::map::vendor_label(m),
             None if self.local.lan.is_some_and(|(ip, _)| ip == h.ip) => "(this machine)".into(),
@@ -1014,7 +1178,18 @@ impl SweepTool {
     }
 
     fn report(&self) -> String {
-        let mut s = format!("Sweep of {}: {} alive", self.ran, self.alive.len());
+        let mut s = match &self.imported {
+            Some(im) => format!(
+                "Advanced IP Scanner scan of {}{}, imported: {} alive",
+                self.ran,
+                im.date
+                    .as_ref()
+                    .map(|d| format!(" ({d})"))
+                    .unwrap_or_default(),
+                self.alive.len()
+            ),
+            None => format!("Sweep of {}: {} alive", self.ran, self.alive.len()),
+        };
         let mut only = Vec::new();
         match self.arp_only() {
             0 => {}
@@ -1044,6 +1219,27 @@ impl SweepTool {
                 "⚠ {selfie} self-assigned address(es) (169.254.x.x): {}\n",
                 crate::map::NO_DHCP
             );
+        }
+        if let Some(im) = &self.imported {
+            s += &format!(
+                "Not imported: {} dead and {} unknown (Advanced IP Scanner's status); only \
+                 alive rows become hosts\n",
+                im.dead, im.unknown
+            );
+            if im.skipped > 0 {
+                s += &format!(
+                    "{} row(s) skipped: no IPv4 address, or a second row for one address\n",
+                    im.skipped
+                );
+            }
+            if im.cut {
+                s += &format!(
+                    "⚠ More than {} rows: the rest weren't read\n",
+                    ais::MAX_ROWS
+                );
+            }
+            s += "Services as Advanced IP Scanner found them (FTP, HTTP, HTTPS, RDP only). \
+                  Logged-on users aren't imported; shares and printers are counted, not named\n";
         }
         if self.stopped {
             s += "Stopped before it finished: hosts it hadn't reached aren't listed, and ports \
@@ -1082,6 +1278,7 @@ impl SweepTool {
         for h in &self.alive {
             let rtt = match h.rtt {
                 Some(r) => format!("{r:.1} ms"),
+                None if h.via.ais => "imported".into(),
                 None if h.via.arp => "ARP only".into(),
                 None => match (h.via.mdns, h.via.ssdp) {
                     (true, true) => "mDNS+SSDP".into(),
@@ -1108,6 +1305,34 @@ impl SweepTool {
             }
             if let Some(sv) = h.ssdp.as_deref().and_then(|u| u.server.as_deref()) {
                 line += &format!("  UPnP \"{sv}\"");
+            }
+            if let Some(a) = &h.ais {
+                if let Some(n) = a
+                    .netbios_name
+                    .as_ref()
+                    .filter(|n| h.name.as_ref() != Some(*n))
+                {
+                    line += &format!("  NetBIOS {n}");
+                }
+                if let Some(g) = &a.netbios_group {
+                    line += &format!("  workgroup {g}");
+                }
+                if let Some(os) = &a.os {
+                    line += &format!("  OS \"{os}\"");
+                }
+                if let Some(t) = &a.tls {
+                    line += &format!("  {t}");
+                }
+                if let Some(f) = &a.ftp {
+                    line += &format!("  FTP \"{f}\"");
+                }
+                if let Some(r) = &a.rdp {
+                    line += &format!("  RDP \"{r}\"");
+                }
+                let sh = shared(a);
+                if !sh.is_empty() {
+                    line += &format!("  {sh}");
+                }
             }
             if !h.also.is_empty() {
                 let also: Vec<String> = h.also.iter().map(mac::fmt).collect();
@@ -1137,7 +1362,7 @@ impl SweepTool {
                     h.mac.as_ref().map(mac::fmt).unwrap_or_default(),
                     self.vendor(h),
                     h.name.clone().unwrap_or_default(),
-                    if h.checked || self.ran_ports == PortCheck::Off {
+                    if h.checked || !self.checked_ports() {
                         port_list(&h.open)
                     } else {
                         log::NOT_CHECKED.into()
@@ -1157,8 +1382,12 @@ impl SweepTool {
     /// becomes of the names of hosts that look like a phone, laptop or PC
     /// (the Site Bundle's setting; Full for the tech's own save).
     pub fn inventory(&self, info: &HostInfo, clients: Clients) -> String {
-        // The segment the scanner sat on when the run started.
-        let lan = self.local.lan.or(info.lan);
+        // The segment the scanner sat on when the run started. An imported
+        // scan ran on another computer, whose segment isn't known.
+        let lan = match self.imported {
+            Some(_) => None,
+            None => self.local.lan.or(info.lan),
+        };
         let hosts: Vec<_> = self
             .alive
             .iter()
@@ -1175,7 +1404,11 @@ impl SweepTool {
                 json!({
                     "ip": h.ip.to_string(),
                     "mac": h.mac.as_ref().map(mac::fmt),
-                    "vendor": made.and_then(|m| m.vendor),
+                    "vendor": h
+                        .ais
+                        .as_ref()
+                        .and_then(|a| a.maker.clone())
+                        .or_else(|| made.and_then(|m| m.vendor).map(str::to_string)),
                     "private_mac": made.map(|m| m.private),
                     "virtual_mac": made.map(|m| m.virtual_mac),
                     "name": clients.device_name(h.name.as_deref(), &key, client),
@@ -1203,27 +1436,60 @@ impl SweepTool {
                         "uuids": u.uuids,
                         "locations": u.locations,
                     })),
+                    "ais": h.ais.as_ref().map(|a| json!({
+                        "netbios_name": clients.device_name(a.netbios_name.as_deref(), &key, client),
+                        "netbios_group": a.netbios_group,
+                        "os": a.os,
+                        "tls": a.tls,
+                        "https_server": a.https,
+                        "ftp": a.ftp,
+                        "rdp": a.rdp,
+                        "shares": a.shares,
+                        "printers": a.printers,
+                    })),
                     "is_gateway": self.local.gateway == Some(h.ip),
                     "is_this_machine": self.local.lan.is_some_and(|(ip, _)| ip == h.ip),
                     "on_scanner_lan": lan.map(|(ip, bits)| same_subnet(ip, h.ip, bits)),
                 })
             })
             .collect();
+        let im = self.imported.as_ref();
+        let here = im.is_none();
         let v = json!({
-            "source": format!("is-alive {} subnet sweep", crate::VERSION),
-            "scanned_at": self.run_started.clone().unwrap_or_else(log::now),
+            "source": match im {
+                Some(_) => format!("is-alive {} import of an Advanced IP Scanner scan", crate::VERSION),
+                None => format!("is-alive {} subnet sweep", crate::VERSION),
+            },
+            "scanned_at": im
+                .and_then(|i| i.date.clone())
+                .or_else(|| self.run_started.clone())
+                .unwrap_or_else(log::now),
             "range": self.ran,
             "ranges": targets::list(&self.ran),
-            "scanner": {
-                "lan": self.local.lan.or(info.lan).map(|(ip, bits)| format!("{ip}/{bits}")),
+            // An imported scan ran on a computer whose network isn't known.
+            "scanner": here.then(|| json!({
+                "lan": lan.map(|(ip, bits)| format!("{ip}/{bits}")),
                 "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
                 "wan": info.wan.map(|w| w.to_string()),
+            })),
+            "imported": im.map(|i| json!({
+                "from": "Advanced IP Scanner",
+                "scanned_at": i.date,
+                "dead": i.dead,
+                "unknown": i.unknown,
+                "skipped": i.skipped,
+            })),
+            "ports_checked": if im.is_some() {
+                ais::PORTS
+            } else if self.ran_ports == PortCheck::Off {
+                &[]
+            } else {
+                ports::INFRA
             },
-            "ports_checked": if self.ran_ports == PortCheck::Off { &[] } else { ports::INFRA },
             "client_names": clients.label(),
             "dnssd_browsed": self.browsed,
             "ssdp_searched": self.searched,
-            "complete": !self.stopped,
+            "complete": !self.stopped && !im.is_some_and(|i| i.cut),
             "notes": [
                 "found_by lists every way the host answered: ping (an echo reply, rtt_ms set), arp (this machine's ARP table confirmed it during the sweep, on the scanner's own segment), mdns (it answered the DNS-SD browse) and ssdp (it answered the SSDP search). Several are usual: a printer is often [\"ping\", \"arp\", \"mdns\"]. Without ping, rtt_ms is null: [\"arp\"] answered ARP but drops ping (a firewall default); a list with only mdns and/or ssdp is a device silent to ping and ARP that answered the multicast browse, listed only because it answered from its own address, inside the swept range and on the scanner's own segment (on_scanner_lan true); an address merely named in another device's answer is never added. A host that answers none of these is missed, so absence is not proof.",
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
@@ -1238,6 +1504,7 @@ impl SweepTool {
                 "An ip in 169.254.0.0/16 is self-assigned: DHCP didn't answer that device (check the DHCP server/scope and the switch port). ports_checked includes 21 (ftp): printers and NAS often leave FTP on, which sends logins in clear text.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
+                "imported is null for a sweep is-alive ran itself. Otherwise the hosts come from an Advanced IP Scanner XML export the tech imported, scanned on another computer at imported.scanned_at (as that scanner wrote it; scanned_at matches): every host has found_by [\"ais\"] (Advanced IP Scanner found it alive; is-alive did not ping it, so rtt_ms and ttl are null), mac_from ais (the scanner's own reading), name_from ais (the name the scanner resolved, usually DNS) or netbios, and vendor is the maker the scanner named (else the IEEE registry's). Only rows it marked alive become hosts: imported.dead and imported.unknown count the rest, imported.skipped the rows with no IPv4 address and the second row for an address already read (an alive row wins over a dead or unknown one). imported.scanned_at is the newest row date that reads as a date, else the first row's, as written. range and ranges are every address a row named, not a range typed in: one per /24 (lowest to highest there, or the whole /24), summarised past 32 as one span per /16, and past 32 of those as one span from the lowest address to the highest, so a summarised span may include addresses the scan never tried; scanner and on_scanner_lan are null because the scanning computer's segment isn't known. open_ports is what its service flags found among ports_checked (FTP 21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it checks, so [] is not proof nothing else is open), null when the row carried no flags. ais holds the rest: netbios_name and netbios_group (the computer name and workgroup or domain it reported; netbios_name follows client_names), os, tls (the TLS or SSL version its HTTPS answered with: TLSv1 or SSLv3 is outdated), https_server, ftp and rdp (banners), and shares and printers (how many it shares: counts only, names are never imported). Logged-on users are never imported.",
             ],
             "hosts": hosts,
         });
@@ -1311,6 +1578,7 @@ impl SweepTool {
             web: None,
             dnssd: None,
             ssdp: None,
+            ais: None,
             via: Via {
                 arp: mac.is_some(),
                 ..Via::PING
@@ -1376,6 +1644,17 @@ impl SweepTool {
         self.revision += 1;
     }
 
+    /// For the screenshot tour: a fictional Advanced IP Scanner export
+    /// imported (documentation addresses), the PC open in the inspector.
+    /// Nothing is sent.
+    pub fn sample_import_for_shots(&mut self) {
+        if let Ok(scan) = ais::parse(ais::SAMPLE.as_bytes()) {
+            self.load_import("example-scan.xml", scan);
+        }
+        self.run_started = None;
+        self.picked = Some(Ipv4Addr::new(192, 0, 2, 20));
+    }
+
     /// For the screenshot tour: the sample sweep with the host at
     /// 192.0.2.`last` open in the inspector.
     pub fn pick_for_shots(&mut self, last: u8) {
@@ -1391,6 +1670,61 @@ impl SweepTool {
 
     pub fn is_running(&self) -> bool {
         self.job.is_some()
+    }
+
+    /// Import scan…'s file dialog is open, or the file is being read: what
+    /// it brings would land in whatever site is open by then.
+    pub fn importing(&self) -> bool {
+        self.importing.is_some()
+    }
+
+    /// The last run is an imported scan from another computer.
+    pub fn imported(&self) -> bool {
+        self.imported.is_some()
+    }
+
+    /// Import scan…: pick an Advanced IP Scanner XML export and read it,
+    /// off the UI thread. Nothing goes on the network.
+    fn import_dialog(&mut self, ctx: &egui::Context) {
+        if self.importing.is_some() {
+            return;
+        }
+        self.err = None;
+        self.importing = Some(Job::spawn(ctx, |tx| {
+            let picked = rfd::FileDialog::new()
+                .set_title("Import an Advanced IP Scanner scan")
+                .add_filter("Advanced IP Scanner XML export", &["xml"])
+                .add_filter("All files", &["*"])
+                .pick_file();
+            if let Some(p) = picked {
+                tx.send(read_import(&p));
+            }
+        }));
+    }
+
+    /// An Advanced IP Scanner export as the last run, in place of a
+    /// sweep: its alive rows as hosts, the dead and unknown ones counted.
+    /// It reaches the Map, Results, the report and the inventory as a
+    /// sweep does. `file` is shown on the tab only.
+    pub fn load_import(&mut self, file: &str, scan: ais::Scan) {
+        self.clear_results();
+        self.runs += 1;
+        self.detected = true;
+        self.ran = scan.ranges.clone();
+        self.total = scan.rows();
+        self.probed = self.total;
+        self.run_started = Some(log::now());
+        self.imported = Some(Imported {
+            file: file.to_string(),
+            date: scan.date.clone(),
+            dead: scan.dead,
+            unknown: scan.unknown,
+            skipped: scan.skipped,
+            cut: scan.cut,
+        });
+        self.alive = scan.hosts.into_iter().filter_map(imported_host).collect();
+        self.alive.sort_by_key(|h| h.ip);
+        self.revision += 1;
     }
 
     /// While running: hosts probed, how many in all, since when, and the range.
@@ -1413,7 +1747,7 @@ impl SweepTool {
 
     /// Whether the last run checked management ports.
     pub fn checked_ports(&self) -> bool {
-        self.ran_ports != PortCheck::Off
+        self.ran_ports != PortCheck::Off || self.imported.is_some()
     }
 
     /// Hosts found so far, for the map.
@@ -1434,6 +1768,17 @@ impl SweepTool {
                     .via
                     .multicast_only()
                     .then(|| h.via.multicast().to_string()),
+                imported: h.via.ais.then(|| {
+                    let date = self.imported.as_ref().and_then(|i| i.date.as_deref());
+                    let mut s = crate::map::IMPORTED.to_string();
+                    if let Some(d) = date {
+                        s += &format!(" of {d}");
+                    }
+                    if let Some(os) = h.ais.as_ref().and_then(|a| a.os.as_deref()) {
+                        s += &format!(", OS {os}");
+                    }
+                    s
+                }),
             })
             .collect()
     }
@@ -1461,6 +1806,9 @@ impl SweepTool {
         self.picked = None;
         self.browsed = false;
         self.searched = false;
+        self.imported = None;
+        // An import still being picked or read is dropped with the rest.
+        self.importing = None;
     }
 
     /// The whole networks the last run swept (10.20.0.0/24, not a range
@@ -1485,6 +1833,9 @@ impl SweepTool {
     }
 
     fn start(&mut self, ctx: &egui::Context) {
+        // An import still being picked or read would cancel this sweep and
+        // lose its Results entry when it lands: Start drops it.
+        self.importing = None;
         // A range that won't read leaves the last sweep as it was: a typo
         // doesn't wipe 40 hosts.
         let ips = match targets::parse_range(&self.range) {
@@ -1504,6 +1855,7 @@ impl SweepTool {
         self.ran_ports = self.ports;
         self.browsed = false;
         self.searched = false;
+        self.imported = None;
         // DNS-SD and SSDP only where they can be heard: with names on, and
         // only if the sweep covers part of this computer's own segment.
         let lan = self.local.lan;
@@ -1588,6 +1940,7 @@ impl SweepTool {
                         web: None,
                         dnssd: None,
                         ssdp: None,
+                        ais: None,
                         via: Via {
                             arp: mac.is_some(),
                             ..Via::PING
@@ -1648,6 +2001,7 @@ impl SweepTool {
                     web: None,
                     dnssd: None,
                     ssdp: None,
+                    ais: None,
                     via: Via::ARP,
                 }));
             });
@@ -1734,6 +2088,7 @@ impl SweepTool {
                         web: None,
                         dnssd: d.clone().map(Box::new),
                         ssdp: u.clone().map(Box::new),
+                        ais: None,
                         via: Via {
                             arp: m.is_some(),
                             mdns: d.is_some(),
@@ -1841,6 +2196,70 @@ fn identify(
     let from = md.is_some().then_some("mdns");
     (md, from, mac)
 }
+
+/// A picked file read as an Advanced IP Scanner export: its name and what
+/// it held, or why it won't read. Never more than `ais::MAX_FILE` is read.
+fn read_import(p: &std::path::Path) -> Picked {
+    use std::io::Read;
+    let name = crate::tools::export::file_name(p);
+    let meta = std::fs::metadata(p).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a regular file"));
+    }
+    let mut data = Vec::new();
+    std::fs::File::open(p)
+        .and_then(|f| f.take(ais::MAX_FILE + 1).read_to_end(&mut data))
+        .map_err(|e| format!("{name}: {e}"))?;
+    let scan = ais::parse(&data).map_err(|e| format!("{name}: {e}"))?;
+    Ok((name, scan))
+}
+
+/// An alive row as a host. Its name is the one the scanner resolved, else
+/// its NetBIOS name; its MAC is the scanner's.
+fn imported_host(r: ais::Row) -> Option<Host> {
+    let (name, name_from) = match (&r.name, &r.netbios_name) {
+        (Some(n), _) => (Some(n.clone()), Some("ais")),
+        (None, Some(n)) => (Some(n.clone()), Some("netbios")),
+        (None, None) => (None, None),
+    };
+    Some(Host {
+        ip: r.ip?,
+        rtt: None,
+        ttl: None,
+        name,
+        name_from,
+        mac: r.mac,
+        mac_from: r.mac.map(|_| "ais"),
+        open: r.open.clone(),
+        checked: r.checked,
+        also: Vec::new(),
+        web: r.web.clone(),
+        dnssd: None,
+        ssdp: None,
+        via: Via::AIS,
+        ais: Some(Box::new(r)),
+    })
+}
+
+/// "2 shares, 1 printer": counts only, the names are never read.
+fn shared(a: &ais::Row) -> String {
+    let n = |k: usize, one: &str| match k {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        k => Some(format!("{k} {one}s")),
+    };
+    [n(a.shares, "share"), n(a.printers, "printer")]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+const AIS_TIP: &str = "From an imported Advanced IP Scanner scan: it found this host alive. \
+is-alive didn't ping it; Ping or Ports checks it from here.";
+
+const AIS_NOTE: &str = "From an imported Advanced IP Scanner scan, as it found the host then. \
+Logged-on users aren't imported, and shares and printers are counted, never named.";
 
 const MULTICAST_TIP: &str = "Answered only the multicast browse (DNS-SD or SSDP), not ping or \
 ARP. Listed because it's inside the swept range and on this computer's own segment, the only one \
@@ -2025,8 +2444,9 @@ impl Cols {
 }
 
 /// Every column that fits in `width`: Vendor goes first as it narrows, then
-/// MAC (both are in the inspector). Open ports only after a port check.
-fn columns(width: f32, ports: bool) -> Cols {
+/// MAC (both are in the inspector). Open ports only after a port check; TTL
+/// only when there is one (not for an imported scan).
+fn columns(width: f32, ports: bool, ttl: bool) -> Cols {
     let mut all = vec![
         Col::Address,
         Col::Time,
@@ -2037,6 +2457,9 @@ fn columns(width: f32, ports: bool) -> Cols {
     ];
     if ports {
         all.push(Col::Ports);
+    }
+    if !ttl {
+        all.retain(|c| *c != Col::Ttl);
     }
     let need = |cols: &[Col]| cols.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
     // Vendor, then MAC (docs/dev/ui-layout.md), then TTL: at 620 wide with ports
@@ -2098,6 +2521,7 @@ mod tests {
             web: None,
             dnssd: None,
             ssdp: None,
+            ais: None,
             via: if rtt.is_some() { Via::PING } else { Via::ARP },
         }
     }
@@ -2190,7 +2614,7 @@ mod tests {
 
     #[test]
     fn vendor_then_mac_drop_out_as_the_table_narrows() {
-        let has = |w: f32, c: Col| columns(w, false).0.contains(&c);
+        let has = |w: f32, c: Col| columns(w, false, true).0.contains(&c);
         // Room for everything.
         assert!(has(900.0, Col::Vendor) && has(900.0, Col::Mac));
         // Vendor goes first.
@@ -2202,10 +2626,12 @@ mod tests {
         assert!(!has(400.0, Col::Mac));
         // Open ports only after a port check, and it keeps its place last.
         assert!(!has(1400.0, Col::Ports));
-        assert_eq!(columns(1400.0, true).0.last(), Some(&Col::Ports));
+        assert_eq!(columns(1400.0, true, true).0.last(), Some(&Col::Ports));
+        // No TTL to show (an imported scan): no column for it.
+        assert!(!columns(1400.0, true, false).0.contains(&Col::Ttl));
         // At 620 wide (about 548 for the table), with ports checked, TTL
         // goes too so Ports isn't cut off.
-        let narrow = columns(548.0, true);
+        let narrow = columns(548.0, true, true);
         let fits = narrow.0.iter().map(|c| c.width() + GAP).sum::<f32>() + GAP;
         assert!(fits <= 548.0, "{fits}");
         assert!(narrow.0.contains(&Col::Ports) && !narrow.0.contains(&Col::Ttl));
@@ -2957,6 +3383,280 @@ mod tests {
             languages(&["application/pdf".into(), "image/urf".into()]),
             "pdf, urf"
         );
+    }
+
+    /// An imported Advanced IP Scanner export: its alive rows are the
+    /// hosts, the rest counted, and it reaches the report, the CSV, the
+    /// inventory and the Map like a sweep. Who was logged on, the share
+    /// and printer names, and the file's name never get in.
+    #[test]
+    fn an_imported_ais_scan_flows_like_a_sweep_without_users_or_share_names() {
+        let mut s = SweepTool::default();
+        s.load_import("acme-scan.xml", ais::parse(ais::SAMPLE.as_bytes()).unwrap());
+        assert_eq!(s.alive.len(), 3);
+        assert_eq!(s.finished(), Some(("192.0.2.0/24".to_string(), 3)));
+        assert!(s.checked_ports(), "its service checks count");
+        let r = s.report();
+        assert!(
+            r.starts_with(
+                "Advanced IP Scanner scan of 192.0.2.0/24 (2026-11-24 13:05:12 UTC-05:00), \
+                 imported: 3 alive\n"
+            ),
+            "{r}"
+        );
+        assert!(r.contains("Not imported: 1 dead and 2 unknown"), "{r}");
+        for want in [
+            "OS \"Windows 11 Pro\"",
+            "RDP \"RDP 10.0\"",
+            "2 shares, 1 printer",
+            "TLSv1.2",
+            "workgroup EXAMPLE",
+            "NetBIOS FRONTDESK-PC",
+            "(found by ais)",
+            "imported",
+        ] {
+            assert!(r.contains(want), "{want}: {r}");
+        }
+        assert!(r.lines().all(|l| l == l.trim_end()), "no trailing spaces");
+        let t = s.table().unwrap();
+        assert_eq!(t.rows[1][8], "ais");
+        assert_eq!(t.rows[1][6], "frontdesk.example.lan");
+        assert_eq!(t.rows[2][6], "NAS01", "no DNS name: its NetBIOS one");
+        assert_eq!(t.rows[2][7], "21 8080");
+        assert_eq!(t.rows[0][5], "Example Networks", "the scanner's maker");
+
+        let inv = |c: Clients| -> serde_json::Value {
+            serde_json::from_str(&s.inventory(&HostInfo::default(), c)).unwrap()
+        };
+        let v = inv(Clients::Full);
+        assert_eq!(v["scanned_at"], "2026-11-24 13:05:12 UTC-05:00");
+        assert_eq!(
+            (&v["imported"]["dead"], &v["imported"]["unknown"]),
+            (&json!(1), &json!(2))
+        );
+        assert_eq!(v["ports_checked"], json!([21, 80, 443, 3389, 8080]));
+        assert!(v["scanner"]["lan"].is_null() && v["scanner"]["wan"].is_null());
+        assert!(
+            v["source"]
+                .as_str()
+                .unwrap()
+                .contains("Advanced IP Scanner")
+        );
+        let pc = &v["hosts"][1];
+        assert_eq!(pc["found_by"], json!(["ais"]));
+        assert_eq!(
+            (&pc["mac_from"], &pc["name_from"]),
+            (&json!("ais"), &json!("ais"))
+        );
+        assert!(pc["rtt_ms"].is_null() && pc["on_scanner_lan"].is_null());
+        assert_eq!(pc["open_ports"][0]["port"], 3389);
+        assert_eq!(pc["ais"]["netbios_name"], "FRONTDESK-PC");
+        assert_eq!(pc["ais"]["os"], "Windows 11 Pro");
+        assert_eq!(
+            (&pc["ais"]["shares"], &pc["ais"]["printers"]),
+            (&json!(2), &json!(1))
+        );
+        assert_eq!(v["hosts"][0]["ais"]["tls"], "TLSv1.2");
+        assert_eq!(v["hosts"][0]["vendor"], "Example Networks");
+        assert_eq!(v["hosts"][2]["name_from"], "netbios");
+        // A sweep's own hosts say null.
+        let swept_v: serde_json::Value = serde_json::from_str(
+            &swept(vec![host([10, 0, 0, 1], Some(1.0))])
+                .inventory(&HostInfo::default(), Clients::Full),
+        )
+        .unwrap();
+        assert!(swept_v["imported"].is_null() && swept_v["hosts"][0]["ais"].is_null());
+
+        // Every field it adds is one the bundled skill explains.
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        let keys = |x: &serde_json::Value| -> Vec<String> {
+            x.as_object().unwrap().keys().cloned().collect()
+        };
+        for k in keys(pc).into_iter().chain(keys(&pc["ais"])) {
+            assert!(
+                skill.contains(&format!("`{k}`")),
+                "SKILL.md doesn't explain {k}"
+            );
+        }
+        assert!(skill.contains("`imported`"));
+        for k in keys(&v["imported"]) {
+            assert!(
+                skill.contains(&format!("`imported.{k}`")),
+                "SKILL.md: imported.{k}"
+            );
+        }
+        let notes = v["notes"].to_string();
+        assert!(
+            notes.contains("Logged-on users are never imported"),
+            "{notes}"
+        );
+
+        // Nothing private, anywhere it goes.
+        let mut out = vec![r, format!("{:?}", t.rows), format!("{:?}", s.seen())];
+        for c in [Clients::Full, Clients::Anonymized, Clients::None] {
+            out.push(s.inventory(&HostInfo::default(), c));
+        }
+        for o in &out {
+            for never in [
+                "jdoe",
+                "ghost",
+                "Payroll",
+                "Scans",
+                "Front Desk HP",
+                "acme-scan",
+            ] {
+                assert!(!o.contains(never), "{never} in {o}");
+            }
+        }
+
+        // On the Map: an imported line, not "ARP only".
+        let seen = s.seen();
+        let line = seen[1].imported.as_deref().unwrap();
+        assert!(line.starts_with(crate::map::IMPORTED), "{line}");
+        assert!(
+            line.contains("2026-11-24") && line.contains("Windows 11 Pro"),
+            "{line}"
+        );
+        let m = crate::map::build(&crate::map::Input {
+            sweep: seen,
+            range: s.finished().map(|f| f.0),
+            ports_checked: true,
+            ..Default::default()
+        });
+        let card = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == Some(Ipv4Addr::new(192, 0, 2, 20)))
+            .unwrap();
+        assert!(
+            card.details
+                .iter()
+                .any(|d| d.starts_with(crate::map::IMPORTED)),
+            "{:?}",
+            card.details
+        );
+        assert!(
+            !card.chips.iter().any(|c| c == "ARP only"),
+            "{:?}",
+            card.chips
+        );
+
+        // The HTTPS banner is its own row, never the web page's title.
+        assert_eq!(s.alive[0].web, None);
+        assert_eq!(v["hosts"][0]["ais"]["https_server"], "Web-Server httpd 3.0");
+        // The scanner's network is unknown: null, not an object of nulls.
+        assert!(v["scanner"].is_null());
+        assert!(!swept_v["scanner"].is_null());
+
+        // A new sweep, or Clear map, forgets it was an import.
+        s.clear_results();
+        assert!(s.imported.is_none() && s.alive.is_empty());
+    }
+
+    /// An import still being picked or read never lands after Clear map
+    /// or a new sweep: it would cancel the sweep and lose its Results
+    /// entry, or (after a site switch, which waits for it) fill the
+    /// wrong site.
+    #[test]
+    fn an_import_in_progress_is_dropped_by_clear_and_start() {
+        let ctx = egui::Context::default();
+        let pending = |ctx: &egui::Context| {
+            Some(Job::spawn(ctx, |tx: crate::job::Tx<Picked>| {
+                tx.sleep(Duration::from_millis(50));
+                tx.send(Ok((
+                    "late.xml".into(),
+                    ais::parse(ais::SAMPLE.as_bytes()).unwrap(),
+                )));
+            }))
+        };
+        let mut s = swept(vec![host([10, 0, 0, 1], Some(1.0))]);
+        s.importing = pending(&ctx);
+        assert!(s.importing());
+        s.clear_results();
+        assert!(!s.importing());
+        // Start drops it, even with a range that won't read (so nothing
+        // is sent from a test).
+        s.importing = pending(&ctx);
+        s.range = "10.0.0.1/2x".into();
+        s.start(&ctx);
+        assert!(!s.importing() && s.job.is_none());
+        std::thread::sleep(Duration::from_millis(150));
+        s.poll();
+        assert!(!s.imported(), "the late file never landed");
+    }
+
+    /// A PC's NetBIOS name is often a person's: it follows the Site
+    /// Bundle's Clients setting like the host's name.
+    #[test]
+    fn an_imported_pcs_netbios_name_follows_the_clients_setting() {
+        let rows = "<row status='alive' ip='192.0.2.30' mac='00:12:F0:00:00:09' name='' \
+                    netbiosname='DR-SMITH-PC' netbiosgroup='EXAMPLE' user='EXAMPLE\\drsmith'/>";
+        let mut s = SweepTool::default();
+        s.load_import("scan.xml", ais::parse(rows.as_bytes()).unwrap());
+        let host = |c: Clients| -> serde_json::Value {
+            let v: serde_json::Value =
+                serde_json::from_str(&s.inventory(&HostInfo::default(), c)).unwrap();
+            v["hosts"][0].clone()
+        };
+        let full = host(Clients::Full);
+        assert_eq!(
+            (&full["name"], &full["ais"]["netbios_name"]),
+            (&json!("DR-SMITH-PC"), &json!("DR-SMITH-PC"))
+        );
+        let token = json!(crate::unifi::token("00:12:f0:00:00:09"));
+        let anon = host(Clients::Anonymized);
+        assert_eq!(
+            (&anon["name"], &anon["ais"]["netbios_name"]),
+            (&token, &token)
+        );
+        let none = host(Clients::None);
+        assert!(none["name"].is_null() && none["ais"]["netbios_name"].is_null());
+        assert_eq!(
+            none["ais"]["netbios_group"], "EXAMPLE",
+            "a workgroup isn't a person"
+        );
+        for c in [Clients::Full, Clients::Anonymized, Clients::None] {
+            assert!(!s.inventory(&HostInfo::default(), c).contains("drsmith"));
+        }
+    }
+
+    /// The tab after an import: the hosts, how the scan was had, and the
+    /// PC's details in the inspector, at the two laptop sizes.
+    #[test]
+    fn an_imported_scan_shows_on_the_tab_and_in_the_inspector() {
+        for size in [vec2(1280.0, 720.0), vec2(1120.0, 720.0), vec2(620.0, 400.0)] {
+            let ctx = egui::Context::default();
+            let mut s = SweepTool::default();
+            s.sample_import_for_shots();
+            sweep_frame(&ctx, &mut s, size, vec![]);
+            let (t, _) = sweep_frame(&ctx, &mut s, size, vec![]);
+            for label in [
+                "Import scan…",
+                "· imported · 3 not alive",
+                "HOST · IMPORTED",
+                "Windows 11 Pro",
+                "FRONTDESK-PC",
+                "2 shares, 1 printer (names not imported)",
+            ] {
+                // At 620 × 400 the inspector scrolls: its top only.
+                if size.y > 500.0 || label.starts_with(['I', '·', 'H']) {
+                    at(&t, label);
+                }
+            }
+            assert!(
+                !t.iter()
+                    .any(|(x, _)| x.contains("jdoe") || x.contains("Payroll"))
+            );
+            // A real scan's hundreds of dead and unknown rows still leave
+            // the buttons room.
+            if let Some(im) = s.imported.as_mut() {
+                (im.dead, im.unknown) = (120, 377);
+            }
+            let (t, _) = sweep_frame(&ctx, &mut s, size, vec![]);
+            let rect = |label: &str| t.iter().find(|(x, _)| x == label).unwrap().1;
+            let (said, button) = (rect("· imported · 497 not alive"), rect("Import scan…"));
+            assert!(said.max.x < button.min.x, "{size:?}: {said:?} {button:?}");
+        }
     }
 
     fn h_types() -> Vec<String> {

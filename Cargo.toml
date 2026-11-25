@@ -1,6 +1,6 @@
 [package]
 name = "is-alive"
-version = "0.38.0"
+version = "0.39.0"
 edition = "2024"
 description = "Native network testing toolkit: ping, port check, traceroute, speed test with jitter, subnet sweep, DNS, domain/mail health, network map"
 license-file = "LICENSE.md"
@@ -27,13 +27,14 @@ arboard = { version = "3", default-features = false }
 # for its text, so no new crates (pure Rust, nothing for the C runtime).
 vello_cpu = { version = "0.1", default-features = false, features = ["std", "u8_pipeline"] }
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# Advanced IP Scanner's XML export (Sweep › Import scan…); tests also check
+# the SVG and draw.io exports parse as XML.
+roxmltree = "0.20"
 
 [dev-dependencies]
 # Tests make a CA and a server certificate to read back, so no key is kept
 # in the repository.
 rcgen = { version = "0.14.10", default-features = false, features = ["ring"] }
-# Tests check the SVG and draw.io exports parse as XML.
-roxmltree = "0.20"
 
 [build-dependencies]
 winresource = "0.1"

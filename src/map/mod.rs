@@ -732,7 +732,13 @@ pub struct Seen {
     pub multicast: Option<String>,
     /// What it said over DNS-SD: a printer's model and services.
     pub dnssd: Option<crate::net::dnssd::Found>,
+    /// From an imported Advanced IP Scanner scan, not pinged from here:
+    /// its card's line, starting `IMPORTED`.
+    pub imported: Option<String>,
 }
+
+/// How an imported Advanced IP Scanner host's line starts on its card.
+pub const IMPORTED: &str = "Alive in an imported Advanced IP Scanner scan";
 
 /// A backup or export open in Config Export: its file's name and the JSON
 /// it was converted to.
@@ -2211,11 +2217,13 @@ impl B {
                 l.starts_with("Answered ping in ")
                     || l.starts_with("Answered ARP, not ping")
                     || l.starts_with("Answered only ")
+                    || l.starts_with(IMPORTED)
                     || ((s.checked || !s.open.is_empty()) && l.starts_with(OPEN_PORTS))
             })
         });
         n.detail(at(match (s.rtt, &s.multicast) {
             (Some(r), _) => format!("Answered ping in {}", crate::widgets::fmt_ms(r)),
+            (None, _) if s.imported.is_some() => s.imported.clone().unwrap_or_default(),
             (None, Some(m)) => {
                 format!("Answered only {m}, not ping or ARP (multicast, this segment only)")
             }
@@ -2223,7 +2231,7 @@ impl B {
         }));
         // About the card's own address: another one answering only ARP
         // doesn't make the card ARP only.
-        if s.rtt.is_none() && own {
+        if s.rtt.is_none() && own && s.imported.is_none() {
             n.chip(if s.multicast.is_some() {
                 "Multicast only"
             } else {
@@ -3850,6 +3858,7 @@ mod tests {
             web: None,
             multicast: None,
             dnssd: None,
+            imported: None,
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -3931,6 +3940,7 @@ mod tests {
                 web: Some("UniFi OS".into()),
                 multicast: None,
                 dnssd: None,
+                imported: None,
             }],
             ..Default::default()
         };
@@ -3962,6 +3972,7 @@ mod tests {
                 web: None,
                 multicast: None,
                 dnssd: None,
+                imported: None,
             }],
             gateway: Some("192.168.1.1".parse().unwrap()),
             ..Default::default()
@@ -4001,6 +4012,7 @@ mod tests {
             web: None,
             multicast: None,
             dnssd: None,
+            imported: None,
         };
         let input = Input {
             sweep: vec![
@@ -4222,6 +4234,7 @@ mod tests {
             web: None,
             multicast: None,
             dnssd: None,
+            imported: None,
         };
         let input = Input {
             sweep: vec![
@@ -4326,6 +4339,7 @@ mod tests {
                 web: None,
                 multicast: None,
                 dnssd: None,
+                imported: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -4619,6 +4633,7 @@ mod tests {
                 web: None,
                 multicast: None,
                 dnssd: None,
+                imported: None,
             })
             .collect();
         let make = |clients, reveal| {
@@ -4768,6 +4783,7 @@ mod tests {
             web: None,
             multicast: None,
             dnssd: None,
+            imported: None,
         };
         let m = build(&Input {
             sonicwall: one(&sw),
@@ -4830,6 +4846,7 @@ mod tests {
             web: None,
             multicast: None,
             dnssd: None,
+            imported: None,
         };
         let at_office = build(&Input {
             unifi: one(&j),

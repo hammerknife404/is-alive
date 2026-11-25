@@ -262,7 +262,8 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
 - **`inventory.json` hosts:** `found_by` lists every way the host answered
   the sweep: `ping`, `arp` (the scanner's ARP table confirmed it, own segment
   only), `mdns` (it answered the DNS-SD browse) and `ssdp` (it answered the
-  SSDP search). Several together are normal (`["ping", "arp", "mdns"]` for a
+  SSDP search); `ais` marks a host from an imported Advanced IP Scanner scan
+  (below). Several together are normal (`["ping", "arp", "mdns"]` for a
   printer). `["arp"]` without `ping` means it answered ARP but drops ping (a
   firewall default, not a fault). A list with only `mdns` and/or `ssdp`
   (`rtt_ms` null) is a device silent to ping and ARP that answered the
@@ -371,6 +372,35 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
   only from the host itself (below) — a missing one there is **expected**,
   not an unidentified device.
+- **An imported Advanced IP Scanner scan** (`imported` set at the top level;
+  `null` for a sweep is-alive ran itself): the hosts come from an Advanced
+  IP Scanner XML export the tech brought in (`imported.from`), scanned on
+  another computer at `imported.scanned_at` (as that scanner wrote it).
+  Every host has `found_by: ["ais"]`: the scanner found it alive, is-alive
+  did not ping it, so `rtt_ms` and `ttl` are null. `mac_from` is `ais` (the
+  scanner's reading), `name_from` is `ais` (the name it resolved, usually
+  DNS) or `netbios`, and `vendor` is the maker the scanner named, else the
+  IEEE registry's. Only rows it marked alive are hosts: `imported.dead` and
+  `imported.unknown` count the rest, `imported.skipped` rows with no IPv4
+  address and the second row for an address already read (an alive row wins
+  over a dead or unknown one). `imported.scanned_at` is the newest row date
+  that reads as a date, else the first row's. `ranges` are every address a
+  row named, not a range typed in: one per /24, summarised past 32 as one
+  span per /16 and past 32 of those as one span overall, so a summarised
+  span may hold addresses never tried. `scanner` and `on_scanner_lan` are
+  null: the scanning computer's segment isn't known, so a missing MAC means
+  nothing. `open_ports` is what its service flags found among
+  `ports_checked` (FTP 21, HTTP 80 or 8080, HTTPS 443, RDP 3389: all it
+  checks, so `[]` doesn't rule out anything else), null where a row carried
+  no flags. Each host's `ais` holds the rest (`null` on a swept host):
+  `netbios_name` and `netbios_group` (the computer name and workgroup or
+  domain it reported; `netbios_name` follows `client_names`), `os`, `tls`
+  (the TLS or SSL version its HTTPS answered with: `TLSv1`, `TLSv1.1` or
+  `SSLv3` is outdated, a med finding on infrastructure), `https_server`,
+  `ftp` and `rdp` (banners: role hints, the device's own claim), and
+  `shares` and `printers` (how many it shares: counts only, never names).
+  Logged-on users are never imported. A host sharing files or with RDP open
+  is a server or PC; a NAS login page in `web_title` is a NAS.
 - **Where a host's `name` and `mac` came from:** `name_from` is `dns` (its
   PTR record), `netbios` (the computer name a Windows, Samba or NAS host
   reports) or `mdns` (a `name.local` an Apple device, printer, cast device or
@@ -378,6 +408,7 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `netbios` (a Windows host past a router reported it). `netbios` and `mdns`
   are the device's own claim: use them as labels and role hints (a
   `Brother-MFC-L2750DW.local` is a printer), never as proof of identity.
+  An imported scan adds `ais` to both (Advanced IP Scanner's reading).
 - **`client_names`** (in `inventory.json`, and in the inventory's and each
   Meraki file's `summary` in `manifest.json`) says what became of the names
   of phones, laptops and PCs: anything not the gateway that no maker, port
@@ -390,7 +421,7 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
   `private_mac`, `virtual_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
-  `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `is_gateway`,
+  `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `ais`, `is_gateway`,
   `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
@@ -695,7 +726,8 @@ silently drop, or render wrong:
   unresolved node refs; zone or site refs that aren't defined; more than
   120 nodes; `</script`, `<script` or `<!--` anywhere in the block (any
   case).
-- **Text from the network is hostile.** Names, `web_title`, banners and
+- **Text from the network is hostile.** Names, `web_title`, banners (an
+  imported scan's `ftp`, `rdp`, `https_server`, `os` too) and
   notes come from devices anyone on the client's network can name, and the
   block sits inside the page's `<script>` element: a device called
   `</script><img src=x onerror=…>` would end it and run. Write every `<`

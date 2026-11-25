@@ -226,6 +226,7 @@ mod tests {
                     web: None,
                     multicast: None,
                     dnssd: None,
+                    imported: None,
                 })
                 .collect(),
             gateway: Some("10.0.0.1".parse().unwrap()),

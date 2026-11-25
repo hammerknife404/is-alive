@@ -125,9 +125,15 @@ cleared; the gateway is never private), TTL, open management ports (null where a
 (service types, a printer's model, queues and page languages) and over SSDP (UPnP server, device types; the \
 description URL as text, never fetched). DNS-SD and SSDP are multicast: the scanner's own segment only. \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). Observed state; complete false \
-when the sweep was stopped before it finished.";
+when the sweep was stopped before it finished. Or, with imported set, an Advanced IP Scanner XML export the tech \
+imported (found_by ais, scanned on another computer at imported.scanned_at): its alive hosts with the scanner's \
+MAC, maker, name, NetBIOS name and workgroup, OS, web title, the FTP, HTTP, HTTPS and RDP it found (TLS version \
+and banners) and how many shares and printers each has (never their names); dead and unknown rows only counted, \
+logged-on users never imported.";
 const RESULTS_WHAT: &str = "is-alive test runs (ping, port check, traceroute, DNS, mail health) with \
-start and end times. A site keeps its runs from one visit to the next, so they can span visits: judge each \
+start and end times. A Subnet Sweep run may be an imported Advanced IP Scanner scan (its text starts \
+\"Advanced IP Scanner scan of\"): its start time is when it was imported, not when that scan ran, which its \
+text gives. A site keeps its runs from one visit to the next, so they can span visits: judge each \
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
 and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network; \
 Host info's dhcp_server, lease_obtained, lease_expires, dns_servers and dns_suffix are what that computer was \

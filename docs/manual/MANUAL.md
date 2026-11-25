@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.38.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.39.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -507,6 +507,7 @@ How to read it:
 | **Resolve names** | Name each device (on by default): from DNS, else the name the device gives itself (below). On this computer's own segment it also sends the DNS-SD browse and SSDP search, which find and describe more devices (below) |
 | **Mgmt ports** | After the sweep, check live devices' management ports: **Off**, **Smart** (the default) or **All hosts**; see below |
 | **Inventory…** | Save the live devices as JSON for Claude's `/mapnetwork` (after a run), every name as the table shows it. The Claude Handoff's copy follows its **Client names** instead |
+| **Import scan…** | Bring in an Advanced IP Scanner scan (its XML export) in place of a sweep: see [Importing an Advanced IP Scanner scan](#importing-an-advanced-ip-scanner-scan). Nothing is sent on the network |
 
 ### How it finds devices
 
@@ -533,6 +534,29 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 | **All hosts** | Every live device, phones and laptops too |
 
 Every device the sweep found stays in the list and on the Map whether its ports were checked or not; one Smart skipped says *not checked* in **Open ports**, not that nothing is open (while the ports are being tried it says *checking…*). A sweep stopped part way says so in its report and in the Inventory (`complete: false`), and hosts whose ports it hadn't finished say *not checked*. Full scan uses the same choice: set **Off** where you mustn't port-scan.
+
+### Importing an Advanced IP Scanner scan
+
+If the site was scanned with Advanced IP Scanner, bring its scan in instead of pasting it into the notes: in Advanced IP Scanner, export the results as XML; in is-alive, **Import scan…** (beside **Inventory…**, or on the empty tab) and pick the file. A file of rows copied out of the XML on their own (no `<rows>` around them) reads too.
+
+The scan then takes the tab's place as the last run, as if it had been swept: the table, the **Map**, **Results** (a *Subnet Sweep* run), the site report and the Claude Handoff's sweep inventory all get its hosts. Only rows Advanced IP Scanner marked **alive** become hosts. The status row says *imported* and how many rows were *not alive* (hover it for dead and unknown separately, the file's name and when the scan ran); the report says the same. **Ranges** in the report and inventory are the addresses the file covered: one per /24 (the lowest to the highest there), and for a scan across more than 32 of them, one span per /16, or one from the lowest address to the highest. **Scanned** is the newest row date. If an address has two rows, the alive one is kept.
+
+| From the export | In is-alive |
+|---|---|
+| `ip`, `mac` | **Address**, **MAC** (*MAC from: Advanced IP Scanner*) |
+| `name`, else `netbiosname` | **Name** (*Name from: Advanced IP Scanner*, or the device over NetBIOS) |
+| `manufacturer` | **Vendor**; when it's blank, the app's own list names the maker from the MAC |
+| `netbiosname`, `netbiosgroup`, `os_version` | **NetBIOS**, **Workgroup**, **OS** in the inspector |
+| `http_title` | **Web page** (only a page title; the HTTPS banner shows as **HTTPS server**) |
+| `has_ftp`, `has_http` (with `is_http8080`), `has_https`, `has_rdp` | **Open ports** 21, 80 or 8080, 443, 3389: the only services Advanced IP Scanner checks |
+| `https_version`, `ftp_version`, `rdp_version` | **TLS** (the version its HTTPS answered with, such as *TLSv1.2*), **HTTPS server**, **FTP**, **RDP** |
+| `share`, `printer` | **Shared**: how many, never their names |
+| `date` | **Scanned**, and the inventory's `scanned_at` |
+| `user` | Never imported |
+
+An imported host's **Time** says *imported* (is-alive didn't ping it; **Ping** or **Ports** checks it from here), there's no **TTL** column, and its inspector says *Host · imported*. **Found by** says *Advanced IP Scanner (imported)*, and the CSV and inventory have `found_by` *ais*. On the Map its card says *Alive in an imported Advanced IP Scanner scan* with the scan's date. **Start** sweeps again as usual, replacing the import.
+
+🔑 **Privacy:** who was logged on (Advanced IP Scanner's `user`) is never read, and shares and printers are counted, never named, so none of it reaches the report, the Map or the Claude Handoff. In the Handoff, a PC's NetBIOS name follows **Client names** like its name. The file's name shows only on the tab (it may name the client).
 
 ### A device's details
 
@@ -603,7 +627,7 @@ How to read it: the gateway and a switch (both Ubiquiti, with SSH open: infrastr
 
 - **"invalid IPv4 address"** beside Start: one of the ranges has a typo; it's named, the rest are fine.
 
-**CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (every way the device answered, space-separated: `ping`, `arp`, `mdns`, `ssdp`).
+**CSV columns:** range, ip, rtt_ms, ttl, mac, vendor, name, open_ports, found_by (every way the device answered, space-separated: `ping`, `arp`, `mdns`, `ssdp`, or `ais` for an imported Advanced IP Scanner scan).
 
 ---
 
@@ -1761,7 +1785,8 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers; when another program is holding the clipboard, nothing is copied and a message says so, rather than a copy that would land in history. On Linux, the app's copies are marked for clipboard managers (Klipper and others) to leave out of their history. When the app closes, it clears the clipboard if it still holds the app's last copy.
 - **At rest** there are only the settings file, `startup.log` (which renderer opened the window), `notes.md` (redacted, with any photos added to it), `map-clients.txt` (the live map's **Clients** choice) and, if you unredacted a detected value, `notes-allow.json` (the values you chose to keep); the notes files are readable only by your user account. Each site's folder holds the same kinds of files, plus `site.json` with the *paths* of its configs: the configs themselves are never copied. A site's folder also holds `results.json`, its Results (hosts, addresses, DNS and port results as the runs showed them), readable only by your user account; **Keep with site** off on the Results tab keeps them in memory only and takes the file away. Scratch's Results go in `results.json` in the profile folder, readable only by your user account, and each run is dropped 24 hours after it started. On Linux and macOS the data folder itself is readable by your user only (mode 700, set at every start), so other accounts can't list the sites in it either. On Windows the profile folder already is; a portable `is-alive-data` folder keeps the permissions of wherever you put it. A config a site remembers on a network share (`\\server\share\…`) isn't opened by itself when the site opens or the app starts: open it from Config Export when you're on that network.
-- **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking and what's parsed are capped, and the readers are tested against damaged and random input.
+- **Files are treated as untrusted:** only regular files up to 2 GB are read, unpacking and what's parsed are capped, and the readers are tested against damaged and random input. An imported Advanced IP Scanner export is capped at 64 MB and 65,536 rows, and an XML document type (where entity tricks live), nesting deeper than 16 levels or an element with more than 128 attributes is refused before it's parsed.
+- **An imported Advanced IP Scanner scan leaves people out:** its logged-on users are never read, and shares and printers are counted, never named, so they can't reach the report, the Map or the Claude Handoff (see [Subnet Sweep](#importing-an-advanced-ip-scanner-scan)).
 - **The network is treated as slow or hostile:** a device's web page (Subnet Sweep's web titles) and a TLS handshake (Port Check's certificates) each have a deadline for the whole exchange, not only for each read, so a device that sends a byte at a time can't hold a run or its Stop. An MTA-STS policy longer than a policy can be is refused rather than listed line by line.
 - **Nothing it writes can run:** a save keeps the type it offers (a name typed as `notes.bat` saves as `notes.bat.txt`), and CSV cells that start with `=`, `+`, `-` or `@` are escaped so Excel shows a hostile hostname as text instead of running it as a formula.
 - **Input is checked:** every field limits how much it takes (255 characters for most fields, 2,048 for a link, 1,000,000 characters in Notes, 20,000 characters in Known problems) and what kind of value it accepts, so a stray paste can't swell a field or start a run with nonsense.

@@ -1,5 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod ais;
 mod backdrop;
 mod bundle;
 mod chrome;

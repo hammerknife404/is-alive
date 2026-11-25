@@ -500,6 +500,9 @@ impl App {
             Some("Stop the running tools first.")
         } else if self.export.is_running() {
             Some("Wait for Config Export to finish reading.")
+        } else if self.sweep.importing() {
+            // The scan would land in the next site.
+            Some("Pick the scan to import, or cancel, first.")
         } else if self.export.picking() {
             // What's picked would open in the next site.
             Some("Pick the files to open, or cancel, first.")
