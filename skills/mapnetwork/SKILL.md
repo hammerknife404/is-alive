@@ -287,6 +287,15 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `other_macs` lists any other MAC the address answered from during the
   sweep: two devices on one IP (a duplicate address), or a failover
   mid-sweep. Flag it on that node and in `ACTIONS` (med).
+  An `ip` in 169.254.0.0/16 is self-assigned: DHCP didn't answer that
+  device. Flag it on the node and in `ACTIONS` (med) with the count and
+  "check the DHCP server/scope and the switch port". A client whose `ip` is
+  the gateway's, a switch's, an AP's or a server's (a different device, not
+  the same `mac`) is an address clash: one `ACTIONS` item (high on the
+  gateway's address, else med) naming both nodes. is-alive raises the same
+  findings when it reopens the map, client lines of a "+N more" card
+  included. `open_ports` includes 21 (`ftp`) when checked: printers and NAS
+  often leave FTP on, clear text, worth a low item.
   `private_mac: true` is a phone, laptop or VM, never infrastructure.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;
