@@ -200,15 +200,15 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 
 ### Copying and pasting
 
-Anything you can read in the app you can copy: select it with the mouse and press **Ctrl+C**, or right-click it.
+Anything you can read in the app you can copy: select it with the mouse and press **Ctrl+C**, or right-click it. The menus use the same three words everywhere: **Copy selected text** is what you selected (offered when you right-click the text you selected), **Copy** is a value whole, and **Copy all** is a whole block of text.
 
 | Right-click on | The menu |
 |---|---|
-| A text box (Host, Range, the Notes editor, a search or filter box, a setting) | **Cut**, **Copy**, **Paste**, **Select all**. Cut and Copy are greyed until text is selected, Paste until the clipboard has text; a read-only box (a file opened in Notes) has no Cut or Paste |
+| A text box (Host, Range, the Notes editor, a search or filter box, a setting) | **Cut**, **Copy**, **Paste**, **Select all**. Cut and Copy are greyed until text is selected; Paste is greyed when the clipboard holds no text (when another program is holding the clipboard, Paste stays on); a read-only box (a file opened in Notes) has no Cut or Paste |
 | A hidden box (SNMP's **Community**) | **Paste** and **Select all** only: what's typed in it never leaves by copy, by the menu or by Ctrl+C |
-| A value in the inspector (an address, MAC, name, vendor, serial, version, a finding or detail line), a card's name at the top, a port chip | **Copy**: the whole value. With part of it selected, **Copy selected text** too |
-| Text you've selected anywhere else (a label, a Map run's line, a heading) | **Copy**: what's selected |
-| A run's output in **Results**, or the Notes preview | **Copy** (what's selected) and **Copy all** |
+| A value in the inspector (an address, MAC, name, vendor, serial, version, a finding or detail line), a card's name at the top, a port chip, a Map run's line | **Copy**: the whole value. With part of it selected, **Copy selected text** too |
+| Other text you've selected (a heading, a hint) | **Copy selected text** |
+| A run's output in **Results**, or the Notes preview | **Copy all**, and **Copy selected text** when you right-click what you selected. The preview's **Copy all** copies the notes as Markdown, redacted, as **⋯ › Copy** does, with each photo as its *Photo N* marker rather than the picture |
 | A cell in a Results table | **Copy** (the whole cell, even when it's cut short with …) and **Copy row** (its cells separated by tabs, so they paste into a spreadsheet's columns) |
 | A row in Subnet Sweep | **Copy IP**, **Copy name**, **Copy MAC**, **Copy vendor** (each only when the host has one, the value on the right), then **Wake** |
 | A card on the Map | **Copy name**, **Copy IP**, **Copy MAC**, **Copy all details** (see [The right-click menu](#the-right-click-menu)) |
@@ -1259,7 +1259,7 @@ Notes never get scanned and mangled: only what you mark, and the secrets of the 
 
 Autosave, **Copy**, **Save as** and the Claude Handoff all get the redacted text. Only **Raw copy** gives the original.
 
-Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting. In **Split** and **Preview**, the formatted text can be selected: right-click it for **Copy** (what's selected) or **Copy all** (the notes as Markdown, with what's redacted kept redacted).
+Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting. In **Split** and **Preview**, the formatted text can be selected: right-click it for **Copy selected text** (when you right-click what you selected) or **Copy all** (the notes as Markdown, with what's redacted kept redacted and each photo as its marker).
 
 ### Example: a visit write-up
 
@@ -1682,7 +1682,7 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Drag a box's title | Map | Move the box with its cards |
 | Right-click a box's title | Map | Select its cards, put the box back, Links |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
-| Drag across text, then right-click it | Anywhere | Copy what's selected |
+| Drag across text, then right-click it | Anywhere | Copy selected text |
 | Right-click a value | The inspector, the status bar | Copy it whole |
 | Right-click a row or a cell | Subnet Sweep, a Results table | Copy its IP, name, MAC or vendor; the cell or the row |
 | Drop a file on the window | Map | Open it there: Config Export reads it and the Map redraws (a saved map opens as one) |

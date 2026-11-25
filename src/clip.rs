@@ -4,9 +4,10 @@
 //! right-click menus of text boxes and values agree on what they offer.
 
 use eframe::egui::{
-    self, Context, Event, FullOutput, Id, OutputCommand, PointerButton, RawInput, Response, Ui,
+    self, Context, Event, FullOutput, Id, OutputCommand, PointerButton, Response, Ui, ViewportId,
     text_selection::LabelSelectionState,
 };
+use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 /// The clipboard the app holds open on Linux (X11 serves a copy from the
@@ -36,10 +37,19 @@ pub fn pass_through(text: &str) {
     lock(&PASSED).push(hash(text));
 }
 
-/// The text selected in labels (empty when none).
+/// The selected label text a menu opened by the last right-click may
+/// offer: only when that click landed on a label holding the selection
+/// (empty otherwise, or when nothing is selected).
 pub fn selected(ctx: &Context) -> String {
+    let vp = ctx.viewport_id();
     ctx.plugin_opt::<Router>()
-        .map(|r| r.lock().text.clone())
+        .and_then(|r| {
+            r.lock()
+                .views
+                .get(&vp)
+                .filter(|v| v.on_selection)
+                .map(|v| v.text.clone())
+        })
         .unwrap_or_default()
 }
 
@@ -48,34 +58,76 @@ pub fn install(ctx: &Context) {
     ctx.add_plugin(Router::default());
 }
 
-/// Sees every frame's input and output:
+/// Where a copy goes once routed: `widgets::put`, or a test's own.
+type Sink = fn(String) -> Option<String>;
+
+/// Sees every pass's input and output:
 /// - every copy (Ctrl+C in a text box or on selected label text, a menu's
 ///   Copy, a Copy button) leaves through `widgets::put`, so all of them are
-///   kept out of clipboard history and cleared on exit alike;
-/// - while labels hold a selection, it notes the selected text each quiet
-///   frame (`text`), and puts the selection back after a right-click on
-///   a label moved it, so the menu that click opens has it to copy.
-#[derive(Default)]
+///   kept out of clipboard history and cleared on exit alike. This is done
+///   on the pass's output, after egui's label selection has made its copy:
+///   routing at the end of the app's own drawing missed that one;
+/// - once after any input while labels hold a selection, it asks them for
+///   the selected text (as Ctrl+C would) and keeps the answer, so a
+///   right-click menu has it to offer after the click itself has moved
+///   egui's selection; and it puts the selection back after a right-click
+///   on the label that holds it.
+///
+/// It asks only after input, never on an idle frame, and pushes its
+/// question into the pass after egui has decided whether to redraw: an
+/// idle window with text selected doesn't redraw again for it.
 struct Router {
-    /// The label selection as of the last quiet frame.
-    saved: Option<LabelSelectionState>,
-    /// This frame asks the labels for their selected text, not the user.
-    asking: bool,
-    /// A right-click is under way: pressed, not yet seen through.
-    right: Option<Right>,
-    /// A right-click on selected text just ended: open its menu.
-    menu: bool,
-    /// The text selected across labels, as of the last frame that had a
-    /// selection and no click: what a right-click menu's Copy copies,
-    /// after the click itself has moved egui's selection.
-    text: String,
+    /// Each window's state: the manual in its own window has its own.
+    views: HashMap<ViewportId, View>,
+    /// The windows whose passes are under way, innermost last.
+    passes: Vec<ViewportId>,
+    sink: Sink,
 }
 
-#[derive(Clone, Copy, Default)]
-struct Right {
-    /// Whether it landed on a label; known the frame after the press.
-    on_label: Option<bool>,
-    released: bool,
+impl Default for Router {
+    fn default() -> Self {
+        Self {
+            views: HashMap::new(),
+            passes: Vec::new(),
+            sink: crate::widgets::put,
+        }
+    }
+}
+
+#[derive(Default)]
+struct View {
+    /// The label selection as it was when last asked.
+    saved: Option<LabelSelectionState>,
+    /// The labels holding the selection's two ends, as egui's debug text
+    /// names them (`selection_ends`).
+    ends: Vec<String>,
+    /// The selected text, as last asked.
+    text: String,
+    /// Input arrived since the labels were last asked.
+    dirty: bool,
+    /// This pass asks the labels for their selected text, not the user.
+    asking: bool,
+    /// A right-click on the selection is under way: put it back until it's
+    /// released, and once more after.
+    right: Option<bool>,
+    /// The last right-click landed on a label holding the selection.
+    on_selection: bool,
+    /// A right-click on the selection just ended: open its menu.
+    menu: bool,
+    /// Copy all was picked in this block's menu: its owner copies.
+    copy_all: Option<Id>,
+}
+
+/// The labels at the selection's two ends, by the short form of their
+/// ids. egui keeps them private; its debug text names them, and
+/// `a_selections_ends_are_named_by_the_labels_holding_them` pins that.
+fn selection_ends(labels: &LabelSelectionState) -> Vec<String> {
+    let text = format!("{labels:?}");
+    let key = "widget_id: \"";
+    text.match_indices(key)
+        .filter_map(|(at, _)| text.get(at + key.len()..at + key.len() + 4))
+        .map(str::to_string)
+        .collect()
 }
 
 impl egui::Plugin for Router {
@@ -83,59 +135,65 @@ impl egui::Plugin for Router {
         "is-alive copy router"
     }
 
-    fn input_hook(&mut self, ctx: &Context, input: &mut RawInput) {
-        let labels = ctx.plugin::<LabelSelectionState>();
-        let mut labels = labels.lock();
-        let has = labels.has_selection();
-        let (pressed, released) = right_events(&input.events);
+    // Runs after egui's own label selection has begun the pass (it was
+    // registered first), before anything is drawn.
+    fn on_begin_pass(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let vp = ctx.viewport_id();
+        self.passes.push(vp);
+        let (any, quiet, pressed, released) = ctx.input(|i| {
+            let (p, r) = right_events(&i.events);
+            (!i.events.is_empty(), quiet(&i.events), p, r)
+        });
+        let handle = ctx.plugin::<LabelSelectionState>();
+        let mut labels = handle.lock();
+        let v = self.views.entry(vp).or_default();
+        v.dirty |= any;
         let mut menu = false;
-        if let Some(r) = self.right.as_mut() {
-            // A press on a label left a selection there (a point, where it
-            // landed); one anywhere else let it go.
-            let on = *r.on_label.get_or_insert(has);
-            if on && let Some(s) = &self.saved {
+        if let Some(released) = v.right {
+            if let Some(s) = &v.saved {
                 *labels = s.clone();
             }
-            if r.released {
-                menu = on;
-                self.right = None;
+            if released {
+                menu = true;
+                v.right = None;
             }
         }
-        if pressed && self.saved.is_some() && !self.text.is_empty() {
-            self.right = Some(Right::default());
+        if pressed {
+            // On the selection: a label holding one of its ends.
+            let under: Vec<String> = ctx.interaction_snapshot(|s| {
+                s.hovered.iter().map(|id| id.short_debug_format()).collect()
+            });
+            v.on_selection =
+                !v.text.is_empty() && v.saved.is_some() && under.iter().any(|u| v.ends.contains(u));
+            if v.on_selection {
+                v.right = Some(false);
+            }
         }
-        if released && let Some(r) = self.right.as_mut() {
-            r.released = true;
+        if released && v.right.is_some() {
+            v.right = Some(true);
         }
-        self.menu = menu;
+        v.menu = menu;
         let has = labels.has_selection();
-        drop(labels);
-        // A quiet frame: no click, no key, no text box focused (its own
-        // Ctrl+C is the user's). Ask the labels what's selected, as Ctrl+C
-        // would; the router keeps the answer rather than copy it.
-        let quiet = !input.events.iter().any(|e| {
-            matches!(
-                e,
-                Event::PointerButton { .. }
-                    | Event::Key { .. }
-                    | Event::Copy
-                    | Event::Cut
-                    | Event::Paste(_)
-                    | Event::Text(_)
-            )
-        });
+        // Its own Ctrl+C is a focused text box's.
         let focused = ctx.memory(|m| m.focused().is_some());
-        self.asking = has && quiet && self.right.is_none() && !focused;
-        if self.asking {
-            input.events.push(Event::Copy);
-            self.saved = Some(ctx.plugin::<LabelSelectionState>().lock().clone());
-        } else if !has && self.right.is_none() && !menu && !egui::Popup::is_any_open(ctx) {
-            self.saved = None;
-            self.text.clear();
+        v.asking = has && v.dirty && quiet && v.right.is_none() && !focused;
+        if v.asking {
+            v.dirty = false;
+            v.saved = Some(labels.clone());
+            v.ends = selection_ends(&labels);
+            drop(labels);
+            ctx.input_mut(|i| i.events.push(Event::Copy));
+        } else if !has && v.right.is_none() && !menu && !egui::Popup::is_any_open(&ctx) {
+            v.saved = None;
+            v.ends.clear();
+            v.text.clear();
+            v.on_selection = false;
         }
     }
 
     fn output_hook(&mut self, _ctx: &Context, output: &mut FullOutput) {
+        let vp = self.passes.pop().unwrap_or(ViewportId::ROOT);
         let mut texts = Vec::new();
         let mut passed = lock(&PASSED);
         output.platform_output.commands.retain(|c| match c {
@@ -151,12 +209,14 @@ impl egui::Plugin for Router {
         });
         passed.clear();
         drop(passed);
-        if std::mem::take(&mut self.asking) {
-            self.text = texts.concat();
+        if let Some(v) = self.views.get_mut(&vp)
+            && std::mem::take(&mut v.asking)
+        {
+            v.text = texts.concat();
             return;
         }
         for t in texts {
-            if let Some(t) = crate::widgets::put(t) {
+            if let Some(t) = (self.sink)(t) {
                 output
                     .platform_output
                     .commands
@@ -164,6 +224,22 @@ impl egui::Plugin for Router {
             }
         }
     }
+}
+
+/// No click, no key, nothing typed or pasted: the labels' selection is
+/// settled, and a Copy asked now is only the router's.
+fn quiet(events: &[Event]) -> bool {
+    !events.iter().any(|e| {
+        matches!(
+            e,
+            Event::PointerButton { .. }
+                | Event::Key { .. }
+                | Event::Copy
+                | Event::Cut
+                | Event::Paste(_)
+                | Event::Text(_)
+        )
+    })
 }
 
 /// Whether `events` press and release the right button.
@@ -186,42 +262,67 @@ fn right_events(events: &[Event]) -> (bool, bool) {
     out
 }
 
-/// Mark `rect` as a block of text (a preview drawn from many labels) whose
-/// whole is `text`: a right-click in it opens the label menu with Copy all
-/// as well. Call each frame it's drawn.
-pub fn block(ctx: &Context, rect: egui::Rect, text: &str) {
-    let id = Id::new("clip blocks");
-    ctx.data_mut(|d| {
-        d.get_temp_mut_or_default::<Vec<(egui::Rect, String)>>(id)
-            .push((rect, text.to_string()))
+/// Mark `rect`, drawn in `ui`, as a block of text (a preview made of many
+/// labels) known as `key`: a right-click in it opens the label menu with
+/// Copy all as well. The text isn't handed over: when Copy all is picked,
+/// `take_copy_all` says so to the block's owner, which copies its own.
+pub fn block(ui: &Ui, rect: egui::Rect, key: Id) {
+    let layer = ui.layer_id();
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(egui::Rect, egui::LayerId, Id)>>(Id::new("clip blocks"))
+            .push((rect, layer, key))
     });
 }
 
-/// The right-click menu for text in labels: Copy (what's selected) and,
-/// in a `block`, Copy all. Opens where a right-click on selected text, or
-/// in a block, ended; not when what was clicked opened a menu of its own.
-/// Call once a frame, after the UI, in each window.
+/// Whether Copy all was picked in block `key`'s menu (once).
+pub fn take_copy_all(ctx: &Context, key: Id) -> bool {
+    let vp = ctx.viewport_id();
+    ctx.plugin_opt::<Router>().is_some_and(|r| {
+        r.lock()
+            .views
+            .get_mut(&vp)
+            .is_some_and(|v| v.copy_all.take_if(|k| *k == key).is_some())
+    })
+}
+
+/// The right-click menu for text in labels: Copy selected text (when the
+/// right-click landed on it) and, in a `block`, Copy all. Not when what
+/// was clicked opened a menu of its own. Call once a pass, after the UI,
+/// in each window.
 pub fn label_menu(ctx: &Context) {
     let id = Id::new("clip label menu");
-    let blocks: Vec<(egui::Rect, String)> = ctx
+    let blocks: Vec<(egui::Rect, egui::LayerId, Id)> = ctx
         .data_mut(|d| d.remove_temp(Id::new("clip blocks")))
         .unwrap_or_default();
     let Some(router) = ctx.plugin_opt::<Router>() else {
         return;
     };
-    let on_selection = std::mem::take(&mut router.lock().menu) && !selected(ctx).is_empty();
+    let vp = ctx.viewport_id();
+    let on_selection = router
+        .lock()
+        .views
+        .get_mut(&vp)
+        .is_some_and(|v| std::mem::take(&mut v.menu))
+        && !selected(ctx).is_empty();
     let pointer = ctx.pointer_latest_pos();
+    // In a block, and not under a window drawn over it.
     let in_block = ctx
         .input(|i| i.pointer.secondary_clicked())
         .then_some(pointer)
         .flatten()
-        .and_then(|p| blocks.iter().rev().find(|(r, _)| r.contains(p)))
-        .map(|(_, t)| t.clone());
+        .and_then(|p| {
+            let top = ctx.layer_id_at(p);
+            blocks
+                .iter()
+                .rev()
+                .find(|(r, layer, _)| r.contains(p) && top == Some(*layer))
+        })
+        .map(|(.., key)| *key);
     let open = (on_selection || in_block.is_some()) && !egui::Popup::is_any_open(ctx);
     if open && let Some(p) = pointer {
-        ctx.data_mut(|d| d.insert_temp(id, (p, in_block.unwrap_or_default())));
+        ctx.data_mut(|d| d.insert_temp(id, (p, in_block)));
     }
-    let Some((at, all)) = ctx.data(|d| d.get_temp::<(egui::Pos2, String)>(id)) else {
+    let Some((at, block)) = ctx.data(|d| d.get_temp::<(egui::Pos2, Option<Id>)>(id)) else {
         return;
     };
     let shown = egui::Popup::new(
@@ -236,26 +337,33 @@ pub fn label_menu(ctx: &Context) {
     .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
     .show(|ui| {
         let sel = selected(ui.ctx());
-        if ui
-            .add_enabled(
-                !sel.is_empty(),
-                egui::Button::new("Copy").shortcut_text(shortcut("C")),
-            )
-            .clicked()
+        if !sel.is_empty()
+            && ui
+                .add(egui::Button::new(COPY_SELECTED).shortcut_text(shortcut("C")))
+                .clicked()
         {
             crate::widgets::copy(ui.ctx(), sel);
             ui.close();
         }
-        if !all.is_empty() && ui.button("Copy all").clicked() {
-            crate::widgets::copy(ui.ctx(), all.clone());
-            crate::widgets::toast("Copied to the clipboard", true);
+        if let Some(key) = block
+            && ui.button(COPY_ALL).clicked()
+        {
+            if let Some(r) = ui.ctx().plugin_opt::<Router>() {
+                r.lock().views.entry(vp).or_default().copy_all = Some(key);
+            }
+            ui.ctx().request_repaint();
             ui.close();
         }
     });
     if shown.is_none() {
-        ctx.data_mut(|d| d.remove::<(egui::Pos2, String)>(id));
+        ctx.data_mut(|d| d.remove::<(egui::Pos2, Option<Id>)>(id));
     }
 }
+
+/// The menus' words: what's selected, a value whole, a block whole.
+pub const COPY_SELECTED: &str = "Copy selected text";
+pub const COPY: &str = "Copy";
+pub const COPY_ALL: &str = "Copy all";
 
 /// A key's shortcut as this system writes it.
 pub fn shortcut(key: &str) -> String {
@@ -311,53 +419,61 @@ pub fn items(b: TextBox, selected: bool, clipboard: Option<bool>, empty: bool) -
     }
 }
 
-/// Whether the clipboard holds text; `None` when it can't be read here.
-/// Asked at most twice a second, as a menu is redrawn every frame.
-pub fn clipboard_has_text() -> Option<bool> {
-    static ASKED: Mutex<Option<(std::time::Instant, Option<bool>)>> = Mutex::new(None);
-    let mut asked = lock(&ASKED);
-    if let Some((at, v)) = *asked
-        && at.elapsed().as_secs_f32() < 0.5
-    {
-        return v;
-    }
-    let v = read_has_text();
-    *asked = Some((std::time::Instant::now(), v));
+/// Whether the clipboard holds text, for menu `id`: read once as the menu
+/// opens and kept while it stays open (a menu is drawn every pass).
+/// `None` when it can't be read (another program holding it): unknown.
+pub fn clipboard_has_text(ctx: &Context, id: Id) -> Option<bool> {
+    let key = id.with("clip paste");
+    let pass = ctx.cumulative_pass_nr();
+    let kept = ctx.data(|d| d.get_temp::<(u64, Option<bool>)>(key));
+    let v = match kept {
+        // Still open: drawn on the pass before this one.
+        Some((at, v)) if at + 1 >= pass => v,
+        _ => read_has_text(),
+    };
+    ctx.data_mut(|d| d.insert_temp(key, (pass, v)));
     v
 }
 
 fn read_has_text() -> Option<bool> {
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
+    let got = {
         let mut held = held();
         if held.is_none() {
             *held = arboard::Clipboard::new().ok();
         }
-        let c = held.as_mut()?;
-        Some(c.get_text().is_ok_and(|t| !t.is_empty()))
-    }
+        held.as_mut()?.get_text()
+    };
     #[cfg(not(all(unix, not(target_os = "macos"))))]
-    {
-        let mut c = arboard::Clipboard::new().ok()?;
-        Some(c.get_text().is_ok_and(|t| !t.is_empty()))
+    let got = arboard::Clipboard::new().ok()?.get_text();
+    has_text(got)
+}
+
+/// What a clipboard read says: text, none, or (any other error) unknown.
+fn has_text(got: Result<String, arboard::Error>) -> Option<bool> {
+    match got {
+        Ok(t) => Some(!t.is_empty()),
+        Err(arboard::Error::ContentNotAvailable) => Some(false),
+        Err(_) => None,
     }
 }
 
 /// Give `r` (a value: an address, a name, a finding) a right-click menu:
-/// Copy the selected text when some is selected, and Copy `value` whole.
+/// Copy selected text, when the right-click landed on a selection in it,
+/// and Copy, for `value` whole.
 pub fn value_menu(r: &Response, value: &str) {
     r.context_menu(|ui| value_items(ui, value));
 }
 
-/// For a block of text (a run's output, a preview): Copy the selected
-/// text when some is selected, and Copy all of `text`.
+/// For a block of text in one label (a run's output): Copy selected
+/// text, as `value_menu`, and Copy all of `text`.
 pub fn block_menu(r: &Response, text: &str) {
-    r.context_menu(|ui| copy_items(ui, text, "Copy all"));
+    r.context_menu(|ui| copy_items(ui, text, COPY_ALL));
 }
 
 /// `value_menu`'s items, for a menu that has others too.
 pub fn value_items(ui: &mut Ui, value: &str) {
-    copy_items(ui, value, "Copy");
+    copy_items(ui, value, COPY);
 }
 
 fn copy_items(ui: &mut Ui, value: &str, whole: &str) {
@@ -365,7 +481,7 @@ fn copy_items(ui: &mut Ui, value: &str, whole: &str) {
     if !sel.is_empty()
         && sel != value
         && ui
-            .add(egui::Button::new("Copy selected text").shortcut_text(shortcut("C")))
+            .add(egui::Button::new(COPY_SELECTED).shortcut_text(shortcut("C")))
             .clicked()
     {
         crate::widgets::copy(ui.ctx(), sel);
@@ -466,17 +582,39 @@ mod tests {
         );
     }
 
-    /// Text dragged over in a label is still there to copy after the
-    /// right-click that opens its menu, which then offers Copy; and Ctrl+C
-    /// on it leaves through the router, not straight to the window.
-    #[test]
-    fn selected_label_text_survives_a_right_click() {
-        let ctx = egui::Context::default();
-        install(&ctx);
-        let text = "Gateway 192.0.2.1 answers";
-        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let frame = |events: Vec<Event>| {
-            let input = RawInput {
+    /// A window to drive in a test: the router installed, copies it
+    /// routes kept in `ROUTED` (this thread's), each pass's UI given by
+    /// `ui`, which returns the rects it wants to click on.
+    struct Rig {
+        ctx: Context,
+    }
+
+    thread_local! {
+        static ROUTED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn keep(t: String) -> Option<String> {
+        ROUTED.with(|r| r.borrow_mut().push(t));
+        None
+    }
+
+    fn routed() -> Vec<String> {
+        ROUTED.with(|r| std::mem::take(&mut *r.borrow_mut()))
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let ctx = Context::default();
+            ctx.add_plugin(Router {
+                sink: keep,
+                ..Default::default()
+            });
+            Rig { ctx }
+        }
+
+        /// One pass with `events`; its output.
+        fn pass(&self, events: Vec<Event>, ui: &mut dyn FnMut(&mut Ui)) -> FullOutput {
+            let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
                     egui::vec2(800.0, 600.0),
@@ -484,45 +622,83 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let mut out = ctx.run_ui(input, |ui| {
-                rect.set(ui.label(text).rect);
-                label_menu(ui.ctx());
+            let mut out = self.ctx.run_ui(input, |u| {
+                ui(u);
+                label_menu(u.ctx());
             });
             out.textures_delta.clear();
-            std::mem::take(&mut out.platform_output.commands)
-        };
-        let button = |pos, button, pressed| Event::PointerButton {
+            out
+        }
+
+        fn view<R>(&self, f: impl FnOnce(&View) -> R) -> R {
+            let r = self.ctx.plugin::<Router>();
+            let r = r.lock();
+            f(&r.views[&ViewportId::ROOT])
+        }
+    }
+
+    fn button(pos: egui::Pos2, button: PointerButton, pressed: bool) -> Event {
+        Event::PointerButton {
             pos,
             button,
             pressed,
             modifiers: Default::default(),
-        };
-        frame(vec![]);
-        let rect = rect.get();
-        let (a, b) = (
-            rect.left_center() + egui::vec2(1.0, 0.0),
-            rect.right_center(),
+        }
+    }
+
+    /// Drag across `r` with the left button, then let the passes settle.
+    fn drag_over(rig: &Rig, r: egui::Rect, ui: &mut dyn FnMut(&mut Ui)) {
+        let (a, b) = (r.left_center() + egui::vec2(1.0, 0.0), r.right_center());
+        rig.pass(
+            vec![
+                Event::PointerMoved(a),
+                button(a, PointerButton::Primary, true),
+            ],
+            ui,
         );
-        // Drag across the whole label.
-        frame(vec![
-            Event::PointerMoved(a),
-            button(a, PointerButton::Primary, true),
-        ]);
-        frame(vec![Event::PointerMoved(rect.center())]);
-        frame(vec![Event::PointerMoved(b)]);
-        frame(vec![button(b, PointerButton::Primary, false)]);
-        // A quiet frame notes it, and copies nothing.
-        let out = frame(vec![]);
-        assert!(out.is_empty(), "{out:?}");
-        assert_eq!(selected(&ctx), text);
-        // Right-click on it: the selection holds, and the menu opens.
-        let m = rect.center();
-        frame(vec![button(m, PointerButton::Secondary, true)]);
-        frame(vec![button(m, PointerButton::Secondary, false)]);
-        frame(vec![]);
-        assert!(egui::Popup::is_any_open(&ctx), "Copy menu open");
-        assert_eq!(selected(&ctx), text);
-        assert!(ctx.plugin::<LabelSelectionState>().lock().has_selection());
+        rig.pass(vec![Event::PointerMoved(r.center())], ui);
+        rig.pass(vec![Event::PointerMoved(b)], ui);
+        rig.pass(vec![button(b, PointerButton::Primary, false)], ui);
+        rig.pass(vec![], ui);
+        rig.pass(vec![], ui);
+    }
+
+    fn right_click(rig: &Rig, at: egui::Pos2, ui: &mut dyn FnMut(&mut Ui)) {
+        rig.pass(
+            vec![
+                Event::PointerMoved(at),
+                button(at, PointerButton::Secondary, true),
+            ],
+            ui,
+        );
+        rig.pass(vec![button(at, PointerButton::Secondary, false)], ui);
+        rig.pass(vec![], ui);
+        rig.pass(vec![], ui);
+    }
+
+    const LABEL_MENU: &str = "clip label menu";
+
+    /// Text dragged over in a label is still there after the right-click
+    /// that opens its menu, which offers Copy selected text.
+    #[test]
+    fn selected_label_text_survives_a_right_click() {
+        let rig = Rig::new();
+        let text = "Gateway 192.0.2.1 answers";
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut ui = |ui: &mut Ui| rect.set(ui.label(text).rect);
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, rect.get(), &mut ui);
+        assert_eq!(rig.view(|v| v.text.clone()), text);
+        assert!(routed().is_empty(), "asking copies nothing");
+        right_click(&rig, rect.get().center(), &mut ui);
+        assert!(egui::Popup::is_id_open(&rig.ctx, Id::new(LABEL_MENU)));
+        assert_eq!(selected(&rig.ctx), text);
+        assert!(
+            rig.ctx
+                .plugin::<LabelSelectionState>()
+                .lock()
+                .has_selection()
+        );
         // Esc shuts the menu and lets the selection go.
         let esc = Event::Key {
             key: egui::Key::Escape,
@@ -531,10 +707,84 @@ mod tests {
             repeat: false,
             modifiers: Default::default(),
         };
-        frame(vec![esc]);
-        frame(vec![]);
-        frame(vec![]);
-        assert!(!egui::Popup::is_any_open(&ctx));
+        rig.pass(vec![esc], &mut ui);
+        rig.pass(vec![], &mut ui);
+        rig.pass(vec![], &mut ui);
+        assert!(!egui::Popup::is_any_open(&rig.ctx));
+    }
+
+    /// The leak this fixes: Ctrl+C on selected label text is copied by
+    /// egui's label selection after the app has drawn, and went to the
+    /// window's clipboard unmarked. It goes through the router now.
+    #[test]
+    fn ctrl_c_on_selected_label_text_goes_through_the_router() {
+        let rig = Rig::new();
+        let text = "Serial EXAMPLE0123";
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut ui = |ui: &mut Ui| rect.set(ui.label(text).rect);
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, rect.get(), &mut ui);
+        routed();
+        // Ctrl+C as the window delivers it: the key, and Copy.
+        let ctrl_c = Event::Key {
+            key: egui::Key::C,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let out = rig.pass(vec![ctrl_c, Event::Copy], &mut ui);
+        assert_eq!(routed(), [text]);
+        assert!(
+            !out.platform_output
+                .commands
+                .iter()
+                .any(|c| matches!(c, OutputCommand::CopyText(_))),
+            "nothing left for the window to copy unmarked"
+        );
+    }
+
+    /// A window with text selected and nothing happening doesn't redraw:
+    /// the router asks the labels once after input, then leaves it.
+    #[test]
+    fn an_idle_window_with_a_selection_doesnt_redraw() {
+        let rig = Rig::new();
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut ui = |ui: &mut Ui| rect.set(ui.label("Uptime 12 d 4 h").rect);
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, rect.get(), &mut ui);
+        assert!(!rig.view(|v| v.text.is_empty()));
+        for _ in 0..3 {
+            let out = rig.pass(vec![], &mut ui);
+            let delay = out.viewport_output[&ViewportId::ROOT].repaint_delay;
+            assert_eq!(delay, std::time::Duration::MAX, "idle");
+        }
+        assert!(
+            rig.ctx
+                .plugin::<LabelSelectionState>()
+                .lock()
+                .has_selection()
+        );
+    }
+
+    /// Right-clicking other text while some is selected doesn't offer the
+    /// selection, or put it back: the click is about what it landed on.
+    #[test]
+    fn a_right_click_on_other_text_leaves_the_selection_be() {
+        let rig = Rig::new();
+        let rects = std::cell::Cell::new((egui::Rect::NOTHING, egui::Rect::NOTHING));
+        let mut ui = |ui: &mut Ui| {
+            let a = ui.label("MAC from the device").rect;
+            ui.add_space(40.0);
+            let b = ui.label("Vendor Synology").rect;
+            rects.set((a, b));
+        };
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, rects.get().0, &mut ui);
+        assert!(!rig.view(|v| v.text.is_empty()));
+        right_click(&rig, rects.get().1.center(), &mut ui);
+        assert!(!egui::Popup::is_id_open(&rig.ctx, Id::new(LABEL_MENU)));
+        assert_eq!(selected(&rig.ctx), "");
     }
 
     /// With text selected in a side panel, a canvas beside it (as the Map
@@ -542,89 +792,125 @@ mod tests {
     /// menu, not the label's.
     #[test]
     fn a_selection_leaves_a_canvas_its_drags_and_its_menu() {
-        let ctx = egui::Context::default();
-        install(&ctx);
+        let rig = Rig::new();
         let panned = std::cell::Cell::new(0.0_f32);
         let canvas_menu = std::cell::Cell::new(false);
-        let rects = std::cell::Cell::new((egui::Rect::NOTHING, egui::Rect::NOTHING));
-        let frame = |events: Vec<Event>| {
-            let input = RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 600.0),
-                )),
-                events,
-                ..Default::default()
-            };
-            let mut out = ctx.run_ui(input, |ui| {
-                let label = ui.label("Switch 198.51.100.4").rect;
-                let area =
-                    egui::Rect::from_min_size(egui::pos2(300.0, 100.0), egui::vec2(300.0, 300.0));
-                let canvas = ui.interact(area, Id::new("canvas"), egui::Sense::click_and_drag());
-                panned.set(panned.get() + canvas.drag_delta().x);
-                canvas.context_menu(|ui| {
-                    canvas_menu.set(true);
-                    ui.label("Card menu");
-                });
-                rects.set((label, area));
-                label_menu(ui.ctx());
+        let label = std::cell::Cell::new(egui::Rect::NOTHING);
+        let area = egui::Rect::from_min_size(egui::pos2(300.0, 100.0), egui::vec2(300.0, 300.0));
+        let mut ui = |ui: &mut Ui| {
+            label.set(ui.label("Switch 198.51.100.4").rect);
+            let canvas = ui.interact(area, Id::new("canvas"), egui::Sense::click_and_drag());
+            panned.set(panned.get() + canvas.drag_delta().x);
+            canvas.context_menu(|ui| {
+                canvas_menu.set(true);
+                ui.label("Card menu");
             });
-            out.textures_delta.clear();
         };
-        let button = |pos, button, pressed| Event::PointerButton {
-            pos,
-            button,
-            pressed,
-            modifiers: Default::default(),
-        };
-        frame(vec![]);
-        let (label, area) = rects.get();
-        let (a, b) = (
-            label.left_center() + egui::vec2(1.0, 0.0),
-            label.right_center(),
-        );
-        frame(vec![
-            Event::PointerMoved(a),
-            button(a, PointerButton::Primary, true),
-        ]);
-        frame(vec![Event::PointerMoved(b)]);
-        frame(vec![button(b, PointerButton::Primary, false)]);
-        frame(vec![]);
-        assert!(!selected(&ctx).is_empty());
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, label.get(), &mut ui);
+        assert!(!rig.view(|v| v.text.is_empty()));
         // A drag on the canvas pans it.
         let c = area.center();
-        frame(vec![
-            Event::PointerMoved(c),
-            button(c, PointerButton::Primary, true),
-        ]);
+        rig.pass(
+            vec![
+                Event::PointerMoved(c),
+                button(c, PointerButton::Primary, true),
+            ],
+            &mut ui,
+        );
         for dx in 1..=6 {
-            frame(vec![Event::PointerMoved(
-                c + egui::vec2(10.0 * dx as f32, 0.0),
-            )]);
+            rig.pass(
+                vec![Event::PointerMoved(c + egui::vec2(10.0 * dx as f32, 0.0))],
+                &mut ui,
+            );
         }
-        frame(vec![button(
-            c + egui::vec2(60.0, 0.0),
-            PointerButton::Primary,
-            false,
-        )]);
+        rig.pass(
+            vec![button(
+                c + egui::vec2(60.0, 0.0),
+                PointerButton::Primary,
+                false,
+            )],
+            &mut ui,
+        );
         assert!(panned.get() > 30.0, "panned {}", panned.get());
         // Select again, then right-click the canvas: its own menu.
-        frame(vec![
-            Event::PointerMoved(a),
-            button(a, PointerButton::Primary, true),
-        ]);
-        frame(vec![Event::PointerMoved(b)]);
-        frame(vec![button(b, PointerButton::Primary, false)]);
-        frame(vec![]);
-        frame(vec![
-            Event::PointerMoved(c),
-            button(c, PointerButton::Secondary, true),
-        ]);
-        frame(vec![button(c, PointerButton::Secondary, false)]);
-        frame(vec![]);
-        frame(vec![]);
+        drag_over(&rig, label.get(), &mut ui);
+        right_click(&rig, c, &mut ui);
         assert!(canvas_menu.get(), "the canvas's menu");
-        let ours = Id::new("clip label menu");
-        assert!(!egui::Popup::is_id_open(&ctx, ours), "not the label menu");
+        assert!(!egui::Popup::is_id_open(&rig.ctx, Id::new(LABEL_MENU)));
+    }
+
+    /// A block's Copy all is its owner's to copy, asked only when picked;
+    /// a right-click on a window drawn over the block isn't in the block.
+    #[test]
+    fn a_blocks_copy_all_is_left_to_its_owner() {
+        let rig = Rig::new();
+        let key = Id::new("preview");
+        let block = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let over = std::cell::Cell::new(false);
+        let mut ui = |ui: &mut Ui| {
+            ui.label("Notes in Markdown");
+            super::block(ui, block, key);
+            if over.get() {
+                egui::Area::new(Id::new("window over"))
+                    .fixed_pos(egui::pos2(100.0, 100.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.allocate_exact_size(egui::vec2(200.0, 150.0), egui::Sense::click());
+                    });
+            }
+        };
+        rig.pass(vec![], &mut ui);
+        let at = egui::pos2(150.0, 150.0);
+        right_click(&rig, at, &mut ui);
+        assert!(egui::Popup::is_id_open(&rig.ctx, Id::new(LABEL_MENU)));
+        assert!(!take_copy_all(&rig.ctx, key), "not picked yet");
+        // Over another window: no block menu.
+        let esc = Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        rig.pass(vec![esc], &mut ui);
+        over.set(true);
+        rig.pass(vec![], &mut ui);
+        right_click(&rig, at, &mut ui);
+        assert!(!egui::Popup::is_id_open(&rig.ctx, Id::new(LABEL_MENU)));
+    }
+
+    /// `selection_ends` reads egui's private selection from its debug
+    /// text: this pins that it names the label holding the selection.
+    #[test]
+    fn a_selections_ends_are_named_by_the_labels_holding_them() {
+        let rig = Rig::new();
+        let id = std::cell::Cell::new(Id::NULL);
+        let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut ui = |ui: &mut Ui| {
+            let r = ui.label("Firmware 20231115");
+            id.set(r.id);
+            rect.set(r.rect);
+        };
+        rig.pass(vec![], &mut ui);
+        drag_over(&rig, rect.get(), &mut ui);
+        let ends = selection_ends(&rig.ctx.plugin::<LabelSelectionState>().lock());
+        assert!(!ends.is_empty());
+        assert!(
+            ends.iter().all(|e| *e == id.get().short_debug_format()),
+            "{ends:?}"
+        );
+    }
+
+    #[test]
+    fn a_clipboard_that_cant_be_read_leaves_paste_on() {
+        assert_eq!(has_text(Ok("192.0.2.1".into())), Some(true));
+        assert_eq!(has_text(Ok(String::new())), Some(false));
+        assert_eq!(
+            has_text(Err(arboard::Error::ContentNotAvailable)),
+            Some(false)
+        );
+        // Held by another program (a remote-desktop session): unknown.
+        assert_eq!(has_text(Err(arboard::Error::ClipboardOccupied)), None);
+        assert_eq!(items(EDITABLE, false, None, false).paste, Some(true));
     }
 }

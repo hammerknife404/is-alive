@@ -530,6 +530,14 @@ impl NotesTool {
         c.1.clone()
     }
 
+    /// The sanitized notes as text, for the preview's Copy all: as
+    /// `sanitized_plain`, but each photo stays its short marker rather than
+    /// megabytes of picture data.
+    fn sanitized_text_only(&self) -> String {
+        self.clean_key();
+        crate::theme::strip_emoji_styles(&self.clean.borrow().1.0)
+    }
+
     /// The sanitized notes for other programs: no emoji style marks.
     pub fn sanitized_plain(&self) -> String {
         crate::theme::strip_emoji_styles(&self.sanitized().0)
@@ -2411,8 +2419,14 @@ impl NotesTool {
                     ui.weak("Formatted, as saved.");
                     return;
                 }
-                // Right-click in it: Copy what's selected, or Copy all.
-                crate::clip::block(ui.ctx(), ui.clip_rect(), &clean);
+                // Right-click in it: Copy selected text, or Copy all (as
+                // ⋯ Copy: redacted, photos by name, no emoji style marks).
+                let key = egui::Id::new("notes preview");
+                crate::clip::block(ui, ui.clip_rect(), key);
+                if crate::clip::take_copy_all(ui.ctx(), key) {
+                    widgets::copy(ui.ctx(), self.sanitized_text_only());
+                    widgets::toast("Notes copied", true);
+                }
                 // Line numbers match the raw text, so a ticked box maps back.
                 if let Some(line) = markdown::render(ui, &clean, font) {
                     markdown::toggle_task(&mut self.text, line);

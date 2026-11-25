@@ -1329,7 +1329,7 @@ pub fn text_edit_menu(ui: &mut Ui, id: egui::Id, b: crate::clip::TextBox, empty:
         .and_then(|s| s.cursor.char_range())
         .is_some_and(|r| r.primary != r.secondary);
     let clipboard = if b.editable {
-        crate::clip::clipboard_has_text()
+        crate::clip::clipboard_has_text(&ctx, id)
     } else {
         None
     };
