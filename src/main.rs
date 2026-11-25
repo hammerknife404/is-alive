@@ -1252,6 +1252,7 @@ impl App {
             (tools::netcheck::SCAN, self.netcheck.take_finished_scan()),
             ("Domain join", self.join.take_finished()),
             (tools::join::OTHERS, self.join.take_finished_others()),
+            (tools::snmp::TOOL, tools::snmp::take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -1376,6 +1377,7 @@ impl App {
         ]
         .into_iter()
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
+        .chain(tools::snmp::running_since().map(|(since, out)| (tools::snmp::TOOL, since, out)))
         .collect()
     }
 }

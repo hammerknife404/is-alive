@@ -12,6 +12,7 @@ pub mod names;
 pub mod netconf;
 pub mod pmtu;
 pub mod ports;
+pub mod snmp;
 pub mod speed;
 pub mod ssdp;
 pub mod subnet;

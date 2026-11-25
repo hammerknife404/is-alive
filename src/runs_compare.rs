@@ -93,6 +93,8 @@ fn spec(tool: &str) -> Option<Spec> {
         // Access points new, gone or moved; signal changes every time.
         crate::tools::netcheck::SCAN => s(&["bssid"], &["ssid", "channel"]),
         "Domain join" => s(&["section", "field"], &["value"]),
+        // One row per value read (uptime changes with every read).
+        crate::tools::snmp::TOOL => s(&["target", "section", "field"], &["value"]),
         "Domain join (others)" => s(&["host"], &["verdict", "computer", "dns_domain"]),
         "Speed Test" => s(
             &["phase"],

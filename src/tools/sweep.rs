@@ -756,6 +756,7 @@ impl SweepTool {
                     .to_string()
             })
             .collect();
+        let (snmp_ok, snmp_tip) = crate::tools::snmp::button(ip.into());
         let mut open = true;
         let mut ask = None;
         let address = ip.to_string();
@@ -805,6 +806,11 @@ impl SweepTool {
                     tip: &wake_tip,
                     enabled: wake.is_some(),
                 },
+                Act {
+                    label: "SNMP",
+                    tip: &snmp_tip,
+                    enabled: snmp_ok,
+                },
             ];
             match insp::actions(ui, &acts) {
                 Some(0) => ask = Some(Ask::Ping(address.clone())),
@@ -818,8 +824,11 @@ impl SweepTool {
                         wol::wake_all(vec![t]);
                     }
                 }
+                Some(7) => crate::tools::snmp::start(ui.ctx(), ip.into()),
                 _ => {}
             }
+            // Under the buttons, so what SNMP read shows where it was asked.
+            crate::tools::snmp::section(ui, ip.into());
             insp::section(ui, "Details");
             insp::row(ui, "Address", &address, true);
             if let Some(m) = &mac {

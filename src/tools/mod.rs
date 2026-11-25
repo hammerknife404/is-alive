@@ -9,6 +9,7 @@ pub mod notes;
 pub mod ping;
 pub mod ports;
 pub mod report;
+pub mod snmp;
 pub mod speed;
 pub mod sweep;
 pub mod trace;

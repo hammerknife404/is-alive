@@ -205,6 +205,27 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   AD-joined (Entra not checked)` means only that: never write that a
   device is a workgroup machine or has no directory from it. `No answer`
   and `Answers, but doesn't say` are not findings.
+  An `SNMP` run is one device's own answer over SNMP, read when the
+  technician pressed SNMP on it (never by a sweep): `target` is its
+  address, and each row is `section`, `field`, `value`. `system` rows are
+  `name`, `description`, `object_id`, `maker` (from the object ID's
+  enterprise number), `uptime`, `location` and `contact`; `chassis` rows
+  are ENTITY-MIB's `model`, `software` and `serial`; `printer` rows are
+  `status` and `errors` (*low toner*, *jammed* …, or `none`), and each
+  `supply` row is a toner or drum (`field`) and what's left (`value`:
+  *45%*, *some left*, *unknown*). An `lldp` row's `field` is the
+  device's own port and its `value` the neighbour's name and port
+  (*SW-OFFICE-1 Gi1/0/14 (Front desk printer)*): observed from the device,
+  so it can set that node's uplink and port when no config says
+  otherwise, and the switch it names joins by name. Use the rest as
+  observed facts for the node (model, firmware, serial in its `details`;
+  a sysName as its name when the map has none). A printer error or a
+  supply at a few percent can be an action item; an `uptime` is context,
+  not a finding. `note` rows say a table was cut short. `snmp` /
+  `answer` = `no answer` means nothing answered: SNMP off, a wrong
+  community, an ACL or a v3-only agent look the same, so never report
+  which, and never report a device as having no SNMP from it. No row
+  ever holds the community.
 - **Several of a kind** (one visit, more than one controller or firewall):
   the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
   `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`
