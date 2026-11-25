@@ -5,7 +5,7 @@ use crate::log::{self, Table};
 use crate::net::hostinfo::HostInfo;
 use crate::net::icmp;
 use crate::net::mac::{self, Mac};
-use crate::net::{self, TcpState, dnssd, names, ports, ssdp, subnet, targets, wol};
+use crate::net::{self, TcpState, dnssd, names, ports, ssdp, subnet, targets, tls, wol};
 use crate::theme;
 use crate::unifi::Clients;
 use crate::widgets::{self, Action};
@@ -54,6 +54,12 @@ struct Host {
     /// What its own web page calls it (its title, else its server), read
     /// after the port check where a web port answered.
     web: Option<String>,
+    /// `web` is a real title, not a Server header standing in for a
+    /// placeholder or missing one.
+    titled: bool,
+    /// The certificate on its HTTPS management port, read from the same
+    /// handshake as that GET: the device's own claim, never trusted.
+    cert: Option<Box<tls::Cert>>,
     /// What it said over DNS-SD (its service types, a printer's model):
     /// only devices on the scanner's own segment can answer.
     dnssd: Option<Box<dnssd::Found>>,
@@ -256,8 +262,8 @@ enum Ev {
     Conflict(Ipv4Addr, Vec<Mac>),
     /// This many more steps for the progress bar.
     More(usize),
-    /// What this host's web page calls it.
-    Web(Ipv4Addr, String),
+    /// What this host's web page and its certificate say.
+    Web(Ipv4Addr, Box<net::web::Named>),
     Open(Ipv4Addr, u16),
     /// The multicast discovery went out on the scanner's segment: the
     /// DNS-SD browse, the SSDP search.
@@ -441,9 +447,17 @@ impl SweepTool {
                     }
                 }
                 Ev::More(n) => self.total += n,
-                Ev::Web(ip, title) => {
+                Ev::Web(ip, named) => {
                     if let Some(h) = self.alive.iter_mut().find(|h| h.ip == ip) {
-                        h.web = Some(title);
+                        let net::web::Named {
+                            label,
+                            titled,
+                            cert,
+                        } = *named;
+                        if label.is_some() {
+                            (h.web, h.titled) = (label, titled);
+                        }
+                        h.cert = cert.map(Box::new).or(h.cert.take());
                         changed = true;
                     }
                 }
@@ -864,6 +878,7 @@ impl SweepTool {
         let web = insp::web_url(ip, &ports_open);
         let (checked, ran) = (h.checked, self.ran_ports);
         let web_title = h.web.clone();
+        let cert = h.cert.as_deref().cloned();
         let found = h.dnssd.clone();
         let scanned = h.ais.clone();
         let scan_date = self.imported.as_ref().and_then(|i| i.date.clone());
@@ -973,6 +988,9 @@ impl SweepTool {
             }
             if let Some(t) = &web_title {
                 insp::row(ui, "Web page", t, false);
+            }
+            if let Some(c) = &cert {
+                cert_rows(ui, c);
             }
             insp::row(ui, "Found by", &via.words(), false);
             if via.multicast_only() {
@@ -1300,6 +1318,9 @@ impl SweepTool {
             if let Some(t) = &h.web {
                 line += &format!("  \"{t}\"");
             }
+            if let Some(c) = h.cert.as_deref() {
+                line += &cert_words(c, h.titled, chrono::Utc::now());
+            }
             if let Some(m) = h.dnssd.as_deref().and_then(dnssd::Found::model) {
                 line += &format!("  model \"{m}\"");
             }
@@ -1393,9 +1414,11 @@ impl SweepTool {
             .iter()
             .map(|h| {
                 let open: &[u16] = if h.checked { &h.open } else { &[] };
+                let words = h.cert.as_deref().map(tls::Cert::words);
                 let said = crate::map::Said {
                     page: h.web.as_deref(),
                     dnssd: h.dnssd.as_deref(),
+                    cert: words.as_deref(),
                 };
                 let client = self.local.gateway != Some(h.ip)
                     && crate::map::looks_like_client(h.mac.as_ref(), open, said);
@@ -1423,6 +1446,13 @@ impl SweepTool {
                     })).collect::<Vec<_>>()),
                     "other_macs": h.also.iter().map(mac::fmt).collect::<Vec<_>>(),
                     "web_title": h.web,
+                    "tls": h.cert.as_deref().map(|c| json!({
+                        "subject": c.dn(),
+                        "sans": c.names,
+                        "issuer": c.issuer,
+                        "not_after": c.not_after.map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                        "self_signed": c.self_signed,
+                    })),
                     "dnssd": h.dnssd.as_ref().map(|f| json!({
                         "services": f.services,
                         "ty": f.ty,
@@ -1500,6 +1530,7 @@ impl SweepTool {
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered). A locally administered MAC (second-lowest bit of the first octet set) is either a client's private address or a device's virtual one: virtual_mac true means it is the gateway's (never private, whatever its MAC) or a network-gear maker's own prefix with that bit set, such as a SonicWall LAN interface answering on 2e:b8:ed:… for SonicWall's 2c:b8:ed:…, on a host that showed gear of its own (telnet, 541, 4433 or 8291 open, or a web page naming gear; the Smart port check skips locally administered MACs, so off the gateway that needs All hosts); vendor then names that maker (null for a gateway whose maker isn't known). private_mac true means a locally administered address with nothing to say infrastructure (a phone or laptop's private per-network MAC, or a VM's virtual NIC), vendor null. Both are false for a registered MAC and null when mac is null. HP's prefixes cover HP printers, PCs and Poly desk phones alike: tell them apart by web_title, dnssd and open_ports, not the vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header; a placeholder title such as Loading..., Login or Redirecting counts as none), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
+                "tls is the certificate the host showed on its HTTPS management port (443, 8443 or 4433), read from the same handshake as the web_title GET (or, where no GET went over TLS, one handshake that is then closed), null where no handshake finished: subject is its subject as CN=…, OU=…, O=… (the parts it has; null if none), sans its DNS names and IP addresses (at most 16), issuer its issuer's common name (else organisation), not_after its end date (UTC, null if unreadable) and self_signed whether it issued itself. Nothing about it is trusted or checked. Device certificates often carry the model or serial (a FortiGate's FGT60F… serial, a NAS or printer's model, a camera maker): a role and model hint where web_title is null or only a Server header, the device's own claim, not proof. A self-signed or expired certificate is usual on a management page: a low note at most, never a finding by itself.",
                 "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse ran and its answers were read: false with names off, when no swept range is on the scanner's segment, or when the sweep was stopped first. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
                 "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search ran and its replies were read (false in the same cases as dnssd_browsed); it is sent with TTL 1, and like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
@@ -1578,6 +1609,8 @@ impl SweepTool {
             checked: false,
             also: Vec::new(),
             web: None,
+            titled: false,
+            cert: None,
             dnssd: None,
             ssdp: None,
             ais: None,
@@ -1607,6 +1640,22 @@ impl SweepTool {
             ],
         }));
         printer.via.mdns = true;
+        // Its page's title was a placeholder: the Server header stands in,
+        // and its certificate names it.
+        (printer.open, printer.checked) = (vec![80, 443, 9100], true);
+        printer.web = Some("HP HTTP Server".into());
+        printer.cert = Some(Box::new(tls::Cert {
+            subject: "NPI0A1B2C".into(),
+            cn: Some("NPI0A1B2C".into()),
+            unit: Some("Jetdirect".into()),
+            issuer: "NPI0A1B2C".into(),
+            names: vec!["NPI0A1B2C.local".into(), "192.0.2.40".into()],
+            not_after: chrono::NaiveDate::from_ymd_opt(2034, 1, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|t| t.and_utc()),
+            self_signed: true,
+            ..Default::default()
+        }));
         // Silent to ping and ARP: found only by its multicast answers.
         let mut tv = host(75, Some("Lobby-TV.local"), None);
         (tv.rtt, tv.ttl, tv.via) = (
@@ -1766,6 +1815,8 @@ impl SweepTool {
                 also: h.also.clone(),
                 web: h.web.clone(),
                 dnssd: h.dnssd.as_deref().cloned(),
+                cert: h.cert.as_deref().cloned(),
+                titled: h.titled,
                 multicast: h
                     .via
                     .multicast_only()
@@ -1940,6 +1991,8 @@ impl SweepTool {
                         checked: false,
                         also: Vec::new(),
                         web: None,
+                        titled: false,
+                        cert: None,
                         dnssd: None,
                         ssdp: None,
                         ais: None,
@@ -2001,6 +2054,8 @@ impl SweepTool {
                     checked: false,
                     also: Vec::new(),
                     web: None,
+                    titled: false,
+                    cert: None,
                     dnssd: None,
                     ssdp: None,
                     ais: None,
@@ -2088,6 +2143,8 @@ impl SweepTool {
                         checked: false,
                         also: Vec::new(),
                         web: None,
+                        titled: false,
+                        cert: None,
                         dnssd: d.clone().map(Box::new),
                         ssdp: u.clone().map(Box::new),
                         ais: None,
@@ -2164,12 +2221,61 @@ impl SweepTool {
             // A printer's or a switch's TLS takes a while.
             let page_wait = Duration::from_millis(timeout.max(2000) as u64);
             net::par_for(&webby, threads, rate, tx.cancel_flag(), |(ip, ps)| {
-                if let Some(t) = net::web::identify(IpAddr::V4(*ip), ps, page_wait) {
-                    tx.send(Ev::Web(*ip, t));
+                let named = net::web::identify(IpAddr::V4(*ip), ps, page_wait);
+                if named.label.is_some() || named.cert.is_some() {
+                    tx.send(Ev::Web(*ip, Box::new(named)));
                 }
                 tx.send(Ev::Probed);
             });
         }));
+    }
+}
+
+/// The inspector's rows for a device's own certificate: who it names,
+/// its alternative names, who issued it and when it ends, with
+/// self-signed and expired as plain notes (usual on a management page,
+/// so never a finding).
+fn cert_rows(ui: &mut Ui, c: &tls::Cert) {
+    use crate::inspector as insp;
+    if let Some(dn) = c.dn() {
+        insp::row(ui, "Certificate", &dn, false);
+    }
+    if !c.names.is_empty() {
+        insp::row(ui, "Cert names", &c.names.join(", "), true);
+    }
+    let issuer = if c.self_signed {
+        "itself (self-signed)".to_string()
+    } else {
+        c.issuer.clone()
+    };
+    insp::row(ui, "Cert issued by", &issuer, false);
+    if let Some(t) = c.not_after {
+        let mut until = t.format("%Y-%m-%d").to_string();
+        if c.expired(chrono::Utc::now()) {
+            until += " (expired)";
+        }
+        insp::row(ui, "Cert valid until", &until, true);
+    }
+    insp::note(ui, CERT_NOTE);
+}
+
+const CERT_NOTE: &str = "From its HTTPS management page's handshake: the device's own claim, \
+read and never trusted. A self-signed or expired certificate is usual on a device's own page.";
+
+/// A report line's part for a device's certificate: its subject where the
+/// page has no real title to name it, and the low notes (self-signed,
+/// expired). Empty where there's nothing to add.
+fn cert_words(c: &tls::Cert, titled: bool, now: chrono::DateTime<chrono::Utc>) -> String {
+    let notes = c.notes(now);
+    match c.dn().filter(|_| !titled) {
+        Some(dn) if notes.is_empty() => format!("  cert \"{dn}\""),
+        Some(dn) => format!("  cert \"{dn}\" ({})", notes.join(", ")),
+        // Titled: only an expiry is worth a word.
+        None => c
+            .not_after
+            .filter(|_| c.expired(now))
+            .map(|t| format!("  cert expired {}", t.format("%Y-%m-%d")))
+            .unwrap_or_default(),
     }
 }
 
@@ -2236,6 +2342,8 @@ fn imported_host(r: ais::Row) -> Option<Host> {
         checked: r.checked,
         also: Vec::new(),
         web: r.web.clone(),
+        titled: r.web.is_some(),
+        cert: None,
         dnssd: None,
         ssdp: None,
         via: Via::AIS,
@@ -2521,6 +2629,8 @@ mod tests {
             checked: false,
             also: Vec::new(),
             web: None,
+            titled: false,
+            cert: None,
             dnssd: None,
             ssdp: None,
             ais: None,
@@ -3186,7 +3296,12 @@ mod tests {
         assert_eq!(s.seen()[1].also, [mac(9)]);
 
         // A web page's title rides along the same way.
-        s.apply(vec![Ev::More(1), Ev::Web(ip(5), "UniFi OS".into())]);
+        let page = net::web::Named {
+            label: Some("UniFi OS".into()),
+            titled: true,
+            cert: None,
+        };
+        s.apply(vec![Ev::More(1), Ev::Web(ip(5), Box::new(page))]);
         assert_eq!(s.alive[0].web.as_deref(), Some("UniFi OS"));
         assert!(s.report().contains("\"UniFi OS\""));
         let v: serde_json::Value =
@@ -3222,6 +3337,119 @@ mod tests {
                 .contains("self-assigned")
         );
         assert!(ports::INFRA.contains(&21));
+    }
+
+    /// A device's certificate rides along with its page: shown where the
+    /// title was a placeholder, in the inventory's tls object, on the Map,
+    /// and as a role hint; self-signed and expired are notes only.
+    #[test]
+    fn a_devices_certificate_reaches_the_report_inventory_and_map() {
+        let ip = |last: u8| Ipv4Addr::new(10, 0, 0, last);
+        let mut fw = host([10, 0, 0, 1], Some(1.0));
+        (fw.open, fw.checked) = (vec![443], true);
+        let mut nas = host([10, 0, 0, 2], Some(1.0));
+        (nas.open, nas.checked) = (vec![443], true);
+        let mut s = swept(vec![fw, nas]);
+        let at = |y, m, d| {
+            chrono::NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+        };
+        let fgt = tls::Cert {
+            subject: "FGT60FTK00000000".into(),
+            cn: Some("FGT60FTK00000000".into()),
+            unit: Some("FortiGate".into()),
+            org: Some("Fortinet".into()),
+            issuer: "FGT60FTK00000000".into(),
+            names: vec!["fw.branch.example".into()],
+            not_after: Some(at(2038, 1, 19)),
+            self_signed: true,
+            ..Default::default()
+        };
+        let nas_cert = tls::Cert {
+            cn: Some("DS-0000".into()),
+            issuer: "Acme Test CA".into(),
+            not_after: Some(at(2024, 3, 1)),
+            ..Default::default()
+        };
+        s.apply(vec![
+            Ev::More(2),
+            // "Loading..." was dropped: the Server header stands in.
+            Ev::Web(
+                ip(1),
+                Box::new(net::web::Named {
+                    label: Some("xxxxxxxx-xxxxx".into()),
+                    titled: false,
+                    cert: Some(fgt),
+                }),
+            ),
+            Ev::Web(
+                ip(2),
+                Box::new(net::web::Named {
+                    label: Some("Synology DiskStation".into()),
+                    titled: true,
+                    cert: Some(nas_cert),
+                }),
+            ),
+        ]);
+        let r = s.report();
+        assert!(
+            r.contains("cert \"CN=FGT60FTK00000000, OU=FortiGate, O=Fortinet\" (self-signed)"),
+            "{r}"
+        );
+        // A real title names it: only the expiry is worth a word.
+        assert!(r.contains("cert expired 2024-03-01"), "{r}");
+        assert!(!r.contains("DS-0000"), "{r}");
+
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Full)).unwrap();
+        let t = &v["hosts"][0]["tls"];
+        assert_eq!(
+            t["subject"],
+            "CN=FGT60FTK00000000, OU=FortiGate, O=Fortinet"
+        );
+        assert_eq!(t["sans"], json!(["fw.branch.example"]));
+        assert_eq!(t["issuer"], "FGT60FTK00000000");
+        assert_eq!(t["not_after"], "2038-01-19T00:00:00Z");
+        assert_eq!(t["self_signed"], true);
+        assert_eq!(v["hosts"][1]["tls"]["subject"], "CN=DS-0000");
+        assert_eq!(v["hosts"][1]["tls"]["self_signed"], false);
+        let notes = v["notes"].to_string();
+        assert!(notes.contains("tls is the certificate"), "{notes}");
+        // Each tls key is one the bundled skill explains.
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        for key in t.as_object().unwrap().keys() {
+            assert!(skill.contains(&format!("`{key}`")), "SKILL.md: {key}");
+        }
+
+        // The Map gets it, and it names the firewall's role.
+        let seen = s.seen();
+        assert!(!seen[0].titled && seen[1].titled);
+        assert_eq!(
+            seen[0].cert.as_ref().and_then(tls::Cert::dn).as_deref(),
+            Some("CN=FGT60FTK00000000, OU=FortiGate, O=Fortinet")
+        );
+        let words = seen[0].cert.as_ref().map(tls::Cert::words);
+        let said = crate::map::Said {
+            page: seen[0].web.as_deref(),
+            dnssd: None,
+            cert: words.as_deref(),
+        };
+        assert!(!crate::map::looks_like_client(None, &[443], said));
+
+        // A later answer with a certificate but no page keeps the label.
+        s.apply(vec![Ev::Web(
+            ip(2),
+            Box::new(net::web::Named {
+                label: None,
+                titled: false,
+                cert: None,
+            }),
+        )]);
+        assert_eq!(s.alive[1].web.as_deref(), Some("Synology DiskStation"));
+        assert!(s.alive[1].titled && s.alive[1].cert.is_some());
     }
 
     /// The port pass only adds: every host the sweep found stays, with what

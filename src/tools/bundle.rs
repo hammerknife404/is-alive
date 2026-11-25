@@ -123,7 +123,8 @@ with where it came from: mac_from, name_from), whether a locally administered MA
 one (private_mac) or the gateway's or network gear's virtual one (virtual_mac, vendor then from the MAC with that bit \
 cleared; the gateway is never private), TTL, open management ports (null where a host's ports weren't checked), what it said over DNS-SD \
 (service types, a printer's model, queues and page languages) and over SSDP (UPnP server, device types; the \
-description URL as text, never fetched). DNS-SD and SSDP are multicast: the scanner's own segment only. \
+description URL as text, never fetched), and the certificate on its HTTPS management port (tls: subject, names, \
+issuer, end date, self-signed; read, never trusted: a model hint). DNS-SD and SSDP are multicast: the scanner's own segment only. \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). scanner.switch_port is the \
 switch port the scanner was plugged into (switch, port, VLANs, management address), as its newest Switch port run \
 found it, with when (heard_at), null when not known; its port_description can name a person. Observed state; complete false \
