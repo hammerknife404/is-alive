@@ -522,7 +522,7 @@ pub fn convert(data: &[u8]) -> Result<Report, String> {
         "system": system.iter().map(|(k, v)| (k.clone(), json!(v))).collect::<Map<_, _>>(),
         "notes": [
             "Read from the firewall's own config, so this is enforced state, not observation.",
-            "Interface mac is the port's own address: match it against /unifidump's discovered_devices and uplink MACs.",
+            "Interface mac is the port's own address: match it against /unifidump's discovered_devices and uplink MACs. The firewall may answer a sweep on that port with a virtual MAC instead: the same address with the locally-administered bit (0x02 of the first octet) set, so 2e:b8:ed:… for an interface mac of 2c:b8:ed:…. Compare with that bit cleared; the sweep's inventory marks such a host virtual_mac true, not a private client MAC.",
             "A rule or NAT field that is missing, or a NAT interface of -1, means Any. Codes are SonicOS's own: rule action 2 = allow, 0 = deny, 1 = discard (verify on the firewall).",
             "Accounts, passwords, VPN/RADIUS secrets, SNMP communities and certificates were not copied.",
         ],

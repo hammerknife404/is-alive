@@ -524,6 +524,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     if unplaced > 0 {
         summary += &format!(" · {unplaced} not placed");
     }
+    b.address_findings();
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;
@@ -947,6 +948,69 @@ mod tests {
         assert!(off.summary.ends_with("not drawn"), "{}", off.summary);
     }
 
+    /// A client on a self-assigned address, or on the address of the
+    /// gateway or a switch, is a finding on an imported map too: client
+    /// cards and the lines of its "+N more" card alike, clients off or on.
+    #[test]
+    fn self_assigned_and_clashing_clients_on_an_imported_map() {
+        let page = r#"
+        /* ===================== SITE DATA ===================== */
+        this.META = { title:'Example Site' };
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'fw', kind:'FIREWALL', label:'Edge FW', sub:'192.0.2.1' },
+          { id:'sw', kind:'SWITCH', label:'Core SW', sub:'192.0.2.2' },
+          { id:'ws', kind:'WORKSTATION', label:'front-desk', sub:'192.0.2.2' },
+          { id:'more', kind:'ADDITIONAL DEVICES', label:'+2 more', sub:'via Core SW',
+            details:['laptop-b · 192.0.2.1', 'copier-3 · 169.254.10.20'] },
+        ];
+        this.EDGES = [
+          { from:'inet', to:'fw' }, { from:'fw', to:'sw' }, { from:'sw', to:'ws' },
+          { from:'sw', to:'more' },
+        ];
+        /* =================== END SITE DATA =================== */"#;
+        let doc = crate::mapnetwork::parse(page.as_bytes()).unwrap();
+        for clients in [Clients::All, Clients::Off] {
+            let m = build(
+                &doc,
+                &Input {
+                    clients,
+                    ..Default::default()
+                },
+            );
+            let texts: Vec<&str> = m.findings.iter().map(|f| f.text.as_str()).collect();
+            let gw = m
+                .findings
+                .iter()
+                .find(|f| f.text.contains("Address clash on 192.0.2.1"))
+                .expect("laptop-b on the firewall's address");
+            assert_eq!(gw.sev, Sev::High, "the gateway's address: worst first");
+            assert!(gw.text.contains("laptop-b") && gw.text.contains("Edge FW"));
+            let sw = m
+                .findings
+                .iter()
+                .find(|f| f.text.contains("Address clash on 192.0.2.2"))
+                .expect("front-desk on the switch's address");
+            assert_eq!(sw.sev, Sev::Med);
+            assert!(sw.text.contains("front-desk") && sw.text.contains("Core SW"));
+            let dhcp = m
+                .findings
+                .iter()
+                .find(|f| f.text.contains("self-assigned"))
+                .expect("copier-3 on 169.254.x.x");
+            assert!(dhcp.text.starts_with("1 device(s)"), "{texts:?}");
+            assert!(dhcp.text.contains("copier-3") && dhcp.text.contains(crate::map::NO_DHCP));
+            assert_eq!(m.findings.len(), 3, "{texts:?}");
+            // The firewall's card is flagged, drawn at every clients setting.
+            assert!(
+                by(&m, "fw")
+                    .flags
+                    .iter()
+                    .any(|f| f == "Address clash on 192.0.2.1")
+            );
+        }
+    }
+
     /// A node's own ip and mac fields win over what its text says; a
     /// malformed one falls back to the text.
     #[test]
@@ -1005,6 +1069,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let look_alike = Input {
             sweep: vec![host([10, 0, 0, 2], Some([2, 0, 0, 0, 0, 9]))],
@@ -1041,6 +1106,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let laptop = [2, 0, 0, 0, 0, 0x99];
         let sweep = vec![
@@ -1134,6 +1200,7 @@ mod tests {
                     also: vec![],
                     web: None,
                     multicast: None,
+                    dnssd: None,
                 }],
                 clients: Clients::All,
                 ..Default::default()
@@ -1209,6 +1276,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         // Swept at the branch: its firewall answers by MAC.
         let input = Input {
@@ -1622,6 +1690,7 @@ mod examples {
                 also: vec![],
                 web: None,
                 multicast: None,
+                dnssd: None,
             })
             .collect();
         let open: HashMap<String, usize> = [("gateway".to_string(), usize::MAX)].into();

@@ -119,7 +119,9 @@ observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with how each was found (found_by: \
 ping, arp, mdns, ssdp; a host with only mdns or ssdp answered nothing but the multicast browse and is listed because \
 it's in the swept range on the scanner's own segment), MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL, open management ports (null where a host's ports weren't checked), what it said over DNS-SD \
+with where it came from: mac_from, name_from), whether a locally administered MAC is a client's private \
+one (private_mac) or the gateway's or network gear's virtual one (virtual_mac, vendor then from the MAC with that bit \
+cleared; the gateway is never private), TTL, open management ports (null where a host's ports weren't checked), what it said over DNS-SD \
 (service types, a printer's model, queues and page languages) and over SSDP (UPnP server, device types; the \
 description URL as text, never fetched). DNS-SD and SSDP are multicast: the scanner's own segment only. \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). Observed state; complete false \

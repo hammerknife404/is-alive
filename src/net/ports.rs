@@ -19,9 +19,10 @@ pub const PRESETS: &[(&str, &str)] = &[
 
 /// Checked on live hosts by Subnet Sweep's "Mgmt ports" (Smart or All): the
 /// management ports of switches, APs and firewalls, plus a few that mark a
-/// host's role (SMB/RDP for Windows, 9100 printers, 554 cameras).
+/// host's role (SMB/RDP for Windows, 9100 printers, 554 cameras) and FTP,
+/// which printers and NAS often leave on. A connect only: nothing is sent.
 pub const INFRA: &[u16] = &[
-    22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443, 9100,
+    21, 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443, 9100,
 ];
 
 const SERVICES: &[(u16, &str)] = &[
