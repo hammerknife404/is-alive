@@ -504,7 +504,7 @@ Past a router there's no ARP, so on a remote subnet only devices that answer pin
 
 **MAC** comes from this computer's ARP table, so devices on your own segment have one. Past a router there's no ARP, but a Windows device still reports its MAC over NetBIOS, so it gets one (and a vendor) too; Samba devices report zeros, which are left out. **Vendor** is the company that registered the first half of the MAC (from a list built into the app, no internet needed). *private/virtual* means a made-up MAC: a phone or laptop using a private Wi-Fi address, or a virtual machine. Some network gear makes a virtual MAC from its own: a SonicWall answers on its LAN with its interface MAC, one bit changed. When the gateway, or a device with an open port or web page, has a MAC like that from a network-gear maker's range, **Vendor** names the maker with *(virtual MAC)* after it (*SonicWall (virtual MAC)*), and the device counts as gear, not a phone. The gateway is never called private; with no maker to name it reads *(virtual MAC)*. **HP** covers HP printers, HP PCs and Poly desk phones alike, so its role comes from its web page and ports, not the vendor.
 
-**Mgmt ports** tries ports 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
+**Mgmt ports** tries ports 21, 22, 23, 80, 443, 445, 541, 554, 3389, 4433, 5000, 8080, 8291, 8443 and 9100 once the sweep has found what's alive: the management ports of switches, access points and firewalls, FTP (21, which printers and NAS often leave on), plus a few that give a device's role away (9100 printers, 554 cameras, 3389 Windows). Each is a connect only: nothing is sent to the port. Open ones show in an **Open ports** column and help the Map tell infrastructure from clients.
 
 | Mgmt ports | Checks |
 |---|---|
@@ -1094,7 +1094,7 @@ Notes kept on this computer are in `map-notes.json` beside the settings. The **C
 - **Roles** with counts; click one to fade those cards out.
 - **Action items** (the findings), worst first; click one to select the devices it's about.
 
-**Findings** come only from evidence: telnet open, management only over plain HTTP, an address answering from two MACs (a duplicate IP), firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **More › Copy findings** puts them in a ticket.
+**Findings** come only from evidence: telnet open, FTP open, management only over plain HTTP, an address answering from two MACs (a duplicate IP), devices on a self-assigned 169.254.x.x address (DHCP didn't answer them: check the DHCP server or scope and the switch port), a client on the address of the gateway, a switch, an access point or a server (an address clash, naming both; high on the gateway's), firewall management allowed on a WAN interface, unidentified uplinks, end-of-life models, mixed firmware on one model, devices in the swept range that didn't answer, and more. **More › Copy findings** puts them in a ticket.
 
 ### Example: walking a site with the Acme example
 

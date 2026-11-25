@@ -348,8 +348,9 @@ lines:\n\n  10.10.10.0/24   a subnet (or 10.10.10.0 255.255.255.0, or 10.10.10.*
 65,536 addresses in all. Past a router only ping answers (no ARP, no MACs).";
 
 const PORTS_TIP: &str = "After the sweep, try a TCP connect to live hosts' management ports \
-(SSH, telnet, web, UniFi 8080/8443, FortiGate 541, SonicWall 4433, MikroTik 8291) and a few that \
-mark a role (SMB, RDP, printers 9100, cameras 554). Evidence for telling switches, APs and \
+(SSH, telnet, web, UniFi 8080/8443, FortiGate 541, SonicWall 4433, MikroTik 8291), FTP (21, \
+often left on in printers and NAS) and a few that mark a role (SMB, RDP, printers 9100, cameras \
+554). A connect only: nothing is sent. Evidence for telling switches, APs and \
 firewalls from clients. Same speed limit as the sweep, but it is a port scan: IDS/EDR may notice. \
 Every host the sweep found stays listed, checked or not.";
 
@@ -1017,6 +1018,13 @@ impl SweepTool {
                  failover during the sweep\n"
             );
         }
+        let selfie = self.alive.iter().filter(|h| h.ip.is_link_local()).count();
+        if selfie > 0 {
+            s += &format!(
+                "⚠ {selfie} self-assigned address(es) (169.254.x.x): {}\n",
+                crate::map::NO_DHCP
+            );
+        }
         if self.stopped {
             s += "Stopped before it finished: hosts it hadn't reached aren't listed, and ports \
                   it hadn't checked say not checked\n";
@@ -1084,6 +1092,9 @@ impl SweepTool {
             if !h.also.is_empty() {
                 let also: Vec<String> = h.also.iter().map(mac::fmt).collect();
                 line += &format!("  ⚠ also from {}", also.join(", "));
+            }
+            if h.ip.is_link_local() {
+                line += "  ⚠ self-assigned, no DHCP";
             }
             line += &format!("  (found by {})", h.via.list().join(", "));
             s += line.trim_end();
@@ -1204,6 +1215,7 @@ impl SweepTool {
                 "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse ran and its answers were read: false with names off, when no swept range is on the scanner's segment, or when the sweep was stopped first. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
                 "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search ran and its replies were read (false in the same cases as dnssd_browsed); it is sent with TTL 1, and like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
+                "An ip in 169.254.0.0/16 is self-assigned: DHCP didn't answer that device (check the DHCP server/scope and the switch port). ports_checked includes 21 (ftp): printers and NAS often leave FTP on, which sends logins in clear text.",
                 "open_ports is null when that host's ports were not checked: the default Smart check skips phones and laptops (private_mac true, or a laptop or phone network card's maker such as Intel, Realtek, Apple or Samsung), and a stopped sweep leaves the hosts it hadn't finished. Null is not \"none open\"; an empty list is.",
                 "complete false means the sweep was stopped before it finished: a host missing from hosts may simply not have been reached, so absence says even less than usual.",
             ],
@@ -2651,6 +2663,34 @@ mod tests {
         assert_eq!(v["hosts"][0]["web_title"], "UniFi OS");
         assert!(v["hosts"][1]["web_title"].is_null());
         assert_eq!(s.seen()[0].web.as_deref(), Some("UniFi OS"));
+    }
+
+    /// A host on 169.254.x.x is flagged in the report with the DHCP hint;
+    /// FTP is among the ports checked.
+    #[test]
+    fn a_self_assigned_host_is_flagged_in_the_report() {
+        let s = swept(vec![
+            host([192, 0, 2, 5], Some(1.0)),
+            host([169, 254, 3, 4], Some(1.0)),
+        ]);
+        let r = s.report();
+        assert!(
+            r.contains(&format!(
+                "⚠ 1 self-assigned address(es) (169.254.x.x): {}",
+                crate::map::NO_DHCP
+            )),
+            "{r}"
+        );
+        let line = r.lines().find(|l| l.starts_with("169.254.3.4")).unwrap();
+        assert!(line.contains("⚠ self-assigned, no DHCP"), "{line}");
+        let other = r.lines().find(|l| l.starts_with("192.0.2.5")).unwrap();
+        assert!(!other.contains("self-assigned"));
+        assert!(
+            !swept(vec![host([192, 0, 2, 5], Some(1.0))])
+                .report()
+                .contains("self-assigned")
+        );
+        assert!(ports::INFRA.contains(&21));
     }
 
     /// The port pass only adds: every host the sweep found stays, with what
