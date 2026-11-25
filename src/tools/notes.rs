@@ -530,6 +530,14 @@ impl NotesTool {
         c.1.clone()
     }
 
+    /// The sanitized notes as text, for the preview's Copy all: as
+    /// `sanitized_plain`, but each photo stays its short marker rather than
+    /// megabytes of picture data.
+    fn sanitized_text_only(&self) -> String {
+        self.clean_key();
+        crate::theme::strip_emoji_styles(&self.clean.borrow().1.0)
+    }
+
     /// The sanitized notes for other programs: no emoji style marks.
     pub fn sanitized_plain(&self) -> String {
         crate::theme::strip_emoji_styles(&self.sanitized().0)
@@ -2314,7 +2322,8 @@ impl NotesTool {
     fn editor_menu(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let id = egui::Id::new(EDITOR_ID);
-        if widgets::text_edit_menu(ui, id, true) {
+        let empty = self.text.is_empty();
+        if widgets::text_edit_menu(ui, id, crate::clip::EDITABLE, empty) {
             ui.close();
             return;
         }
@@ -2409,6 +2418,14 @@ impl NotesTool {
                 if clean.trim().is_empty() {
                     ui.weak("Formatted, as saved.");
                     return;
+                }
+                // Right-click in it: Copy selected text, or Copy all (as
+                // ⋯ Copy: redacted, photos by name, no emoji style marks).
+                let key = egui::Id::new("notes preview");
+                crate::clip::block(ui, ui.clip_rect(), key);
+                if crate::clip::take_copy_all(ui.ctx(), key) {
+                    widgets::copy(ui.ctx(), self.sanitized_text_only());
+                    widgets::toast("Notes copied", true);
                 }
                 // Line numbers match the raw text, so a ticked box maps back.
                 if let Some(line) = markdown::render(ui, &clean, font) {
@@ -2527,7 +2544,7 @@ fn viewer(ui: &mut Ui, v: &Viewed, font: &FontId) {
                 );
                 widgets::restore_selection(ui.ctx(), id, &r, keep);
                 r.context_menu(|ui| {
-                    if widgets::text_edit_menu(ui, id, false) {
+                    if widgets::text_edit_menu(ui, id, crate::clip::READ_ONLY, text.is_empty()) {
                         ui.close();
                     }
                 });

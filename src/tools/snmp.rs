@@ -207,9 +207,9 @@ pub fn section(ui: &mut Ui, ip: IpAddr) {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             ui.label("Community");
-            ui.add(
+            widgets::add_masked_text_edit(
+                ui,
                 egui::TextEdit::singleline(&mut s.community)
-                    .password(true)
                     .desired_width(120.0)
                     .min_size(vec2(0.0, theme::TARGET_H)),
             )

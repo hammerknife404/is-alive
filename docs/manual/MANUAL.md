@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.37.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.38.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -183,7 +183,7 @@ All the testing tabs work the same way:
 
 **Enter** in the main field starts a run, and **Esc** stops it (so does **■ Stop**, which replaces Start while a run is going). One press of Esc does one thing: if you were typing in a box, it only leaves the box; if a menu is open, it only closes the menu; if the inspector floats over the results, it only closes the inspector. Only an Esc with none of those stops the run. A target that won't read (a typo in the range or host) says what's wrong and leaves the last run's results as they were, and a run's report and its row in Results name what it ran on, even if you've typed the next target in the box since. A small spinner turns while it works. It holds still while the window is behind another one, so a ping left running for hours doesn't keep redrawing the window. Copies and saves confirm themselves with a short message at the bottom of the window.
 
-Every text box has a right-click menu with **Cut**, **Copy**, **Paste** and **Select all**.
+Every text box has a right-click menu with **Cut**, **Copy**, **Paste** and **Select all** (see [Copying and pasting](#copying-and-pasting)).
 
 **What the boxes accept.** Every text box has a length limit (see [Privacy and security](#20-privacy-and-security)) and quietly drops hidden characters that come along with a paste: control characters, zero-width spaces and the invisible marks that can make one name look like another. A value the box can't use gets a plain message saying why, and the run doesn't start until it's fixed. For example, typing `22,99999` in Port Check's **Ports** says *'99999' isn't a port (1 to 65535)*.
 
@@ -197,6 +197,26 @@ A **Host** box (Ping, Port Check, Traceroute) takes any of these, so you can pas
 | `[::1]:443`, `nas.local:5001` | The host; in Ping's **TCP** mode the port too, and in Port Check the port replaces the **Ports** list |
 | `https://portal.example.com/login` | `portal.example.com` |
 | `bücher.de`, `пример.рф` | Names in any language (looked up in their DNS form) |
+
+### Copying and pasting
+
+Anything you can read in the app you can copy: select it with the mouse and press **Ctrl+C**, or right-click it. The menus use the same three words everywhere: **Copy selected text** is what you selected (offered when you right-click the text you selected), **Copy** is a value whole, and **Copy all** is a whole block of text.
+
+| Right-click on | The menu |
+|---|---|
+| A text box (Host, Range, the Notes editor, a search or filter box, a setting) | **Cut**, **Copy**, **Paste**, **Select all**. Cut and Copy are greyed until text is selected; Paste is greyed when the clipboard holds no text (when another program is holding the clipboard, Paste stays on); a read-only box (a file opened in Notes) has no Cut or Paste |
+| A hidden box (SNMP's **Community**) | **Paste** and **Select all** only: what's typed in it never leaves by copy, by the menu or by Ctrl+C |
+| A value in the inspector (an address, MAC, name, vendor, serial, version, a finding or detail line), a card's name at the top, a port chip, a Map run's line | **Copy**: the whole value. With part of it selected, **Copy selected text** too |
+| Other text you've selected (a heading, a hint) | **Copy selected text** |
+| A run's output in **Results**, or the Notes preview | **Copy all**, and **Copy selected text** when you right-click what you selected. The preview's **Copy all** copies the notes as Markdown, redacted, as **⋯ › Copy** does, with each photo as its *Photo N* marker rather than the picture |
+| A cell in a Results table | **Copy** (the whole cell, even when it's cut short with …) and **Copy row** (its cells separated by tabs, so they paste into a spreadsheet's columns) |
+| A row in Subnet Sweep | **Copy IP**, **Copy name**, **Copy MAC**, **Copy vendor** (each only when the host has one, the value on the right), then **Wake** |
+| A card on the Map | **Copy name**, **Copy IP**, **Copy MAC**, **Copy all details** (see [The right-click menu](#the-right-click-menu)) |
+| **LAN**, **Gateway** or **WAN** in the status bar | **Copy**: the address alone, without the word in front |
+
+- **Select** by dragging across text; a double-click selects a word, a triple-click a line. A selection can run across several lines and labels.
+- **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** work as they always have (**⌘** on a Mac).
+- **Every copy goes the same way**, whether from a menu, a **Copy** button or Ctrl+C: kept out of clipboard history and cleared when the app closes (see [Privacy and security](#20-privacy-and-security)). Copying only puts on the clipboard what's already on your screen; what the exports, the Site report and the Claude Handoff include, and what they redact, doesn't change.
 
 ### The status bar (bottom)
 
@@ -522,7 +542,7 @@ Click a device's row to open it in the **inspector** on the right: what it is (*
 - **Web**: open its web page in the browser (https, or what its open ports say: 8443, or plain http on 80).
 - **On map**: switch to the Map with its card selected (if it's on the map).
 - **Domain join**: put it in Domain join's **Other computers** box (nothing is sent until you press Start).
-- **Wake**: send it Wake-on-LAN, as [Ping's Wake](#waking-a-device-wake-on-lan) does (greyed out without a real MAC: a private MAC doesn't wake). Right-clicking a device's row offers the same **Wake (Wake-on-LAN)**.
+- **Wake**: send it Wake-on-LAN, as [Ping's Wake](#waking-a-device-wake-on-lan) does (greyed out without a real MAC: a private MAC doesn't wake). Right-clicking a device's row offers the same **Wake (Wake-on-LAN)**, under **Copy IP**, **Copy name**, **Copy MAC** and **Copy vendor** (each only when it has one).
 - **SNMP**: ask this one device what it is over SNMP ([below](#reading-a-device-over-snmp)). Greyed out while another device is being read. With the community empty it only opens the section, to type one in.
 
 Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**, then **TTL** (so the open ports still fit at the smallest window): all three stay in the inspector.
@@ -1085,14 +1105,15 @@ Right-click a card, or click **⋯** at the top of it in the inspector. Under th
 | **Open in a tab** ▸ | (A card with an IP) A full Ping, Port Check or Traceroute of its IP in that tab |
 | **Open web admin** | (Firewalls and gateways, switches, access points and other network gear; servers and devices that have a web page: a NAS, ESXi or Proxmox, iDRAC/iLO/IPMI, a backup appliance, a UPS or PDU card, or any with a web port known to be open) Its web page in your browser: `https://` and its IP, or the port its open ports point to |
 | **Wake (Wake-on-LAN)** | (A card with a MAC known from a sweep of this network or a backup) A Wake-on-LAN packet to wake a computer that's asleep or switched off. It goes out as a broadcast on the device's network, so it reaches a device on this computer's own network, or further only if the router passes it on (a card inside a range a sweep covered whole also gets that range's broadcast, which only helps if the range is its real subnet and the router forwards directed broadcasts: off by default on most); the device wakes only if Wake-on-LAN is turned on in its BIOS and network card. Ping it a minute later to see it come up. A private (randomized) MAC gets no item: phones and virtual adapters don't wake this way. On several selected cards, **Wake all (N)** wakes each one with a MAC, and one message says how many went out |
+| **Copy name** | The card's name |
 | **Copy IP** / **Copy MAC** | (When it has one) The address, shown on the right of the item |
-| **Copy details** | Copy the card as text |
+| **Copy all details** | The card as text: name and role, the line under the name, flags, details and its note |
 | **Put back in the layout** | (A card you've dragged) Back where the layout had it |
 | **Collapse / Expand** *site* | (Sites layout, on a map with two or more sites) Fold the card's site into one card, or open it. A long site name is cut short; hover the item for all of it |
 
 Each item shows only when it applies, with how many cards it takes, and a line sets each group apart. Selections made from this menu light only the links that join the selected cards, like Ctrl+click.
 
-**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the inspector; a message says so and the inspector scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
+**Right-clicking one of several selected cards applies the item to all of them:** the menu says how many, **Pin all N** pins them all, **Copy all details of all N** copies them all, **Select only this card** keeps just the one you clicked, and the Select items work from every selected card (for example, *Select their paths to the WAN* on three selected access points selects all three paths). **Ping all N** and **Port Check all N** run the quick check on each selected card with an IP (up to 32 at once; three probe at a time, the rest wait their turn), each result in its own section of the inspector; a message says so and the inspector scrolls to the first. A card already running that check is left to finish: the item then reads, for example, **Ping the other 2**. **Copy names**, **Copy IPs** and **Copy MACs** copy one per line, for pasting into a list of hosts.
 
 **⋯ in the inspector is the same menu:** the same items, doing the same things, for the card whose ⋯ you clicked (all of the selected cards, if there are several). Pick an item, click elsewhere or press **Esc** to close it; **Esc** closes only the menu, not the selection.
 
@@ -1114,7 +1135,7 @@ Each selected card gets a section, newest on top. A whole site or role box picke
 - **Note:** the note you wrote on it, with **Edit** and **Remove**, and where it's kept (see below); **Add note** starts one.
 - **Connections:** its uplink and what hangs off it; click one to show that card, **Ctrl+click** to add it to the selection.
 
-**Copy details**, **Wake** and the rest are in **⋯**.
+**Copy all details**, **Wake** and the rest are in **⋯**. Every value in the inspector can be selected and copied too: right-click it for **Copy**.
 
 With several cards selected, the inspector's header says how many and offers **Trace to WAN** and **Copy all**, and each card has a frame of its own. Drag a card's grip (⠿) to reorder; **×** takes a card out.
 
@@ -1122,7 +1143,7 @@ With several cards selected, the inspector's header says how many and offers **T
 
 Write a few lines on a card: where the spare is, who to call before rebooting it, what you changed. **Add note…** on its right-click menu (or ⋯), **Add note** in its inspector, **N** with one card selected, or a double-click on a card's note mark opens the editor in the card's inspector. Up to 2,000 characters, several lines; **Save** (**Ctrl+Enter**) keeps it, **Cancel** (**Esc**) leaves it as it was. Starting a note on another card while one is open saves what you typed first, and so does its card leaving the map (a new sweep, a site folded): the note is there when the card comes back. Several cards selected: **Add note to N cards…** writes one note onto each.
 
-A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy details** and the exports carry it.
+A card with a note has a small folded sheet on its top edge, at every zoom, and **Has a note** in the legend. Hovering the card shows the note's first lines; **Search** finds it; **Copy all details** and the exports carry it.
 
 **Redaction works as in Notes**, with the same lists: select a value in the editor and press **Ctrl+R** (or right-click, **Redact**) to hide it wherever it appears, in Notes too; a secret from a backup loaded in Config Export (a Wi-Fi key, an admin password) is caught by itself. What will be hidden is highlighted, with a count (*🔑 1 redacted: by hand*). **Unredact** keeps a value as written, and a value kept in Notes is kept here too. The note is kept as typed only while is-alive runs: saved maps, the notes kept on this computer, copies, exports, the tooltip and the Claude Handoff only ever get the redacted text.
 
@@ -1238,7 +1259,7 @@ Notes never get scanned and mangled: only what you mark, and the secrets of the 
 
 Autosave, **Copy**, **Save as** and the Claude Handoff all get the redacted text. Only **Raw copy** gives the original.
 
-Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting.
+Right-click in the editor for Cut, Copy, Paste, Select all, Redact/Unredact and the formatting. In **Split** and **Preview**, the formatted text can be selected: right-click it for **Copy selected text** (when you right-click what you selected) or **Copy all** (the notes as Markdown, with what's redacted kept redacted and each photo as its marker).
 
 ### Example: a visit write-up
 
@@ -1623,6 +1644,7 @@ At the bottom of Settings, **Remove everything is-alive saved…** is for a clie
 | **Enter** | A tool's field | Start the run |
 | **Esc** | While a tool runs | Stop the run (once no text box, menu or floating inspector has it) |
 | **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** | Any text box | Copy, cut, paste, select all (also on the right-click menu) |
+| **Ctrl+C** | Selected text anywhere | Copy it |
 | **Ctrl+B / Ctrl+I / Ctrl+E** | Notes | Bold / italic / code |
 | **Ctrl+K** | Notes | Link |
 | **Ctrl+Alt+1 / 2 / 3 / 0** | Notes | Heading 1, 2, 3 / plain text |
@@ -1660,6 +1682,9 @@ On a Mac, **⌘** takes the place of **Ctrl**. Speed Test and Subnet Calc have n
 | Drag a box's title | Map | Move the box with its cards |
 | Right-click a box's title | Map | Select its cards, put the box back, Links |
 | Right-click | Any text box | Cut, Copy, Paste, Select all |
+| Drag across text, then right-click it | Anywhere | Copy selected text |
+| Right-click a value | The inspector, the status bar | Copy it whole |
+| Right-click a row or a cell | Subnet Sweep, a Results table | Copy its IP, name, MAC or vendor; the cell or the row |
 | Drop a file on the window | Map | Open it there: Config Export reads it and the Map redraws (a saved map opens as one) |
 | Drop a file on the window | Notes | A photo or notes go into Notes; anything else to Config Export |
 | Drop a file on the window | Any other tab | Open it in Config Export |

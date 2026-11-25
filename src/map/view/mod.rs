@@ -3074,7 +3074,8 @@ mod tests {
         ] {
             assert!(!has(&menu, item), "{item:?} in {menu:?}");
         }
-        assert!(has(&menu, "Copy details"));
+        assert!(has(&menu, "Copy name"));
+        assert!(has(&menu, "Copy all details"));
         // A client with an IP and a MAC: the tests, both copies (showing
         // what they copy), no web admin.
         v.map.nodes[7].ip = ip(7);
@@ -3254,19 +3255,54 @@ mod tests {
     #[test]
     fn copy_ip_and_mac_give_a_line_for_each_card_that_has_one() {
         let mut v = view(3);
+        for (k, name) in ["Core switch", "Spare", "Printer"].iter().enumerate() {
+            v.map.nodes[k].label = name.to_string();
+        }
         v.map.nodes[0].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 5));
         v.map.nodes[0].mac = Some([0xaa, 0xbb, 0xcc, 0, 0, 1]);
         v.map.nodes[2].ip = Some(std::net::Ipv4Addr::new(10, 0, 0, 7));
-        let [(ip, ips), (mac, macs)] = v.copy_lists(&[0]);
-        assert_eq!((ip, mac), ("IP", "MAC"));
+        let [(name, names), (ip, ips), (mac, macs)] = v.copy_lists(&[0]);
+        assert_eq!((name, ip, mac), ("name", "IP", "MAC"));
+        assert_eq!(names, ["Core switch"]);
         assert_eq!(ips, ["10.0.0.5"]);
         assert_eq!(macs, ["aa:bb:cc:00:00:01"]);
         // Several: one per line, in the menu's order, skipping the card
         // without one.
-        let [(_, ips), (_, macs)] = v.copy_lists(&[2, 1, 0]);
+        let [(_, names), (_, ips), (_, macs)] = v.copy_lists(&[2, 1, 0]);
+        assert_eq!(names.join("\n"), "Printer\nSpare\nCore switch");
         assert_eq!(ips.join("\n"), "10.0.0.7\n10.0.0.5");
         assert_eq!(macs.join("\n"), "aa:bb:cc:00:00:01");
+        let [_, rest @ ..] = v.copy_lists(&[1]);
+        assert!(rest.iter().all(|(_, l)| l.is_empty()));
+        // A card with no name offers no Copy name.
+        v.map.nodes[1].label = "  ".into();
         assert!(v.copy_lists(&[1]).iter().all(|(_, l)| l.is_empty()));
+    }
+
+    /// Copy all details: each card's name and role, what's under it, its
+    /// flags, details and note, the cards one after another.
+    #[test]
+    fn copy_all_details_carries_each_card_whole() {
+        let mut v = view(3);
+        v.map.nodes[0].label = "Lobby AP".into();
+        v.map.nodes[0].flags = vec!["Weak signal".into()];
+        v.map.nodes[0].details = vec!["Firmware 6.5.62".into()];
+        v.map.nodes[0].note = "Behind the ceiling tile".into();
+        v.map.nodes[2].label = "Front desk".into();
+        let one = v.details_text(&[0]);
+        let kind = v.map.nodes[0].kind.to_string();
+        assert!(one.starts_with(&format!("Lobby AP ({kind})\n")), "{one}");
+        for part in [
+            "Flag: Weak signal",
+            "Firmware 6.5.62",
+            "Note:\n  Behind the ceiling tile",
+        ] {
+            assert!(one.contains(part), "{part:?} in {one}");
+        }
+        // Two: the first card whole, then the second.
+        let two = v.details_text(&[0, 2]);
+        assert!(two.starts_with(&one), "{two}");
+        assert!(two[one.len()..].contains("Front desk"), "{two}");
     }
 
     #[test]
@@ -3355,7 +3391,8 @@ mod tests {
     #[test]
     fn the_card_menu_sets_sections_apart_with_one_separator() {
         // A card on its own (no uplink, nothing below), no IP: Pin and
-        // Select, Add note…, then Copy details, with one separator under
+        // Select, Add note…, then Copy name and Copy all details, with one
+        // separator under
         // the title and one between each, none for the empty sections in
         // between.
         let ctx = egui::Context::default();
@@ -3365,7 +3402,14 @@ mod tests {
         let shown = click(&ctx, &mut v, at, egui::PointerButton::Secondary);
         assert_eq!(
             words(&shown.canvas),
-            ["card 4", "Pin", "Select", "Add note…", "Copy details"]
+            [
+                "card 4",
+                "Pin",
+                "Select",
+                "Add note…",
+                "Copy name",
+                "Copy all details"
+            ]
         );
         assert_eq!(shown.canvas_lines, 3);
     }

@@ -693,22 +693,36 @@ impl SweepTool {
                     if resp.clicked() {
                         pick = Some((!on).then_some(h.ip));
                     }
-                    // Right-click: Wake, as on a Map card.
-                    if let Some(t) = wake_target(h, &nets) {
-                        resp.context_menu(|ui| {
+                    // Right-click: its copies (only what it has), then
+                    // Wake, as on a Map card.
+                    let copies = row_copies(h, &self.vendor(h));
+                    let wake = wake_target(h, &nets);
+                    resp.context_menu(|ui| {
+                        for (what, value) in &copies {
+                            let b = egui::Button::new(format!("Copy {what}"))
+                                .shortcut_text(widgets::short(value, 24))
+                                .min_size(vec2(0.0, theme::TARGET_H));
+                            if ui.add(b).clicked() {
+                                widgets::copy(ui.ctx(), value.clone());
+                                widgets::toast("Copied to the clipboard", true);
+                                ui.close();
+                            }
+                        }
+                        if let Some(t) = &wake {
+                            ui.separator();
                             if ui
                                 .add(
                                     egui::Button::new("Wake (Wake-on-LAN)")
                                         .min_size(vec2(0.0, theme::TARGET_H)),
                                 )
-                                .on_hover_text(wake_tip(&t))
+                                .on_hover_text(wake_tip(t))
                                 .clicked()
                             {
-                                wol::wake_all(vec![t]);
+                                wol::wake_all(vec![*t]);
                                 ui.close();
                             }
-                        });
-                    }
+                        }
+                    });
                 }
             },
         );
@@ -1902,6 +1916,20 @@ const DNSSD_NOTE: &str = "From DNS-SD (Bonjour), the device's own claim. A compu
 server that shares a printer shows that printer's model. Multicast stays on this computer's own \
 network segment: devices on routed networks can't answer it.";
 
+/// What a host's right-click menu can copy, in order, each only when the
+/// host has it: its address, name, MAC and vendor.
+fn row_copies(h: &Host, vendor: &str) -> Vec<(&'static str, String)> {
+    [
+        ("IP", Some(h.ip.to_string())),
+        ("name", h.name.clone()),
+        ("MAC", h.mac.as_ref().map(mac::fmt)),
+        ("vendor", Some(vendor.to_string())),
+    ]
+    .into_iter()
+    .filter_map(|(w, v)| Some((w, v.filter(|v| !v.trim().is_empty())?)))
+    .collect()
+}
+
 /// What Wake sends to for `h`: its MAC (a real card's), its address, and
 /// the swept network holding it.
 fn wake_target(h: &Host, nets: &[(Ipv4Addr, u32)]) -> Option<wol::Target> {
@@ -2076,6 +2104,23 @@ mod tests {
 
     fn mac(last: u8) -> Mac {
         [0x00, 0x11, 0x32, 0x00, 0x00, last]
+    }
+
+    /// A row's right-click copies only what the host has, address first.
+    #[test]
+    fn a_rows_menu_copies_only_what_the_host_has() {
+        let bare = host([192, 0, 2, 20], None);
+        let got = row_copies(&bare, "");
+        assert_eq!(got, [("IP", "192.0.2.20".to_string())]);
+        let mut full = host([192, 0, 2, 21], Some(1.0));
+        full.name = Some("FRONT-DESK".into());
+        full.mac = Some(mac(7));
+        let got: Vec<&str> = row_copies(&full, "Synology")
+            .into_iter()
+            .map(|(w, _)| w)
+            .collect();
+        assert_eq!(got, ["IP", "name", "MAC", "vendor"]);
+        assert_eq!(row_copies(&full, "  ")[2].1, mac::fmt(&mac(7)));
     }
 
     /// The Site Bundle's Clients setting reaches the inventory: a phone,

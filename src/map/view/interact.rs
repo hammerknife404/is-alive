@@ -956,8 +956,8 @@ impl MapView {
         }
     }
 
-    /// Copy: the IP and the MAC (one line per card for several), the
-    /// details.
+    /// Copy: the name, the IP and the MAC (one line per card for several),
+    /// each only when a card has one; then all its details.
     fn menu_copy(&mut self, ui: &mut Ui, sep: &mut Sep, group: &[usize]) {
         let n = group.len();
         let many = n > 1;
@@ -965,42 +965,33 @@ impl MapView {
             let k = list.len();
             let button = match list.as_slice() {
                 [] => continue,
+                // A name is in the menu's title already; an address shows.
+                [_] if !many && what == "name" => egui::Button::new("Copy name"),
                 [one] if !many => egui::Button::new(format!("Copy {what}")).shortcut_text(one),
                 _ => egui::Button::new(format!("Copy {what}s")).shortcut_text(format!("{k} cards")),
             };
-            let tip = if many {
-                "One per line, for each card that has one".to_string()
-            } else {
-                format!("Copy its {what} address")
+            let tip = match (many, what) {
+                (true, _) => "One per line, for each card that has one".to_string(),
+                (false, "name") => "Copy its name".to_string(),
+                (false, _) => format!("Copy its {what} address"),
             };
             if sep.add(ui, button).on_hover_text(tip).clicked() {
                 widgets::copy(ui.ctx(), list.join("\n"));
-                widgets::toast(
-                    if many {
-                        format!("{k} {what}s copied")
-                    } else {
-                        format!("{what} copied")
-                    },
-                    true,
-                );
+                widgets::toast(copied(what, k, many), true);
                 ui.close();
             }
         }
         let copy = if many {
-            format!("Copy details of all {n}")
+            format!("Copy all details of all {n}")
         } else {
-            "Copy details".to_string()
+            "Copy all details".to_string()
         };
         if sep
             .add(ui, egui::Button::new(copy))
             .on_hover_text("Name, role, flags, details and note, as text")
             .clicked()
         {
-            let text: Vec<String> = group
-                .iter()
-                .map(|&k| card_text(&self.map.nodes[k]))
-                .collect();
-            widgets::copy(ui.ctx(), text.join("\n"));
+            widgets::copy(ui.ctx(), self.details_text(group));
             widgets::toast(
                 if many {
                     format!("{n} cards copied")
@@ -1013,9 +1004,19 @@ impl MapView {
         }
     }
 
-    /// What Copy IP and Copy MAC copy: a line for each card in `group`
-    /// that has one, in order.
-    pub(super) fn copy_lists(&self, group: &[usize]) -> [(&'static str, Vec<String>); 2] {
+    /// What Copy all details copies: each card in `group` as text, one
+    /// after another.
+    pub(super) fn details_text(&self, group: &[usize]) -> String {
+        group
+            .iter()
+            .map(|&k| card_text(&self.map.nodes[k]))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// For each thing Copy can copy (name, IP, MAC), a line from each card
+    /// in `group` that has one.
+    pub(super) fn copy_lists(&self, group: &[usize]) -> [(&'static str, Vec<String>); 3] {
         let lines = |what: &dyn Fn(&Node) -> Option<String>| -> Vec<String> {
             group
                 .iter()
@@ -1023,6 +1024,10 @@ impl MapView {
                 .collect()
         };
         [
+            (
+                "name",
+                lines(&|n| Some(n.label.trim().to_string()).filter(|l| !l.is_empty())),
+            ),
             ("IP", lines(&|n| n.ip.map(|ip| ip.to_string()))),
             ("MAC", lines(&|n| n.mac.map(|m| crate::net::mac::fmt(&m)))),
         ]
@@ -1464,4 +1469,17 @@ pub(super) fn ellipsis(s: &str, max: usize) -> String {
     }
     let cut: String = s.chars().take(max.saturating_sub(1)).collect();
     format!("{}…", cut.trim_end())
+}
+
+/// The message after Copy: "Name copied", "IP copied", "3 MACs copied".
+fn copied(what: &str, k: usize, many: bool) -> String {
+    if many {
+        format!("{k} {what}s copied")
+    } else {
+        let mut c = what.chars();
+        c.next()
+            .map(|f| f.to_uppercase().chain(c).collect::<String>())
+            .unwrap_or_default()
+            + " copied"
+    }
 }
