@@ -190,6 +190,12 @@ impl PortCheck {
     }
 }
 
+/// The vendor of another MAC an address answered from, nothing else
+/// known about it.
+fn map_vendor_label(m: &Mac) -> String {
+    crate::map::vendor_label(crate::map::maker(m, false, false))
+}
+
 /// Of the live hosts (with the MAC each was found with), the ones whose
 /// ports `mode` checks, in address order. Smart always checks the
 /// gateway and never this machine.
@@ -206,11 +212,15 @@ fn port_targets(
             PortCheck::All => true,
             PortCheck::Smart => {
                 Some(*ip) == gateway
-                    || (Some(*ip) != me
-                        && crate::map::ports_worth_checking(
-                            m.as_ref().and_then(mac::vendor),
-                            m.as_ref().is_some_and(mac::local_admin),
-                        ))
+                    || (Some(*ip) != me && {
+                        // A virtual MAC on a gear maker's prefix is checked:
+                        // its ports are what tell it from a phone's.
+                        let made = m.map(|m| crate::map::maker(&m, false, true));
+                        crate::map::ports_worth_checking(
+                            made.and_then(|m| m.vendor),
+                            made.is_some_and(|m| m.private),
+                        )
+                    })
             }
         })
         .map(|h| h.0)
@@ -751,7 +761,7 @@ impl SweepTool {
             .also
             .iter()
             .map(|m| {
-                format!("{} {}", mac::fmt(m), mac::vendor_label(m))
+                format!("{} {}", mac::fmt(m), map_vendor_label(m))
                     .trim_end()
                     .to_string()
             })
@@ -943,10 +953,19 @@ impl SweepTool {
         self.alive.iter().filter(|h| h.via.multicast_only()).count()
     }
 
+    /// Who made a host by its MAC (`map::maker`): the gateway's MAC is
+    /// never private; a gear maker's virtual MAC is named when the host
+    /// showed a port or a page of its own.
+    fn maker(&self, h: &Host) -> Option<crate::map::Maker> {
+        let gateway = self.local.gateway == Some(h.ip);
+        let evidence = (h.checked && !h.open.is_empty()) || h.web.is_some();
+        h.mac.map(|m| crate::map::maker(&m, gateway, evidence))
+    }
+
     /// Vendor, or what the host is to this machine when it has no MAC here.
     fn vendor(&self, h: &Host) -> String {
-        match &h.mac {
-            Some(m) => mac::vendor_label(m),
+        match self.maker(h) {
+            Some(m) => crate::map::vendor_label(m),
             None if self.local.lan.is_some_and(|(ip, _)| ip == h.ip) => "(this machine)".into(),
             None => String::new(),
         }
@@ -1114,14 +1133,20 @@ impl SweepTool {
             .iter()
             .map(|h| {
                 let open: &[u16] = if h.checked { &h.open } else { &[] };
+                let said = crate::map::Said {
+                    page: h.web.as_deref(),
+                    dnssd: h.dnssd.as_deref(),
+                };
                 let client = self.local.gateway != Some(h.ip)
-                    && crate::map::looks_like_client(h.mac.as_ref(), open, h.web.as_deref());
+                    && crate::map::looks_like_client(h.mac.as_ref(), open, said);
                 let key = h.mac.as_ref().map_or_else(|| h.ip.to_string(), mac::fmt);
+                let made = self.maker(h);
                 json!({
                     "ip": h.ip.to_string(),
                     "mac": h.mac.as_ref().map(mac::fmt),
-                    "vendor": h.mac.as_ref().and_then(mac::vendor),
-                    "private_mac": h.mac.as_ref().map(mac::local_admin),
+                    "vendor": made.and_then(|m| m.vendor),
+                    "private_mac": made.map(|m| m.private),
+                    "virtual_mac": made.map(|m| m.virtual_mac),
                     "name": clients.device_name(h.name.as_deref(), &key, client),
                     "name_from": h.name_from,
                     "mac_from": h.mac_from,
@@ -1174,8 +1199,8 @@ impl SweepTool {
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "client_names says what became of the names of hosts that look like a phone, laptop or PC (not the gateway, and no maker, port or web page that says network gear, NAS, printer or camera), names that are often people's: full keeps them; anonymized replaces each with a client-xxxxxxxx token made from its MAC (else its IP), the same token the UniFi export's client table uses for that MAC; none leaves name null. name_from still says where the real name came from. Other hosts keep their names.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
-                "vendor is the IEEE registry owner of the MAC prefix (null if unregistered); private_mac true means a locally administered address (a phone or laptop's private per-network MAC, or a virtual NIC) with no vendor.",
-                "web_title is what the host's own web page calls it (its <title>, else its Server header), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
+                "vendor is the IEEE registry owner of the MAC prefix (null if unregistered). A locally administered MAC (second-lowest bit of the first octet set) is either a client's private address or a device's virtual one: virtual_mac true means it is the gateway's (never private, whatever its MAC) or a network-gear maker's own prefix with that bit set, such as a SonicWall LAN interface answering on 2e:b8:ed:… for SonicWall's 2c:b8:ed:…, on a host that showed an open port or web page; vendor then names that maker (null for a gateway whose maker isn't known). private_mac true means a locally administered address with nothing to say infrastructure (a phone or laptop's private per-network MAC, or a VM's virtual NIC), vendor null. Both are false for a registered MAC and null when mac is null. HP's prefixes cover HP printers, PCs and Poly desk phones alike: tell them apart by web_title, dnssd and open_ports, not the vendor.",
+                "web_title is what the host's own web page calls it (its <title>, else its Server header; a placeholder title such as Loading..., Login or Redirecting counts as none), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
                 "dnssd is what the host said over DNS-SD (Bonjour/multicast DNS), null if it said nothing: services lists the service types it offers (_ipp._tcp IPP printing, _pdl-datastream._tcp raw printing, _airplay._tcp, _googlecast._tcp, _smb._tcp file sharing, _http._tcp a web page and so on); ty and product are a printer's make and model from its TXT record (product without its brackets), null when it didn't give one or the host advertised several different printers; rp lists its print queues (rp=, such as ipp/print; a print server has one per printer) and pdl the page languages its printer services accept (pdl=, MIME types such as application/pdf or application/vnd.hp-PCL), both [] when not given. A model belongs to the printer service: a computer or print server that shares a printer advertises that printer's model, so check the rest of the host's evidence before calling it a printer. The device's own claim: a strong model and role hint, not proof. dnssd_browsed (top level) says whether the browse ran and its answers were read: false with names off, when no swept range is on the scanner's segment, or when the sweep was stopped first. Multicast DNS stays on the scanner's own segment, so only hosts with on_scanner_lan true can answer; null on a routed host is expected, not a sign it has no services.",
                 "ssdp is what the host said over SSDP (UPnP discovery), null if it said nothing: server is its SERVER header (its OS, UPnP stack and often product, such as a NAS's or a TV's), st lists the search targets it answered for (upnp:rootdevice, urn:schemas-upnp-org:device:MediaRenderer:1, urn:schemas-upnp-org:device:InternetGatewayDevice:1 and so on: its device and service types), uuids the device UUIDs from its USN headers, and locations the URL of its description document as text: is-alive never fetches it. The device's own claim: a role hint (a media renderer, a NAS, an internet gateway with UPnP on), not proof. ssdp_searched (top level) says whether the search ran and its replies were read (false in the same cases as dnssd_browsed); it is sent with TTL 1, and like DNS-SD it is multicast and only the scanner's own segment answers, so null on a routed host is expected.",
                 "other_macs lists any other MAC the address answered from during the sweep (each a fresh or confirmed ARP entry): two devices on one IP (a duplicate address), or a failover mid-sweep.",
@@ -1366,6 +1391,7 @@ impl SweepTool {
                 checked: h.checked,
                 also: h.also.clone(),
                 web: h.web.clone(),
+                dnssd: h.dnssd.as_deref().cloned(),
                 multicast: h
                     .via
                     .multicast_only()
@@ -2310,6 +2336,50 @@ mod tests {
                 .rows
                 .iter()
                 .all(|r| r[0] == "10.0.0.0/24")
+        );
+    }
+
+    /// The gateway answering on a virtual MAC (a SonicWall's LAN: its own
+    /// prefix with the locally-administered bit set) is named by that
+    /// maker and never called private; a phone's private MAC still is.
+    #[test]
+    fn a_gateway_on_a_virtual_mac_is_not_a_private_client() {
+        let mut gw = host([192, 0, 2, 1], Some(1.0));
+        (gw.mac, gw.mac_from) = (Some([0x2e, 0xb8, 0xed, 0x0a, 0x0b, 0x0c]), Some("arp"));
+        (gw.name, gw.name_from) = (Some("fw-lab".into()), Some("dns"));
+        let mut phone = host([192, 0, 2, 40], Some(3.0));
+        (phone.mac, phone.mac_from) = (Some([0x2e, 0xb8, 0xed, 0x44, 0x55, 0x66]), Some("arp"));
+        (phone.name, phone.name_from) = (Some("Sams-Phone".into()), Some("mdns"));
+        let mut s = swept(vec![gw, phone, host([192, 0, 2, 50], Some(1.0))]);
+        s.ran = "192.0.2.0/24".into();
+        s.local = HostInfo {
+            lan: Some((Ipv4Addr::new(192, 0, 2, 50), 24)),
+            gateway: Some(Ipv4Addr::new(192, 0, 2, 1)),
+            ..Default::default()
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&HostInfo::default(), Clients::Anonymized)).unwrap();
+        let h = &v["hosts"][0];
+        assert_eq!(h["is_gateway"], true);
+        assert_eq!(
+            (&h["vendor"], &h["private_mac"], &h["virtual_mac"]),
+            (&json!("SonicWall"), &json!(false), &json!(true))
+        );
+        assert_eq!(h["name"], "fw-lab", "the gateway keeps its name");
+        assert_eq!(s.vendor(&s.alive[0]), "SonicWall (virtual MAC)");
+        // Same maker's prefix, but no port or page of its own: private.
+        let p = &v["hosts"][1];
+        assert_eq!(
+            (&p["vendor"], &p["private_mac"], &p["virtual_mac"]),
+            (&json!(null), &json!(true), &json!(false))
+        );
+        assert_ne!(p["name"], "Sams-Phone");
+        // No MAC: neither.
+        assert!(v["hosts"][2]["private_mac"].is_null() && v["hosts"][2]["virtual_mac"].is_null());
+        let notes = v["notes"].to_string();
+        assert!(
+            notes.contains("virtual_mac true") && notes.contains("Poly"),
+            "{notes}"
         );
     }
 

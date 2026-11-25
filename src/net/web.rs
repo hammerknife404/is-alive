@@ -116,8 +116,63 @@ pub fn parse(raw: &[u8]) -> Option<Page> {
             _ => {}
         }
     }
-    page.title = title(body);
+    page.title = title(body).filter(|t| !placeholder(t));
     Some(page)
+}
+
+/// A title that says nothing about the device: what a page shows while
+/// its script loads, a bare login or redirect page. The Server header
+/// says more, so it's dropped.
+fn placeholder(title: &str) -> bool {
+    let t: String = title
+        .trim()
+        .trim_end_matches(['.', '…', '!', ' '])
+        .to_ascii_lowercase();
+    const SAYS_NOTHING: &[&str] = &[
+        "",
+        "loading",
+        "please wait",
+        "please wait while loading",
+        "wait",
+        "redirect",
+        "redirecting",
+        "redirection",
+        "redirect page",
+        "moved",
+        "302 found",
+        "301 moved permanently",
+        "found",
+        "login",
+        "log in",
+        "logon",
+        "sign in",
+        "signin",
+        "user login",
+        "login page",
+        "web login",
+        "authentication",
+        "authorization required",
+        "home",
+        "index",
+        "index.html",
+        "welcome",
+        "untitled",
+        "untitled document",
+        "document",
+        "web",
+        "web ui",
+        "webui",
+        "web management",
+        "management",
+        "main page",
+        "default",
+        "default page",
+        "javascript required",
+        "no title",
+        "null",
+        "undefined",
+    ];
+    SAYS_NOTHING.contains(&t.as_str()) || t.chars().all(|c| !c.is_alphanumeric())
 }
 
 /// A page's `<title>`, entities decoded, on one line, cut to `TITLE_MAX`.
@@ -236,6 +291,42 @@ mod tests {
             t.elapsed() < Duration::from_secs(3),
             "took {:?}",
             t.elapsed()
+        );
+    }
+
+    /// A placeholder title ("Loading...", "Login") says nothing about the
+    /// device: the Server header names it instead. A real title stays.
+    #[test]
+    fn a_placeholder_title_falls_back_to_the_server() {
+        let page = |title: &str| {
+            parse(
+                format!(
+                    "HTTP/1.1 200 OK\r\nServer: Acme-Edge/2.1\r\n\r\n<html><title>{title}</title>"
+                )
+                .as_bytes(),
+            )
+            .unwrap()
+        };
+        for t in [
+            "Loading...",
+            "Login",
+            "Redirecting…",
+            "Please wait",
+            "  ",
+            "...",
+            "Untitled Document",
+        ] {
+            let p = page(t);
+            assert_eq!(p.title, None, "{t:?}");
+            assert_eq!(p.label().as_deref(), Some("Acme-Edge/2.1"), "{t:?}");
+        }
+        assert_eq!(
+            page("SonicWall - Login").label().as_deref(),
+            Some("SonicWall - Login")
+        );
+        assert_eq!(
+            page("Poly VVX 450").label().as_deref(),
+            Some("Poly VVX 450")
         );
     }
 

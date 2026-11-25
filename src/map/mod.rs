@@ -729,6 +729,8 @@ pub struct Seen {
     /// Found only by the multicast browse (no ping, no ARP): which one
     /// it answered, "mDNS", "SSDP" or "mDNS and SSDP".
     pub multicast: Option<String>,
+    /// What it said over DNS-SD: a printer's model and services.
+    pub dnssd: Option<crate::net::dnssd::Found>,
 }
 
 /// A backup or export open in Config Export: its file's name and the JSON
@@ -1334,6 +1336,23 @@ const GEAR: &[(&str, &str)] = &[
     ("peplink", "PEPLINK"),
     ("cradlepoint", "CRADLEPOINT"),
     ("arista", "ARISTA"),
+    // Carrier and voice edge: the box a phone or internet provider
+    // leaves on site.
+    ("adtran", "ADTRAN"),
+    ("edgewater networks", "EDGEMARC"),
+    ("edgemarc", "EDGEMARC"),
+    ("edgewater", "EDGEWATER"),
+    ("audiocodes", "AUDIOCODES"),
+    ("ribbon communications", "RIBBON"),
+    ("sonus", "RIBBON"),
+    ("patton", "PATTON"),
+    ("mediatrix", "MEDIATRIX"),
+    ("sangoma", "SANGOMA"),
+    ("oneaccess", "ONEACCESS"),
+    ("ekinops", "EKINOPS"),
+    ("teldat", "TELDAT"),
+    ("calix", "CALIX"),
+    ("ciena", "CIENA"),
 ];
 const NAS: &[&str] = &[
     "synology",
@@ -1346,12 +1365,43 @@ const NAS: &[&str] = &[
     "netapp",
 ];
 const PRINTERS: &[&str] = &[
-    "brother", "canon", "epson", "lexmark", "xerox", "kyocera", "ricoh", "konica", "zebra",
+    "brother industries",
+    "canon",
+    "epson",
+    "lexmark",
+    "xerox",
+    "kyocera",
+    "ricoh",
+    "lanier",
+    "savin",
+    "konica",
+    "minolta",
+    "sharp",
+    "toshiba tec",
+    "fujifilm business",
+    "pantum",
+    "zebra",
+];
+/// Makers of desk phones. HP isn't one by its MAC alone: HP's newer
+/// prefixes cover its printers, its PCs and (since it bought Poly) Poly
+/// phones, so an HP host is a phone only when its page or ports say so.
+const PHONES: &[(&str, &str)] = &[
+    ("polycom", "POLY"),
+    ("poly", "POLY"),
+    ("yealink", "YEALINK"),
+    ("grandstream", "GRANDSTREAM"),
+    ("snom", "SNOM"),
+    ("fanvil", "FANVIL"),
+    ("htek", "HTEK"),
+    ("obihai", "OBIHAI"),
+    ("aastra", "MITEL"),
+    ("mitel", "MITEL"),
+    ("avaya", "AVAYA"),
 ];
 const CAMERAS: &[&str] = &[
     "hikvision",
     "dahua",
-    "axis comm",
+    "axis communications",
     "amcrest",
     "reolink",
     "hanwha",
@@ -1362,14 +1412,81 @@ const CAMERAS: &[&str] = &[
     "verkada",
 ];
 
+/// Whether `text` holds `w` as whole words: "sharp" in "SHARP" but not
+/// "Zhuhai Raysharp", "brother industries" but not "McKay Brothers".
+fn word_in(text: &str, w: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
+    t.match_indices(w)
+        .any(|(i, _)| edge(t[..i].chars().next_back()) && edge(t[i + w.len()..].chars().next()))
+}
+
 fn has(vendor: Option<&str>, words: &[&str]) -> bool {
-    let v = vendor.unwrap_or_default().to_ascii_lowercase();
-    words.iter().any(|w| v.contains(w))
+    let v = vendor.unwrap_or_default();
+    words.iter().any(|w| word_in(v, w))
 }
 
 fn gear_brand(vendor: Option<&str>) -> Option<&'static str> {
-    let v = vendor?.to_ascii_lowercase();
-    GEAR.iter().find(|(k, _)| v.contains(k)).map(|g| g.1)
+    let v = vendor?;
+    GEAR.iter().find(|(k, _)| word_in(v, k)).map(|g| g.1)
+}
+
+fn phone_brand(vendor: Option<&str>) -> Option<&'static str> {
+    let v = vendor?;
+    PHONES.iter().find(|(k, _)| word_in(v, k)).map(|g| g.1)
+}
+
+/// What a host's MAC says about who made it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Maker {
+    /// The registered owner of its prefix; for a virtual MAC, of its
+    /// prefix with the locally-administered bit cleared, when known.
+    pub vendor: Option<&'static str>,
+    /// Locally administered, but the gateway's or a piece of network
+    /// gear's own virtual address (a SonicWall's LAN interface), not a
+    /// client's private one.
+    pub virtual_mac: bool,
+    /// Locally administered and nothing says infrastructure: a phone or
+    /// laptop's private per-network MAC, or a virtual machine.
+    pub private: bool,
+}
+
+/// Who made a host, from its MAC. A locally administered MAC is private
+/// unless it's the gateway's, or its prefix with that bit cleared is a
+/// network-gear maker's and the host shows something of its own
+/// (`evidence`: an open management port or a web page). The cleared
+/// prefix alone is a guess, since a phone's random MAC clears to some
+/// registered prefix about one time in a hundred; the gateway is never
+/// called private.
+pub fn maker(m: &Mac, gateway: bool, evidence: bool) -> Maker {
+    if let Some(v) = mac::vendor(m) {
+        return Maker {
+            vendor: Some(v),
+            ..Maker::default()
+        };
+    }
+    if !mac::local_admin(m) {
+        return Maker::default();
+    }
+    let gear = mac::universal_vendor(m).filter(|v| gear_brand(Some(v)).is_some());
+    let virtual_mac = gateway || (gear.is_some() && evidence);
+    Maker {
+        vendor: gear.filter(|_| virtual_mac),
+        virtual_mac,
+        private: !virtual_mac,
+    }
+}
+
+/// The vendor as the sweep's table and a card show it, or why there
+/// isn't one.
+pub fn vendor_label(m: Maker) -> String {
+    match (m.vendor, m.virtual_mac) {
+        (Some(v), true) => format!("{v} (virtual MAC)"),
+        (Some(v), false) => v.to_string(),
+        (None, true) => "(virtual MAC)".into(),
+        (None, false) if m.private => "(private/virtual MAC)".into(),
+        (None, false) => String::new(),
+    }
 }
 
 /// First word of a registry name, for a card's kind line.
@@ -1452,20 +1569,10 @@ fn page_role(page: &str) -> Option<(Zone, String, bool)> {
     ]) {
         return Some((Zone::Server, "NAS".into(), false));
     }
-    if any(&[
-        "laserjet",
-        "officejet",
-        "deskjet",
-        "printer",
-        "web jetadmin",
-        "brother",
-        "epson",
-        "ricoh",
-        "kyocera",
-        "xerox",
-        "lexmark",
-        "canon",
-    ]) {
+    if let Some(k) = page_phone(page) {
+        return Some((Zone::Client, k, true));
+    }
+    if page_printer(page) {
         return Some((Zone::Device, "PRINTER".into(), true));
     }
     if any(&[
@@ -1499,6 +1606,8 @@ fn page_role(page: &str) -> Option<(Zone, String, bool)> {
         ("routeros", "MIKROTIK"),
         ("omada", "TP-LINK"),
         ("pfsense", "PFSENSE"),
+        ("netvanta", "ADTRAN"),
+        ("mediant", "AUDIOCODES"),
         ("opnsense", "OPNSENSE"),
     ];
     if let Some(b) = PAGES
@@ -1513,47 +1622,173 @@ fn page_role(page: &str) -> Option<(Zone, String, bool)> {
         .then(|| (Zone::Gear, "NETWORK DEVICE".into(), false))
 }
 
+/// A web page that names a desk phone: "PHONE" with its maker's name
+/// when the page gives one.
+fn page_phone(page: &str) -> Option<String> {
+    const WORDS: &[(&str, &str)] = &[
+        ("polycom", "POLY"),
+        ("poly", "POLY"),
+        ("vvx", "POLY"),
+        ("yealink", "YEALINK"),
+        ("grandstream", "GRANDSTREAM"),
+        ("snom", "SNOM"),
+        ("fanvil", "FANVIL"),
+        ("obihai", "OBIHAI"),
+        ("ip phone", ""),
+        ("sip phone", ""),
+        ("voip phone", ""),
+    ];
+    let (_, b) = WORDS.iter().find(|(w, _)| word_in(page, w))?;
+    Some(caps(&format!("{b} PHONE")))
+}
+
+/// A web page that names a printer or a printer line.
+fn page_printer(page: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "laserjet",
+        "officejet",
+        "deskjet",
+        "pagewide",
+        "printer",
+        "web jetadmin",
+        "imagerunner",
+        "imageclass",
+        "workcentre",
+        "versalink",
+        "altalink",
+        "bizhub",
+        "taskalfa",
+        "ecosys",
+        "e-studio",
+        "topaccess",
+        "web image monitor",
+        "brother",
+        "epson",
+        "ricoh",
+        "lanier",
+        "savin",
+        "kyocera",
+        "xerox",
+        "lexmark",
+        "canon",
+        "konica",
+        "sharp",
+    ];
+    WORDS.iter().any(|w| word_in(page, w))
+}
+
+/// What a host said about itself besides its MAC and open ports.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Said<'a> {
+    /// What its own web page calls it (title, else Server header).
+    pub page: Option<&'a str>,
+    /// What it said over DNS-SD.
+    pub dnssd: Option<&'a crate::net::dnssd::Found>,
+}
+
+impl Said<'_> {
+    /// Its DNS-SD answer says printer: a printer's make and model, or a
+    /// printing service. A computer or print server sharing a printer
+    /// says the same, so not from a laptop or phone card's maker, nor
+    /// with a queue for each of several printers.
+    fn printer(&self, vendor: Option<&str>) -> bool {
+        let Some(d) = self.dnssd else { return false };
+        let prints = d.model().is_some()
+            || d.services.iter().any(|s| {
+                matches!(
+                    s.as_str(),
+                    "_ipp._tcp" | "_ipps._tcp" | "_pdl-datastream._tcp" | "_printer._tcp"
+                )
+            });
+        prints && !has(vendor, CLIENT_NICS) && d.rp.len() <= 2
+    }
+}
+
 /// `classify`, then what its web page says where that placed it only as a
 /// client or a network device by its ports.
+fn classify_with(
+    vendor: Option<&str>,
+    private: bool,
+    open: &[u16],
+    said: Said,
+) -> (Zone, String, bool) {
+    let r = classify_said(vendor, private, open, said);
+    let weak = r.0 == Zone::Client || r.1 == "NETWORK DEVICE";
+    match said.page.and_then(page_role) {
+        Some(p) if weak => p,
+        _ => r,
+    }
+}
+
+#[cfg(test)]
 fn classify_with_page(
     vendor: Option<&str>,
     private: bool,
     open: &[u16],
     page: Option<&str>,
 ) -> (Zone, String, bool) {
-    let r = classify(vendor, private, open);
-    let weak = r.0 == Zone::Client || r.1 == "NETWORK DEVICE";
-    match page.and_then(page_role) {
-        Some(p) if weak => p,
-        _ => r,
-    }
+    classify_with(vendor, private, open, Said { page, dnssd: None })
 }
 
 /// Whether a device looks like a phone, laptop or PC (the Map's Clients
-/// zone) by its MAC, the ports found open and its web page: the devices
-/// whose names are often people's. A gateway is never one; the caller
-/// knows that, this doesn't.
-pub fn looks_like_client(mac: Option<&Mac>, open: &[u16], page: Option<&str>) -> bool {
-    let vendor = mac.and_then(mac::vendor);
-    let private = mac.is_some_and(mac::local_admin);
-    classify_with_page(vendor, private, open, page).0 == Zone::Client
+/// zone) by its MAC, the ports found open and what it said about itself:
+/// the devices whose names are often people's. A gateway is never one;
+/// the caller knows that, this doesn't.
+pub fn looks_like_client(mac: Option<&Mac>, open: &[u16], said: Said) -> bool {
+    let m = mac.map(|m| maker(m, false, !open.is_empty() || said.page.is_some()));
+    let vendor = m.and_then(|m| m.vendor);
+    let private = m.is_some_and(|m| m.private);
+    classify_with(vendor, private, open, said).0 == Zone::Client
 }
 
-/// Role of a host the sweep found and nothing else describes.
+/// Role of a host the sweep found and nothing else describes, from its
+/// maker and ports alone.
 fn classify(vendor: Option<&str>, private: bool, open: &[u16]) -> (Zone, String, bool) {
+    classify_said(vendor, private, open, Said::default())
+}
+
+/// Role of a host the sweep found and nothing else describes. A page that
+/// names a phone wins over a gear maker (a Cisco phone); printer and phone
+/// evidence wins over telnet and the other gear ports, which printers and
+/// phones often leave open.
+fn classify_said(
+    vendor: Option<&str>,
+    private: bool,
+    open: &[u16],
+    said: Said,
+) -> (Zone, String, bool) {
     let p = |x| open.contains(&x);
+    if let Some(k) = said.page.and_then(page_phone) {
+        return (Zone::Client, k, true);
+    }
     if let Some(b) = gear_brand(vendor) {
         return (Zone::Gear, caps(&format!("{b} DEVICE")), false);
+    }
+    if has(vendor, NAS) {
+        let k = vendor.map_or("NAS".into(), |v| caps(&format!("{} NAS", short_vendor(v))));
+        return (Zone::Server, k, false);
+    }
+    if has(vendor, PRINTERS)
+        || p(9100)
+        || p(515)
+        || p(631)
+        || said.page.is_some_and(page_printer)
+        || said.printer(vendor)
+    {
+        return (Zone::Device, "PRINTER".into(), true);
+    }
+    if let Some(b) = phone_brand(vendor) {
+        return (Zone::Client, caps(&format!("{b} PHONE")), true);
+    }
+    if p(5060) {
+        return (Zone::Client, "PHONE".into(), true);
     }
     if p(23) || p(8291) || p(541) || p(4433) {
         return (Zone::Gear, "NETWORK DEVICE".into(), false);
     }
-    if has(vendor, NAS) || p(5000) {
+    if p(5000) {
         let k = vendor.map_or("NAS".into(), |v| caps(&format!("{} NAS", short_vendor(v))));
         return (Zone::Server, k, false);
-    }
-    if has(vendor, PRINTERS) || p(9100) {
-        return (Zone::Device, "PRINTER".into(), true);
     }
     if has(vendor, CAMERAS) || p(554) {
         return (Zone::Device, "CAMERA".into(), true);
@@ -1636,12 +1871,19 @@ pub(crate) const TECH_NOTE: &str = "Tech note: ";
 /// A card for a host the sweep found, not yet hung anywhere. `this`: the
 /// machine the sweep ran from.
 fn sweep_card(s: &Seen, this: bool) -> Node {
-    let vendor = s.mac.as_ref().and_then(mac::vendor);
-    let private = s.mac.as_ref().is_some_and(mac::local_admin);
+    let said = Said {
+        page: s.web.as_deref(),
+        dnssd: s.dnssd.as_ref(),
+    };
+    let made = s
+        .mac
+        .map(|m| maker(&m, false, !s.open.is_empty() || said.page.is_some()));
+    let vendor = made.and_then(|m| m.vendor);
+    let private = made.is_some_and(|m| m.private);
     let (zone, kind, client) = if this {
         (Zone::Client, "THIS MACHINE".into(), false)
     } else {
-        classify_with_page(vendor, private, &s.open, s.web.as_deref())
+        classify_with(vendor, private, &s.open, said)
     };
     let label = match (&s.name, this) {
         (_, true) => "This machine".into(),
@@ -1669,9 +1911,13 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
     };
     if let Some(m) = &s.mac {
         n.details.push(
-            format!("MAC {} {}", mac::fmt(m), mac::vendor_label(m))
-                .trim_end()
-                .to_string(),
+            format!(
+                "MAC {} {}",
+                mac::fmt(m),
+                vendor_label(made.unwrap_or_default())
+            )
+            .trim_end()
+            .to_string(),
         );
     } else if !this {
         n.details
@@ -1819,10 +2065,20 @@ impl B {
         i
     }
 
+    /// The card with this MAC, else this address. A locally administered
+    /// MAC also matches its maker's address with that bit cleared: a
+    /// SonicWall answers on its LAN with a virtual MAC made from the
+    /// interface MAC its config holds.
     fn find(&self, mac: Option<Mac>, ip: Option<Ipv4Addr>) -> Option<usize> {
-        mac.and_then(|m| self.by_mac.get(&m))
-            .or_else(|| ip.and_then(|i| self.by_ip.get(&i)))
-            .copied()
+        mac.and_then(|m| {
+            self.by_mac.get(&m).or_else(|| {
+                mac::local_admin(&m)
+                    .then(|| self.by_mac.get(&mac::universal(&m)))
+                    .flatten()
+            })
+        })
+        .or_else(|| ip.and_then(|i| self.by_ip.get(&i)))
+        .copied()
     }
 
     fn finding(&mut self, sev: Sev, text: String, nodes: &[usize]) {
@@ -2850,7 +3106,9 @@ impl FirstUpper for String {
     }
 }
 
-/// Whether the sweep found hardware any backup or export knows by MAC.
+/// Whether the sweep found hardware any backup or export knows by MAC (a
+/// virtual MAC by its address with the locally-administered bit cleared:
+/// a SonicWall answers its LAN on one).
 fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: &[Firewall]) -> bool {
     let mut macs: HashSet<Mac> = HashSet::new();
     if let Some(u) = unifi {
@@ -2862,10 +3120,11 @@ fn same_site(input: &Input, unifi: Option<&Unifi>, sonic: &[Firewall]) -> bool {
         macs.extend(s.ifaces.iter().filter_map(|f| f.mac));
         macs.extend(s.heard.iter().filter_map(|h| h.mac));
     }
-    input
-        .sweep
-        .iter()
-        .any(|h| h.mac.is_some_and(|m| macs.contains(&m)))
+    input.sweep.iter().any(|h| {
+        h.mac.is_some_and(|m| {
+            macs.contains(&m) || (mac::local_admin(&m) && macs.contains(&mac::universal(&m)))
+        })
+    })
 }
 
 fn summary(input: &Input, unifi: Option<&Unifi>, sonic: &[Firewall]) -> String {
@@ -2995,9 +3254,8 @@ fn known(name: Option<&str>, vendor: bool) -> u8 {
 /// A card standing for more of them comes after them all.
 fn reveal_key(n: &Node) -> (u8, u8, u64) {
     let role = n.zone != Zone::Client
-        || ["PHONE", "WINDOWS HOST"]
-            .iter()
-            .any(|k| n.kind.starts_with(k));
+        || n.kind.starts_with("WINDOWS HOST")
+        || n.kind.split_whitespace().any(|w| w == "PHONE");
     let tier = if is_more(n) {
         3
     } else if !n.flags.is_empty() {
@@ -3307,6 +3565,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let input = Input {
             sweep: vec![s("192.0.2.51", Some(0.36)), s("192.0.2.52", None)],
@@ -3387,6 +3646,7 @@ mod tests {
                 also: vec![],
                 web: Some("UniFi OS".into()),
                 multicast: None,
+                dnssd: None,
             }],
             ..Default::default()
         };
@@ -3417,6 +3677,7 @@ mod tests {
                 also: vec![mac::parse_mac("02:00:00:00:00:02").unwrap()],
                 web: None,
                 multicast: None,
+                dnssd: None,
             }],
             gateway: Some("192.168.1.1".parse().unwrap()),
             ..Default::default()
@@ -3533,6 +3794,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let input = Input {
             sweep: vec![
@@ -3636,6 +3898,7 @@ mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                dnssd: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),
             ..Default::default()
@@ -3928,6 +4191,7 @@ mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                dnssd: None,
             })
             .collect();
         let make = |clients, reveal| {
@@ -4053,6 +4317,66 @@ mod tests {
         assert!(m.findings[0].text.contains("X1 (WAN) allows HTTPS/SSH"));
     }
 
+    /// A SonicWall answers the sweep on its LAN with a virtual MAC: its
+    /// interface MAC with the locally-administered bit set. That host is
+    /// the firewall's card, not a private-MAC client beside it.
+    #[test]
+    fn a_firewall_answering_on_a_virtual_mac_is_the_firewall() {
+        let sw = json!({
+            "system": {"model": "TZ 270"},
+            "interfaces": [
+                {"name": "X0", "zone": "LAN", "ip": "192.0.2.1", "mask": "255.255.255.0",
+                 "mac": "2c:b8:ed:00:00:01", "management": ["https"]}
+            ]
+        })
+        .to_string();
+        let seen = |ip: &str, m: &str| Seen {
+            ip: ip.parse().unwrap(),
+            mac: mac::parse_mac(m),
+            name: None,
+            rtt: Some(1.0),
+            open: vec![443],
+            checked: true,
+            also: vec![],
+            web: None,
+            multicast: None,
+            dnssd: None,
+        };
+        let m = build(&Input {
+            sonicwall: one(&sw),
+            sweep: vec![
+                seen("192.0.2.254", "2e:b8:ed:00:00:01"),
+                seen("192.0.2.77", "2e:b8:ed:00:00:99"),
+            ],
+            ..Default::default()
+        });
+        assert!(
+            !m.nodes.iter().any(|n| n.id == "ip:192.0.2.254"),
+            "the virtual MAC is the firewall's own"
+        );
+        let fw = m
+            .nodes
+            .iter()
+            .find(|n| n.kind == "SONICWALL TZ 270")
+            .unwrap();
+        assert!(fw.seen_by.contains(&"sweep"), "{:?}", fw.seen_by);
+        // Another of the maker's virtual MACs with a port open: its gear,
+        // named, not a private MAC.
+        let other = m.nodes.iter().find(|n| n.id == "ip:192.0.2.77").unwrap();
+        assert_eq!(
+            (other.zone, other.kind.as_str()),
+            (Zone::Gear, "SONICWALL DEVICE")
+        );
+        assert!(
+            other
+                .details
+                .iter()
+                .any(|d| d.ends_with("SonicWall (virtual MAC)")),
+            "{:?}",
+            other.details
+        );
+    }
+
     #[test]
     fn local_scan_merges_only_on_a_shared_mac() {
         let j = unifi(
@@ -4069,6 +4393,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let at_office = build(&Input {
             unifi: one(&j),
@@ -4453,6 +4778,179 @@ mod tests {
         );
         assert_eq!(file_tag("/x/site.unf", 1), "site");
         assert_eq!(file_tag("", 2), "2");
+    }
+
+    /// A locally administered MAC: the gateway's is never private; a gear
+    /// maker's prefix with the bit cleared names the maker once the host
+    /// shows a port or page; anything else stays a private client MAC.
+    #[test]
+    fn a_virtual_mac_is_gear_only_with_something_to_back_it() {
+        let sonic = [0x2e, 0xb8, 0xed, 0x0a, 0x0b, 0x0c];
+        // Clears to the registry's first prefix (XEROX): no gear maker.
+        let phone = [0x02, 0, 0, 0x12, 0x34, 0x56];
+        let gw = maker(&sonic, true, false);
+        assert_eq!(
+            gw,
+            Maker {
+                vendor: Some("SonicWall"),
+                virtual_mac: true,
+                private: false
+            }
+        );
+        assert_eq!(vendor_label(gw), "SonicWall (virtual MAC)");
+        let unknown_gw = maker(&phone, true, false);
+        assert!(unknown_gw.virtual_mac && !unknown_gw.private);
+        assert_eq!(
+            unknown_gw.vendor, None,
+            "a guess that isn't gear isn't named"
+        );
+        assert_eq!(vendor_label(unknown_gw), "(virtual MAC)");
+        // Not the gateway: a port or page of its own backs the guess.
+        assert_eq!(maker(&sonic, false, true), gw);
+        assert!(maker(&sonic, false, false).private);
+        assert_eq!(maker(&sonic, false, false).vendor, None);
+        let p = maker(&phone, false, true);
+        assert!(p.private && p.vendor.is_none() && !p.virtual_mac);
+        assert_eq!(vendor_label(p), "(private/virtual MAC)");
+        // A registered MAC is neither.
+        let reg = maker(&[0x2c, 0xb8, 0xed, 1, 2, 3], false, false);
+        assert_eq!(
+            (reg.vendor, reg.virtual_mac, reg.private),
+            (Some("SonicWall"), false, false)
+        );
+        // The Smart check looks at the gear maker's virtual MAC, not the phone's.
+        let worth = |m: &Mac| {
+            let k = maker(m, false, true);
+            ports_worth_checking(k.vendor, k.private)
+        };
+        assert!(worth(&sonic));
+        assert!(!worth(&phone));
+    }
+
+    /// Printer evidence (its maker, a printing port, its page, its DNS-SD
+    /// answer) beats the telnet and other gear ports copiers leave open.
+    #[test]
+    fn a_printer_with_telnet_is_a_printer() {
+        let c = |v: Option<&str>, open: &[u16], said: Said| classify_with(v, false, open, said).1;
+        let none = Said::default();
+        for v in [
+            "SHARP",
+            "Toshiba TEC",
+            "KONICA MINOLTA HOLDINGS",
+            "KYOCERA Document Solutions",
+            "RICOH",
+            "CANON",
+            "Brother Industries",
+            "LEXMARK INTERNATIONAL",
+            "XEROX",
+            "Seiko Epson",
+        ] {
+            assert_eq!(c(Some(v), &[23, 80], none), "PRINTER", "{v}");
+        }
+        let page = |p| Said {
+            page: Some(p),
+            dnssd: None,
+        };
+        for p in [
+            "Lanier MP C3004",
+            "SHARP MX-3071",
+            "TOSHIBA e-STUDIO",
+            "bizhub C258",
+            "Web Image Monitor",
+        ] {
+            assert_eq!(c(None, &[23, 80], page(p)), "PRINTER", "{p}");
+        }
+        for port in [9100, 515, 631] {
+            assert_eq!(c(None, &[23, port], none), "PRINTER", "{port}");
+        }
+        let found = crate::net::dnssd::Found {
+            services: vec!["_ipp._tcp".into()],
+            ty: Some("Acme LaserBox 400".into()),
+            ..Default::default()
+        };
+        let said = Said {
+            page: None,
+            dnssd: Some(&found),
+        };
+        assert_eq!(c(None, &[23], said), "PRINTER");
+        // A laptop sharing that printer is still a laptop.
+        assert_eq!(c(Some("Intel Corporate"), &[], said), "INTEL");
+        // Telnet with nothing else is still network gear.
+        assert_eq!(c(None, &[23], none), "NETWORK DEVICE");
+        // Whole words: neither is a printer maker.
+        assert_eq!(c(Some("Zhuhai Raysharp"), &[], none), "ZHUHAI");
+        assert_eq!(c(Some("McKay Brothers"), &[], none), "MCKAY");
+    }
+
+    /// Carrier and voice edge boxes are network gear, even answering only
+    /// ARP with no ports.
+    #[test]
+    fn carrier_and_voice_edge_makers_are_gear() {
+        for (v, k) in [
+            ("Adtran", "ADTRAN DEVICE"),
+            ("Edgewater Networks", "EDGEMARC DEVICE"),
+            ("Audiocodes USA", "AUDIOCODES DEVICE"),
+            ("SONUS NETWORKS", "RIBBON DEVICE"),
+            ("PATTON ELECTRONICS", "PATTON DEVICE"),
+        ] {
+            assert_eq!(
+                classify(Some(v), false, &[]),
+                (Zone::Gear, k.into(), false),
+                "{v}"
+            );
+        }
+        // A railway maker that merely starts the same isn't.
+        assert_eq!(classify(Some("Adtranz Sweden"), false, &[]).0, Zone::Client);
+        assert_eq!(
+            classify_with_page(None, false, &[443], Some("EdgeMarc 4806")).0,
+            Zone::Gear
+        );
+    }
+
+    /// HP's prefixes cover Poly phones too: a phone's page or SIP port says
+    /// phone; only a printer's page or port makes it a printer.
+    #[test]
+    fn an_hp_mac_with_a_phone_page_is_a_phone() {
+        let r = |open: &[u16], page: Option<&str>| {
+            let (z, k, _) = classify_with_page(Some("HP"), false, open, page);
+            (z, k)
+        };
+        assert_eq!(
+            r(&[80], Some("Poly VVX 450")),
+            (Zone::Client, "POLY PHONE".into())
+        );
+        assert_eq!(
+            r(&[443, 23], Some("Polycom - Configuration Utility")),
+            (Zone::Client, "POLY PHONE".into())
+        );
+        assert_eq!(r(&[5060], None), (Zone::Client, "PHONE".into()));
+        assert_eq!(r(&[80], Some("HP LaserJet Pro M404")).1, "PRINTER");
+        assert_eq!(r(&[9100], None).1, "PRINTER");
+        assert_eq!(r(&[], None), (Zone::Client, "HP".into()));
+        // A phone maker's own MAC, telnet or not.
+        assert_eq!(classify(Some("Polycom"), false, &[23]).1, "POLY PHONE");
+        assert_eq!(
+            classify(Some("YEALINK(XIAMEN) NETWORK"), false, &[80]).1,
+            "YEALINK PHONE"
+        );
+        // A Cisco phone's page wins over its gear maker.
+        assert_eq!(
+            classify_with_page(
+                Some("Cisco Systems"),
+                false,
+                &[80],
+                Some("Cisco IP Phone 8841")
+            )
+            .1,
+            "PHONE"
+        );
+        // Shown among the roles under its switch.
+        let n = Node {
+            kind: "POLY PHONE".into(),
+            zone: Zone::Client,
+            ..Default::default()
+        };
+        assert_eq!(reveal_key(&n).0, 1);
     }
 
     #[test]

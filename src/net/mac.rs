@@ -21,6 +21,26 @@ pub fn local_admin(m: &Mac) -> bool {
     m[0] & 0x02 != 0
 }
 
+/// The same address with the locally-administered bit cleared. Some gear
+/// makes its virtual MACs this way from its own prefix (a SonicWall's LAN
+/// interface, a cluster's shared address), so this is the maker's
+/// registered address, or a random one for a phone's private MAC.
+pub fn universal(m: &Mac) -> Mac {
+    let mut u = *m;
+    u[0] &= !0x02;
+    u
+}
+
+/// The registered owner of a locally administered MAC's prefix with that
+/// bit cleared: a guess (a phone's random private MAC lands on some
+/// registered prefix about one time in a hundred), so callers take it
+/// only with something else that agrees (`crate::map::maker`).
+pub fn universal_vendor(m: &Mac) -> Option<&'static str> {
+    (local_admin(m) && vendor(m).is_none())
+        .then(|| vendor(&universal(m)))
+        .flatten()
+}
+
 /// Unicast and not all zeros (an incomplete entry).
 fn usable(m: &Mac) -> bool {
     m[0] & 0x01 == 0 && m.iter().any(|&b| b != 0)
@@ -102,15 +122,6 @@ pub fn vendor(m: &Mac) -> Option<&'static str> {
             .ok()
             .map(|i| t[i].1.as_str())
     })
-}
-
-/// Vendor, or why there isn't one.
-pub fn vendor_label(m: &Mac) -> String {
-    match vendor(m) {
-        Some(v) => v.to_string(),
-        None if local_admin(m) => "(private/virtual MAC)".into(),
-        None => String::new(),
-    }
 }
 
 /// IPv4 → MAC for every resolved entry in this machine's neighbor table.
@@ -370,8 +381,23 @@ mod tests {
     fn local_admin_macs() {
         let m = [0x02 | 0xa0, 1, 2, 3, 4, 5];
         assert!(local_admin(&m));
-        assert_eq!(vendor_label(&m), "(private/virtual MAC)");
         assert!(!local_admin(&[0x24, 0x5a, 0x4c, 1, 2, 3]));
+    }
+
+    /// A SonicWall's virtual LAN MAC: its own prefix with the
+    /// locally-administered bit set. Clearing the bit finds the maker; a
+    /// registered or universal address has no such second guess.
+    #[test]
+    fn a_virtual_mac_names_its_maker_with_the_bit_cleared() {
+        let virt = [0x2e, 0xb8, 0xed, 0x10, 0x20, 0x30];
+        assert!(local_admin(&virt));
+        assert_eq!(vendor(&virt), None);
+        assert_eq!(universal(&virt), [0x2c, 0xb8, 0xed, 0x10, 0x20, 0x30]);
+        assert_eq!(universal_vendor(&virt), Some("SonicWall"));
+        assert_eq!(universal_vendor(&[0x2c, 0xb8, 0xed, 1, 2, 3]), None);
+        // Why it's only a guess: a random private MAC clears to some
+        // registered prefix, here the very first one.
+        assert_eq!(universal_vendor(&[0x02, 0, 0, 0, 0, 1]), Some("XEROX"));
     }
 
     /// Settings shows the table's date: scripts/update-oui.py writes it
