@@ -932,7 +932,7 @@ mod tests {
             "Fortinet",
             "fw.branch.example",
         ] {
-            assert!(w.contains(part), "{w}");
+            assert!(w.contains(part), "missing {part}");
         }
         // Self-signed is a note; expired only once it is.
         assert_eq!(c.notes(at(2026, 11, 9)), ["self-signed"]);
@@ -961,7 +961,7 @@ mod tests {
         assert_eq!(c.cn.as_ref().unwrap().chars().count(), FIELD_MAX);
         assert_eq!(c.names.len(), NAMES_MAX);
         // As a device's leaf: over LEAF_MAX, not read at all.
-        assert!(der.len() > LEAF_MAX, "{}", der.len());
+        assert!(der.len() > LEAF_MAX);
         assert_eq!(read_leaf(&der), None);
         // Under it, a few names kept.
         let (der, _) = device_cert("ap", None, None, &names[..40], (2030, 1, 1));
