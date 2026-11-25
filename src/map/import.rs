@@ -997,7 +997,18 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
                     o.guest |= h.guest;
                     o.mac = o.mac.or(h.mac);
                     o.ip = o.ip.or(h.ip);
-                } else if let Some(j) = b.find(h.mac, h.ip).filter(|&j| j != c) {
+                } else if let Some(j) = b.find(h.mac, h.ip).filter(|&j| {
+                    // The same device: its MAC, or its address with no other
+                    // name. A differently named device at a card's address
+                    // is an address clash, its own card.
+                    let o = &b.nodes[j];
+                    j != c
+                        && (h.mac.is_some_and(|m| o.mac == Some(m))
+                            || (h.mac.is_none()
+                                && h.name
+                                    .as_deref()
+                                    .is_none_or(|n| n.eq_ignore_ascii_case(&o.label))))
+                }) {
                     elsewhere.push((j, h.line));
                 } else {
                     hosts.push(h);

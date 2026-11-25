@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.34.1**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.35.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -236,17 +236,17 @@ When every check is done and the sweep found something, the **Map** tab glows br
 | Field or row | What it's for |
 |---|---|
 | **Title** | The page's heading and file name (`<title>-report-<date>.html`). The open site's name, else the map's title |
-| **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section |
+| **Map** | The map showing on the Map tab (the live map or a saved one), as it's laid out there, on white. The findings aren't drawn under it: they have their own section. Under the title, **Map used** names the map file it came from (a saved map, or the `/mapnetwork` map the live map was built from), when that file was last saved and a short code made from its contents (`#1f2e3d4c`): two reports with different codes used different versions of the map |
 | **Findings** | The map's findings, worst first, each with the devices it names |
 | **Changes since** | What changed since the saved map you're comparing with (**More › Compare** on the Map tab): new, changed and gone devices, and what changed on each. Greyed out while nothing is compared |
 | **Infrastructure** | Every gateway, switch, access point, server and printer: role, IP, MAC, vendor, what it plugs into (and the port), open ports, flags and the note on its card. A role or an uplink that is-alive worked out, not read from a backup or a config, is marked *inferred*; point at the word for what it was worked out from |
 | **Clients** | Every client the map knows, **whatever Clients shows on the map**, with what it's connected to |
-| **Tech notes** | The Notes tab, redacted as everywhere else, photos included |
+| **Tech notes** | The Notes tab, photos included. Notes are redacted only where you marked a value in Notes (and the loaded configs' secrets): they aren't scanned for anything else. If the notes or card notes still hold full MAC addresses, `DOMAIN\user` logons or share paths, or pasted scan output (XML), a ⚠ line above **Save report…** says how many of each, so you can mark them or untick the row |
 | **Test results** | Every run in Results. Off by default: like the Claude Handoff's, it can hold other clients' hosts, so the row lists its targets for you to check |
 
-At the top of the page, tiles count the devices, the findings by severity and the changes, and say which LAN, gateway and WAN is-alive ran from. A section with nothing in it is left out, and so is a column no device has a value for (no MAC column for a map Claude drew, no Site column for one site). A plan, a training map or an example says so under the title, as it does on the Map tab.
+At the top of the page, tiles count the devices, the findings by severity and the changes. The last tile says where the data came from: **Scanned from** with the LAN, gateway and WAN of the sweep on the live map when it has one (where this computer was when the sweep ran), else **This report was made on** with this computer's own, which says nothing about the site when you save the report back at the office. A section with nothing in it is left out, and so is a column no device has a value for (no MAC column for a map Claude drew, no Site column for one site). A plan, a training map or an example says so under the title, as it does on the Map tab.
 
-**What's safe about the page.** Everything in it is escaped, the map is a picture, and the page loads and runs nothing: no scripts, no fonts, nothing from the internet, so opening it tells no one it was opened. Card notes and Notes are redacted as they are everywhere; check photos yourself, as Notes says.
+**What's safe about the page.** Everything in it is escaped, the map is a picture, and the page loads and runs nothing: no scripts, no fonts, nothing from the internet, so opening it tells no one it was opened. The footer says exactly what was cleaned: the config files' secrets, and in the notes only the values you marked (it names how many), nothing else. Check the notes and photos yourself before you send it.
 
 ### Dropping files
 
@@ -790,7 +790,22 @@ The API key comes from `MERAKI_DASHBOARD_API_KEY` or a hidden prompt and is neve
 | **A sweep alone** | Devices hang under the gateway on dotted *inferred* links, with roles worked out from vendor and open ports (marked *inferred* too) |
 | **A /mapnetwork map** | Claude's map redrawn in is-alive's style, with its sites, zones, VLANs and findings. A sweep of the same network marks which devices answered (what it finds now about an address, its ping and its open ports, replaces what the map said about it last visit, so those lines don't pile up visit after visit), and the hosts the map left out join it as clients, each under the card its subnet hangs off (or under **Not placed**); so do the clients of the site's UniFi backup, under their switch or AP, with names as Config Export left them (tokens when anonymized). With several backups open, each joins only when the map shows its devices |
 
-**Measured or inferred.** What is-alive read or measured is shown plain. What it worked out carries one word, *inferred*, wherever it shows: a card's tag, its inspector, the legend, the Site report, a map's CSV export and the bundle's card notes. Two things can be: a device's **role**, when a sweep has only its vendor and open ports to go on, and a card's **uplink**, when it answered on the network but no backup or config says which port it's on. Point at the word (in the app or the report) for which it was.
+**Measured or inferred.** What is-alive read or measured is shown plain. What it worked out carries one word, *inferred*, wherever it shows: a card's tag, its inspector, the legend, the Site report, a map's CSV export and the bundle's card notes. Two things can be: a device's **role**, when a sweep has only its vendor, open ports or web page to go on (or a `/mapnetwork` map marks the role inferred), and a card's **uplink**, when no backup or config says which port it's on. Point at the word (in the app or the report) for why: its subnet placed it, it answered here, the `/mapnetwork` map drew the link dashed, the controller's uplink data points both ways, it was only last seen there, or nothing on the map links to it.
+
+**Reading a `/mapnetwork` map back.** What is-alive takes from each part of Claude's map:
+
+| On the map | Read as |
+|---|---|
+| A card's role | Its `kind` first (*SWITCH*, *COPIER*, *FIREWALL*), then its zone, its label last, so a *DESKTOP-…* name in an OT zone stays with the OT devices. Network words win over voice words: a *voice edge* zone's router is a gateway, not a phone; a card in a voice zone is voice gear unless it says *phone*. *Printers, cameras, IoT* also holds door access, sensors and building or plant devices |
+| A link's label | The parent's port only when it is one (*Port 21*, *p21*, *Gi1/0/21*, *X1*, *eth0*); *X2 → Port 24* is the parent's port, then the card's own (in its details). A count (*21 wired*), a VLAN (*VLAN 10 gw*) or a name goes in the card's details instead. A tunnel (*IPsec*, *VPN*) is a link of its own, not *inferred* |
+| A dashed link | Wireless for `wifi`. Otherwise *inferred*, with the map's reason (dashed, reciprocal, last seen), unless its label names a port: then it's wired, and the details say the map drew it dashed |
+| A backbone link | *WAN* in the inspector only off the internet; the firewall's LAN to its core switch keeps its port |
+| A card nothing links to | A gateway goes on the internet; anything else goes under **Not linked** (below the gateway), placement unknown, with what hangs off it |
+| A **+N more** card | One client card per device it lists (by address, MAC or a bare name), with the vendor and *guest* tag its line names, once each, on the switch or AP but not its port. *…and N more* stays one card, **+N not listed**, and the summary under the title says how many the map only counts |
+| An internet card | Keeps this computer's public address (WAN) |
+| A MAC in a card's text | Only from its `mac` field, its sub line, or a line that is the MAC; never from a *candidate* or *unconfirmed* one, so a sweep doesn't merge another device into it |
+
+A switch the map marks *inferred* or *scan-only* never wins over a confirmed one when a sweep's hosts are placed by subnet. A UniFi client at the address of a card with no MAC, or of the firewall (seen with another interface's MAC), joins that card instead of making a second.
 
 A map with nothing to show says what it's built from (and that Meraki configs aren't drawn: they go into the Claude Handoff for Claude), and offers **Scan this network** (a sweep of this computer's subnet that fills the map as devices answer), **Open a backup or map…**, and links to the two example maps and a blank one.
 
