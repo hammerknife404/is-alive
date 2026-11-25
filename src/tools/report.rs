@@ -36,6 +36,8 @@ pub struct ReportTool {
     /// again when the map changes (once a second at most during a sweep).
     preview: Option<(u64, Option<MapPart>)>,
     previewed_at: f64,
+    /// What `risks` found last, by a hash of the text it looked at.
+    risk_memo: Option<(u64, Vec<String>)>,
 }
 
 impl Default for ReportTool {
@@ -52,6 +54,7 @@ impl Default for ReportTool {
             use_results: false,
             preview: None,
             previewed_at: f64::NEG_INFINITY,
+            risk_memo: None,
         }
     }
 }
@@ -210,6 +213,29 @@ impl ReportTool {
                 || (parts.changes && map.is_some_and(|m| m.since.is_some()))))
             || (self.use_notes && !src.notes.is_empty())
             || (self.use_results && runs > 0);
+        // Notes aren't scanned when they're redacted: say what's still in
+        // them before the page is saved.
+        let map_key = self.preview.as_ref().map_or(0, |(k, _)| *k);
+        let risky = risks(
+            &mut self.risk_memo,
+            self.use_notes,
+            &parts,
+            src,
+            map,
+            map_key,
+        );
+        if !risky.is_empty() {
+            ui.separator();
+            ui.label(
+                RichText::new(format!("⚠ The notes still hold {}", risky.join(", ")))
+                    .color(ui.visuals().warn_fg_color),
+            )
+            .on_hover_text(
+                "Notes are redacted only where you marked a value in Notes. Mark these \
+                 (or take them out) before saving if the client shouldn't see them, or \
+                 untick Tech notes.",
+            );
+        }
         ui.separator();
         ui.horizontal(|ui| {
             let save = ui
@@ -242,15 +268,7 @@ impl ReportTool {
         let map = any_map
             .then(|| src.map.report(&src.map_src, parts.picture))
             .flatten();
-        let na = |v: Option<String>| v.filter(|s| !s.is_empty());
-        let from: Vec<(&'static str, String)> = [
-            ("LAN", na(src.info.lan.map(|(ip, b)| format!("{ip}/{b}")))),
-            ("Gateway", na(src.info.gateway.map(|g| g.to_string()))),
-            ("WAN", na(src.info.wan.map(|w| w.to_string()))),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| Some((k, v?)))
-        .collect();
+        let (from, from_scan) = scanned_from(src);
         let runs = if self.use_results {
             src.log
                 .entries
@@ -270,6 +288,17 @@ impl ReportTool {
             title: self.title.trim().to_string(),
             made: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
             from,
+            from_scan,
+            redacted: if self.use_notes && !src.notes.is_empty() {
+                let hits = src.notes.hits();
+                if hits.is_empty() {
+                    String::new()
+                } else {
+                    crate::redact::summary(&hits)
+                }
+            } else {
+                String::new()
+            },
             map,
             parts,
             notes: (self.use_notes && !src.notes.is_empty()).then(|| src.notes.sanitized_plain()),
@@ -283,6 +312,83 @@ impl ReportTool {
             Ok(report::html(&r).into_bytes())
         });
     }
+}
+
+/// Where the report's data came from: the sweep on the live map's own
+/// LAN and gateway when it has one (true), else this computer's now
+/// (false: the report says it was made there, not scanned from there).
+fn scanned_from(src: &Sources) -> (Vec<(&'static str, String)>, bool) {
+    let scan = (src.map.showing_live() && src.map.shows_sweep(&src.map_src))
+        .then(|| src.map_src.sweep.scanned_from())
+        .flatten()
+        .filter(|s| s.lan.is_some() || s.gateway.is_some());
+    let info = scan.unwrap_or(src.info);
+    // The public address is read later; it's this site's only if the
+    // computer is still on the scan's LAN.
+    let wan = info
+        .wan
+        .or_else(|| scan.filter(|s| s.lan == src.info.lan).and(src.info.wan));
+    let from = [
+        ("LAN", info.lan.map(|(ip, b)| format!("{ip}/{b}"))),
+        ("Gateway", info.gateway.map(|g| g.to_string())),
+        ("WAN", wan.map(|w| w.to_string())),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| Some((k, v.filter(|s| !s.is_empty())?)))
+    .collect();
+    (from, scan.is_some())
+}
+
+/// What in the notes going in still looks like it shouldn't (full MACs,
+/// DOMAIN\\user logons, pasted scan XML): the technician notes as they'd
+/// be written, and the notes of the cards that will be saved (none when
+/// Infrastructure and Clients are both unticked). Looked at again only
+/// when the notes, the map or the ticks change, not every frame: the key
+/// is the notes' redaction cache key and the map preview's key, so no
+/// text is copied or hashed while nothing changes.
+fn risks(
+    memo: &mut Option<(u64, Vec<String>)>,
+    use_notes: bool,
+    parts: &Parts,
+    src: &Sources,
+    map: Option<&MapPart>,
+    map_key: u64,
+) -> Vec<String> {
+    use std::hash::{Hash, Hasher};
+    let notes = use_notes && !src.notes.is_empty();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        notes.then(|| src.notes.clean_key()),
+        map.is_some().then_some(map_key),
+        parts.infra,
+        parts.clients,
+    )
+        .hash(&mut h);
+    let key = h.finish();
+    if let Some((k, r)) = memo
+        && *k == key
+    {
+        return r.clone();
+    }
+    let mut text = String::new();
+    if notes {
+        // The words, each photo still its marker: a photo's data isn't
+        // notes, and copying it every change would cost megabytes.
+        text += &crate::theme::strip_emoji_styles(&src.notes.sanitized_words());
+    }
+    let saved = |d: &&report::Device| if d.client { parts.clients } else { parts.infra };
+    for d in map
+        .map(|m| m.devices.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(saved)
+    {
+        text.push('\n');
+        text += &d.note;
+    }
+    let r = report::note_risks(&text);
+    *memo = Some((key, r.clone()));
+    r
 }
 
 fn clients_in(map: Option<&MapPart>) -> usize {

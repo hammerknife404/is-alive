@@ -151,7 +151,8 @@ community is never in it.";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \
-Update it rather than starting over: keep what still holds, change what the other files show.";
+Update it rather than starting over: keep what still holds, change what the other files show. \
+is-alive reads it back by the skill's rules: a role word in each kind, a port in each edge label.";
 const CARD_NOTES_WHAT: &str = "The technician's notes on cards of the Map tab's live map: each \
 card's name, role, IP and MAC with its note, and an `inferred` list naming what is-alive worked out \
 and didn't read or measure (role, uplink; empty when neither). Redacted like notes.md. Observations \

@@ -13,7 +13,7 @@ mod png;
 mod scene;
 mod svg;
 
-pub use csv::vendor;
+pub use csv::{clean_vendor, vendor};
 pub use dchtml::{DRAWN as DC_HTML_DRAWN, left_out as dc_html_left_out};
 pub use scene::Look;
 

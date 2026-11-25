@@ -98,7 +98,8 @@ pub enum Zone {
     /// Network gear the sweep found by vendor or management port.
     Gear,
     Server,
-    /// Printers and cameras.
+    /// Printers, cameras and other single-purpose devices (door access,
+    /// sensors, building and plant gear).
     Device,
     Client,
     #[default]
@@ -126,7 +127,7 @@ impl Zone {
             Zone::Wireless => "Access points",
             Zone::Gear => "Network gear",
             Zone::Server => "Servers / NAS",
-            Zone::Device => "Printers / cameras",
+            Zone::Device => "Printers, cameras, IoT",
             Zone::Client => "Clients",
             Zone::Unknown => "Unidentified",
         }
@@ -1439,6 +1440,60 @@ fn gear_brand(vendor: Option<&str>) -> Option<&'static str> {
     GEAR.iter().find(|(k, _)| word_in(v, k)).map(|g| g.1)
 }
 
+/// Makers people write by a name the registry spells otherwise ("Super
+/// Micro Computer", "GIGA-BYTE", "Cisco Meraki").
+const WRITTEN_AS: &[&str] = &[
+    "supermicro",
+    "gigabyte",
+    "hpe",
+    "hp",
+    "meraki",
+    "asus",
+    "msi",
+    "google",
+    "amazon",
+    "nest",
+    "ring",
+    "sonos",
+    "roku",
+    "lg",
+    "vizio",
+    "hisense",
+    "tcl",
+    "wyze",
+    "ecobee",
+];
+
+/// Whether `field` names a maker the way people write one: a brand this
+/// app knows (gear, NAS, printers, phones, cameras, laptop and phone
+/// makers), or the maker's word of registered names ("Hikvision", "Dell",
+/// "Epson"). Not a room, a place or a product ("Main office", "Pixel 8").
+pub(super) fn written_maker(field: &str) -> bool {
+    let first = field
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .find(|w| w.len() >= 2)
+        .map(str::to_ascii_lowercase);
+    let Some(first) = first else {
+        return false;
+    };
+    let keys = GEAR
+        .iter()
+        .map(|g| g.0)
+        .chain(NAS.iter().copied())
+        .chain(PRINTERS.iter().copied())
+        .chain(PHONES.iter().map(|p| p.0))
+        .chain(CAMERAS.iter().copied())
+        .chain(CLIENT_NICS.iter().copied());
+    // The whole name, or its first word: "Brother" for "brother
+    // industries", not "Western" for "western digital".
+    let known = keys.into_iter().any(|k| {
+        word_in(field, k)
+            || (k.split(' ').next() == Some(first.as_str())
+                && !matches!(first.as_str(), "western" | "hon" | "the"))
+    });
+    known || WRITTEN_AS.contains(&first.as_str()) || mac::maker_word(field)
+}
+
 /// A desk-phone maker's name, and whether it also makes gear.
 fn phone_brand(vendor: Option<&str>) -> Option<(&'static str, bool)> {
     let v = vendor?;
@@ -1947,18 +2002,37 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
     }
     if zone == Zone::Gear || zone == Zone::Server {
         n.chip(crate::inferred::WORD);
-        n.details.push(crate::inferred::ROLE.into());
+        // What placed it: the vendor alone, the ports, or its web page.
+        let by_vendor = vendor.is_some() && classify(vendor, private, &[]).0 == zone;
+        let by_ports = !by_vendor && classify(vendor, private, &s.open).0 == zone;
+        n.details.push(crate::inferred::role_from(
+            by_vendor,
+            by_ports,
+            !by_vendor && !by_ports,
+        ));
     }
     n
 }
 
 /// A card for a UniFi client, not yet hung anywhere. Its name is what the
 /// backup holds: a client-xxxxxxxx token when Config Export anonymized it.
+/// Cisco names its desk phones "SEP" and their MAC ("SEP0A1B2C3D4E5F"):
+/// a phone, though Cisco's prefixes are mostly network gear.
+pub(super) fn cisco_phone_name(name: Option<&str>) -> bool {
+    name.and_then(|n| {
+        n.get(..3)
+            .filter(|p| p.eq_ignore_ascii_case("SEP"))
+            .map(|_| &n[3..])
+    })
+    .is_some_and(|rest| rest.len() == 12 && rest.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 fn unifi_client_card(c: &UClient) -> Node {
     let vendor = c.oui.as_deref();
     // Infrastructure hiding in the client table (an unadopted AP,
     // a NAS) is shown even with clients off.
     let (zone, kind, client) = match classify(vendor, false, &[]) {
+        _ if cisco_phone_name(c.name.as_deref()) => (Zone::Client, "CISCO PHONE".into(), true),
         (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
         r => r,
     };
@@ -3552,7 +3626,7 @@ fn limit(b: B, input: &Input) -> Map {
         .enumerate()
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
-    let mut findings: Vec<Finding> = findings
+    let findings: Vec<Finding> = findings
         .into_iter()
         .map(|(sev, text, ids)| Finding {
             sev,
@@ -3563,7 +3637,7 @@ fn limit(b: B, input: &Input) -> Map {
                 .collect(),
         })
         .collect();
-    findings.sort_by_key(|f| f.sev);
+    let findings = sort_findings(findings);
     Map {
         title: String::new(),
         nodes: out,
@@ -3578,10 +3652,83 @@ fn limit(b: B, input: &Input) -> Map {
     }
 }
 
+/// Findings worst first. A finding that points at its neighbour ("see the
+/// next finding", "(previous finding)") would point at another once
+/// sorted: the reference becomes the start of the finding it meant.
+fn sort_findings(mut findings: Vec<Finding>) -> Vec<Finding> {
+    static NEAR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:the\s+)?(next|previous|following|preceding)\s+finding\b|\b(?:the\s+)?finding\s+(above|below)\b",
+        )
+        .unwrap()
+    });
+    let heads: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            let words: Vec<&str> = f.text.split_whitespace().collect();
+            let head = words.iter().take(8).copied().collect::<Vec<_>>().join(" ");
+            let head = head.trim_end_matches(['.', ',', ';', ':']);
+            if words.len() > 8 {
+                format!("“{head}…”")
+            } else {
+                format!("“{head}”")
+            }
+        })
+        .collect();
+    let n = findings.len();
+    for (i, f) in findings.iter_mut().enumerate() {
+        f.text = NEAR
+            .replace_all(&f.text, |c: &regex::Captures| {
+                let word = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
+                let to = match word.to_ascii_lowercase().as_str() {
+                    "next" | "following" | "below" => i.checked_add(1).filter(|&j| j < n),
+                    _ => i.checked_sub(1),
+                };
+                match to {
+                    Some(j) => format!("the finding {}", heads[j]),
+                    None => c[0].to_string(),
+                }
+            })
+            .into_owned();
+    }
+    findings.sort_by_key(|f| f.sev);
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Sorted worst first, "(next finding)" still means the one it did.
+    #[test]
+    fn sorting_findings_keeps_what_they_point_at() {
+        let f = |sev, text: &str| Finding {
+            sev,
+            text: text.into(),
+            nodes: vec![],
+        };
+        let out = sort_findings(vec![
+            f(Sev::Low, "Printer firmware is old (see the next finding)."),
+            f(Sev::Med, "Spare switch is unpatched."),
+            f(
+                Sev::High,
+                "Admin page open to the internet; fix before the finding above.",
+            ),
+        ]);
+        assert_eq!(out[0].sev, Sev::High);
+        assert_eq!(
+            out[0].text,
+            "Admin page open to the internet; fix before the finding “Spare switch is unpatched”."
+        );
+        assert_eq!(
+            out[2].text,
+            "Printer firmware is old (see the finding “Spare switch is unpatched”)."
+        );
+        // Nothing next to point at: left as written.
+        let last = sort_findings(vec![f(Sev::Low, "See the next finding.")]);
+        assert_eq!(last[0].text, "See the next finding.");
+    }
 
     fn unifi(devices: &[Value], users: &[Value]) -> String {
         let mut v = vec![
