@@ -1501,6 +1501,7 @@ impl SweepTool {
                 "lan": lan.map(|(ip, bits)| format!("{ip}/{bits}")),
                 "gateway": self.local.gateway.or(info.gateway).map(|g| g.to_string()),
                 "wan": info.wan.map(|w| w.to_string()),
+                "switch_port": info.port.as_ref().map(crate::net::lldp::Heard::json),
             })),
             "imported": im.map(|i| json!({
                 "from": "Advanced IP Scanner",
@@ -1525,6 +1526,7 @@ impl SweepTool {
                 "mac_from says where mac came from: arp (this machine's ARP table, hosts on the scanner's own segment) or netbios (the host reported it, a Windows host past a router). Otherwise mac is null: past a router that is expected, not a sign of an unknown device.",
                 "name_from says where name came from: dns (its PTR record), netbios (the computer name a Windows, Samba or NAS host reports) or mdns (a name.local an Apple device, printer, cast device or Linux host reports). netbios and mdns are the device's own claim: good labels and role hints, not proof of identity.",
                 "client_names says what became of the names of hosts that look like a phone, laptop or PC (not the gateway, and no maker, port or web page that says network gear, NAS, printer or camera), names that are often people's: full keeps them; anonymized replaces each with a client-xxxxxxxx token made from its MAC (else its IP), the same token the UniFi export's client table uses for that MAC; none leaves name null. name_from still says where the real name came from. Other hosts keep their names.",
+                "scanner.switch_port is the switch port the scanner itself was plugged into, null when not known: what the switch announced over LLDP or CDP and is-alive heard on the wired adapter (heard_via raw socket, Npcap, lldpd or systemd-networkd; protocol LLDP or CDP), or what a switch's forwarding table said over SNMP (heard_via SNMP: the port that learned the scanner's MAC, which on an uplink is another switch's). switch and port are the switch's own names, port_description often the patch-panel label, vlan the port's untagged VLAN, voice_vlan its voice VLAN, vlan_names [{id, name}] the VLANs it named on the port, management the switch's management address, heard_at when that run started (local time). It is the site's newest such run, possibly from an earlier visit; draw the scanner's link to that switch and port. port_description is what the switch's admin typed and often names the person at that desk: use it to place the drop, never repeat a person's name.",
                 "ranges lists each network swept; on_scanner_lan says whether a host is on the scanner's own segment (true) or routed (false: a mac only if the host reported one over NetBIOS; null when the scanner's LAN wasn't known).",
                 "vendor is the IEEE registry owner of the MAC prefix (null if unregistered). A locally administered MAC (second-lowest bit of the first octet set) is either a client's private address or a device's virtual one: virtual_mac true means it is the gateway's (never private, whatever its MAC) or a network-gear maker's own prefix with that bit set, such as a SonicWall LAN interface answering on 2e:b8:ed:… for SonicWall's 2c:b8:ed:…, on a host that showed gear of its own (telnet, 541, 4433 or 8291 open, or a web page naming gear; the Smart port check skips locally administered MACs, so off the gateway that needs All hosts); vendor then names that maker (null for a gateway whose maker isn't known). private_mac true means a locally administered address with nothing to say infrastructure (a phone or laptop's private per-network MAC, or a VM's virtual NIC), vendor null. Both are false for a registered MAC and null when mac is null. HP's prefixes cover HP printers, PCs and Poly desk phones alike: tell them apart by web_title, dnssd and open_ports, not the vendor.",
                 "web_title is what the host's own web page calls it (its <title>, else its Server header; a placeholder title such as Loading..., Login or Redirecting counts as none), read with one GET where a management web port answered: the device's own claim, a strong role hint (a UniFi console, a SonicWall login, an HP printer's page), not proof.",
@@ -3028,6 +3030,7 @@ mod tests {
         assert!(hosts[1]["rtt_ms"].is_null());
         assert!(hosts[0]["open_ports"].is_null(), "ports weren't checked");
         assert_eq!(v["scanner"]["lan"], "10.0.0.50/24");
+        assert!(v["scanner"]["switch_port"].is_null(), "nothing heard");
         assert_eq!(v["range"], "10.0.0.0/24");
         assert_eq!(v["ranges"], json!(["10.0.0.0/24"]));
         assert_eq!(hosts[0]["on_scanner_lan"], true);
@@ -3059,6 +3062,31 @@ mod tests {
             )
         );
         assert_eq!(w["on_scanner_lan"], false);
+
+        // The port the scanner was heard on, and every field of it, in the skill.
+        let info = HostInfo {
+            port: Some(crate::net::lldp::Heard {
+                n: crate::net::lldp::parse_frame(&crate::net::lldp::sample::lldp()).unwrap(),
+                via: "raw socket".into(),
+                adapter: "eth0".into(),
+                at: "2026-11-25 10:42:00".into(),
+            }),
+            ..Default::default()
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&s.inventory(&info, Clients::Full)).unwrap();
+        let sp = &v["scanner"]["switch_port"];
+        assert_eq!(sp["port"], "Gi1/0/12");
+        assert_eq!(sp["vlan"], 20);
+        let skill = include_str!("../../skills/mapnetwork/SKILL.md");
+        let mut keys: Vec<String> = sp.as_object().unwrap().keys().cloned().collect();
+        keys.push("switch_port".into());
+        for key in keys {
+            assert!(
+                skill.contains(&format!("`{key}`")),
+                "skills/mapnetwork/SKILL.md doesn't explain scanner.switch_port's {key}"
+            );
+        }
 
         // Every field a host carries is one the bundled /mapnetwork skill
         // explains: a new one has to be described there before it ships.

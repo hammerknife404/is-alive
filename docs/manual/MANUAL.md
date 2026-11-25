@@ -8,7 +8,7 @@ describes. See "Updating this manual" at the end.
 
 A field guide to **is-alive**, the portable network tester for site visits: what every tab does, what every control means, worked examples with real numbers, and what to do when something doesn't look right.
 
-This manual describes **is-alive 0.40.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
+This manual describes **is-alive 0.41.0**, and is built into the app: **Help** at the bottom right, then **Manual**, or **F1** for the chapter about the tab you're on. It works with no network. The [wiki](https://github.com/hammerknife404/is-alive/wiki) has a shorter page per tab, and the [follow-along guide](../../FOLLOW-ALONG.md) is a 20-minute walk-through for people new to networking.
 
 ## Contents
 
@@ -120,7 +120,7 @@ Five parts, the same on every tab:
 | **Left**: the nav | **VISIT** (Full scan, Claude Handoff, Report) at the top, then **TOOLS**: six rows of tools, a dot on a row with one running (on a short window they scroll, and a fade at the bottom says there are more); **Settings** and **Help** at the foot. **Tab** moves through the rows, ringed as it goes |
 | **Middle** | The tab you're on: its run bar, **Options**, the status row and the results |
 | **Right**: the inspector | What you picked on a tab with things to pick: a device in Sweep, a card on the Map |
-| **Bottom**: the status bar | This computer's LAN address, gateway, the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right, with **Update: v…** beside it when a newer release is out |
+| **Bottom**: the status bar | This computer's LAN address, gateway, the switch port it's plugged into (**Which port?** until it's known), the domain it's joined to and its public (WAN) address, **Refresh**; what's running and the version on the right, with **Update: v…** beside it when a newer release is out |
 
 The first time it opens, is-alive takes 1120 × 720, or the whole screen on a small one (a 1080p laptop at 150%, or 1366 × 768), so the status bar isn't left under the taskbar. After that it opens at the size you left it, maximised if it was.
 
@@ -213,6 +213,7 @@ Anything you can read in the app you can copy: select it with the mouse and pres
 | A row in Subnet Sweep | **Copy IP**, **Copy name**, **Copy MAC**, **Copy vendor** (each only when the host has one, the value on the right), then **Wake** |
 | A card on the Map | **Copy name**, **Copy IP**, **Copy MAC**, **Copy all details** (see [The right-click menu](#the-right-click-menu)) |
 | **LAN**, **Gateway** or **WAN** in the status bar | **Copy**: the address alone, without the word in front |
+| **Port** in the status bar, once heard | **Copy**: the port's name (*Gi1/0/12*) |
 
 - **Select** by dragging across text; a double-click selects a word, a triple-click a line. A selection can run across several lines and labels.
 - **Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A** work as they always have (**⌘** on a Mac).
@@ -222,13 +223,40 @@ Anything you can read in the app you can copy: select it with the mouse and pres
 
 - **LAN** is this computer's address and subnet (for example `192.168.1.50/24`).
 - **Gateway** is the router this computer sends internet traffic to.
+- **Port** is the switch port this computer is plugged into (*Port Gi1/0/12*), once [Which port am I on?](#which-port-am-i-on) has heard it; until then it reads **Which port?**, and while it listens, *Port: listening 42 s*. Click it to open Which port; hover it for the switch's name.
 - **Domain** is how this computer is joined: the Active Directory domain (`corp.example.com`), **Entra · tenant** for a computer joined only to Entra ID, **none** for a workgroup computer. Hover it for the details, click it for the [Domain join](#15-domain-join) tab.
 - **WAN** is the public address the internet sees for this network. It's looked up when the app opens (one DNS query to OpenDNS), on **Refresh**, and by a **Full scan**. If you turned that off in Settings it says *not looked up*.
 - **Refresh** reads the LAN, gateway and domain again and looks up the WAN address, for when you've plugged into a different network.
 - **What's running** on the right (*Ping, Sweep running*), so a run on another tab isn't forgotten.
 - **The version** at the far right (**v** and a number) is the one you're running: worth including when you report a problem.
 
-On a window under 1100 points wide the words *LAN*, *Gateway*, *Domain* and *WAN* drop off (hover an item for what it is) and what's running is a count (*2 running*, its names on hover), so everything still fits at the smallest size.
+On a window under 1100 points wide the words *LAN*, *Gateway*, *Port*, *Domain* and *WAN* drop off (*Port Gi1/0/12* reads *Gi1/0/12*, *Port: listening 42 s* reads *listening 42 s*; **Which port?** stays) (hover an item for what it is) and what's running is a count (*2 running*, its names on hover), so everything still fits at the smallest size.
+
+### Which port am I on?
+
+A managed switch announces itself on every port every 30 to 60 seconds: its name, which port this is, the port's VLANs and the switch's management address. **Which port am I on?** listens for that, so you don't have to trace a cable to find the drop. Click **Port** (or **Which port?**) in the status bar, then **Listen**.
+
+- **It only listens.** Nothing is sent: it waits for the switch's own **LLDP** or **CDP** announcement on the wired adapter (the one with this computer's LAN address, else the first with a link), for up to 65 seconds, and stops at the first one heard. A countdown shows how long is left; **Stop** ends it. It isn't a running test, so a Full scan can run meanwhile.
+- **Plug in a cable.** Wi-Fi never carries these announcements. With no wired adapter, or one with no link (no light on the port: a dead drop or a port that's shut down), it says so straight away. It still works on a drop that gave no address, since the switch announces itself on the wire either way.
+- **What you see:**
+
+| Line | What it is |
+|---|---|
+| **Switch** | The switch's name (LLDP's system name, CDP's device ID) |
+| **Port** | The port you're on, as the switch names it (*Gi1/0/12*) |
+| **Port desc.** | The port's description, often the patch-panel or room label |
+| **VLAN** / **Voice VLAN** | The port's untagged VLAN, and the voice VLAN a phone on it would use |
+| **VLAN names** | The VLANs the switch named on the port (*20 Staff, 30 Voice*) |
+| **Management** | The switch's management address: what to browse to, or ask over SNMP |
+| **PoE** | What the switch says about power on the port (*class 4, 25.5 W allocated*) |
+| **Model** | The switch's description or platform |
+| **Chassis ID** | The switch's own ID, often its MAC |
+
+  Under them, how it was heard (*Heard over LLDP on eth0 (raw socket) after 23 s*). Each line copies from its right-click menu.
+- **Every attempt is logged** as a **Switch port** run in [Results](#16-results), nothing-heard ones too, with the reason. If the cable comes out mid-listen it says the capture broke off, not that the switch is silent. The newest one that named a port is what the status bar shows for the site (hover it for when it was heard, perhaps on an earlier visit; listening again with nothing heard, or no wired link, clears it), and what the [Claude Handoff](#19-claude-handoff)'s inventory records as where the scanner was plugged in, so the map can draw it.
+- **How it listens.** On **Windows** through **Npcap**, the capture driver Wireshark uses, if it's installed (is-alive loads it from Windows' own `System32\Npcap` folder when you press Listen, and doesn't need it otherwise). The capture isn't promiscuous: the adapter still ignores frames meant for other computers. The one change is that while the capture is open, Npcap lets all *multicast* frames through to it (its *all multicast* receive filter), because an adapter otherwise drops multicast to addresses nothing on the computer asked for, and the switch's announcement goes to one of those. That lasts only for the listen: when it ends (at the first announcement, after 65 seconds, or on Stop) is-alive sets the filter back before closing the capture, and Npcap drops it with the capture anyway; nothing about the adapter is saved. If Npcap was installed to let only administrators capture, it says so: run is-alive as administrator, or reinstall Npcap without that option. On **Linux** with a raw socket when is-alive has the *CAP_NET_RAW* capability (or runs with sudo); otherwise, if **lldpd** or **systemd-networkd** is already running, it reads what they heard (`lldpcli`, `networkctl lldp`). When none of these can, it says what would make it work: run is-alive with sudo, or give it the capability. It never suggests installing or starting lldpd, which would announce this computer to every switch it's plugged into.
+- **Nothing heard** after 65 seconds means the switch doesn't announce: unmanaged switches never do, and a managed one can have LLDP and CDP turned off. That isn't a fault.
+- **Ask the switch over SNMP.** After an attempt that didn't name the port, type the address of a switch you know and press **Ask**: it asks that switch (UDP 161, with the community from the [SNMP section](#reading-a-device-over-snmp)) which of its ports has this computer's wired MAC in its forwarding table (BRIDGE-MIB, then Q-BRIDGE). It asks for that one MAC, never for the whole table. If the answer is the switch's uplink to another switch, ask that one next. Logged as a Switch port run too.
 
 ### Full scan
 
@@ -1501,7 +1529,7 @@ The fields that matter most when a join is broken: **DeviceAuthStatus** (*SUCCES
 
 **What it's for:** everything you ran at this site in one place, with start and end times, to copy into a ticket or export for a report.
 
-Every finished run from every tab is logged here (Full scan runs too), and so is each **SNMP** read from an inspector: one row per value read, its list line the device's name and model, or *no answer*. The community it used is never in it.
+Every finished run from every tab is logged here (Full scan runs too), and so is each **SNMP** read from an inspector: one row per value read, its list line the device's name and model, or *no answer*. The community it used is never in it. Each [Which port am I on?](#which-port-am-i-on) attempt is a **Switch port** run: the switch, port and VLANs it heard (its list line *Gi1/0/12 on sw-example-01*), or *nothing heard*, *can't listen*, *no wired link* with the reason.
 
 **The list** on the left has every run, newest first, under the day it ran (**Today**, then earlier dates), with what's still going at the top under **Running**. Each row has the tool, its target and the time, and a few words on what it found: *2 open of 14 checked*, *37 alive*, *Down 412 · up 38 Mbps*, *1 failed · 2 warnings*, or a ping's totals. Click a run to open it beside the list. The newest opens by itself, and after a **Full scan** its first run does.
 
@@ -1530,6 +1558,7 @@ Every finished run from every tab is logged here (Full scan runs too), and so is
 | Domain join | the field's section and name | its value (`AzureAdPrt` YES → NO) |
 | Domain join (others) | the computer asked | its verdict, name or DNS domain |
 | SNMP | the device, and the value's section and name | the value (a new serial, firmware, a toner level; uptime changes every read) |
+| Switch port | the field (switch, port, VLAN …) | its value: plugged in somewhere else |
 | Wi-Fi scan | the access point's BSSID | its network name or channel (signal changes every time, so it isn't counted) |
 | Speed Test | phase | its speed, latency, jitter, loss or MOS, with how much it moved (*412 → 380 (−32)*) |
 | Ping | | replies, loss and Avg / Min / Max side by side, with the difference |
@@ -1781,6 +1810,7 @@ is-alive was built for sites with regulated data (healthcare, finance): it sends
 - **On start, two requests, both optional:** the public IP (one DNS query to OpenDNS) and the update check (one HTTPS request to GitHub, carrying only the app's version). Turn both off in **Settings → Network** and opening the app sends nothing at all: then the status bar's domain isn't read at start either (on Windows that runs `dsregcmd /status`, which can ask the domain); **Refresh**, Domain join and a Full scan read it.
 - **A crash report keeps out what it was handling.** If is-alive ever stops with an error, `startup.log` keeps where it happened and the error's wording, with any long quoted text (a note, a name, a config line) replaced by its length and the rest redacted like notes, since that log is what a bug report attaches.
 - **Everything else only when you run it.** No telemetry, no accounts, no analytics. A **Domain Health** run looks up this network's public address (one DNS query to OpenDNS) and asks the blacklists about it with the domain's mail servers, so the lists' operators see it; its MTA-STS and RDAP lookups go over HTTPS only. The manual is built in and opens with no network. Links (Help's online entries, the update link, a card's Web button) open in your own browser; **Report a problem** fills in only the version and the system (Windows or Linux), and sends nothing until you submit the form on GitHub.
+- **Which port am I on? only listens.** It sends nothing: it waits on the wired adapter for the switch's own LLDP or CDP announcement, which the switch sends to every port anyway, and parses it with a reader tested against damaged and random frames. On Windows it uses Npcap only if you installed it, never promiscuous; while it listens (65 seconds at most) Npcap lets all multicast frames through to that capture, and drops that when it closes. On Linux it needs the raw-socket capability, or reads what lldpd or systemd-networkd, already running, heard; it never suggests installing or starting lldpd, which would announce this computer to the switch. Port descriptions can hold a person's name (*J. Smith desk*): they go to Results and the Claude Handoff as the switch gave them. Its optional **Ask** sends SNMP to the one switch you type, asking for this computer's MAC only.
 - **SNMP only when you ask, to the one device you pick.** The inspector's **SNMP** sends to that device's UDP 161 and nothing else; a sweep and a Full scan never send SNMP. The community you type is kept in memory for the session only: never in settings, Results, the Site report or a Site Bundle.
 - **Configs are sanitized on this computer** before anything is saved or shared, as described in [Config Export](#10-config-export). Notes and Known problems are redacted as described in [Notes](#12-notes).
 - **The clipboard:** on Windows, everything the app copies is kept out of clipboard history (Win+V), cloud clipboard sync and clipboard managers; when another program is holding the clipboard, nothing is copied and a message says so, rather than a copy that would land in history. On Linux, the app's copies are marked for clipboard managers (Klipper and others) to leave out of their history. When the app closes, it clears the clipboard if it still holds the app's last copy.
@@ -1909,6 +1939,7 @@ The manual doesn't need one: **Help → Manual** (or **F1**) works offline. For 
 | **Access point (AP)** | Provides Wi-Fi |
 | **Uplink** | A device's connection towards the internet |
 | **LLDP** | How switches, phones and APs tell their neighbours what they are and which port they're on |
+| **CDP** | Cisco's own version of LLDP, which Cisco switches send as well or instead |
 | **Markdown** | Plain text with simple marks for formatting (`**bold**`, `- list`, `## heading`) |
 | **Redact** | Hide a value (a password) in everything that leaves the app |
 

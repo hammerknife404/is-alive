@@ -22,6 +22,32 @@ pub struct Adapter {
     pub guid: String,
 }
 
+/// A wired (Ethernet) adapter: where the switch's LLDP and CDP can be
+/// heard. Wi-Fi never carries them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Wired {
+    /// Its name: `eth0`, or Windows' friendly name ("Ethernet 2").
+    pub name: String,
+    /// What a capture opens: the Linux interface name, or Windows' GUID.
+    pub dev: String,
+    /// Linux's interface index (0 on Windows).
+    pub index: u32,
+    pub mac: Option<[u8; 6]>,
+    /// It has a link (a cable to something switched on).
+    pub up: bool,
+    /// It holds this computer's LAN address.
+    pub lan: bool,
+}
+
+/// The wired adapter to listen on: the one with the LAN address and a
+/// link, else the first with a link, else (to say "no link") the first.
+pub fn pick_wired(all: &[Wired]) -> Option<&Wired> {
+    all.iter()
+        .find(|w| w.up && w.lan)
+        .or_else(|| all.iter().find(|w| w.up))
+        .or_else(|| all.first())
+}
+
 /// Where the DHCP lease came from.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dhcp {
@@ -157,6 +183,32 @@ const VPN_PREFIXES: &[&str] = &[
     "nordlynx",
 ];
 
+/// Words in a virtual Ethernet adapter's name or description (Windows):
+/// a hypervisor's switch or host-only network, a container's, a capture
+/// driver's loopback. Only used when Windows won't say whether an adapter
+/// is hardware.
+const VIRTUAL_WORDS: &[&str] = &[
+    "vethernet",
+    "hyper-v",
+    "virtual ethernet",
+    "vmware",
+    "vmnet",
+    "virtualbox",
+    "host-only",
+    "docker",
+    "wsl",
+    "loopback",
+    "parallels",
+];
+
+/// Whether an Ethernet adapter looks virtual, from its name and description.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn virtual_like(name: &str, desc: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    let d = desc.to_ascii_lowercase();
+    VIRTUAL_WORDS.iter().any(|w| n.contains(w) || d.contains(w))
+}
+
 /// Whether an adapter looks like a VPN's, from its name and description.
 pub fn vpn_like(name: &str, desc: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -200,6 +252,49 @@ pub fn adapter_to(dest: Ipv4Addr) -> Option<Adapter> {
         name: super::sanitize(&name),
         ..Default::default()
     })
+}
+
+/// The physical Ethernet adapters: ARPHRD_ETHER, backed by a device (not a
+/// bridge, veth or tunnel), not Wi-Fi.
+#[cfg(target_os = "linux")]
+pub fn wired(lan: Option<Ipv4Addr>) -> Vec<Wired> {
+    let lan_if = lan.and_then(iface_of);
+    let Ok(dir) = std::fs::read_dir("/sys/class/net") else {
+        return Vec::new();
+    };
+    let read = |p: std::path::PathBuf| {
+        std::fs::read_to_string(p)
+            .ok()
+            .map(|s| s.trim().to_string())
+    };
+    let mut out: Vec<Wired> = dir
+        .flatten()
+        .take(256)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let sys = e.path();
+            let ether = read(sys.join("type")).as_deref() == Some("1");
+            let wifi = sys.join("wireless").exists() || sys.join("phy80211").exists();
+            if !ether || wifi || !sys.join("device").exists() {
+                return None;
+            }
+            Some(Wired {
+                index: read(sys.join("ifindex"))
+                    .and_then(|i| i.parse().ok())
+                    .unwrap_or(0),
+                mac: read(sys.join("address"))
+                    .and_then(|m| super::mac::parse_mac(&m))
+                    .filter(|m| *m != [0; 6]),
+                // Reading carrier fails while the adapter is down.
+                up: read(sys.join("carrier")).as_deref() == Some("1"),
+                lan: lan_if.as_deref() == Some(name.as_str()),
+                dev: name.clone(),
+                name: super::sanitize(&name),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// DHCP server, DNS and suffix of the adapter holding `ip`.
@@ -411,6 +506,79 @@ mod win {
 
     /// Call `f` on the adapter holding `ip`, if there is one.
     fn with_adapter<T>(ip: Ipv4Addr, f: impl FnOnce(&IP_ADAPTER_ADDRESSES_LH) -> T) -> Option<T> {
+        let mut f = Some(f);
+        let mut out = None;
+        each_adapter(|ad| {
+            if out.is_none() && holds(ad, ip) {
+                out = f.take().map(|f| f(ad));
+            }
+        });
+        out
+    }
+
+    /// Whether the adapter has `ip`.
+    fn holds(ad: &IP_ADAPTER_ADDRESSES_LH, ip: Ipv4Addr) -> bool {
+        let mut u = ad.FirstUnicastAddress;
+        while !u.is_null() {
+            let ua = unsafe { &*u };
+            if unsafe { addr(&ua.Address) } == Some(IpAddr::V4(ip)) {
+                return true;
+            }
+            u = ua.Next;
+        }
+        false
+    }
+
+    /// The physical Ethernet adapters (IF_TYPE_ETHERNET_CSMACD), with
+    /// whether each has a link (IfOperStatusUp).
+    pub fn wired(lan: Option<Ipv4Addr>) -> Vec<super::Wired> {
+        let mut out = Vec::new();
+        each_adapter(|ad| {
+            if ad.IfType != 6 || out.len() >= 64 {
+                return;
+            }
+            let name = unsafe { wide(ad.FriendlyName) };
+            let desc = unsafe { wide(ad.Description) };
+            // Hyper-V's and WSL's vEthernet, VMware's VMnet and VirtualBox's
+            // host-only adapters are Ethernet too, and always up: listening
+            // there hears nothing and blames the switch. The system's own
+            // word first (a hardware interface), the name when it won't say.
+            let hardware =
+                hardware_interface(ad).unwrap_or_else(|| !super::virtual_like(&name, &desc));
+            if !hardware || super::vpn_like(&name, &desc) {
+                return;
+            }
+            let mac = (ad.PhysicalAddressLength == 6)
+                .then(|| {
+                    let mut m = [0u8; 6];
+                    m.copy_from_slice(&ad.PhysicalAddress[..6]);
+                    m
+                })
+                .filter(|m| *m != [0; 6]);
+            out.push(super::Wired {
+                name: crate::net::sanitize(&name),
+                dev: unsafe { narrow(ad.AdapterName) },
+                index: 0,
+                mac,
+                up: ad.OperStatus == 1,
+                lan: lan.is_some_and(|ip| holds(ad, ip)),
+            });
+        });
+        out
+    }
+
+    /// Whether Windows calls the adapter a hardware interface (MIB_IF_ROW2's
+    /// HardwareInterface, bit 0 of its flags); None if it can't be read.
+    fn hardware_interface(ad: &IP_ADAPTER_ADDRESSES_LH) -> Option<bool> {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+        let mut row: MIB_IF_ROW2 = unsafe { std::mem::zeroed() };
+        row.InterfaceLuid = ad.Luid;
+        (unsafe { GetIfEntry2(&mut row) } == 0)
+            .then_some(row.InterfaceAndOperStatusFlags._bitfield & 0x01 != 0)
+    }
+
+    /// Call `f` on every adapter.
+    fn each_adapter(mut f: impl FnMut(&IP_ADAPTER_ADDRESSES_LH)) {
         let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
         // 15 KB is Microsoft's advice for the first try; grow if told to.
         let mut len: u32 = 15_000;
@@ -431,23 +599,15 @@ mod win {
                 0 => break,
                 // ERROR_BUFFER_OVERFLOW
                 111 if tries < 3 => tries += 1,
-                _ => return None,
+                _ => return,
             }
         }
         let mut a = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
         while !a.is_null() {
             let ad = unsafe { &*a };
-            let mut u = ad.FirstUnicastAddress;
-            while !u.is_null() {
-                let ua = unsafe { &*u };
-                if unsafe { addr(&ua.Address) } == Some(IpAddr::V4(ip)) {
-                    return Some(f(ad));
-                }
-                u = ua.Next;
-            }
+            f(ad);
             a = ad.Next;
         }
-        None
     }
 
     /// When the adapter named `guid` got its DHCP lease and when it runs
@@ -539,11 +699,16 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{adapter_to, read};
+pub use win::{adapter_to, read, wired};
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn adapter_to(_: Ipv4Addr) -> Option<Adapter> {
     None
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn wired(_: Option<Ipv4Addr>) -> Vec<Wired> {
+    Vec::new()
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -620,6 +785,32 @@ mod tests {
                 let _ = parse_networkd_lease(t);
             },
         );
+    }
+
+    #[test]
+    fn virtual_ethernet_adapters_are_known_by_name() {
+        for (name, desc) in [
+            ("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter"),
+            (
+                "vEthernet (Default Switch)",
+                "Hyper-V Virtual Ethernet Adapter #2",
+            ),
+            (
+                "VMware Network Adapter VMnet8",
+                "VMware Virtual Ethernet Adapter for VMnet8",
+            ),
+            ("Ethernet 3", "VirtualBox Host-Only Ethernet Adapter"),
+            ("Npcap Loopback Adapter", "Npcap Loopback Adapter"),
+        ] {
+            assert!(virtual_like(name, desc), "{name}");
+        }
+        for (name, desc) in [
+            ("Ethernet", "Intel(R) Ethernet Connection (13) I219-LM"),
+            ("Ethernet 2", "Realtek USB GbE Family Controller"),
+            ("eth0", ""),
+        ] {
+            assert!(!virtual_like(name, desc), "{name}");
+        }
     }
 
     #[test]

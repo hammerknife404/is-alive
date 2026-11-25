@@ -132,6 +132,27 @@ fn start_in(s: &mut State, ctx: &egui::Context, ip: IpAddr) {
     s.running = Some((ip, log::now(), job));
 }
 
+/// The community typed this session, for Which port's SNMP ask (in
+/// memory only, like the reads').
+pub fn community() -> Option<String> {
+    with(|s| Some(s.community.clone()))
+}
+
+/// The community's box, for Which port's SNMP ask: the same one the
+/// inspectors' SNMP sections edit.
+pub fn community_edit(ui: &mut Ui) {
+    with(|s| {
+        ui.label("Community");
+        widgets::add_masked_text_edit(
+            ui,
+            egui::TextEdit::singleline(&mut s.community)
+                .desired_width(100.0)
+                .min_size(vec2(0.0, theme::TARGET_H)),
+        )
+        .on_hover_text(COMMUNITY_TIP);
+    });
+}
+
 /// The inspector's SNMP button was pressed: read `ip` (one read at a time).
 pub fn start(ctx: &egui::Context, ip: IpAddr) {
     with(|s| start_in(s, ctx, ip));

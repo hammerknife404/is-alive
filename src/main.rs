@@ -153,6 +153,8 @@ struct App {
     advanced: tools::advanced::AdvancedTool,
     /// Full scan's network checks (HTTPS inspection, the clock).
     netcheck: tools::netcheck::NetCheck,
+    /// Which port am I on? (the status bar's Port item).
+    port: tools::whichport::WhichPort,
     /// How this computer is joined, for its tab and the status bar.
     join: tools::join::DomainJoin,
     export: tools::export::ExportTool,
@@ -368,6 +370,7 @@ impl App {
             dns: Default::default(),
             advanced: Default::default(),
             netcheck: Default::default(),
+            port: Default::default(),
             join: Default::default(),
             export: Default::default(),
             bundle: Default::default(),
@@ -537,6 +540,12 @@ impl App {
         self.dns.poll();
         self.advanced.poll();
         self.netcheck.poll();
+        self.port.poll();
+        match self.port.take_change() {
+            Some(tools::whichport::Change::Heard(h)) => self.info.port = Some(*h),
+            Some(tools::whichport::Change::Gone) => self.info.port = None,
+            None => {}
+        }
         self.join.poll();
         self.export.poll(ctx);
         // Files the user opened are in: a saved map on show gives way to
@@ -613,7 +622,11 @@ impl App {
         self.collect();
         self.keep_results();
         self.dropped_files(ctx);
-        pump(&mut self.info_job, |i| self.info = i);
+        // A refresh re-reads the computer; the port it was heard on stays.
+        pump(&mut self.info_job, |i| {
+            let port = self.info.port.take();
+            self.info = HostInfo { port, ..i };
+        });
         if self.info_job.is_none() {
             self.log_host_info();
         }
@@ -1255,6 +1268,7 @@ impl App {
             ("Domain Health", self.advanced.take_finished()),
             ("Network checks", self.netcheck.take_finished()),
             (tools::netcheck::SCAN, self.netcheck.take_finished_scan()),
+            (tools::whichport::TOOL, self.port.take_finished()),
             ("Domain join", self.join.take_finished()),
             (tools::join::OTHERS, self.join.take_finished_others()),
             (tools::snmp::TOOL, tools::snmp::take_finished()),
@@ -1288,6 +1302,8 @@ impl App {
         // As read: runs that expired make it differ, so the file is written
         // again without them.
         self.log_saved = self.log.stamp();
+        // The port this site last heard the scanner on, for its bundle.
+        self.info.port = tools::whichport::from_log(&self.log);
         if site::current().is_none() {
             self.log
                 .keep_since(chrono::Local::now().naive_local(), log::SCRATCH_HOURS);
@@ -1372,6 +1388,11 @@ impl App {
                 tools::netcheck::SCAN,
                 self.netcheck.scan_running_since(),
                 None,
+            ),
+            (
+                tools::whichport::TOOL,
+                self.port.running_since(),
+                self.port.output(),
             ),
             ("Domain join", self.join.running_since(), None),
             (

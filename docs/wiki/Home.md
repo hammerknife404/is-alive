@@ -22,6 +22,8 @@
 
 Every tab is laid out the same way: the main input and **Start** in the run bar, the rest of the settings folded under **Options** (their values shown as small chips), a status row with **Copy** and **Save…**, and a short explanation before the first run. The nav down the left starts with **VISIT** (**Full scan**, **Claude Handoff**, **Report**), then **TOOLS** in six rows (Connectivity, Discover, DNS & mail, Map, Notes & results, Utilities); a row's tools switch in the title bar, and the row opens on the one used last. **Ctrl+1 … Ctrl+9** and **Ctrl+0** go straight to a tab. **Help** at the foot of the nav (or **F1**) opens this wiki.
 
+**Which port am I on?** Click **Which port?** in the status bar and **Listen**: is-alive waits up to 65 s on the wired adapter for the switch's own LLDP or CDP announcement and shows the switch's name, the port, its VLANs and the switch's management address. It sends nothing. On Windows it needs [Npcap](https://npcap.com); on Linux the raw-socket capability (sudo or setcap), or reads what an already-running lldpd or systemd-networkd heard. If the switch doesn't announce, **Ask** a switch you know over SNMP which port has this computer's MAC.
+
 When a newer release is out, the status bar shows **Update: vX.Y.Z**, a link to its release page (see [[Settings and themes|Settings-and-themes]]).
 
 ## Guides
