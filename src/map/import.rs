@@ -37,8 +37,11 @@ fn strings(v: &Value, k: &str) -> Vec<String> {
     }
 }
 
-/// Role from a card's words: its kind first, then its label, then the
-/// zone it was filed under in the map.
+/// Role from a card's words (its kind, its zone's key or name, then its
+/// label: the caller tries them in that order). Network words come before
+/// voice and client words: a "voice edge" zone is the carrier's router, not
+/// a phone. A voice zone's card is voice gear unless it says it's a phone:
+/// /mapnetwork draws infrastructure, and clients only on request.
 fn role(text: &str) -> Option<Zone> {
     let up = text.to_uppercase();
     let words: HashSet<&str> = up
@@ -49,19 +52,20 @@ fn role(text: &str) -> Option<Zone> {
     let phrase = |ps: &[&str]| ps.iter().any(|p| up.contains(p));
     if any(&["INTERNET", "WAN", "ISP", "CARRIER"]) {
         Some(Zone::Internet)
-    } else if any(&["UNKNOWN", "UNIDENTIFIED", "EXTERNAL", "UNRESOLVED"]) {
-        Some(Zone::Unknown)
     } else if any(&[
         "FIREWALL",
         "FIREWALLS",
         "GATEWAY",
         "ROUTER",
+        "ROUTERS",
         "SONICWALL",
         "FORTIGATE",
         "UDM",
         "UCG",
         "USG",
         "UXG",
+        "EDGE",
+        "ROUTING",
     ]) {
         Some(Zone::Gateway)
     } else if any(&["SWITCH", "SWITCHES", "USW", "IDF", "MDF", "DISTRIBUTION"]) {
@@ -79,7 +83,6 @@ fn role(text: &str) -> Option<Zone> {
         "STORAGE",
         "HYPERVISOR",
         "ESXI",
-        "HOST",
         "DC",
         "RODC",
         "SQL",
@@ -95,6 +98,12 @@ fn role(text: &str) -> Option<Zone> {
     } else if any(&[
         "PRINTER",
         "PRINTERS",
+        "COPIER",
+        "COPIERS",
+        "MFP",
+        "MFD",
+        "PLOTTER",
+        "SCANNER",
         "CAMERA",
         "CAMERAS",
         "NVR",
@@ -102,33 +111,36 @@ fn role(text: &str) -> Option<Zone> {
         "UPS",
         "PDU",
         "IOT",
+        "OT",
+        "PLC",
+        "HMI",
         "SENSOR",
         "DOOR",
         "BADGE",
+        "INTERCOM",
         "HVAC",
         "THERMOSTAT",
-    ]) {
+    ]) || phrase(&["ACCESS CONTROL"])
+    {
         Some(Zone::Device)
+    } else if any(&["PHONE", "PHONES", "HANDSET", "HANDSETS"]) {
+        Some(Zone::Client)
+    } else if any(&["VOIP", "VOICE", "SIP", "ATA"]) {
+        Some(Zone::Gear)
     } else if any(&[
         "WORKSTATION",
         "WORKSTATIONS",
         "LAPTOP",
         "DESKTOP",
         "PC",
-        "PHONE",
-        "PHONES",
         "TABLET",
         "CLIENT",
         "CLIENTS",
         "GUEST",
-        "VOIP",
-        "VOICE",
         "TRUSTED",
     ]) || phrase(&["ADDITIONAL DEVICES"])
     {
         Some(Zone::Client)
-    } else if any(&["EDGE", "ROUTING"]) {
-        Some(Zone::Gateway)
     } else if any(&[
         "CONTROLLER",
         "KVM",
@@ -139,6 +151,8 @@ fn role(text: &str) -> Option<Zone> {
         "INFRA",
     ]) {
         Some(Zone::Gear)
+    } else if any(&["UNKNOWN", "UNIDENTIFIED", "EXTERNAL", "UNRESOLVED"]) {
+        Some(Zone::Unknown)
     } else {
         None
     }
@@ -157,6 +171,165 @@ fn first_mac<'a>(texts: impl IntoIterator<Item = &'a str>) -> Option<Mac> {
             .filter(|w| w.len() == 17)
             .find_map(mac::parse_mac)
     })
+}
+
+/// Words that make a line about another device, or a maybe: "Candidate
+/// identity: Dell 00:18:8b:… unconfirmed" names someone else's MAC.
+const NOT_ITS_OWN: &[&str] = &[
+    "candidate",
+    "unconfirmed",
+    "possibl",
+    "maybe",
+    "likely",
+    "probabl",
+    "suspect",
+    "might",
+    "could be",
+    "behind",
+    "upstream",
+    "downstream",
+    "neighbo",
+    "seen on",
+    "via ",
+];
+
+/// A card's own MAC from its text, for maps that don't write a `mac`
+/// field: the sub line, or a chip or detail that is the MAC ("MAC
+/// aa:bb:…", or the address alone). Never one in a sentence about
+/// something else, or a maybe.
+fn own_mac(sub: &str, lines: &[&str]) -> Option<Mac> {
+    let plain = |t: &str| {
+        let low = t.to_lowercase();
+        !NOT_ITS_OWN.iter().any(|w| low.contains(w))
+    };
+    let own_line = |t: &str| {
+        let t = t.trim();
+        let rest = t
+            .strip_prefix("MAC")
+            .or_else(|| t.strip_prefix("mac"))
+            .map(|r| r.trim_start_matches([':', ' ']))
+            .unwrap_or(t);
+        // The address first, then at most a short tag ("· ARP only").
+        rest.get(..17).and_then(mac::parse_mac).filter(|_| plain(t))
+    };
+    Some(sub)
+        .filter(|s| plain(s))
+        .and_then(|s| first_mac([s]))
+        .or_else(|| lines.iter().find_map(|l| own_line(l)))
+}
+
+/// What a /mapnetwork edge says about the card it leads to: how it's
+/// linked, the parent's port when the label names one, and lines for the
+/// card's details (what the label said otherwise, its own port, why the
+/// link is inferred).
+struct EdgeRead {
+    link: Link,
+    port: Option<String>,
+    notes: Vec<String>,
+}
+
+/// A link's label read as a port: "Port 21", "port #21", "p21",
+/// "Gi1/0/21", "eth0", "X1", "LAN2", "SFP+ 1". A count ("21 wired"), a
+/// VLAN ("VLAN 10 gw") or a name ("AT&T") isn't one.
+fn port_in(text: &str) -> Option<String> {
+    static PORT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b(?:port|p)\s*#?\s*(\d{1,3}(?:/\d{1,3}){0,2})\b").unwrap()
+    });
+    static IFACE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:gigabitethernet|tengigabitethernet|fastethernet|ethernet|port-channel|gi|ge|fa|te|xe|et|eth|ether|sfp\+?|x|lan|wan|mgmt|po|igb|em|ix)\s?-?\d{1,3}(?:/\d{1,3}){0,2}(?:\.\d{1,4})?\b",
+        )
+        .unwrap()
+    });
+    if let Some(c) = PORT.captures(text) {
+        return Some(format!("Port {}", &c[1]));
+    }
+    IFACE.find(text).map(|m| m.as_str().to_string())
+}
+
+/// Words that say a link is a tunnel, not a cable.
+const TUNNEL: &[&str] = &["ipsec", "vpn", "tunnel", "wireguard", "site-to-site", "s2s"];
+
+/// Words that describe the link itself, kept as its label: "LAG", "PoE".
+const LINK_WORDS: &[&str] = &[
+    "lag", "lacp", "mlag", "bond", "poe", "fiber", "fibre", "sfp", "trunk", "stack", "ha",
+];
+
+fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
+    let label = s(e, "label");
+    let low = label.to_lowercase();
+    let words: Vec<&str> = low
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let dashed = e.get("dashed").and_then(Value::as_bool) == Some(true);
+    let cls = s(e, "cls");
+    let mut notes = Vec::new();
+    // "X2 → Port 24": the parent's port first, then the card's own.
+    let split = ["→", "<->", "->", "↔", " to ", " – ", " — ", " - "]
+        .iter()
+        .find_map(|sep| label.split_once(sep));
+    let (port, own) = match split {
+        Some((a, b)) => (port_in(a), port_in(b)),
+        // "Port 24 uplink": the card's own uplink port, not the parent's.
+        None if words.contains(&"uplink") => (None, port_in(label)),
+        None => (port_in(label), None),
+    };
+    if let Some(p) = &own {
+        notes.push(format!("Its own port: {p}"));
+    }
+    let tunnel = TUNNEL.iter().any(|t| words.iter().any(|w| w.starts_with(t)));
+    let link_word = LINK_WORDS.iter().any(|t| words.contains(t));
+    // The label stays the link's when it's a port, a tunnel, a kind of
+    // link, or the WAN's (the ISP); otherwise it goes in the details.
+    let keep = port.is_some() || tunnel || link_word || from_root;
+    let shown = if port.is_some() && split.is_none() && own.is_none() {
+        Some(label.to_string())
+    } else if port.is_some() {
+        port.clone()
+    } else if keep && !label.is_empty() {
+        Some(label.to_string())
+    } else {
+        None
+    };
+    if !label.is_empty() && !keep {
+        notes.push(format!("Link on the map: {label}"));
+    }
+    let link = match cls {
+        "backbone" => Link::Backbone,
+        "wifi" => Link::Wireless,
+        _ if tunnel => {
+            notes.push(format!("Linked by a tunnel on the map ({label}), not a cable"));
+            Link::Wired
+        }
+        _ if !dashed => Link::Wired,
+        _ if low.contains("reciprocal") => {
+            notes.push(crate::inferred::UPLINK_RECIPROCAL.into());
+            Link::Assumed
+        }
+        _ if low.contains("last seen") || low.contains("not seen") || low.contains("stale") => {
+            notes.push(crate::inferred::UPLINK_LAST_SEEN.into());
+            Link::Assumed
+        }
+        // Dashed, but its port is in what the map was made from.
+        _ if port.is_some() => {
+            notes.push(
+                "Drawn dashed on the /mapnetwork map, but the port is from what it was made \
+                 from"
+                    .into(),
+            );
+            Link::Wired
+        }
+        _ => {
+            notes.push(crate::inferred::UPLINK_MAP.into());
+            Link::Assumed
+        }
+    };
+    EdgeRead {
+        link,
+        port: shown,
+        notes,
+    }
 }
 
 pub fn build(doc: &Doc, input: &Input) -> Map {
@@ -193,10 +366,12 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     let zone_of = |v: &Value| {
         let z = s(v, "zone");
         let zinfo = doc.zones.get(z);
+        // The kind, then the zone, and the label last: a "DESKTOP-4QX"
+        // in the OT zone is filed with the OT gear around it.
         role(s(v, "kind"))
-            .or_else(|| role(s(v, "label")))
             .or_else(|| role(z))
             .or_else(|| zinfo.and_then(|i| role(s(i, "name"))))
+            .or_else(|| role(s(v, "label")))
             .unwrap_or(Zone::Unknown)
     };
     // The map's own internet card, when it has one at the top, is the root.
@@ -234,20 +409,45 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         let sub = s(v, "sub").to_string();
         let mut details = strings(v, "details");
         let chips = strings(v, "chips");
+        // "SONICWALL INFERRED" or an `inferred` chip: the map worked its
+        // role out. One mark for it, as everywhere: the word leaves the kind.
+        let raw_kind = s(v, "kind");
+        let kind_inferred = raw_kind
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w.eq_ignore_ascii_case(crate::inferred::WORD));
+        let role_inferred = kind_inferred
+            || chips
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(crate::inferred::WORD));
+        let kind = if kind_inferred {
+            let k: Vec<&str> = raw_kind
+                .split_whitespace()
+                .filter(|w| {
+                    !w.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                        .eq_ignore_ascii_case(crate::inferred::WORD)
+                })
+                .collect();
+            k.join(" ")
+                .trim_matches(|c: char| c == '(' || c == ')' || c == '·' || c == '-' || c == ' ')
+                .to_string()
+        } else {
+            raw_kind.to_string()
+        };
         let mut n = Node {
             id: s(v, "id").to_string(),
             zone,
-            kind: caps(s(v, "kind")),
+            kind: caps(&kind),
             label: s(v, "label").to_string(),
             // The node's own ip/mac fields first; older maps only write
             // them into the text.
             ip: s(v, "ip").trim().parse().ok().or_else(|| first_ip(&sub)),
             mac: mac::parse_mac(s(v, "mac").trim()).or_else(|| {
-                first_mac(
-                    std::iter::once(sub.as_str())
-                        .chain(chips.iter().map(String::as_str))
-                        .chain(details.iter().map(String::as_str)),
-                )
+                let lines: Vec<&str> = chips
+                    .iter()
+                    .chain(details.iter())
+                    .map(String::as_str)
+                    .collect();
+                own_mac(&sub, &lines)
             }),
             sub,
             flags: strings(v, "flags"),
@@ -267,7 +467,17 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         let drawn = crate::map::export::DC_HTML_DRAWN;
         n.drawn = chips.iter().any(|c| c == drawn);
         for c in chips.into_iter().filter(|c| c != drawn) {
-            n.chip(c);
+            if c.eq_ignore_ascii_case(crate::inferred::WORD) {
+                n.chip(crate::inferred::WORD);
+            } else {
+                n.chip(c);
+            }
+        }
+        if role_inferred {
+            n.chip(crate::inferred::WORD);
+            if !details.iter().any(|d| d.starts_with("Role inferred")) {
+                details.push(crate::inferred::ROLE_MAP.into());
+            }
         }
         let vlans = strings(v, "vlans");
         match vlans.len() {
@@ -327,37 +537,79 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         reached[i] = true;
         queue.push_back(i);
     }
-    let link_of = |e: &Value| {
-        if s(e, "cls") == "backbone" {
-            Link::Backbone
-        } else if s(e, "cls") == "wifi" {
-            Link::Wireless
-        } else if e.get("dashed").and_then(Value::as_bool) == Some(true) {
-            // /mapnetwork dashes a link it inferred (a sweep can't see
-            // uplinks): assumed, as this app's own sweep draws it.
-            Link::Assumed
-        } else {
-            Link::Wired
-        }
-    };
-    let label_of = |e: &Value| Some(s(e, "label").to_string()).filter(|l| !l.is_empty());
+    // Cards the map links to nothing go under one "Not linked" card: only
+    // a gateway may sit straight on the internet.
+    let mut unlinked = Vec::new();
     for i in 0..src.len() {
         if Some(i) == root_src {
             continue;
         }
+        let c = card[i];
         let up = match via[i] {
             Some(k) => {
                 let (f, _, e) = edges[k];
-                (card[f], link_of(e), label_of(e))
+                let r = read_edge(e, Some(f) == root_src);
+                b.nodes[c].details.extend(r.notes);
+                (card[f], r.link, r.port)
             }
-            // Only a firewall can sit straight on the internet.
-            None if b.nodes[card[i]].zone == Zone::Gateway && root_src.is_none() => {
+            None if b.nodes[c].zone == Zone::Gateway && root_src.is_none() => {
                 (0, Link::Backbone, None)
             }
-            None => (0, Link::Assumed, None),
+            None if b.nodes[c].zone == Zone::Gateway => {
+                b.nodes[c].details.push(
+                    "Uplink inferred: the map links nothing to it, so it sits on the internet \
+                     as the gateway it is"
+                        .into(),
+                );
+                (0, Link::Assumed, None)
+            }
+            None => {
+                unlinked.push(c);
+                continue;
+            }
         };
-        b.nodes[card[i]].up = Some(up);
+        b.nodes[c].up = Some(up);
     }
+    if !unlinked.is_empty() {
+        // Under the gateway when there's one on the internet, else there.
+        let mut gws = (0..b.nodes.len())
+            .filter(|&i| b.nodes[i].zone == Zone::Gateway && b.nodes[i].parent() == Some(0));
+        let home = match (gws.next(), gws.next()) {
+            (Some(g), None) => g,
+            _ => 0,
+        };
+        let nl = b.add(Node {
+            id: "mapnetwork:not-linked".into(),
+            zone: Zone::Unknown,
+            kind: "NOT LINKED".into(),
+            label: "Not linked".into(),
+            sub: format!("{} card(s), placement unknown", unlinked.len()),
+            details: vec![
+                "Cards the /mapnetwork map links to nothing: where they plug in isn't known, \
+                 so they wait here rather than on the internet"
+                    .into(),
+            ],
+            up: Some((home, Link::Assumed, None)),
+            ..Default::default()
+        });
+        b.nodes[nl].details.push(crate::inferred::UPLINK_NONE.into());
+        for c in unlinked {
+            b.nodes[c].details.push(crate::inferred::UPLINK_NONE.into());
+            b.nodes[c].up = Some((nl, Link::Assumed, None));
+        }
+    }
+    // The scanner's public address stays on the map's own internet card.
+    if let (Some(r), Some(w)) = (root_src, input.wan) {
+        let n = &mut b.nodes[card[r]];
+        let line = format!("WAN {w}");
+        if n.sub.is_empty() {
+            n.sub = line;
+        } else if !n.sub.contains(&w.to_string()) {
+            n.details
+                .push(format!("Public address this scan left by: {w}"));
+        }
+    }
+    let label_of = |e: &Value| Some(s(e, "label").to_string()).filter(|l| !l.is_empty());
     let used: HashSet<usize> = via.iter().flatten().copied().collect();
     // A few per card: a crafted page can hold 50,000 links between the
     // same two cards, each line a copy of a label.
@@ -386,8 +638,9 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     }
 
     // The map's own "+7 more" cards, one card for each device they list.
+    let mut only_counted = 0usize;
     for &c in &card {
-        expand_overflow(&mut b, c, src.len() as u64);
+        only_counted = only_counted.saturating_add(expand_overflow(&mut b, c, src.len() as u64));
     }
 
     for a in &doc.actions {
@@ -478,6 +731,42 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
                 b.nodes[i].seen("UniFi");
                 continue;
             }
+            // The same address on a card that has no MAC (a line of the
+            // map's "+N more") or is infrastructure (a firewall the sweep
+            // knows by another interface's MAC): that card, not a second.
+            if let Some(i) = c.ip.and_then(|ip| b.by_ip.get(&ip).copied()).filter(|&i| {
+                let n = &b.nodes[i];
+                n.mac.is_none() || !n.client
+            }) {
+                let n = &mut b.nodes[i];
+                n.seen("UniFi");
+                match n.mac {
+                    None => {
+                        n.mac = Some(c.mac);
+                        b.by_mac.entry(c.mac).or_insert(i);
+                    }
+                    Some(m) if m != c.mac => n.detail(format!(
+                        "The controller's client table has it at the same address with MAC {}",
+                        mac::fmt(&c.mac)
+                    )),
+                    Some(_) => {}
+                }
+                let n = &mut b.nodes[i];
+                if let Some(name) = &c.name
+                    && n.label.starts_with("Host ")
+                {
+                    n.label = name.clone();
+                }
+                if let Some(v) = &c.oui
+                    && !n.details.iter().any(|d| d.starts_with("Vendor"))
+                {
+                    n.details.push(format!("Vendor {v} (UniFi)"));
+                }
+                if c.guest {
+                    n.chip("guest");
+                }
+                continue;
+            }
             let (parent, link, port) = b.unifi_uplink(c);
             let mut n = unifi_client_card(c);
             n.up = parent.map(|p| (p, link, port));
@@ -524,6 +813,9 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     if unplaced > 0 {
         summary += &format!(" · {unplaced} not placed");
     }
+    if only_counted > 0 {
+        summary += &format!(" · {only_counted} client(s) the map counts but doesn't list");
+    }
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;
@@ -549,38 +841,185 @@ pub(super) fn is_overflow(n: &Node) -> bool {
     n.kind.contains("ADDITIONAL DEVICES")
 }
 
+/// One device a "+N more" card lists: "client-0badf00d · Hikvision ·
+/// guest", "laptop-a · 192.168.1.40", "MAC 38:c6:… · ARP only".
+struct Listed {
+    line: String,
+    name: Option<String>,
+    ip: Option<Ipv4Addr>,
+    mac: Option<Mac>,
+    vendor: Option<String>,
+    guest: bool,
+}
+
+/// Words in a listed line that say how it's connected, not who made it.
+const LISTED_TAGS: &[&str] = &[
+    "wired",
+    "wireless",
+    "wifi",
+    "wi-fi",
+    "arp only",
+    "offline",
+    "online",
+    "blocked",
+    "private mac",
+    "randomized",
+    "random mac",
+    "dhcp",
+    "static",
+    "unknown",
+    "none",
+];
+
+/// "…and 121 more" (or "+121 more", "and 121 others"): devices the card
+/// only counts.
+fn unlisted_count(line: &str) -> Option<usize> {
+    static MORE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)^\s*(?:…|\.\.\.|\+)?\s*(?:and\s+)?(\d+)\s+(?:more|others?)\b")
+            .unwrap()
+    });
+    MORE.captures(line).and_then(|c| c[1].parse().ok())
+}
+
+/// A listed device from a line of a "+N more" card's details, or None
+/// for a note ("Private MACs are per-network addresses").
+fn listed(line: &str) -> Option<Listed> {
+    let fields: Vec<&str> = line
+        .split(['·', '|'])
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .collect();
+    let head = *fields.first()?;
+    let ip = first_ip(line);
+    let mac = first_mac([line]);
+    let one_word = |t: &str| !t.contains(char::is_whitespace) && t.len() <= 63;
+    let device = ip.is_some()
+        || mac.is_some()
+        || (fields.len() > 1 && one_word(head))
+        || (fields.len() == 1 && one_word(head) && !head.ends_with(':'));
+    if !device {
+        return None;
+    }
+    let names_it = |f: &str| first_ip(f).is_some() || first_mac([f]).is_some();
+    let name = Some(head)
+        .filter(|h| !names_it(h))
+        .map(str::to_string);
+    let mut vendor = None;
+    let mut guest = false;
+    for f in fields.iter().skip(usize::from(name.is_some())) {
+        let low = f.to_lowercase();
+        if names_it(f) {
+            continue;
+        }
+        if low == "guest" || low.starts_with("guest ") {
+            guest = true;
+        } else if LISTED_TAGS.iter().any(|t| low == *t || low.starts_with(&format!("{t} "))) {
+        } else if vendor.is_none() {
+            vendor = crate::map::export::clean_vendor(f);
+        }
+    }
+    Some(Listed {
+        line: line.to_string(),
+        name,
+        ip,
+        mac,
+        vendor,
+        guest,
+    })
+}
+
+/// Whether a line of a card's details is about its link (said where the
+/// card hangs), not a note to copy onto each device it lists.
+fn about_its_link(line: &str) -> bool {
+    [
+        "Link on the map:",
+        "Its own port:",
+        "Uplink ",
+        "Drawn dashed",
+        "Placement unknown",
+        "Linked by a tunnel",
+    ]
+    .iter()
+    .any(|p| line.starts_with(p))
+}
+
 /// Turn the overflow card `c` into a client card for each device it lists
-/// by address or MAC ("laptop-jsmith · 192.168.1.42"), under the same
-/// uplink, so the reveal steps through them like any other clients; its
-/// other lines (notes) go on each. The first device takes the card's
-/// place. Without such lines it stays one card, revealed last. `after`:
-/// past the rank of every card from the map.
+/// ("laptop-jsmith · 192.168.1.42", "client-0badf00d · Hikvision ·
+/// guest", a bare name), under the same uplink (not on its port: that was
+/// the card's), so the reveal steps through them like any other clients.
+/// Its notes go on each, with the vendor and guest tag its line names. A
+/// device listed twice, or already on the map by address or MAC, is one
+/// card. The first device takes the card's place, unless the card also
+/// says "…and N more": then it stays, as that count, saying the map
+/// doesn't list them. Without device lines it stays one card, revealed
+/// last. `after`: past the rank of every card from the map. Returns how
+/// many the card only counts.
 ///
 /// A /mapnetwork card lists a handful. A crafted page could list hundreds
 /// of thousands, each card copying every note line: so at most
 /// `OVERFLOW_HOSTS` cards and `OVERFLOW_NOTES` notes each, and never past
 /// the map's own `NODES_MAX` in all.
-fn expand_overflow(b: &mut B, c: usize, after: u64) {
+fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
     const OVERFLOW_HOSTS: usize = 1_000;
     const OVERFLOW_NOTES: usize = 20;
     let n = &b.nodes[c];
     if !is_overflow(n) {
-        return;
+        return 0;
     }
-    let (mut hosts, mut notes): (Vec<&String>, Vec<&String>) = n
-        .details
-        .iter()
-        .partition(|d| first_ip(d).is_some() || first_mac([d.as_str()]).is_some());
+    let mut unlisted = 0usize;
+    let mut hosts: Vec<Listed> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut elsewhere: Vec<(usize, String)> = Vec::new();
+    for d in &n.details {
+        if let Some(k) = unlisted_count(d) {
+            unlisted = unlisted.saturating_add(k);
+            continue;
+        }
+        match listed(d) {
+            Some(h) => {
+                let key_of = |x: &Listed| {
+                    (
+                        x.mac,
+                        x.ip,
+                        x.name.as_deref().map(str::to_lowercase),
+                    )
+                };
+                let same = hosts.iter_mut().find(|o| {
+                    let (a, b2) = (key_of(o), key_of(&h));
+                    (a.0.is_some() && a.0 == b2.0)
+                        || (a.1.is_some() && a.1 == b2.1)
+                        || (a.0.is_none() && a.1.is_none() && a.2.is_some() && a.2 == b2.2)
+                });
+                if let Some(o) = same {
+                    o.vendor = o.vendor.take().or(h.vendor);
+                    o.guest |= h.guest;
+                    o.mac = o.mac.or(h.mac);
+                    o.ip = o.ip.or(h.ip);
+                } else if let Some(j) = b.find(h.mac, h.ip).filter(|&j| j != c) {
+                    elsewhere.push((j, h.line));
+                } else {
+                    hosts.push(h);
+                }
+            }
+            None if !about_its_link(d) => notes.push(d.clone()),
+            None => {}
+        }
+    }
+    let label = n.label.clone();
+    for (j, line) in elsewhere {
+        b.nodes[j].detail(format!("Also listed in \"{label}\" on the /mapnetwork map: {line}"));
+    }
+    let n = &b.nodes[c];
     // The first device takes the card's own place, so it costs nothing.
+    let keep_card = unlisted > 0;
     let room = crate::mapnetwork::NODES_MAX
         .saturating_sub(b.nodes.len())
-        .saturating_add(1)
+        .saturating_add(usize::from(!keep_card))
         .min(OVERFLOW_HOSTS);
     let left_out = hosts.len().saturating_sub(room);
     let notes_left_out = notes.len().saturating_sub(OVERFLOW_NOTES);
     hosts.truncate(room);
     notes.truncate(OVERFLOW_NOTES);
-    let label = n.label.clone();
     let chips: Vec<String> = n
         .chips
         .iter()
@@ -588,66 +1027,88 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) {
         .take(8)
         .cloned()
         .collect();
-    let devices: Vec<Node> = hosts
+    let up = n.up.as_ref().map(|u| (u.0, u.1, None));
+    let mut devices: Vec<Node> = hosts
         .iter()
         .enumerate()
-        .map(|(k, line)| {
-            let ip = first_ip(line);
-            let mac = first_mac([line.as_str()]);
-            let head = line.split('·').next().unwrap_or("").trim();
-            let name = Some(head)
-                .filter(|h| !h.is_empty() && first_ip(h).is_none() && first_mac([*h]).is_none());
+        .map(|(k, h)| {
             let mut d = Node {
                 id: format!(
                     "{}:{}",
                     n.id,
-                    match (ip, mac) {
-                        (Some(ip), _) => ip.to_string(),
-                        (None, Some(m)) => mac::fmt(&m),
+                    match (h.ip, h.mac, &h.name) {
+                        (Some(ip), ..) => ip.to_string(),
+                        (None, Some(m), _) => mac::fmt(&m),
+                        (None, None, Some(name)) => name.to_lowercase(),
                         _ => k.to_string(),
                     }
                 ),
                 zone: Zone::Client,
                 kind: "CLIENT".into(),
-                label: match (name, ip, mac) {
-                    (Some(h), ..) => h.to_string(),
+                label: match (&h.name, h.ip, h.mac) {
+                    (Some(name), ..) => name.clone(),
                     (None, Some(ip), _) => format!("Host {ip}"),
                     (None, None, Some(m)) => mac::fmt(&m),
-                    _ => line.to_string(),
+                    _ => h.line.clone(),
                 },
-                sub: ip.map(|i| i.to_string()).unwrap_or_default(),
-                ip,
-                mac,
+                sub: h.ip.map(|i| i.to_string()).unwrap_or_default(),
+                ip: h.ip,
+                mac: h.mac,
                 chips: chips.clone(),
                 client: true,
-                up: n.up.clone(),
+                up: up.clone(),
                 site: n.site.clone(),
                 seen_by: n.seen_by.clone(),
                 // After the map's own clients, in the map's order.
                 rank: (2, after + k as u64),
                 ..Default::default()
             };
-            d.details.push(line.to_string());
-            d.details.extend(notes.iter().map(|s| s.to_string()));
+            d.details.push(h.line.clone());
+            if let Some(v) = &h.vendor {
+                d.details.push(format!("Vendor {v}"));
+            }
+            if h.guest {
+                d.chip("guest");
+            }
+            d.details.extend(notes.iter().cloned());
             d.details
                 .push(format!("In \"{label}\" on the /mapnetwork map"));
             d
         })
         .collect();
-    let mut devices = devices.into_iter();
-    let Some(mut first) = devices.next() else {
-        return;
-    };
+    let mut lines = Vec::new();
     if left_out > 0 {
-        first.details.push(format!(
-            "{left_out} more listed in \"{label}\" aren't drawn"
-        ));
+        lines.push(format!("{left_out} more listed in \"{label}\" aren't drawn"));
     }
     if notes_left_out > 0 {
-        first.details.push(format!(
+        lines.push(format!(
             "{notes_left_out} more lines of notes in \"{label}\" aren't copied"
         ));
     }
+    if keep_card {
+        let listed_n = devices.len();
+        let card = &mut b.nodes[c];
+        card.label = format!("+{unlisted} not listed");
+        card.details.retain(|d| unlisted_count(d).is_none() && listed(d).is_none());
+        card.details.insert(
+            0,
+            format!(
+                "\"{label}\" on the /mapnetwork map counts {unlisted} more device(s) it doesn't \
+                 list: is-alive can't draw what isn't named ({listed_n} it does list are \
+                 their own cards)"
+            ),
+        );
+        card.details.extend(lines);
+        for d in devices {
+            b.add(d);
+        }
+        return unlisted;
+    }
+    if devices.is_empty() {
+        return 0;
+    }
+    let mut first = devices.remove(0);
+    first.details.extend(lines);
     b.nodes[c] = first;
     if let Some(m) = b.nodes[c].mac {
         b.by_mac.entry(m).or_insert(c);
@@ -658,6 +1119,7 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) {
     for d in devices {
         b.add(d);
     }
+    0
 }
 
 /// The /24 of an address.
@@ -746,15 +1208,28 @@ fn subnet_uplinks(
             }
         }
     }
+    // A card the map itself marks inferred (a scan-only switch) never
+    // outvotes one it confirms, however many hosts hang off it.
     votes
         .into_iter()
         .filter_map(|(net, v)| {
             let best = v
                 .into_iter()
-                .max_by_key(|&(i, n)| (n, std::cmp::Reverse(i)))?;
+                .max_by_key(|&(i, n)| (!speculative(&b.nodes[i]), n, std::cmp::Reverse(i)))?;
             Some((net, best.0))
         })
         .collect()
+}
+
+/// A card the map drew as a maybe: its role inferred, seen only by a scan,
+/// or placed nowhere.
+fn speculative(n: &Node) -> bool {
+    n.role_inferred()
+        || n.zone == Zone::Unknown
+        || n.chips.iter().any(|c| {
+            let c = c.to_lowercase();
+            c == "scan-only" || c == "unconfirmed" || c == "external"
+        })
 }
 
 /// Link each UniFi device to its card on the map (by MAC, else by name,

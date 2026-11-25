@@ -55,8 +55,13 @@ pub struct Device {
     pub uplink: String,
     /// The link up isn't in the data: placed where it answered.
     pub assumed: bool,
-    /// Its role was worked out from its vendor and open ports.
+    /// Why its uplink is inferred, for the mark's hover (empty: the
+    /// general reason).
+    pub uplink_why: String,
+    /// Its role was worked out, not read.
     pub role_inferred: bool,
+    /// What its role was worked out from (empty: the general reason).
+    pub role_why: String,
     pub ports: Vec<u16>,
     pub flags: Vec<String>,
     /// The technician's note on its card, redacted.
@@ -454,12 +459,26 @@ fn devices(body: &mut String, id: &str, heading: &str, list: &[&Device], site: b
             "Role",
             false,
             Box::new(|d| {
-                let role = match d.kind.trim() {
+                // The mark says "inferred" once: not again in the kind.
+                let kind: String = if d.role_inferred {
+                    d.kind
+                        .split_whitespace()
+                        .filter(|w| !w.eq_ignore_ascii_case(crate::inferred::WORD))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    d.kind.trim().to_string()
+                };
+                let role = match kind.as_str() {
                     "" => escape(&d.role),
                     k => escape(&format!("{} · {}", d.role, k.to_lowercase())),
                 };
                 if d.role_inferred {
-                    format!("{role} {}", crate::inferred::html(crate::inferred::ROLE))
+                    let why = match d.role_why.as_str() {
+                        "" => crate::inferred::ROLE,
+                        w => w,
+                    };
+                    format!("{role} {}", crate::inferred::html(why))
                 } else {
                     role
                 }
@@ -487,7 +506,10 @@ fn devices(body: &mut String, id: &str, heading: &str, list: &[&Device], site: b
             (false, true) => format!(
                 "{} {}",
                 escape(&d.uplink),
-                crate::inferred::html(crate::inferred::UPLINK)
+                crate::inferred::html(match d.uplink_why.as_str() {
+                    "" => crate::inferred::UPLINK,
+                    w => w,
+                })
             ),
             _ => escape(&d.uplink),
         }),

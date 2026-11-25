@@ -403,20 +403,25 @@ impl MapView {
                 insp::section(ui, "Connections");
             }
             if let Some((p, link, port)) = &n.up {
-                let how = match link {
-                    Link::Backbone => "uplink · WAN".to_string(),
-                    Link::Wired => format!("uplink · {}", port.as_deref().unwrap_or("wired")),
-                    Link::Wireless => "uplink · wireless".into(),
-                    Link::Assumed => format!("uplink · {}", crate::inferred::WORD),
+                // WAN only off the internet; a firewall's LAN to its core
+                // switch is backbone too, and keeps its port.
+                let wan = self.map.nodes.get(*p).is_some_and(|u| u.zone == Zone::Internet);
+                let how = match (link, port.as_deref()) {
+                    (Link::Backbone, Some(port)) if wan => format!("uplink · WAN · {port}"),
+                    (Link::Backbone, None) if wan => "uplink · WAN".to_string(),
+                    (Link::Backbone, port) => format!("uplink · {}", port.unwrap_or("backbone")),
+                    (Link::Wired, port) => format!("uplink · {}", port.unwrap_or("wired")),
+                    (Link::Wireless, _) => "uplink · wireless".into(),
+                    (Link::Assumed, _) => format!("uplink · {}", crate::inferred::WORD),
                 };
                 let tip = match link {
-                    Link::Assumed => {
-                        "Show it (Ctrl+click adds it). Its uplink is inferred: it answered \
-                         here, but no backup or config says which port it's on"
-                    }
-                    _ => SHOW_IT,
+                    Link::Assumed => format!(
+                        "Show it (Ctrl+click adds it). {}",
+                        crate::inferred::uplink_why(&n.details)
+                    ),
+                    _ => SHOW_IT.to_string(),
                 };
-                if let Some(go) = self.link_row(ui, *p, &how, tip) {
+                if let Some(go) = self.link_row(ui, *p, &how, &tip) {
                     *pick = Some(go);
                 }
             }

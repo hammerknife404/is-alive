@@ -98,7 +98,8 @@ pub enum Zone {
     /// Network gear the sweep found by vendor or management port.
     Gear,
     Server,
-    /// Printers and cameras.
+    /// Printers, cameras and other single-purpose devices (door access,
+    /// sensors, building and plant gear).
     Device,
     Client,
     #[default]
@@ -126,7 +127,7 @@ impl Zone {
             Zone::Wireless => "Access points",
             Zone::Gear => "Network gear",
             Zone::Server => "Servers / NAS",
-            Zone::Device => "Printers / cameras",
+            Zone::Device => "Printers, cameras, IoT",
             Zone::Client => "Clients",
             Zone::Unknown => "Unidentified",
         }
@@ -1362,9 +1363,19 @@ const CAMERAS: &[&str] = &[
     "verkada",
 ];
 
+/// Whether the vendor's name has one of `words` at the start of a word:
+/// "Canon Inc." is a printer maker, a name that merely holds "canon" in
+/// the middle of a word isn't.
 fn has(vendor: Option<&str>, words: &[&str]) -> bool {
     let v = vendor.unwrap_or_default().to_ascii_lowercase();
-    words.iter().any(|w| v.contains(w))
+    words.iter().any(|w| {
+        v.match_indices(w).any(|(at, _)| {
+            v[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric())
+        })
+    })
 }
 
 fn gear_brand(vendor: Option<&str>) -> Option<&'static str> {
@@ -1679,7 +1690,14 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
     }
     if zone == Zone::Gear || zone == Zone::Server {
         n.chip(crate::inferred::WORD);
-        n.details.push(crate::inferred::ROLE.into());
+        // What placed it: the vendor alone, the ports, or its web page.
+        let by_vendor = vendor.is_some() && classify(vendor, private, &[]).0 == zone;
+        let by_ports = !by_vendor && classify(vendor, private, &s.open).0 == zone;
+        n.details.push(crate::inferred::role_from(
+            by_vendor,
+            by_ports,
+            !by_vendor && !by_ports,
+        ));
     }
     n
 }

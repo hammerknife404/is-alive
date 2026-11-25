@@ -597,7 +597,7 @@ mod tests {
                     "Access points",
                     "Network gear",
                     "Servers / NAS",
-                    "Printers / cameras"
+                    "Printers, cameras, IoT"
                 ]
             );
             // HA firewalls on two WANs: four internet uplinks, the rest wired.

@@ -8,15 +8,42 @@
 //! one place, "assumed" in another and "inferred" in a third.
 //!
 //! Two things are inferred today: a device's role, when all there is to
-//! go on is its vendor and open ports; and a card's uplink, when it
-//! answered on the network but no backup or config says which port it
-//! hangs off.
+//! go on is its vendor, open ports or web page (or a /mapnetwork map
+//! says it worked the role out); and a card's uplink, when no backup or
+//! config says which port it hangs off. Each says why in its own words:
+//! the subnet placed it, the map drew it dashed, the pair was reciprocal,
+//! it was last seen there, or nothing links to it.
 
 /// The word, everywhere.
 pub const WORD: &str = "inferred";
 
-/// Where an inferred role came from.
+/// Where an inferred role came from, when nothing narrower is known.
 pub const ROLE: &str = "Role inferred from its vendor and open ports: nothing read names it";
+
+/// Where an inferred role came from: what the sweep had to go on.
+pub fn role_from(vendor: bool, ports: bool, page: bool) -> String {
+    let mut from = Vec::new();
+    if vendor {
+        from.push("its vendor");
+    }
+    if ports {
+        from.push("its open ports");
+    }
+    if page {
+        from.push("its web page");
+    }
+    let from = match from.as_slice() {
+        [] => return ROLE.to_string(),
+        [a] => a.to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("Role inferred from {from}: nothing read names it")
+}
+
+/// A /mapnetwork map's card whose role the map itself marks inferred.
+pub const ROLE_MAP: &str =
+    "Role inferred on the /mapnetwork map: nothing the map was made from names it";
 
 /// Where an inferred uplink came from, when its subnet placed it.
 pub const UPLINK_SUBNET: &str = "Uplink inferred from its subnet: other cards there hang off it";
@@ -24,6 +51,32 @@ pub const UPLINK_SUBNET: &str = "Uplink inferred from its subnet: other cards th
 /// Where an inferred uplink came from, otherwise.
 pub const UPLINK: &str = "Uplink inferred: it answered here, but no backup or config says which \
                           port it's on";
+
+/// A /mapnetwork map drew the link dashed: it worked it out.
+pub const UPLINK_MAP: &str =
+    "Uplink inferred on the /mapnetwork map (drawn dashed): nothing it was made from shows this link";
+
+/// A /mapnetwork map's reciprocal pair: the direction is the map's pick.
+pub const UPLINK_RECIPROCAL: &str = "Uplink direction inferred: the controller's uplink data \
+                                     points both ways, so the map picked one";
+
+/// Where the controller last saw it, not where it is now.
+pub const UPLINK_LAST_SEEN: &str =
+    "Uplink inferred from where it was last seen: not seen live when the map was made";
+
+/// A card the map links to nothing.
+pub const UPLINK_NONE: &str =
+    "Placement unknown: the /mapnetwork map links nothing to it, so where it plugs in isn't known";
+
+/// Why a card's uplink is inferred, from its own detail line when it has
+/// one ("Uplink inferred from its subnet…", "Placement unknown…"), else
+/// the general one.
+pub fn uplink_why(details: &[String]) -> &str {
+    details
+        .iter()
+        .find(|d| d.starts_with("Uplink ") || d.starts_with("Placement unknown"))
+        .map_or(UPLINK, String::as_str)
+}
 
 /// The mark in the site report: the word, with where it came from on
 /// hover. `why` is escaped here.
