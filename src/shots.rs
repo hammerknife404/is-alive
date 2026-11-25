@@ -428,12 +428,27 @@ const SCENES: &[Scene] = &[
         },
         at_once,
     ),
+    // Which port am I on?, open from the status bar, with a made-up
+    // switch heard (a sandbox has no switch to hear): fictional names,
+    // documentation addresses. Its run goes to Results like a real one.
+    scene(
+        "switch-port",
+        Tab::Results,
+        |a, _| {
+            crate::tools::whichport::sample_for_shots(&mut a.port);
+            // The newest run, the Switch port one, opens by itself.
+            a.result_pick = None;
+        },
+        at_once,
+    ),
     // Over the Map, not the Results log: what's behind the window then
     // doesn't depend on the network the tour ran on.
     scene(
         "site-bundle",
         Tab::Map,
-        |a, _| {
+        |a, ctx| {
+            a.port.shots_open = false;
+            egui::Popup::close_all(ctx);
             a.bundle.open = true;
             a.bundle.step_for_shots(0);
         },

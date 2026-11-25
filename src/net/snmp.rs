@@ -1086,6 +1086,156 @@ fn lldp(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
     Ok(())
 }
 
+// ------------------------------------------- which port has a MAC
+
+const FDB_PORT: [u32; 11] = [1, 3, 6, 1, 2, 1, 17, 4, 3, 1, 2];
+const QFDB_PORT: [u32; 13] = [1, 3, 6, 1, 2, 1, 17, 7, 1, 2, 2, 1, 2];
+const QFDB_COUNT: [u32; 13] = [1, 3, 6, 1, 2, 1, 17, 7, 1, 2, 1, 1, 2];
+const BASE_PORT_IF: [u32; 11] = [1, 3, 6, 1, 2, 1, 17, 1, 4, 1, 2];
+const IF_NAME: [u32; 11] = [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 1];
+const IF_ALIAS: [u32; 11] = [1, 3, 6, 1, 2, 1, 31, 1, 1, 1, 18];
+const IF_DESCR: [u32; 10] = [1, 3, 6, 1, 2, 1, 2, 2, 1, 2];
+/// Forwarding databases asked about at most (one per VLAN, usually).
+const FDB_ROWS: usize = 64;
+
+/// Where a switch's forwarding table says a MAC is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Learned {
+    pub target: IpAddr,
+    pub switch: Option<String>,
+    /// Its name for the port (ifName, else ifDescr, else "bridge port N").
+    pub port: String,
+    pub port_alias: Option<String>,
+    /// Q-BRIDGE's forwarding database the MAC was found in: usually the VLAN.
+    pub fdb: Option<u32>,
+}
+
+/// How asking a switch for a MAC ended.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Lookup {
+    Found(Learned),
+    /// It answered, and its table doesn't have the MAC.
+    NotLearned {
+        target: IpAddr,
+        switch: Option<String>,
+    },
+    Failed(String),
+}
+
+/// Ask the switch at `ip` (BRIDGE-MIB, then Q-BRIDGE) which of its ports
+/// has learned `mac`: a GET by the MAC itself, never a walk of the table,
+/// plus one short walk listing its forwarding databases.
+pub fn find_mac(ip: IpAddr, community: &[u8], mac: [u8; 6], cancel: &AtomicBool) -> Lookup {
+    find_mac_at(SocketAddr::new(ip, PORT), community, mac, cancel, WHOLE)
+}
+
+pub fn find_mac_at(
+    to: SocketAddr,
+    community: &[u8],
+    mac: [u8; 6],
+    cancel: &AtomicBool,
+    whole: Duration,
+) -> Lookup {
+    let ip = to.ip();
+    let deadline = Instant::now() + whole;
+    let why = |f: Fail| match f {
+        Fail::Silent | Fail::Late => {
+            format!("{ip} didn't answer SNMP (v2c or v1) with that community")
+        }
+        Fail::Refused => format!("{ip} refused SNMP: nothing listens on its UDP 161"),
+        Fail::Stopped => "stopped".into(),
+        Fail::Io(e) => e,
+    };
+    let mut found = None;
+    for version in [Version::V2c, Version::V1] {
+        let mut a = match Agent::new(to, version, community, deadline, cancel) {
+            Ok(a) => a,
+            Err(e) => return Lookup::Failed(e.to_string()),
+        };
+        match a.get(&[sys(5)]) {
+            Ok(got) => {
+                found = Some((a, got));
+                break;
+            }
+            Err(Fail::Silent) => continue,
+            Err(f) => return Lookup::Failed(why(f)),
+        }
+    }
+    let Some((mut a, got)) = found else {
+        return Lookup::Failed(why(Fail::Silent));
+    };
+    let switch = got.first().and_then(|(_, v)| v.text());
+    let m: Vec<u32> = mac.iter().map(|&b| u32::from(b)).collect();
+    let as_port = |v: &Value| {
+        v.int()
+            .and_then(|p| u32::try_from(p).ok())
+            .filter(|&p| p > 0)
+    };
+    let port_of = |got: &[(Oid, Value)]| got.iter().find_map(|(_, v)| as_port(v));
+    // BRIDGE-MIB: the default VLAN's table, indexed by the MAC.
+    let mut hit = match a.get(&[[&FDB_PORT[..], &m].concat()]) {
+        Ok(got) => port_of(&got).map(|p| (p, None)),
+        Err(f) => return Lookup::Failed(why(f)),
+    };
+    // Q-BRIDGE: one table per forwarding database, indexed by its ID and the MAC.
+    if hit.is_none() {
+        let dbs = match a.walk(&QFDB_COUNT, FDB_ROWS) {
+            Ok(w) => w.rows,
+            Err(Fail::Stopped) => return Lookup::Failed(why(Fail::Stopped)),
+            Err(_) => Vec::new(),
+        };
+        let ids: Vec<u32> = dbs.iter().filter_map(|(o, _)| o.first().copied()).collect();
+        for chunk in ids.chunks(8) {
+            let oids: Vec<Oid> = chunk
+                .iter()
+                .map(|&id| [&QFDB_PORT[..], &[id], &m].concat())
+                .collect();
+            let got = match a.get(&oids) {
+                Ok(g) => g,
+                Err(f) => return Lookup::Failed(why(f)),
+            };
+            if let Some(h) = got
+                .iter()
+                .find_map(|(o, v)| Some((as_port(v)?, o.get(QFDB_PORT.len()).copied())))
+            {
+                hit = Some(h);
+                break;
+            }
+        }
+    }
+    let Some((port, fdb)) = hit else {
+        return Lookup::NotLearned { target: ip, switch };
+    };
+    // Bridge port to interface, then its names.
+    let ifindex = a
+        .get(&[col(&BASE_PORT_IF, port)])
+        .ok()
+        .and_then(|g| port_of(&g))
+        .unwrap_or(port);
+    let names = a
+        .get(&[
+            col(&IF_NAME, ifindex),
+            col(&IF_DESCR, ifindex),
+            col(&IF_ALIAS, ifindex),
+        ])
+        .unwrap_or_default();
+    let named = |base: &[u32]| {
+        names
+            .iter()
+            .find(|(o, _)| *o == col(base, ifindex))
+            .and_then(|(_, v)| v.text())
+    };
+    Lookup::Found(Learned {
+        target: ip,
+        switch,
+        port: named(&IF_NAME)
+            .or_else(|| named(&IF_DESCR))
+            .unwrap_or_else(|| format!("bridge port {port}")),
+        port_alias: named(&IF_ALIAS),
+        fdb,
+    })
+}
+
 /// What a sysObjectID's enterprise number says, for the common ones.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Enterprise {
@@ -2157,5 +2307,84 @@ mod tests {
     #[test]
     fn long_text_is_cut_at_the_shared_limit() {
         assert_eq!(text(&[b'a'; 600]).chars().count(), 255);
+    }
+
+    /// A made-up MAC (locally administered) for the forwarding table tests.
+    const LAPTOP: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x00, 0x99];
+
+    fn fdb_agent(mib: BTreeMap<Oid, Value>) -> SocketAddr {
+        serve(Fake {
+            mib,
+            community: b"public",
+            version: 1,
+            ..Fake::default()
+        })
+        .0
+    }
+
+    #[test]
+    fn a_switch_names_the_port_that_learned_a_mac() {
+        let m = "2.0.94.16.0.153";
+        // BRIDGE-MIB: bridge port 12 is ifIndex 10012, Gi1/0/12.
+        let mut mib = BTreeMap::new();
+        mib.insert(sys(5), Value::Bytes(b"sw-example-01".to_vec()));
+        mib.insert(oid(&format!("1.3.6.1.2.1.17.4.3.1.2.{m}")), Value::Int(12));
+        mib.insert(oid("1.3.6.1.2.1.17.1.4.1.2.12"), Value::Int(10012));
+        mib.insert(
+            oid("1.3.6.1.2.1.31.1.1.1.1.10012"),
+            Value::Bytes(b"Gi1/0/12".to_vec()),
+        );
+        mib.insert(
+            oid("1.3.6.1.2.1.31.1.1.1.18.10012"),
+            Value::Bytes(b"Room 2.14".to_vec()),
+        );
+        let cancel = quiet();
+        let got = find_mac_at(
+            fdb_agent(mib),
+            b"public",
+            LAPTOP,
+            &cancel,
+            Duration::from_secs(20),
+        );
+        let Lookup::Found(l) = got else {
+            panic!("{got:?}")
+        };
+        assert_eq!(l.switch.as_deref(), Some("sw-example-01"));
+        assert_eq!(l.port, "Gi1/0/12");
+        assert_eq!(l.port_alias.as_deref(), Some("Room 2.14"));
+        assert_eq!(l.fdb, None);
+
+        // Q-BRIDGE only: forwarding databases 1 and 20, the MAC in 20, on
+        // a port with no names.
+        let mut mib = BTreeMap::new();
+        mib.insert(oid("1.3.6.1.2.1.17.7.1.2.1.1.2.1"), Value::Count(40));
+        mib.insert(oid("1.3.6.1.2.1.17.7.1.2.1.1.2.20"), Value::Count(9));
+        mib.insert(
+            oid(&format!("1.3.6.1.2.1.17.7.1.2.2.1.2.20.{m}")),
+            Value::Int(7),
+        );
+        let got = find_mac_at(
+            fdb_agent(mib),
+            b"public",
+            LAPTOP,
+            &cancel,
+            Duration::from_secs(20),
+        );
+        let Lookup::Found(l) = got else {
+            panic!("{got:?}")
+        };
+        assert_eq!((l.port.as_str(), l.fdb), ("bridge port 7", Some(20)));
+
+        // Answers, but hasn't learned it.
+        let mut mib = BTreeMap::new();
+        mib.insert(sys(5), Value::Bytes(b"sw-example-01".to_vec()));
+        let got = find_mac_at(
+            fdb_agent(mib),
+            b"public",
+            LAPTOP,
+            &cancel,
+            Duration::from_secs(20),
+        );
+        assert!(matches!(got, Lookup::NotLearned { .. }), "{got:?}");
     }
 }

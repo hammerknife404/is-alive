@@ -150,6 +150,9 @@ impl App {
                         crate::clip::value_menu(&r, v);
                     }
                     ui.separator();
+                    self.port_item(ui);
+                    ui.separator();
+                    let i = &self.info;
                     // What the right-hand side will take: measured first, so
                     // the domain gives way to it rather than overlap it.
                     let running = self.running_names();
@@ -268,6 +271,57 @@ impl App {
                     });
                 });
             });
+    }
+
+    /// The status bar's Port item: the switch port this computer was heard
+    /// on, or "Which port?"; a click opens Which port, whose Listen hears
+    /// the switch's announcement. The bar's whole height is the target.
+    fn port_item(&mut self, ui: &mut egui::Ui) {
+        let listening = self.port.running_since().is_some();
+        if listening {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        let heard = self.info.port.as_ref().filter(|_| !listening);
+        let mut text = self.port.bar_text(self.info.port.as_ref());
+        // Under 1100 the word goes, as LAN's and Gateway's do.
+        if ui.ctx().content_rect().width() < crate::nav::OPEN_FROM
+            && let Some(p) = text.strip_prefix("Port ")
+        {
+            text = p.to_string();
+        }
+        let text = egui::RichText::new(text);
+        let text = if heard.is_some() || listening {
+            text
+        } else {
+            text.color(ui.visuals().hyperlink_color)
+        };
+        let label = ui.add(egui::Label::new(text).selectable(false));
+        let hit = egui::Rect::from_x_y_ranges(label.rect.x_range(), ui.max_rect().y_range());
+        let tip = match heard {
+            Some(h) => format!(
+                "{} (heard via {}). Click for VLANs, management address and more, or to listen again.",
+                h.n.short(),
+                h.via
+            ),
+            None => crate::tools::whichport::TIP.to_string(),
+        };
+        let r = ui
+            .interact(hit, ui.id().with("status port"), egui::Sense::click())
+            .on_hover_text(tip)
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if let Some(p) = heard.and_then(|h| h.n.port.clone()) {
+            crate::clip::value_menu(&r, &p);
+        }
+        if self.port.shots_open {
+            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&r));
+        }
+        let lan = self.info.lan.map(|(ip, _)| ip);
+        let known = self.info.port.clone();
+        egui::Popup::from_toggle_button_response(&r)
+            .align(egui::RectAlign::TOP_START)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| self.port.ui(ui, lan, known.as_ref()));
     }
 
     /// The names of the tools running now, for the status bar.

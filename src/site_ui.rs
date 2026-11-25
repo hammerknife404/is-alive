@@ -453,6 +453,7 @@ impl App {
         // into the new site's Results with them.
         if !carry {
             crate::tools::snmp::reset();
+            self.port.reset();
         }
         // A reload asked for here isn't the next site's.
         self.reloading = false;
@@ -496,7 +497,9 @@ impl App {
     /// short a run, a config being read (dropping it from the site's list)
     /// or a Site Bundle being written.
     pub(crate) fn switch_busy(&self) -> Option<&'static str> {
-        if self.any_running() {
+        // Which port's listen too: it's logged when it ends. It isn't a
+        // running test otherwise (it only listens, so Full scan can run).
+        if self.any_running() || self.port.running_since().is_some() {
             Some("Stop the running tools first.")
         } else if self.export.is_running() {
             Some("Wait for Config Export to finish reading.")

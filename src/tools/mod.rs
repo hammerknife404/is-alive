@@ -13,4 +13,5 @@ pub mod snmp;
 pub mod speed;
 pub mod sweep;
 pub mod trace;
+pub mod whichport;
 pub mod whois;

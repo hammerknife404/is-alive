@@ -70,6 +70,7 @@ pub fn summarise(e: &log::Entry) -> String {
         "Subnet Sweep" => format!("{} alive", t.rows.len()),
         "Network checks" => crate::tools::netcheck::summary(&t.rows),
         crate::tools::netcheck::SCAN => crate::tools::netcheck::scan_summary(&t.rows),
+        crate::tools::whichport::TOOL => crate::tools::whichport::summary(&t.rows),
         // "2 of 5 in Active Directory".
         "Domain join (others)" => {
             let col = t.columns.iter().position(|c| *c == "verdict");
