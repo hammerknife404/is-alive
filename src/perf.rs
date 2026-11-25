@@ -317,8 +317,15 @@ fn write(p: &Perf, app: &App, ctx: &egui::Context, error: Option<&str>) {
         "error": error,
     });
     let text = serde_json::to_string_pretty(&doc).unwrap_or_default();
-    if let Err(e) = std::fs::write(&p.out, text) {
-        eprintln!("perf: {}: {e}", p.out.display());
+    // A relative path is from the app's working folder, which needn't be
+    // the caller's; and a GUI app's stderr goes nowhere on Windows, so a
+    // failure goes to startup.log.
+    if let Some(dir) = p.out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(&p.out, text) {
+        Ok(()) => crate::startup::note(&format!("perf: results in {}", p.out.display())),
+        Err(e) => crate::startup::note(&format!("perf: {}: {e}", p.out.display())),
     }
     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 }

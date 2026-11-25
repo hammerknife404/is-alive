@@ -156,7 +156,7 @@ function Write-Report([string]$dir, $machine, [string]$exePath) {
   }
   if ($runs.Count -eq 0) {
     $lines.Add('')
-    $lines.Add('**No results.** This is-alive has no performance probe (0.36.0 and older): use a newer build.')
+    $lines.Add('**No results.** Either this is-alive has no performance probe (releases up to 0.36.0 have none), or the run failed: see the `startup` logs in this folder.')
     $warn.Add('no results')
   }
   $lines.Add('')
@@ -180,6 +180,9 @@ if (-not $OutDir) {
   $OutDir = Join-Path $desktop "is-alive-perf-$Label-$stamp"
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+# Absolute: is-alive runs from its temporary folder, and would read a
+# relative path from there.
+$OutDir = (Resolve-Path $OutDir).Path
 
 if (-not $Exe) {
   foreach ($c in @((Join-Path $PSScriptRoot 'is-alive.exe'), (Join-Path (Get-Location) 'is-alive.exe'))) {
