@@ -445,6 +445,9 @@ impl App {
         }
         self.remember_site_configs();
         self.keep_results();
+        // SNMP readings are the last site's devices: an address here is
+        // another device there.
+        crate::tools::snmp::reset();
         // A reload asked for here isn't the next site's.
         self.reloading = false;
         site::set_current(to);

@@ -523,7 +523,7 @@ Click a device's row to open it in the **inspector** on the right: what it is (*
 - **On map**: switch to the Map with its card selected (if it's on the map).
 - **Domain join**: put it in Domain join's **Other computers** box (nothing is sent until you press Start).
 - **Wake**: send it Wake-on-LAN, as [Ping's Wake](#waking-a-device-wake-on-lan) does (greyed out without a real MAC: a private MAC doesn't wake). Right-clicking a device's row offers the same **Wake (Wake-on-LAN)**.
-- **SNMP**: ask this one device what it is over SNMP ([below](#reading-a-device-over-snmp)).
+- **SNMP**: ask this one device what it is over SNMP ([below](#reading-a-device-over-snmp)). Greyed out while another device is being read, or while the community is empty.
 
 Click the row again, or the inspector's **×**, to close it. In a window 1100 points wide or more it sits beside the table, which gets narrower; in a smaller one it floats over the table's right side (the run bar above stays clear) and **Esc** closes it. When the table gets narrow, **Vendor** drops out first, then **MAC**, then **TTL** (so the open ports still fit at the smallest window): all three stay in the inspector.
 
@@ -536,7 +536,7 @@ Pressing it opens an **SNMP** section under the buttons and starts the read. The
 | Item | What it is |
 |---|---|
 | **Community** | The SNMP community the device answers to, `public` until you change it. It's shown as dots, kept in memory for this session only and gone when is-alive closes: never saved in settings, Results, the Site report or a Site Bundle. One community serves every device you read this session |
-| **Read** / **Read again** | Read it again with the community as typed (after you change it, say). Greyed out while another device is being read: one at a time |
+| **Read** / **Read again** | Read it again with the community as typed (after you change it, say). Greyed out while another device is being read (one at a time) or while the community is empty |
 | **Stop** | While it reads: stop it |
 
 It asks with SNMP v2c, then v1 if v2c gets no answer, over UDP 161 (each request waits 2 seconds and is sent twice; the whole read stops after 30 seconds). Answers are taken only from the device's own address and port 161, and only as replies to what was asked. What comes back, in the section and as an **SNMP** run in [Results](#16-results):
@@ -544,16 +544,19 @@ It asks with SNMP v2c, then v1 if v2c gets no answer, over UDP 161 (each request
 | Line | Where it comes from |
 |---|---|
 | **Version** | v2c or v1, whichever it answered |
-| **Name**, **Description**, **Location**, **Contact** | The device's system group (`sysName`, `sysDescr` and so on): what whoever set it up typed in, and its own description, often its model and firmware |
+| **Name**, **Description**, **Location**, **Contact** | The device's system group (`sysName`, `sysDescr` and so on): what whoever set it up typed in, and its own description, often its model and firmware. **Contact** shows in the section only: it often names a person, with an email or phone number, so it's left out of the Results run, the Site report and the Site Bundle |
 | **Object ID**, **Maker** | Its `sysObjectID`, and the maker it names for the common ones (Cisco, HP, Fortinet, SonicWall, Ubiquiti, Synology, Brother and others) |
+| **Agent software** | Instead of **Maker**, when the object ID names software that many makers' devices run rather than a maker: *Net-SNMP* (an SNMP agent on Linux-based gear, NAS units and appliances) or *Broadcom FASTPATH* (switch software several makers build on). It says what answered, not who made the box |
 | **Uptime** | How long since its SNMP agent started: usually since it last restarted |
-| **Model**, **Software**, **Serial** | Its first chassis in ENTITY-MIB, on devices that have it (switches, firewalls, many NAS units) |
+| **Model**, **Firmware**, **Serial** | Its first chassis in ENTITY-MIB, on devices that have it (switches, firewalls, many NAS units): the walk stops at that entry. **Firmware** is the chassis's firmware revision; a chassis that gives none shows **Software** instead, its software revision (on many switches, the OS version) |
 | **Printer**, **Errors** | A printer's state (*idle*, *printing*, *warming up*) and what it reports wrong (*low toner*, *jammed*, *door open*, *no paper* …), or *none* |
 | **Supply** | Each toner, drum or waste box, and what's left (*45%*, *some left*, *unknown*), up to 32 |
 | **LLDP** | Its LLDP neighbours: its own port, then the device and port at the far end (*eth0 → SW-OFFICE-1 Gi1/0/14*). On a printer, AP or phone, that's the switch port it's plugged into; on a switch, what's plugged into it. Up to 64 |
-| **Note** | What was cut short: a table longer than its cap, or the time limit |
+| **Note** | What was cut short and why: a table longer than its cap, the 30-second limit, or a device that stopped answering, and the parts that weren't read. A part with no note was read in full: if it isn't there, the device doesn't have it |
 
 A device that has none of a part simply doesn't show it. **No answer** is said plainly: SNMP may be off, the community may be wrong, the device may answer only some addresses (an ACL by source IP), or it may only speak SNMPv3. No answer looks the same for all four, so is-alive doesn't guess which. A device that answers *port unreachable* is told apart: nothing takes SNMP on it (its agent is off, or its own firewall rejects it).
+
+Readings belong to the open site. Opening another site clears them (the same address there is another device), and a read still under way holds the switch like any running tool, so it's never logged into the next site's Results. The community stays for the session.
 
 ### Example: what's on the office network?
 
@@ -1087,7 +1090,7 @@ Each selected card gets a section, newest on top. A whole site or role box picke
 - **The role and name**, with its address (or what stands for one: *WAN …*, a site's hosts), its zone and tags; **⋯** (the card's right-click menu, see above), the 📌 pin button and **×** at the top.
 - **Ping**, **Port Check**, **Traceroute**: a quick check of this device, right here. The short result (`4/4 replies · avg 0.34 ms · 0% loss`, `Open: 22, 80, 443 · 12 closed`) shows under **Results**, and the inspector scrolls to it; click the check's name (or the arrow beside it) for the details, **⟲** to run again, **■** to stop, **×** to clear, or **Open in tab** for a full run in that tab. Up to three run at once. These spot checks stay with the card but don't go to the Results tab.
 - **Web** (when the device has 443, 8443 or 80 open) opens its web page in your browser.
-- **SNMP** asks this device over SNMP what it is: model, firmware, serial, a printer's supplies, the switch port it's on. The reading shows in an **SNMP** section under the buttons and goes to the Results tab as an **SNMP** run. It's the same read, and the same session-only community, as [Subnet Sweep's](#reading-a-device-over-snmp): a device read in one shows the same in the other.
+- **SNMP** asks this device over SNMP what it is: model, firmware (or software) version, serial, a printer's supplies, the switch port it's on. The reading shows in an **SNMP** section under the buttons and goes to the Results tab as an **SNMP** run. It's the same read, and the same session-only community, as [Subnet Sweep's](#reading-a-device-over-snmp): a device read in one shows the same in the other.
 - **SSH** (when port 22 is open) and **RDP** (when 3389 is open) connect to the device in the computer's own client, which asks for the log-in; is-alive stores no passwords. On Windows, SSH opens `ssh` (built into Windows 10 and 11) in a console window that stays open when it ends, so a refused connection can be read; RDP opens Remote Desktop Connection (`mstsc`). On Linux, SSH opens in the desktop's terminal (Konsole, Ptyxis, GNOME Terminal and others); RDP uses Remmina or FreeRDP. A button is left out when the computer has no client for it. Hover one to see what it runs.
 - **Action items:** the card's own warnings and the findings that name it.
 - **Details:** its IP (when the line under its name says something else), MAC and what saw it (sweep, backup, map), then everything the source said about it. Each line shows once. A device that answers the sweep on a second address with the same MAC (an alias, a second IP on one network card) stays one card, and that address's lines start with *Also at 10.0.0.252:*.

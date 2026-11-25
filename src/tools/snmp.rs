@@ -6,7 +6,11 @@
 //! session only and gone when the app closes: never in settings, Results,
 //! the report or a bundle. Both inspectors share it and the readings, so a
 //! device read from the Map shows the same in Sweep. Each finished read is
-//! logged as an "SNMP" run in Results, without the community.
+//! logged as an "SNMP" run in Results, without the community or sysContact
+//! (a person, often: on screen only).
+//!
+//! Readings belong to the open site: a site switch clears them (`reset`),
+//! and a read under way counts as a running tool, so the switch waits for it.
 
 use crate::inspector as insp;
 use crate::job::Job;
@@ -24,7 +28,7 @@ pub const COLUMNS: &[&str] = &["target", "section", "field", "value"];
 
 /// What the button says it does.
 pub const TIP: &str = "Ask this device over SNMP (UDP 161, v2c then v1) what it is: model, \
-firmware, serial, a printer's toner, the switch port it's plugged into. Uses the community in its \
+firmware (or software) version, serial, a printer's toner, the switch port it's plugged into. Uses the community in its \
 SNMP section (public unless you change it). Only this device is asked, only when you press it.";
 
 const COMMUNITY_TIP: &str = "The SNMP community (read-only). Kept in memory for this session \
@@ -41,15 +45,19 @@ struct State {
     finished: Vec<(String, String, Option<log::Table>)>,
 }
 
-static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
-    Mutex::new(State {
-        community: "public".into(),
-        running: None,
-        readings: HashMap::new(),
-        open: HashSet::new(),
-        finished: Vec::new(),
-    })
-});
+impl State {
+    fn new() -> Self {
+        State {
+            community: "public".into(),
+            running: None,
+            readings: HashMap::new(),
+            open: HashSet::new(),
+            finished: Vec::new(),
+        }
+    }
+}
+
+static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::new()));
 
 fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
     let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -112,7 +120,7 @@ pub fn summary(rows: &[Vec<String>]) -> Option<String> {
 
 fn start_in(s: &mut State, ctx: &egui::Context, ip: IpAddr) {
     s.open.insert(ip);
-    if s.running.is_some() {
+    if s.running.is_some() || s.community.is_empty() {
         return;
     }
     // Moved into the worker; never written anywhere.
@@ -130,14 +138,43 @@ pub fn start(ctx: &egui::Context, ip: IpAddr) {
 
 /// Whether the SNMP button can be pressed for `ip`, and its tip.
 pub fn button(ip: IpAddr) -> (bool, String) {
-    with(|s| match &s.running {
+    with(|s| button_in(s, ip))
+}
+
+fn button_in(s: &State, ip: IpAddr) -> (bool, String) {
+    match &s.running {
         Some((on, ..)) if *on == ip => (false, "Reading it over SNMP…".to_string()),
         Some((on, ..)) => (
             false,
             format!("An SNMP read of {on} is under way: one device at a time"),
         ),
+        None if s.community.is_empty() => (
+            false,
+            "Type a community in an SNMP section first (it's empty)".to_string(),
+        ),
         None => (true, TIP.to_string()),
-    })
+    }
+}
+
+/// Whether a read is under way (a site switch waits for it).
+pub fn is_running() -> bool {
+    with(|s| s.running.is_some())
+}
+
+/// A site switch: the last site's readings, open sections and unlogged
+/// reads go, and a read under way is stopped. The community stays for the
+/// session.
+pub fn reset() {
+    with(reset_in);
+}
+
+fn reset_in(s: &mut State) {
+    if let Some((.., job)) = s.running.take() {
+        job.stop();
+    }
+    s.readings.clear();
+    s.open.clear();
+    s.finished.clear();
 }
 
 /// A finished read waiting for Results: its start, text and table.
@@ -223,7 +260,8 @@ pub fn section(ui: &mut Ui, ip: IpAddr) {
             insp::note(ui, &p);
             return;
         }
-        let rows = out.rows();
+        // With sysContact: on screen, never logged.
+        let rows = out.screen_rows();
         for (sec, field, value) in rows.iter().skip(1) {
             let (k, v) = snmp::pair(sec, field, value);
             if *sec == "note" {
@@ -236,8 +274,13 @@ pub fn section(ui: &mut Ui, ip: IpAddr) {
             insp::note(
                 ui,
                 &format!(
-                    "Read over SNMP {} from the device itself; also in Results.",
-                    r.version.name()
+                    "Read over SNMP {} from the device itself; also in Results{}.",
+                    r.version.name(),
+                    if r.system.contact.is_some() {
+                        ", without the contact"
+                    } else {
+                        ""
+                    }
                 ),
             );
         }
@@ -272,5 +315,43 @@ mod tests {
         // The community never reaches the log: it isn't in Outcome at all,
         // and the session's default doesn't leak into the text.
         assert!(!out.report().contains("public"));
+    }
+
+    #[test]
+    fn an_empty_community_reads_nothing_from_either_button() {
+        let ip: IpAddr = "192.0.2.41".parse().unwrap();
+        let mut s = State::new();
+        assert!(button_in(&s, ip).0);
+        s.community.clear();
+        let (ok, tip) = button_in(&s, ip);
+        assert!(!ok && tip.contains("community"), "{tip}");
+        // Even if pressed: the section opens, nothing is sent.
+        start_in(&mut s, &egui::Context::default(), ip);
+        assert!(s.open.contains(&ip) && s.running.is_none());
+    }
+
+    #[test]
+    fn a_site_switch_forgets_the_last_sites_readings() {
+        let ip: IpAddr = "192.168.1.40".parse().unwrap();
+        let mut s = State::new();
+        s.community = "example-ro".into();
+        let out = Outcome::Read(Box::new(snmp::sample(ip)));
+        s.open.insert(ip);
+        s.finished
+            .push((log::now(), out.report(), Some(table(&out))));
+        s.readings.insert(ip, out);
+        // A read under way is stopped, not logged into the next site.
+        let job = Job::spawn(&egui::Context::default(), move |tx| {
+            while !tx.cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            tx.send(Outcome::Stopped(ip));
+        });
+        s.running = Some((ip, log::now(), job));
+        reset_in(&mut s);
+        assert!(s.readings.is_empty() && s.open.is_empty() && s.finished.is_empty());
+        assert!(s.running.is_none());
+        // The community is the session's, not the site's.
+        assert_eq!(s.community, "example-ro");
     }
 }

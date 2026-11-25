@@ -209,8 +209,13 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   technician pressed SNMP on it (never by a sweep): `target` is its
   address, and each row is `section`, `field`, `value`. `system` rows are
   `name`, `description`, `object_id`, `maker` (from the object ID's
-  enterprise number), `uptime`, `location` and `contact`; `chassis` rows
-  are ENTITY-MIB's `model`, `software` and `serial`; `printer` rows are
+  enterprise number), `uptime` and `location`; sysContact is never in it
+  (it shows on the technician's screen only). An `agent` row instead of
+  `maker` names software many makers ship (Net-SNMP, Broadcom FASTPATH):
+  it says what answered, never who made the device, so don't use it as
+  the vendor. `chassis` rows are ENTITY-MIB's first chassis: `model`,
+  `firmware` (its firmware revision) or, when it has none, `software` (its
+  software revision, often the OS version), and `serial`; `printer` rows are
   `status` and `errors` (*low toner*, *jammed* …, or `none`), and each
   `supply` row is a toner or drum (`field`) and what's left (`value`:
   *45%*, *some left*, *unknown*). An `lldp` row's `field` is the
@@ -221,7 +226,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   observed facts for the node (model, firmware, serial in its `details`;
   a sysName as its name when the map has none). A printer error or a
   supply at a few percent can be an action item; an `uptime` is context,
-  not a finding. `note` rows say a table was cut short. `snmp` /
+  not a finding. `note` rows say a part was cut short (a table's cap, the
+  time limit, or the device going quiet) and which parts weren't read:
+  with such a note, a missing part is unknown, not absent. Without one,
+  every part was read in full. `snmp` /
   `answer` = `no answer` means nothing answered: SNMP off, a wrong
   community, an ACL or a v3-only agent look the same, so never report
   which, and never report a device as having no SNMP from it. No row

@@ -1185,6 +1185,9 @@ impl App {
             // site switch waits for them like any run.
             || self.join.running_since().is_some()
             || self.join.others_running_since().is_some()
+            // An inspector's SNMP read: logged when it ends, so a switch
+            // waits for it too.
+            || tools::snmp::is_running()
     }
 
     /// Run every tool against this machine's network and switch to Results.

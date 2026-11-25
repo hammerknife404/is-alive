@@ -33,8 +33,6 @@ const MAX_ARCS: usize = 128;
 pub const TABLE_ROWS: usize = 64;
 /// Supplies a printer's walk reads at most.
 const SUPPLY_ROWS: usize = 32;
-/// Characters kept of any one text value.
-const TEXT_MAX: usize = 512;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Version {
@@ -121,7 +119,8 @@ fn text(b: &[u8]) -> String {
                 .any(|c| c.is_control() && !matches!(c, '\r' | '\n' | '\t')) =>
         {
             let one: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-            crate::net::sanitize(&one).chars().take(TEXT_MAX).collect()
+            // Control and bidi characters dropped, 255 characters at most.
+            crate::net::sanitize(&one)
         }
         _ => b
             .iter()
@@ -473,12 +472,20 @@ impl<'a> Agent<'a> {
 
     fn exchange(&mut self, pdu: u8, oids: &[Oid]) -> Result<Message, Fail> {
         let mut buf = vec![0u8; 65_536];
+        // Every try's ID: a late answer to the first counts while the
+        // retry waits.
+        let mut sent = Vec::with_capacity(TRIES);
         for _ in 0..TRIES {
+            // Nothing is sent once the read's time is up.
+            if Instant::now() >= self.deadline {
+                return Err(Fail::Late);
+            }
             self.id = if self.id >= 0x7fff_ffff {
                 1
             } else {
                 self.id + 1
             };
+            sent.push(self.id);
             let req = Message {
                 version: self.version.wire(),
                 community: self.community.to_vec(),
@@ -512,7 +519,7 @@ impl<'a> Agent<'a> {
                         }
                         if let Some(m) = Message::decode(&buf[..n])
                             && m.pdu == RESPONSE
-                            && m.id == self.id
+                            && sent.contains(&m.id)
                             && m.version == self.version.wire()
                         {
                             return Ok(m);
@@ -556,9 +563,21 @@ impl<'a> Agent<'a> {
     }
 
     /// GETNEXT from `base` while the answers stay under it, at most `cap`
-    /// rows. Ends early, keeping what it has, at the read's time limit or
-    /// if the device stops answering.
+    /// rows. Ends early, keeping what it has and saying why in `cut`, at
+    /// the read's time limit or if the device stops answering; with nothing
+    /// read yet, either is an error, never an empty table.
     pub fn walk(&mut self, base: &[u32], cap: usize) -> Result<Walk, Fail> {
+        self.walk_to(base, cap, |_| false)
+    }
+
+    /// `walk`, ending at (and keeping) the first row whose value `found`
+    /// picks.
+    pub fn walk_to(
+        &mut self,
+        base: &[u32],
+        cap: usize,
+        found: impl Fn(&Value) -> bool,
+    ) -> Result<Walk, Fail> {
         let mut at = base.to_vec();
         let mut w = Walk::default();
         loop {
@@ -568,7 +587,7 @@ impl<'a> Agent<'a> {
             }
             let m = match self.exchange(GET_NEXT, std::slice::from_ref(&at)) {
                 Ok(m) => m,
-                Err(Fail::Late) => {
+                Err(Fail::Late) if !w.rows.is_empty() => {
                     w.cut = Some(Cut::Late);
                     break;
                 }
@@ -591,7 +610,11 @@ impl<'a> Agent<'a> {
                 break;
             }
             at.clone_from(&oid);
+            let stop = found(&v);
             w.rows.push((oid[base.len()..].to_vec(), v));
+            if stop {
+                break;
+            }
         }
         Ok(w)
     }
@@ -664,6 +687,9 @@ pub struct System {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Chassis {
     pub model: Option<String>,
+    /// entPhysicalFirmwareRev.
+    pub firmware: Option<String>,
+    /// entPhysicalSoftwareRev, kept only when it has no firmware revision.
     pub software: Option<String>,
     pub serial: Option<String>,
 }
@@ -779,39 +805,39 @@ pub fn read_at(to: SocketAddr, community: &[u8], cancel: &AtomicBool, whole: Dur
         ("the printer MIB", printer),
         ("LLDP", lldp),
     ];
-    for (what, step) in steps {
-        match step(&mut a, &mut r) {
-            Ok(()) => {}
+    for (n, (what, step)) in steps.iter().enumerate() {
+        let why = match step(&mut a, &mut r) {
+            Ok(()) => continue,
             Err(Fail::Stopped) => return Outcome::Stopped(ip),
-            Err(Fail::Late) => {
-                r.notes.push(format!(
-                    "Stopped at the {} s limit while reading {what}.",
-                    whole.as_secs()
-                ));
-                break;
-            }
-            Err(Fail::Silent) => {
-                r.notes
-                    .push(format!("It stopped answering while {what} was read."));
-                break;
-            }
-            Err(Fail::Refused) => {
-                r.notes
-                    .push(format!("It refused UDP 161 while {what} was read."));
-                break;
-            }
-            Err(Fail::Io(e)) => {
-                r.notes.push(format!("Reading {what}: {e}"));
-                break;
-            }
-        }
+            Err(Fail::Late) => format!(
+                "Stopped at the {} s limit while reading {what}.",
+                whole.as_secs()
+            ),
+            Err(Fail::Silent) => format!("It stopped answering while {what} was read."),
+            Err(Fail::Refused) => format!("It refused UDP 161 while {what} was read."),
+            Err(Fail::Io(e)) => format!("Reading {what}: {e}"),
+        };
+        let rest: Vec<&str> = steps[n + 1..].iter().map(|(w, _)| *w).collect();
+        r.notes.push(if rest.is_empty() {
+            why
+        } else {
+            format!("{why} Not read: {}.", rest.join(", "))
+        });
+        break;
     }
     Outcome::Read(Box::new(r))
 }
 
-fn note_cut(r: &mut Reading, what: &str, w: &Walk, cap: usize) {
+/// Say in the reading that a walk stopped short. `cap` is None for a walk
+/// whose cap isn't news (one that wants the first row, or follows a walk
+/// whose cap was already said).
+fn note_cut(r: &mut Reading, what: &str, w: &Walk, cap: Option<usize>) {
     match w.cut {
-        Some(Cut::Cap) => r.notes.push(format!("{what}: the first {cap} rows only.")),
+        Some(Cut::Cap) => {
+            if let Some(cap) = cap {
+                r.notes.push(format!("{what}: the first {cap} rows only."));
+            }
+        }
         Some(Cut::Late) => r
             .notes
             .push(format!("{what}: cut short at the time limit.")),
@@ -822,15 +848,29 @@ fn note_cut(r: &mut Reading, what: &str, w: &Walk, cap: usize) {
     }
 }
 
-/// ENTITY-MIB's first entry of class chassis (3): its model, software and serial.
+/// entPhysicalClass chassis.
+const CLASS_CHASSIS: i64 = 3;
+
+/// ENTITY-MIB's first entry of class chassis: its model, firmware (or
+/// software, when it has no firmware revision) and serial. The walk ends at
+/// that entry, so a big stack's modules and ports don't eat the read's time.
 fn chassis(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
-    let class = a.walk(&col(&ENT_PHYSICAL, 5), TABLE_ROWS)?;
+    let class = a.walk_to(&col(&ENT_PHYSICAL, 5), TABLE_ROWS, |v| {
+        v.int() == Some(CLASS_CHASSIS)
+    })?;
     let Some(idx) = class
         .rows
         .iter()
-        .find(|(_, v)| v.int() == Some(3))
+        .find(|(_, v)| v.int() == Some(CLASS_CHASSIS))
         .map(|(i, _)| i.clone())
     else {
+        if class.cut == Some(Cut::Cap) {
+            r.notes.push(format!(
+                "ENTITY-MIB: no chassis in its first {TABLE_ROWS} entries."
+            ));
+        } else {
+            note_cut(r, "ENTITY-MIB", &class, None);
+        }
         return Ok(());
     };
     let of = |c: u32| {
@@ -838,15 +878,18 @@ fn chassis(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
         o.extend(&idx);
         o
     };
-    let got = a.get(&[of(13), of(10), of(11)])?;
+    // Model name, firmware, software and serial revisions.
+    let got = a.get(&[of(13), of(9), of(10), of(11)])?;
     let at = |c: u32| {
         got.iter()
             .find(|(o, _)| *o == of(c))
             .and_then(|(_, v)| v.text())
     };
+    let firmware = at(9);
     let c = Chassis {
         model: at(13),
-        software: at(10),
+        software: if firmware.is_none() { at(10) } else { None },
+        firmware,
         serial: at(11),
     };
     if c != Chassis::default() {
@@ -898,8 +941,11 @@ pub fn printer_status(s: i64) -> &'static str {
 
 /// A printer (Host Resources' printer table answers): its status, errors
 /// and supplies.
+/// The reading keeps each part as it's read, so a read cut short shows
+/// what came (and its note says what didn't).
 fn printer(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
-    let status = a.walk(&col(&HR_PRINTER, 1), 4)?;
+    let status = a.walk(&col(&HR_PRINTER, 1), 1)?;
+    note_cut(r, "The printer's status", &status, None);
     let Some((idx, st)) = status.rows.first().cloned() else {
         return Ok(());
     };
@@ -909,32 +955,55 @@ fn printer(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
         Some((_, Value::Bytes(b))) => printer_errors(b),
         _ => Vec::new(),
     };
+    r.printer = Some(Printer {
+        status: st.int(),
+        errors,
+        supplies: Vec::new(),
+    });
     let names = a.walk(&col(&PRT_SUPPLIES, 6), SUPPLY_ROWS)?;
-    note_cut(r, "Supplies", &names, SUPPLY_ROWS);
-    let max = a.walk(&col(&PRT_SUPPLIES, 8), SUPPLY_ROWS)?;
-    let level = a.walk(&col(&PRT_SUPPLIES, 9), SUPPLY_ROWS)?;
+    note_cut(r, "Supplies", &names, Some(SUPPLY_ROWS));
+    let rows: Vec<(Oid, Supply)> = names
+        .rows
+        .iter()
+        .filter_map(|(i, v)| {
+            Some((
+                i.clone(),
+                Supply {
+                    name: v.text()?,
+                    level: None,
+                    max: None,
+                },
+            ))
+        })
+        .collect();
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Oid> = rows.iter().map(|(i, _)| i.clone()).collect();
+    if let Some(p) = r.printer.as_mut() {
+        p.supplies = rows.into_iter().map(|(_, s)| s).collect();
+    }
     let find = |w: &Walk, i: &Oid| {
         w.rows
             .iter()
             .find(|(o, _)| o == i)
             .and_then(|(_, v)| v.int())
     };
-    let supplies = names
-        .rows
-        .iter()
-        .filter_map(|(i, v)| {
-            Some(Supply {
-                name: v.text()?,
-                level: find(&level, i),
-                max: find(&max, i),
-            })
-        })
-        .collect();
-    r.printer = Some(Printer {
-        status: st.int(),
-        errors,
-        supplies,
-    });
+    // Same cap as the names, already said.
+    let max = a.walk(&col(&PRT_SUPPLIES, 8), SUPPLY_ROWS)?;
+    note_cut(r, "Supplies' capacities", &max, None);
+    if let Some(p) = r.printer.as_mut() {
+        for (s, i) in p.supplies.iter_mut().zip(&ids) {
+            s.max = find(&max, i);
+        }
+    }
+    let level = a.walk(&col(&PRT_SUPPLIES, 9), SUPPLY_ROWS)?;
+    note_cut(r, "Supplies' levels", &level, None);
+    if let Some(p) = r.printer.as_mut() {
+        for (s, i) in p.supplies.iter_mut().zip(&ids) {
+            s.level = find(&level, i);
+        }
+    }
     Ok(())
 }
 
@@ -944,7 +1013,9 @@ impl Supply {
         match (self.level, self.max) {
             (Some(-3), _) => "some left".into(),
             (Some(l), Some(m)) if l >= 0 && m > 0 => {
-                format!("{}%", (l.min(m) * 100 + m / 2) / m)
+                // i128: an 8-byte INTEGER times 100 doesn't fit an i64.
+                let (l, m) = (i128::from(l.min(m)), i128::from(m));
+                format!("{}%", (l * 100 + m / 2) / m)
             }
             (Some(l), _) if l >= 0 => format!("level {l}"),
             _ => "unknown".into(),
@@ -953,63 +1024,94 @@ impl Supply {
 }
 
 /// LLDP's neighbour table: who is at the far end of each of its ports.
+///
+/// Each neighbour is in the reading from its first walk on, and filled in
+/// as the rest comes, so a read cut short keeps what it heard.
 fn lldp(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
     let port_id = a.walk(&col(&LLDP_REM, 7), TABLE_ROWS)?;
-    note_cut(r, "LLDP", &port_id, TABLE_ROWS);
-    if port_id.rows.is_empty() {
+    note_cut(r, "LLDP", &port_id, Some(TABLE_ROWS));
+    // Index: time mark, local port number, neighbour index.
+    let mut ids: Vec<(Oid, u32)> = Vec::new();
+    let first = r.lldp.len();
+    for (i, v) in &port_id.rows {
+        let Some(&p) = i.get(1) else { continue };
+        ids.push((i.clone(), p));
+        r.lldp.push(Neighbour {
+            local_port: format!("port {p}"),
+            sys_name: None,
+            port_id: v.text(),
+            port_desc: None,
+        });
+    }
+    if ids.is_empty() {
         return Ok(());
     }
-    let port_desc = a.walk(&col(&LLDP_REM, 8), TABLE_ROWS)?;
-    let name = a.walk(&col(&LLDP_REM, 9), TABLE_ROWS)?;
     let find = |w: &Walk, i: &Oid| {
         w.rows
             .iter()
             .find(|(o, _)| o == i)
             .and_then(|(_, v)| v.text())
     };
-    // Index: time mark, local port number, neighbour index.
-    let mut ports: Vec<u32> = port_id
-        .rows
-        .iter()
-        .filter_map(|(i, _)| i.get(1).copied())
-        .collect();
+    // Same cap as the port IDs, already said.
+    let port_desc = a.walk(&col(&LLDP_REM, 8), TABLE_ROWS)?;
+    note_cut(r, "LLDP's port descriptions", &port_desc, None);
+    for (n, (i, _)) in r.lldp[first..].iter_mut().zip(&ids) {
+        n.port_desc = find(&port_desc, i);
+    }
+    let name = a.walk(&col(&LLDP_REM, 9), TABLE_ROWS)?;
+    note_cut(r, "LLDP's names", &name, None);
+    for (n, (i, _)) in r.lldp[first..].iter_mut().zip(&ids) {
+        n.sys_name = find(&name, i);
+    }
+    let mut ports: Vec<u32> = ids.iter().map(|(_, p)| *p).collect();
     ports.sort_unstable();
     ports.dedup();
-    let mut local = std::collections::HashMap::new();
-    for &p in &ports {
+    for p in ports {
         let (mut desc, mut id) = (col(&LLDP_LOC_PORT, 4), col(&LLDP_LOC_PORT, 3));
         desc.push(p);
         id.push(p);
         let got = a.get(&[desc.clone(), id.clone()])?;
         let at = |o: &Oid| got.iter().find(|(g, _)| g == o).and_then(|(_, v)| v.text());
-        local.insert(
-            p,
-            at(&desc)
-                .or_else(|| at(&id))
-                .unwrap_or_else(|| format!("port {p}")),
-        );
-    }
-    for (i, v) in &port_id.rows {
-        let Some(p) = i.get(1) else { continue };
-        r.lldp.push(Neighbour {
-            local_port: local.get(p).cloned().unwrap_or_else(|| format!("port {p}")),
-            sys_name: find(&name, i),
-            port_id: v.text(),
-            port_desc: find(&port_desc, i),
-        });
+        if let Some(own) = at(&desc).or_else(|| at(&id)) {
+            for (n, _) in r.lldp[first..]
+                .iter_mut()
+                .zip(&ids)
+                .filter(|(_, (_, q))| *q == p)
+            {
+                n.local_port.clone_from(&own);
+            }
+        }
     }
     Ok(())
 }
 
-/// The maker named by a sysObjectID's enterprise number, for the common ones.
-pub fn enterprise(object_id: &str) -> Option<&'static str> {
+/// What a sysObjectID's enterprise number says, for the common ones.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Enterprise {
+    /// The device's maker.
+    Maker(&'static str),
+    /// Agent or switch software that many makers ship: it names the
+    /// software, never who made the device.
+    Software(&'static str),
+}
+
+/// What `object_id`'s enterprise number names, for the common ones.
+pub fn enterprise(object_id: &str) -> Option<Enterprise> {
     let n: u32 = object_id
         .strip_prefix("1.3.6.1.4.1.")?
         .split('.')
         .next()?
         .parse()
         .ok()?;
-    Some(match n {
+    let software = match n {
+        8072 => Some("Net-SNMP (agent software many makers use; not the maker)"),
+        4413 => Some("Broadcom FASTPATH (switch software several makers use; not the maker)"),
+        _ => None,
+    };
+    if let Some(s) = software {
+        return Some(Enterprise::Software(s));
+    }
+    Some(Enterprise::Maker(match n {
         9 => "Cisco",
         11 => "HP",
         43 => "3Com",
@@ -1026,11 +1128,9 @@ pub fn enterprise(object_id: &str) -> Option<&'static str> {
         2435 => "Brother",
         2636 => "Juniper",
         3375 => "F5",
-        4413 => "Ubiquiti (EdgeSwitch)",
         4526 => "Netgear",
         6574 => "Synology",
         6876 => "VMware",
-        8072 => "Net-SNMP",
         8741 => "SonicWall",
         11863 => "TP-Link",
         12356 => "Fortinet",
@@ -1045,7 +1145,7 @@ pub fn enterprise(object_id: &str) -> Option<&'static str> {
         41112 => "Ubiquiti",
         47196 => "HPE Aruba",
         _ => return None,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------- words
@@ -1083,8 +1183,19 @@ impl Outcome {
         })
     }
 
-    /// (section, field, value) rows, as Results logs them. No community.
+    /// (section, field, value) rows, as Results logs them: no community,
+    /// and no sysContact (a person's name, email or phone, often), which
+    /// shows in the inspector only (`screen_rows`).
     pub fn rows(&self) -> Vec<(&'static str, String, String)> {
+        self.rows_with(false)
+    }
+
+    /// `rows` with sysContact, for the inspector. Never logged.
+    pub fn screen_rows(&self) -> Vec<(&'static str, String, String)> {
+        self.rows_with(true)
+    }
+
+    fn rows_with(&self, contact: bool) -> Vec<(&'static str, String, String)> {
         let Outcome::Read(r) = self else {
             let why = match self {
                 Outcome::Silent(_) => "no answer",
@@ -1104,19 +1215,19 @@ impl Outcome {
         add("system", "name", &s.name);
         add("system", "description", &s.descr);
         add("system", "object_id", &s.object_id);
-        add(
-            "system",
-            "maker",
-            &s.object_id
-                .as_deref()
-                .and_then(enterprise)
-                .map(str::to_string),
-        );
+        match s.object_id.as_deref().and_then(enterprise) {
+            Some(Enterprise::Maker(m)) => add("system", "maker", &Some(m.into())),
+            Some(Enterprise::Software(w)) => add("system", "agent", &Some(w.into())),
+            None => {}
+        }
         add("system", "uptime", &s.uptime.map(uptime));
         add("system", "location", &s.location);
-        add("system", "contact", &s.contact);
+        if contact {
+            add("system", "contact", &s.contact);
+        }
         if let Some(c) = &r.chassis {
             add("chassis", "model", &c.model);
+            add("chassis", "firmware", &c.firmware);
             add("chassis", "software", &c.software);
             add("chassis", "serial", &c.serial);
         }
@@ -1173,7 +1284,12 @@ impl Outcome {
             let (k, v) = pair(sec, &field, &value);
             s += &format!("{k}: {v}\n");
         }
-        if r.system == System::default() && r.chassis.is_none() {
+        // sysContact isn't logged, so it doesn't count here.
+        let logged = System {
+            contact: None,
+            ..r.system.clone()
+        };
+        if logged == System::default() && r.chassis.is_none() {
             s += "It answered, but with none of the system group.\n";
         }
         s
@@ -1187,6 +1303,7 @@ pub fn pair(section: &str, field: &str, value: &str) -> (String, String) {
     let k = |s: &str| s.to_string();
     match (section, field) {
         ("system", "object_id") => (k("Object ID"), k(value)),
+        ("system", "agent") => (k("Agent software"), k(value)),
         ("printer", "status") => (k("Printer"), k(value)),
         ("printer", "errors") => (k("Errors"), k(value)),
         ("supply", f) => (k("Supply"), format!("{f}: {value}")),
@@ -1219,7 +1336,8 @@ pub fn sample(ip: IpAddr) -> Reading {
         },
         chassis: Some(Chassis {
             model: Some("HP LaserJet Pro M404".into()),
-            software: Some("20231115".into()),
+            firmware: Some("20231115".into()),
+            software: None,
             serial: Some("EXAMPLE0123".into()),
         }),
         printer: Some(Printer {
@@ -1418,20 +1536,29 @@ mod tests {
         assert_eq!(uptime(4_500), "45 s");
         assert_eq!(uptime(100 * 3700), "1 h 1 min");
         assert_eq!(uptime(100 * 86_400 * 12 + 100 * 3600 * 3), "12 d 3 h");
-        assert_eq!(enterprise("1.3.6.1.4.1.11.2.3.9.1"), Some("HP"));
+        assert_eq!(
+            enterprise("1.3.6.1.4.1.11.2.3.9.1"),
+            Some(Enterprise::Maker("HP"))
+        );
         assert_eq!(enterprise("1.3.6.1.4.1.32473.1"), None);
         assert_eq!(enterprise("garbage"), None);
     }
 
     /// A pretend agent on 127.0.0.1: answers GET and GETNEXT from `mib`
     /// for `community`, only as `version`. `drop_first` requests go
-    /// unanswered; `decoy` sends a wrong-ID reply before each real one.
+    /// unanswered; `decoy` sends a wrong-ID reply before each real one;
+    /// `late_first` answers the very first request after its retry has
+    /// gone out, and never the retry; `answer_only` (when not 0) answers
+    /// that many requests, then goes quiet.
+    #[derive(Default)]
     struct Fake {
         mib: BTreeMap<Oid, Value>,
         community: &'static [u8],
         version: i64,
         drop_first: usize,
         decoy: bool,
+        late_first: bool,
+        answer_only: usize,
     }
 
     fn serve(f: Fake) -> (SocketAddr, Arc<AtomicUsize>) {
@@ -1450,6 +1577,13 @@ mod tests {
                 };
                 if k < f.drop_first || req.community != f.community || req.version != f.version {
                     continue;
+                }
+                if (f.late_first && k == 1) || (f.answer_only > 0 && k >= f.answer_only) {
+                    continue;
+                }
+                if f.late_first && k == 0 {
+                    // Past WAIT: the client has sent its retry by now.
+                    std::thread::sleep(WAIT + Duration::from_millis(500));
                 }
                 let mut status = 0;
                 let mut index = 0;
@@ -1551,6 +1685,7 @@ mod tests {
             version: 1,
             drop_first: 0,
             decoy: true,
+            ..Fake::default()
         });
         let out = read_at(addr, b"s3cret-example", &quiet(), Duration::from_secs(20));
         let Outcome::Read(r) = &out else {
@@ -1602,6 +1737,7 @@ mod tests {
             version: 0,
             drop_first: 0,
             decoy: false,
+            ..Fake::default()
         });
         let out = read_at(addr, b"public", &quiet(), Duration::from_secs(30));
         let Outcome::Read(r) = &out else {
@@ -1621,6 +1757,7 @@ mod tests {
             version: 1,
             drop_first: 1,
             decoy: false,
+            ..Fake::default()
         });
         let out = read_at(addr, b"public", &quiet(), Duration::from_secs(30));
         assert!(matches!(out, Outcome::Read(_)), "{out:?}");
@@ -1634,6 +1771,7 @@ mod tests {
             version: 1,
             drop_first: 0,
             decoy: false,
+            ..Fake::default()
         });
         let t = Instant::now();
         let out = read_at(addr, b"bad-guess-77", &quiet(), Duration::from_secs(30));
@@ -1704,6 +1842,7 @@ mod tests {
             version: 1,
             drop_first: 0,
             decoy: false,
+            ..Fake::default()
         });
         let cancel = quiet();
         let mut a = Agent::new(
@@ -1757,5 +1896,236 @@ mod tests {
         assert!(t.starts_with("SNMP read of 192.0.2.40 (v2c)"), "{t}");
         assert!(t.contains("Serial: EXAMPLE0123"), "{t}");
         assert!(t.contains("Supply: Black Cartridge HP 58A: 12%"), "{t}");
+    }
+
+    #[test]
+    fn a_late_answer_to_the_first_try_still_counts() {
+        // The first GET's answer comes after the retry went out, and the
+        // retry is never answered: the first answer is the read.
+        let (addr, _) = serve(Fake {
+            mib: printer_mib(),
+            community: b"public",
+            version: 1,
+            late_first: true,
+            ..Fake::default()
+        });
+        let out = read_at(addr, b"public", &quiet(), Duration::from_secs(30));
+        let Outcome::Read(r) = &out else {
+            panic!("{out:?}")
+        };
+        assert_eq!(r.version, Version::V2c);
+        assert_eq!(r.system.name.as_deref(), Some("PRN-EXAMPLE"));
+    }
+
+    #[test]
+    fn a_walk_at_the_time_limit_is_an_error_not_an_empty_table() {
+        let (addr, seen) = serve(Fake {
+            mib: printer_mib(),
+            community: b"public",
+            version: 1,
+            ..Fake::default()
+        });
+        let cancel = quiet();
+        // The read's time is up before each part starts.
+        for step in [chassis as Step, printer, lldp] {
+            let mut a = Agent::new(addr, Version::V2c, b"public", Instant::now(), &cancel).unwrap();
+            let mut r = sample(addr.ip());
+            r.chassis = None;
+            r.printer = None;
+            r.lldp.clear();
+            assert_eq!(step(&mut a, &mut r), Err(Fail::Late));
+            assert_eq!((r.chassis, r.printer, r.lldp.len()), (None, None, 0));
+        }
+        assert_eq!(seen.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_read_cut_short_says_what_wasnt_read() {
+        // It answers the system group, then nothing more.
+        let (addr, _) = serve(Fake {
+            mib: printer_mib(),
+            community: b"public",
+            version: 1,
+            answer_only: 1,
+            ..Fake::default()
+        });
+        let out = read_at(addr, b"public", &quiet(), Duration::from_secs(30));
+        let Outcome::Read(r) = &out else {
+            panic!("{out:?}")
+        };
+        assert_eq!(r.system.name.as_deref(), Some("PRN-EXAMPLE"));
+        assert_eq!(
+            r.notes,
+            ["It stopped answering while ENTITY-MIB was read. Not read: the printer MIB, LLDP."]
+        );
+        assert!(out.report().contains("Note: It stopped answering"));
+    }
+
+    #[test]
+    fn a_printer_cut_short_keeps_its_supplies_and_says_so() {
+        // Status (1 request), errors (1), the two supplies' names (3):
+        // then quiet, before their capacities.
+        let (addr, _) = serve(Fake {
+            mib: printer_mib(),
+            community: b"public",
+            version: 1,
+            answer_only: 5,
+            ..Fake::default()
+        });
+        let cancel = quiet();
+        let mut a = Agent::new(
+            addr,
+            Version::V2c,
+            b"public",
+            Instant::now() + Duration::from_secs(20),
+            &cancel,
+        )
+        .unwrap();
+        let mut r = sample(addr.ip());
+        r.printer = None;
+        assert_eq!(printer(&mut a, &mut r), Err(Fail::Silent));
+        let p = r.printer.unwrap();
+        assert_eq!(p.status, Some(3));
+        let names: Vec<&str> = p.supplies.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Black Toner", "Drum"]);
+        assert!(p.supplies.iter().all(|s| s.left() == "unknown"));
+    }
+
+    #[test]
+    fn the_chassis_walk_stops_at_the_first_chassis() {
+        let b = |s: &str| Value::Bytes(s.as_bytes().to_vec());
+        let mut mib = BTreeMap::new();
+        // The chassis first, then a big stack's modules and ports.
+        mib.insert(oid("1.3.6.1.2.1.47.1.1.1.1.5.1"), Value::Int(3));
+        for i in 2..200u32 {
+            mib.insert(
+                oid(&format!("1.3.6.1.2.1.47.1.1.1.1.5.{i}")),
+                Value::Int(10),
+            );
+        }
+        mib.insert(oid("1.3.6.1.2.1.47.1.1.1.1.9.1"), b("FW 2.4.1"));
+        mib.insert(oid("1.3.6.1.2.1.47.1.1.1.1.10.1"), b("OS 7.0"));
+        mib.insert(oid("1.3.6.1.2.1.47.1.1.1.1.13.1"), b("EX-SWITCH-48"));
+        let (addr, seen) = serve(Fake {
+            mib: mib.clone(),
+            community: b"public",
+            version: 1,
+            ..Fake::default()
+        });
+        let cancel = quiet();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut a = Agent::new(addr, Version::V2c, b"public", deadline, &cancel).unwrap();
+        let mut r = sample(addr.ip());
+        r.chassis = None;
+        r.notes.clear();
+        chassis(&mut a, &mut r).unwrap();
+        // One GETNEXT to find it, one GET for its values.
+        assert_eq!(seen.load(Ordering::Relaxed), 2);
+        let c = r.chassis.unwrap();
+        assert_eq!(c.model.as_deref(), Some("EX-SWITCH-48"));
+        // The firmware revision, and no software beside it.
+        assert_eq!(c.firmware.as_deref(), Some("FW 2.4.1"));
+        assert_eq!(c.software, None);
+        assert!(r.notes.is_empty());
+
+        // No firmware revision: the software revision, labelled as such.
+        mib.remove(&oid("1.3.6.1.2.1.47.1.1.1.1.9.1"));
+        let (addr, _) = serve(Fake {
+            mib,
+            community: b"public",
+            version: 1,
+            ..Fake::default()
+        });
+        let mut a = Agent::new(addr, Version::V2c, b"public", deadline, &cancel).unwrap();
+        r.chassis = None;
+        chassis(&mut a, &mut r).unwrap();
+        let c = r.chassis.clone().unwrap();
+        assert_eq!((c.firmware, c.software.as_deref()), (None, Some("OS 7.0")));
+        let out = Outcome::Read(Box::new(r));
+        assert!(
+            out.report().contains("Software: OS 7.0"),
+            "{}",
+            out.report()
+        );
+    }
+
+    #[test]
+    fn no_chassis_in_the_capped_walk_is_said() {
+        let mut mib = BTreeMap::new();
+        for i in 1..200u32 {
+            mib.insert(
+                oid(&format!("1.3.6.1.2.1.47.1.1.1.1.5.{i}")),
+                Value::Int(10),
+            );
+        }
+        let (addr, _) = serve(Fake {
+            mib,
+            community: b"public",
+            version: 1,
+            ..Fake::default()
+        });
+        let cancel = quiet();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut a = Agent::new(addr, Version::V2c, b"public", deadline, &cancel).unwrap();
+        let mut r = sample(addr.ip());
+        r.chassis = None;
+        r.notes.clear();
+        chassis(&mut a, &mut r).unwrap();
+        assert_eq!(r.chassis, None);
+        assert_eq!(r.notes, ["ENTITY-MIB: no chassis in its first 64 entries."]);
+    }
+
+    #[test]
+    fn huge_supply_levels_dont_overflow() {
+        let s = |level, max| Supply {
+            name: "Toner".into(),
+            level,
+            max,
+        };
+        assert_eq!(s(Some(i64::MAX), Some(i64::MAX)).left(), "100%");
+        assert_eq!(s(Some(i64::MAX / 2), Some(i64::MAX)).left(), "50%");
+        assert_eq!(s(Some(i64::MAX), Some(1)).left(), "100%");
+    }
+
+    #[test]
+    fn agent_software_isnt_called_the_maker() {
+        for (id, says) in [
+            ("1.3.6.1.4.1.8072.3.2.10", "Net-SNMP"),
+            ("1.3.6.1.4.1.4413.1.1", "Broadcom FASTPATH"),
+        ] {
+            let Some(Enterprise::Software(w)) = enterprise(id) else {
+                panic!("{id}")
+            };
+            assert!(w.starts_with(says) && w.contains("not the maker"), "{w}");
+            let mut r = sample("192.0.2.41".parse().unwrap());
+            r.system.object_id = Some(id.into());
+            let out = Outcome::Read(Box::new(r));
+            assert!(out.rows().iter().all(|(_, f, _)| f != "maker"));
+            assert!(out.report().contains(&format!("Agent software: {says}")));
+        }
+    }
+
+    #[test]
+    fn the_contact_shows_on_screen_and_is_never_logged() {
+        let out = Outcome::Read(Box::new(sample("192.0.2.40".parse().unwrap())));
+        let on_screen = out.screen_rows();
+        assert!(
+            on_screen
+                .iter()
+                .any(|(s, f, v)| *s == "system" && f == "contact" && v == "IT desk, ext. 100")
+        );
+        assert!(
+            out.rows()
+                .iter()
+                .all(|(_, f, v)| f != "contact" && !v.contains("IT desk"))
+        );
+        assert!(!out.report().contains("IT desk"));
+        // Only the contact differs.
+        assert_eq!(on_screen.len(), out.rows().len() + 1);
+    }
+
+    #[test]
+    fn long_text_is_cut_at_the_shared_limit() {
+        assert_eq!(text(&[b'a'; 600]).chars().count(), 255);
     }
 }
