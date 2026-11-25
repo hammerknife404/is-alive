@@ -603,6 +603,7 @@ pub mod tests {
     ///     openssl enc -aes-128-cbc -nopad -K <UNF_KEY hex> -iv <UNF_IV hex>
     ///   printf '\x1f\x8b\x08\x00is-alive known answer, 2 blk' |
     ///     openssl enc -aes-256-cbc -nopad -K <UNIFI_KEY hex> -iv 0707…07
+    /// (the IV `unifi` below writes at the head of its test files).
     #[test]
     fn aes_cbc_matches_openssl() {
         let tail = b"is-alive known answer, 2 blk";
@@ -617,17 +618,21 @@ pub mod tests {
             UNF_KEY, UNF_IV, &unf_ct, ZIP_LOCAL
         ));
 
+        // A whole .unifi file as the console writes it: its IV, then the
+        // ciphertext. Split where `peel` splits it, so the layout is checked
+        // as well as the cipher.
         let unifi_plain = [&[0x1f, 0x8b, 0x08, 0x00][..], tail].concat();
-        let unifi_ct = unhex("be34318870a6ebe749545f743b0d72327e1ffd2edf95a1ac64c198f34f48de17");
-        let iv = [7u8; 16];
-        assert_eq!(unifi(unifi_plain.clone()), [&iv[..], &unifi_ct].concat());
+        let file = unhex(concat!(
+            "07070707070707070707070707070707",
+            "be34318870a6ebe749545f743b0d72327e1ffd2edf95a1ac64c198f34f48de17",
+        ));
+        assert_eq!(unifi(unifi_plain.clone()), file);
+        let (iv, body) = file.split_at(16);
+        assert!(starts_with_after::<aes::Aes256>(&UNIFI_KEY, iv, body, GZIP));
         assert_eq!(
-            decrypt::<aes::Aes256>(&UNIFI_KEY, &iv, unifi_ct.clone()).unwrap(),
+            decrypt::<aes::Aes256>(&UNIFI_KEY, iv, body.to_vec()).unwrap(),
             unifi_plain
         );
-        assert!(starts_with_after::<aes::Aes256>(
-            &UNIFI_KEY, &iv, &unifi_ct, GZIP
-        ));
     }
 
     const BSON: &[u8] = b"\x05\0\0\0\0";
