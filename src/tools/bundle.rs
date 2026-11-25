@@ -119,7 +119,9 @@ observation.";
 const INVENTORY_WHAT: &str = "Ping sweep from the scanner: live hosts with how each was found (found_by: \
 ping, arp, mdns, ssdp; a host with only mdns or ssdp answered nothing but the multicast browse and is listed because \
 it's in the swept range on the scanner's own segment), MAC, IEEE vendor, name (each \
-with where it came from: mac_from, name_from), TTL, open management ports (null where a host's ports weren't checked), what it said over DNS-SD \
+with where it came from: mac_from, name_from), whether a locally administered MAC is a client's private \
+one (private_mac) or the gateway's or network gear's virtual one (virtual_mac, vendor then from the MAC with that bit \
+cleared; the gateway is never private), TTL, open management ports (null where a host's ports weren't checked), what it said over DNS-SD \
 (service types, a printer's model, queues and page languages) and over SSDP (UPnP server, device types; the \
 description URL as text, never fetched). DNS-SD and SSDP are multicast: the scanner's own segment only. \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). Observed state; complete false \
@@ -139,7 +141,13 @@ the Wi-Fi row is one snapshot of the access point the scanner was on (its BSSID)
 rates, not roaming; Nearby Wi-Fi lists other access points heard there (BSSIDs), those on its channel first, \
 reported, not judged. A Wi-Fi scan run is the same list from an active scan, one row per access point \
 (connected = yes on the scanner's own). A Domain join (others) run is about other computers: one row each, saying whether it named an Active \
-Directory domain when asked without credentials (an Entra ID join doesn't show that way).";
+Directory domain when asked without credentials (an Entra ID join doesn't show that way). An SNMP run is one \
+device's own answer over SNMP, read when the technician asked (never by a sweep): rows of section, field and \
+value for its system group (sysContact left out), ENTITY-MIB chassis (model, firmware or else software revision, \
+serial), a printer's status, errors and supplies, and its LLDP neighbours (its own port, then the switch and \
+port at the far end). An agent row (Net-SNMP, Broadcom FASTPATH, Microsoft's SNMP service, VMware) names \
+software, not the device's maker. A note row says what was cut short and what wasn't read; \"no answer\" doesn't say why. The \
+community is never in it.";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \

@@ -616,6 +616,7 @@ pub(crate) mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                dnssd: None,
                 imported: None,
             }],
             gateway: Some("10.0.0.1".parse().unwrap()),

@@ -103,6 +103,9 @@ pub fn summarise(e: &log::Entry) -> String {
                 _ => summary(&e.text),
             }
         }
+        crate::tools::snmp::TOOL => {
+            crate::tools::snmp::summary(&t.rows).unwrap_or_else(|| summary(&e.text))
+        }
         "Lookup" => {
             let notes = count("type", "note");
             plural(t.rows.len() - notes, "record", "records")

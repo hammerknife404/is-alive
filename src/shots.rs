@@ -260,14 +260,14 @@ const SCENES: &[Scene] = &[
         |a, _| a.ping.show_for_shots("00:11:32:00:00:01 192.0.2.50"),
         at_once,
     ),
-    // A name the sample sweep saw with a MAC: Start still pings it, with
-    // Wake beside it. Nothing is sent.
+    // Wake picked beside ICMP and TCP, with a name the sample sweep saw
+    // with a MAC: Wake & wait. Nothing is sent.
     scene(
         "ping-wake-name",
         Tab::Ping,
         |a, _| {
             a.sweep.sample_for_shots();
-            a.ping.show_for_shots("FRONTDESK-PC");
+            a.ping.wake_for_shots("FRONTDESK-PC");
         },
         at_once,
     ),
@@ -294,6 +294,18 @@ const SCENES: &[Scene] = &[
         |a, _| {
             a.sweep.sample_for_shots();
             a.sweep.pick_for_shots(75);
+        },
+        at_once,
+    ),
+    // The same sweep, the printer picked after an SNMP read: a fictional
+    // reading (made-up serial, documentation address), nothing sent.
+    scene(
+        "subnet-sweep-snmp",
+        Tab::Sweep,
+        |a, _| {
+            a.sweep.sample_for_shots();
+            a.sweep.pick_for_shots(40);
+            crate::tools::snmp::sample_for_shots(std::net::Ipv4Addr::new(192, 0, 2, 40).into());
         },
         at_once,
     ),

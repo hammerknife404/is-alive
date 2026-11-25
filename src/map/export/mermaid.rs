@@ -225,6 +225,7 @@ mod tests {
                     also: vec![],
                     web: None,
                     multicast: None,
+                    dnssd: None,
                     imported: None,
                 })
                 .collect(),

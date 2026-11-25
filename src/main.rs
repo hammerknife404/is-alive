@@ -1186,6 +1186,9 @@ impl App {
             // site switch waits for them like any run.
             || self.join.running_since().is_some()
             || self.join.others_running_since().is_some()
+            // An inspector's SNMP read: logged when it ends, so a switch
+            // waits for it too.
+            || tools::snmp::is_running()
     }
 
     /// Run every tool against this machine's network and switch to Results.
@@ -1253,6 +1256,7 @@ impl App {
             (tools::netcheck::SCAN, self.netcheck.take_finished_scan()),
             ("Domain join", self.join.take_finished()),
             (tools::join::OTHERS, self.join.take_finished_others()),
+            (tools::snmp::TOOL, tools::snmp::take_finished()),
         ];
         for (tool, run) in done {
             if let Some((started, text, table)) = run {
@@ -1377,6 +1381,7 @@ impl App {
         ]
         .into_iter()
         .filter_map(|(tool, since, out)| Some((tool, since?.to_owned(), out.unwrap_or_default())))
+        .chain(tools::snmp::running_since().map(|(since, out)| (tools::snmp::TOOL, since, out)))
         .collect()
     }
 }

@@ -211,6 +211,7 @@ pub(crate) const TOOLS: &[(&str, &[&str])] = &[
     ),
     ("Domain join", crate::net::join::COLUMNS),
     (crate::tools::join::OTHERS, crate::net::joined::COLUMNS),
+    (crate::tools::snmp::TOOL, crate::tools::snmp::COLUMNS),
 ];
 
 /// Where the open site keeps its runs: its folder, or the profile folder

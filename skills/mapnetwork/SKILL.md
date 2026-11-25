@@ -205,6 +205,36 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   AD-joined (Entra not checked)` means only that: never write that a
   device is a workgroup machine or has no directory from it. `No answer`
   and `Answers, but doesn't say` are not findings.
+  An `SNMP` run is one device's own answer over SNMP, read when the
+  technician pressed SNMP on it (never by a sweep): `target` is its
+  address, and each row is `section`, `field`, `value`. `system` rows are
+  `name`, `description`, `object_id`, `maker` (from the object ID's
+  enterprise number), `uptime` and `location`; sysContact is never in it
+  (it shows on the technician's screen only). An `agent` row instead of
+  `maker` names software, not hardware (Net-SNMP, Broadcom FASTPATH,
+  Microsoft's SNMP service on a Windows computer, VMware ESXi):
+  it says what answered, never who made the device, so don't use it as
+  the vendor. `chassis` rows are ENTITY-MIB's first chassis: `model`,
+  `firmware` (its firmware revision) or, when it has none, `software` (its
+  software revision, often the OS version), and `serial`; `printer` rows are
+  `status` and `errors` (*low toner*, *jammed* …, or `none`), and each
+  `supply` row is a toner or drum (`field`) and what's left (`value`:
+  *45%*, *some left*, *unknown*). An `lldp` row's `field` is the
+  device's own port and its `value` the neighbour's name and port
+  (*SW-OFFICE-1 Gi1/0/14 (Front desk printer)*): observed from the device,
+  so it can set that node's uplink and port when no config says
+  otherwise, and the switch it names joins by name. Use the rest as
+  observed facts for the node (model, firmware, serial in its `details`;
+  a sysName as its name when the map has none). A printer error or a
+  supply at a few percent can be an action item; an `uptime` is context,
+  not a finding. `note` rows say a part was cut short (a table's cap, the
+  time limit, or the device going quiet) and which parts weren't read:
+  with such a note, a missing part is unknown, not absent. Without one,
+  every part was read in full. `snmp` /
+  `answer` = `no answer` means nothing answered: SNMP off, a wrong
+  community, an ACL or a v3-only agent look the same, so never report
+  which, and never report a device as having no SNMP from it. No row
+  ever holds the community.
 - **Several of a kind** (one visit, more than one controller or firewall):
   the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
   `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`
@@ -236,7 +266,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   routed network can never produce one. (Inventories from before 0.33.0 have
   `found_by` as a single string, `"ping"` or `"arp"`: read it as a one-item
   list.) `open_ports` is role evidence for the
-  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera). It is
+  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera;
+  telnet 23 alone is not gear when the maker, `web_title` or `dnssd` says
+  printer, since many copiers leave it open). It is
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
@@ -244,7 +276,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   finished: hosts it hadn't reached are missing and some ports weren't
   checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
-  else its `Server` header), read where a management web port answered: a
+  else its `Server` header; a placeholder title such as "Loading...",
+  "Login" or "Redirecting" counts as none, so the `Server` header shows
+  instead), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
   HP printer's page), the device's own claim rather than proof.
   `dnssd` is what the host said over DNS-SD (Bonjour), `null` if it said
@@ -288,7 +322,37 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `other_macs` lists any other MAC the address answered from during the
   sweep: two devices on one IP (a duplicate address), or a failover
   mid-sweep. Flag it on that node and in `ACTIONS` (med).
-  `private_mac: true` is a phone, laptop or VM, never infrastructure.
+  An `ip` in 169.254.0.0/16 is self-assigned: DHCP didn't answer that
+  device. Flag it on the node and in `ACTIONS` (med) with the count and
+  "check the DHCP server/scope and the switch port". A client whose `ip` is
+  the gateway's, a switch's, an AP's or a server's (a different device, not
+  the same `mac`) is an address clash: one `ACTIONS` item (high on the
+  gateway's address, else med) naming both nodes. is-alive raises the same
+  findings when it reopens the map, client lines of a "+N more" card
+  included. `open_ports` includes 21 (`ftp`) when checked: printers and NAS
+  often leave FTP on, clear text, worth a low item.
+  `vendor` is the registered owner of the MAC prefix. A locally
+  administered MAC (the `0x02` bit of the first octet set) is one of two
+  things. `private_mac: true` is a phone, laptop or VM's private address
+  with nothing to say infrastructure: `vendor` null, not infrastructure.
+  `virtual_mac: true` is infrastructure's own virtual address: the
+  gateway's (never private, whatever its MAC), or a network-gear maker's
+  prefix with that bit set on a host showing gear of its own (telnet,
+  541, 4433 or 8291 open, or a web page that names gear; a laptop's 445
+  or 3389 doesn't count), such as a SonicWall LAN interface answering on `2e:b8:ed:…` for
+  SonicWall's `2c:b8:ed:…`. `vendor` then names that maker (null on a
+  gateway whose maker isn't known). Match it to a firewall export's or
+  UniFi's interface MAC with that bit cleared. Both are `false` for a
+  registered MAC and `null` when `mac` is. (Inventories from before 0.35.0
+  have no `virtual_mac` and called every locally administered MAC private,
+  the gateway's included: trust `is_gateway` over `private_mac` there.)
+  `vendor: "HP"` covers HP printers, HP PCs and, since HP bought Poly, Poly
+  desk phones on HP's newer prefixes: decide by `web_title` (a Poly or VVX
+  page is a phone, a LaserJet page a printer), `dnssd` and `open_ports`,
+  and call it an HP device only when nothing else says. Carrier and voice
+  edge boxes (Adtran, EdgeMarc, AudioCodes, Ribbon/Sonus, Patton) are
+  network gear, often answering only ARP: the provider's demarc, not a
+  client.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
@@ -339,9 +403,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `name_from` still says where the real name came from. A token is not a
   name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
-  `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
-  `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `ais`,
-  `is_gateway`, `is_this_machine`, `on_scanner_lan`.
+  `private_mac`, `virtual_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
+  `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `ais`, `is_gateway`,
+  `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
   put it in that node's `details` (and `flags` when it reports a problem).
   Its `inferred` list says what about that card is-alive worked out and did

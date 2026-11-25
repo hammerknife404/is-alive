@@ -265,6 +265,9 @@ impl MapView {
             }
             ui.add_space(6.0);
             self.card_actions(ui, i, ev);
+            if let Some(ip) = n.ip {
+                crate::tools::snmp::section(ui, ip.into());
+            }
 
             // Action items: its own flags and the findings that name it.
             let findings: Vec<&crate::map::Finding> = self
@@ -440,8 +443,9 @@ impl MapView {
     }
 
     /// What can be done to card `i` from here: Ping, Ports and Trace (the
-    /// result shows under Results), and Web, SSH and RDP when they're open.
-    /// Wake, Copy and the rest are in ⋯.
+    /// result shows under Results), Web, SSH and RDP when they're open, and
+    /// SNMP (its reading shows under the buttons). Wake, Copy and the rest
+    /// are in ⋯.
     fn card_actions(&self, ui: &mut Ui, i: usize, ev: &mut Option<PanelEv>) {
         let n = &self.map.nodes[i];
         let Some(ip) = n.ip else {
@@ -451,6 +455,7 @@ impl MapView {
             Run(Tool),
             Web(String),
             Connect(crate::connect::Plan),
+            Snmp,
         }
         let mut acts: Vec<(String, String, bool, Do)> = Vec::new();
         for (tool, tip) in [
@@ -499,6 +504,9 @@ impl MapView {
                 ));
             }
         }
+        // SNMP: asked of this one device only, when pressed.
+        let (ok, tip) = crate::tools::snmp::button(ip.into());
+        acts.push(("SNMP".into(), tip, ok, Do::Snmp));
         let shown: Vec<Act> = acts
             .iter()
             .map(|(label, tip, enabled, _)| Act {
@@ -512,6 +520,7 @@ impl MapView {
                 Do::Run(tool) => *ev = Some(PanelEv::Run(i, tool)),
                 Do::Web(url) => widgets::open_url(url),
                 Do::Connect(plan) => crate::connect::launch(plan),
+                Do::Snmp => crate::tools::snmp::start(ui.ctx(), ip.into()),
             }
         }
     }
