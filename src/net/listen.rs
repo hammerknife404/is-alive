@@ -7,10 +7,12 @@
 //!   with a filter for the two multicast addresses.
 //! - Linux: a raw AF_PACKET socket (needs CAP_NET_RAW), joined to the two
 //!   multicast addresses with a kernel filter for them; else what lldpd
-//!   heard (`lldpcli`); else what systemd-networkd heard (`networkctl
-//!   lldp`), when it manages the link.
+//!   heard (`lldpcli`), when it's already running; else what
+//!   systemd-networkd heard (`networkctl lldp`), when it manages the link.
 //!
-//! When none can, the outcome says what would make one work.
+//! When none can, the outcome says what would make one work. Never
+//! "install or start lldpd": lldpd announces this computer on every port
+//! it runs on, and an install starts it for good.
 
 use super::lldp::{self, Neighbor};
 use super::netconf::{self, Wired};
@@ -43,6 +45,13 @@ pub enum Outcome {
     },
     /// No wired adapter, or none with a link.
     NoWire(String),
+    /// The capture broke off (the adapter went away mid-listen).
+    Lost {
+        adapter: String,
+        via: &'static str,
+        why: String,
+        mac: Option<[u8; 6]>,
+    },
     /// Nothing here can listen; what would make it work.
     Cannot {
         adapter: String,
@@ -58,6 +67,7 @@ impl Outcome {
         match self {
             Outcome::Heard { mac, .. }
             | Outcome::Silent { mac, .. }
+            | Outcome::Lost { mac, .. }
             | Outcome::Cannot { mac, .. } => *mac,
             _ => None,
         }
@@ -109,14 +119,20 @@ pub fn listen(lan: Option<Ipv4Addr>, cancel: &AtomicBool, status: &dyn Fn(String
     }
     let secs = start.elapsed().as_secs();
     match got {
-        Some(n) => Outcome::Heard {
+        Err(why) => Outcome::Lost {
+            adapter: w.name.clone(),
+            via,
+            why,
+            mac: w.mac,
+        },
+        Ok(Some(n)) => Outcome::Heard {
             n: Box::new(n),
             adapter: w.name.clone(),
             via,
             secs,
             mac: w.mac,
         },
-        None => Outcome::Silent {
+        Ok(None) => Outcome::Silent {
             adapter: w.name.clone(),
             via,
             secs,
@@ -124,6 +140,10 @@ pub fn listen(lan: Option<Ipv4Addr>, cancel: &AtomicBool, status: &dyn Fn(String
         },
     }
 }
+
+/// What a backend heard: the switch, nothing by the deadline, or why the
+/// capture broke off.
+type Heard = Result<Option<Neighbor>, String>;
 
 /// Whether a captured frame is the switch's: not one this computer sent
 /// (lldpd here announces too).
@@ -141,7 +161,7 @@ const SLICE: Duration = Duration::from_millis(500);
 // ------------------------------------------------------------- Linux
 
 #[cfg(target_os = "linux")]
-type Found = Result<(&'static str, Option<Neighbor>), String>;
+type Found = Result<(&'static str, Heard), String>;
 
 #[cfg(target_os = "linux")]
 fn backend(w: &Wired, deadline: Instant, cancel: &AtomicBool, status: &dyn Fn(String)) -> Found {
@@ -160,7 +180,7 @@ fn backend(w: &Wired, deadline: Instant, cancel: &AtomicBool, status: &dyn Fn(St
         .then(|| super::system_tool("networkctl"))
         .flatten();
     if lldpd.is_none() && networkd.is_none() {
-        return Err(linux_fix(w, &raw, lldpcli.is_some()));
+        return Err(linux_fix(w, &raw));
     }
     let via = if lldpd.is_some() {
         "lldpd"
@@ -175,11 +195,11 @@ fn backend(w: &Wired, deadline: Instant, cancel: &AtomicBool, status: &dyn Fn(St
             _ => None,
         };
         if n.is_some() {
-            return Ok((via, n));
+            return Ok((via, Ok(n)));
         }
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() || cancel.load(Ordering::Relaxed) {
-            return Ok((via, None));
+            return Ok((via, Ok(None)));
         }
         let until = Instant::now() + left.min(Duration::from_secs(3));
         while Instant::now() < until && !cancel.load(Ordering::Relaxed) {
@@ -188,30 +208,24 @@ fn backend(w: &Wired, deadline: Instant, cancel: &AtomicBool, status: &dyn Fn(St
     }
 }
 
-/// What would make listening work, from what was tried.
+/// What would make listening work: the raw socket's permission. Never
+/// "start lldpd": it would announce this computer to the switch.
 #[cfg(target_os = "linux")]
-fn linux_fix(w: &Wired, raw: &std::io::Error, has_lldpcli: bool) -> String {
-    let mut s = format!(
-        "Can't listen on {} here. Any one of these makes it work:\n",
+fn linux_fix(w: &Wired, raw: &std::io::Error) -> String {
+    let fix = if raw.kind() != std::io::ErrorKind::PermissionDenied {
+        format!("a raw socket on it failed: {raw}")
+    } else if std::env::var_os("APPIMAGE").is_some() {
+        "run is-alive with sudo (an AppImage can't be given the CAP_NET_RAW capability)".into()
+    } else {
+        "give is-alive the CAP_NET_RAW capability (sudo setcap cap_net_raw+ep on its program \
+         file), or run it with sudo"
+            .into()
+    };
+    format!(
+        "Can't listen on {} here: {fix}. Then press Listen again. (If lldpd or systemd-networkd \
+         is already running here, is-alive reads what it heard instead.)",
         w.name
-    );
-    if raw.kind() == std::io::ErrorKind::PermissionDenied {
-        if std::env::var_os("APPIMAGE").is_some() {
-            s += "- run is-alive with sudo (an AppImage can't be given the CAP_NET_RAW capability)\n";
-        } else {
-            s += "- give is-alive the CAP_NET_RAW capability (sudo setcap cap_net_raw+ep on its \
-                  program file), or run it with sudo\n";
-        }
-    } else {
-        s += &format!("- (a raw socket failed: {raw})\n");
-    }
-    if has_lldpcli {
-        s += "- start lldpd (sudo systemctl start lldpd): lldpcli is installed but lldpd isn't running\n";
-    } else {
-        s += "- install and start lldpd (sudo apt install lldpd, or your system's package)\n";
-    }
-    s += "Then press Listen again.";
-    s
+    )
 }
 
 /// lldpd's neighbour on `dev`: Err when lldpcli can't reach lldpd.
@@ -360,18 +374,29 @@ mod raw {
         own: Option<[u8; 6]>,
         deadline: Instant,
         cancel: &AtomicBool,
-    ) -> Option<Neighbor> {
+    ) -> Heard {
         let mut buf = vec![0u8; 9216];
         while Instant::now() < deadline && !cancel.load(Ordering::Relaxed) {
             let n = unsafe { libc::recv(sock.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len(), 0) };
-            if n <= 0 {
+            if n < 0 {
+                let e = io::Error::last_os_error();
+                match e.kind() {
+                    io::ErrorKind::WouldBlock
+                    | io::ErrorKind::TimedOut
+                    | io::ErrorKind::Interrupted => {}
+                    // The adapter went down or away (unplugged, a USB adapter pulled).
+                    _ => return Err(format!("the capture stopped: {e}")),
+                }
+                continue;
+            }
+            if n == 0 {
                 continue;
             }
             if let Some(found) = from_switch(&buf[..n as usize], own) {
-                return Some(found);
+                return Ok(Some(found));
             }
         }
-        None
+        Ok(None)
     }
 
     #[test]
@@ -417,7 +442,7 @@ fn backend(
     deadline: Instant,
     cancel: &AtomicBool,
     status: &dyn Fn(String),
-) -> Result<(&'static str, Option<Neighbor>), String> {
+) -> Result<(&'static str, Heard), String> {
     let lib = npcap::Npcap::load().ok_or_else(|| {
         format!(
             "Can't listen on {} here: install Npcap (npcap.com, the capture driver Wireshark \
@@ -425,11 +450,27 @@ fn backend(
             w.name
         )
     })?;
-    let cap = lib
-        .open(&w.dev)
-        .map_err(|e| format!("Npcap couldn't open {}: {e}", w.name))?;
+    let cap = lib.open(&w.dev).map_err(|e| npcap_fix(&w.name, &e))?;
+    // The one change to how the adapter receives, for this capture only.
+    cap.all_multicast();
     status(format!("Listening on {} (Npcap)", w.name));
     Ok(("Npcap", cap.listen(w.mac, deadline, cancel)))
+}
+
+/// Why Npcap couldn't open the adapter, in words: admin-only mode said
+/// so, else Npcap's own error.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn npcap_fix(adapter: &str, err: &str) -> String {
+    let e = err.to_ascii_lowercase();
+    if e.contains("access is denied") || e.contains("error code 5") || e.contains("(5)") {
+        format!(
+            "Npcap is installed to let only administrators capture, so it refused to open \
+             {adapter}. Run is-alive as administrator, or reinstall Npcap without \
+             \"Restrict Npcap driver's access to Administrators only\"."
+        )
+    } else {
+        format!("Npcap couldn't open {adapter}: {err}")
+    }
 }
 
 #[cfg(windows)]
@@ -466,6 +507,7 @@ mod npcap {
     type NextEx = unsafe extern "C" fn(*mut c_void, *mut *mut PktHdr, *mut *const u8) -> c_int;
     type Close = unsafe extern "C" fn(*mut c_void);
     type GetErr = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+    type OidSet = unsafe extern "C" fn(*mut c_void, u32, *const c_void, *mut usize) -> c_int;
 
     pub struct Npcap {
         dll: HMODULE,
@@ -476,6 +518,8 @@ mod npcap {
         next_ex: NextEx,
         close: Close,
         get_err: GetErr,
+        /// Not in every Npcap: optional.
+        oid_set: Option<OidSet>,
     }
 
     impl Drop for Npcap {
@@ -530,7 +574,12 @@ mod npcap {
                     }
                 };
             }
+            let oid_set = unsafe { GetProcAddress(dll, c"pcap_oid_set_request".as_ptr().cast()) }
+                .map(|p| unsafe {
+                    std::mem::transmute::<unsafe extern "system" fn() -> isize, OidSet>(p)
+                });
             Some(Npcap {
+                oid_set,
                 open_live: f!("pcap_open_live", OpenLive),
                 compile: f!("pcap_compile", Compile),
                 set_filter: f!("pcap_setfilter", SetFilter),
@@ -546,13 +595,13 @@ mod npcap {
         pub fn open(&self, guid: &str) -> Result<Capture<'_>, String> {
             let dev = format!("\\Device\\NPF_{guid}\0");
             let mut err = [0 as c_char; 512];
-            // Promiscuous: some adapters only pass these multicast
-            // addresses so. Still receive-only.
+            // Not promiscuous: the adapter keeps its own receive filter
+            // (but see `all_multicast`).
             let p = unsafe {
                 (self.open_live)(
                     dev.as_ptr().cast(),
                     2048,
-                    1,
+                    0,
                     SLICE.as_millis() as c_int,
                     err.as_mut_ptr(),
                 )
@@ -581,12 +630,39 @@ mod npcap {
     }
 
     impl Capture<'_> {
+        /// The only change to how the adapter receives, and only while this
+        /// capture is open: ask Npcap to let all multicast frames through to
+        /// it (NDIS_PACKET_TYPE_ALL_MULTICAST, with directed, listed
+        /// multicast and broadcast as before), since the adapter otherwise
+        /// drops multicast to addresses no program asked for, and CDP's
+        /// 01:00:0c:cc:cc:cc (and LLDP's, without Windows' LLDP driver) is
+        /// one. Npcap keeps the filter per capture and drops it when the
+        /// capture closes. Not promiscuous: frames to other computers'
+        /// addresses still aren't received. Best effort: an Npcap without
+        /// pcap_oid_set_request, or one that refuses, listens as it is.
+        pub fn all_multicast(&self) {
+            const OID_GEN_CURRENT_PACKET_FILTER: u32 = 0x0001_010e;
+            // DIRECTED | MULTICAST | ALL_MULTICAST | BROADCAST.
+            let filter: u32 = 0x1 | 0x2 | 0x4 | 0x8;
+            if let Some(set) = self.lib.oid_set {
+                let mut len = size_of::<u32>();
+                let _ = unsafe {
+                    set(
+                        self.p,
+                        OID_GEN_CURRENT_PACKET_FILTER,
+                        (&raw const filter).cast(),
+                        &mut len,
+                    )
+                };
+            }
+        }
+
         pub fn listen(
             &self,
             own: Option<[u8; 6]>,
             deadline: Instant,
             cancel: &AtomicBool,
-        ) -> Option<Neighbor> {
+        ) -> Heard {
             while Instant::now() < deadline && !cancel.load(Ordering::Relaxed) {
                 let mut h: *mut PktHdr = std::ptr::null_mut();
                 let mut d: *const u8 = std::ptr::null();
@@ -595,14 +671,20 @@ mod npcap {
                         let len = unsafe { (*h).caplen }.min(2048) as usize;
                         let frame = unsafe { std::slice::from_raw_parts(d, len) };
                         if let Some(n) = from_switch(frame, own) {
-                            return Some(n);
+                            return Ok(Some(n));
                         }
                     }
                     0 | 1 => {}
-                    _ => return None,
+                    // -1: the adapter went away (unplugged, a USB adapter
+                    // pulled) or the driver failed; -2 can't happen live.
+                    _ => {
+                        let e =
+                            unsafe { CStr::from_ptr((self.lib.get_err)(self.p)) }.to_string_lossy();
+                        return Err(format!("the capture stopped: {}", crate::net::sanitize(&e)));
+                    }
                 }
             }
-            None
+            Ok(None)
         }
     }
 }
@@ -615,7 +697,7 @@ fn backend(
     _: Instant,
     _: &AtomicBool,
     _: &dyn Fn(String),
-) -> Result<(&'static str, Option<Neighbor>), String> {
+) -> Result<(&'static str, Heard), String> {
     Err(format!(
         "Listening on {} isn't supported on this system.",
         w.name
@@ -625,6 +707,17 @@ fn backend(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn npcap_in_admin_only_mode_says_so() {
+        let e = npcap_fix("Ethernet", "Error opening adapter: Access is denied.  (5)");
+        assert!(e.contains("only administrators"), "{e}");
+        let e = npcap_fix(
+            "Ethernet",
+            "Error opening adapter: The system cannot find the device specified. (20)",
+        );
+        assert!(e.starts_with("Npcap couldn't open Ethernet"), "{e}");
+    }
 
     #[test]
     fn our_own_announcements_are_not_the_switch() {

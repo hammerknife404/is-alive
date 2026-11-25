@@ -286,7 +286,9 @@ impl App {
         let mut text = self.port.bar_text(self.info.port.as_ref());
         // Under 1100 the word goes, as LAN's and Gateway's do.
         if ui.ctx().content_rect().width() < crate::nav::OPEN_FROM
-            && let Some(p) = text.strip_prefix("Port ")
+            && let Some(p) = text
+                .strip_prefix("Port: ")
+                .or_else(|| text.strip_prefix("Port "))
         {
             text = p.to_string();
         }
@@ -300,9 +302,14 @@ impl App {
         let hit = egui::Rect::from_x_y_ranges(label.rect.x_range(), ui.max_rect().y_range());
         let tip = match heard {
             Some(h) => format!(
-                "{} (heard via {}). Click for VLANs, management address and more, or to listen again.",
+                "{} (heard via {}{}). Click for VLANs, management address and more, or to listen again.",
                 h.n.short(),
-                h.via
+                h.via,
+                if h.at.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", h.at)
+                }
             ),
             None => crate::tools::whichport::TIP.to_string(),
         };

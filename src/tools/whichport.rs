@@ -47,8 +47,8 @@ pub struct WhichPort {
     last: Option<Last>,
     /// A run waiting for Results: start, text, table.
     finished: Option<(String, String, Option<Table>)>,
-    /// Something new was heard, for the scanner's record.
-    heard: Option<Heard>,
+    /// What the last attempt says about the scanner's record.
+    change: Option<Change>,
     /// The switch to ask over SNMP.
     pub switch_ip: String,
     /// The scene tour opens the popup.
@@ -123,9 +123,14 @@ impl WhichPort {
             return;
         };
         let (text, rows) = record(&last);
-        if let Some(h) = heard(&last) {
-            self.heard = Some(h);
-        }
+        self.change = match heard(&last) {
+            Some(h) => Some(Change::Heard(Box::new(Heard {
+                at: started.clone(),
+                ..h
+            }))),
+            None if clears(&last) => Some(Change::Gone),
+            None => None,
+        };
         self.finished = Some((
             started,
             text,
@@ -170,9 +175,9 @@ impl WhichPort {
         self.finished.take()
     }
 
-    /// Something newly heard, for the scanner's record, once.
-    pub fn take_heard(&mut self) -> Option<Heard> {
-        self.heard.take()
+    /// What the last attempt says about the scanner's record, once.
+    pub fn take_change(&mut self) -> Option<Change> {
+        self.change.take()
     }
 
     /// A site switch: what was shown belongs to the last site.
@@ -181,6 +186,8 @@ impl WhichPort {
             j.stop();
         }
         self.last = None;
+        // The last site's switch isn't this one's.
+        self.switch_ip.clear();
     }
 
     /// The status bar's words: what's known, or the question.
@@ -246,7 +253,14 @@ impl WhichPort {
             (Some(l), _) => show_last(ui, l),
             (None, Some(h)) => {
                 show_heard(ui, h);
-                insp::note(ui, "Heard earlier at this site (in Results).");
+                insp::note(
+                    ui,
+                    &format!(
+                        "Heard {} at this site (in Results): listen again to check it's still \
+                         this port.",
+                        if h.at.is_empty() { "earlier" } else { &h.at }
+                    ),
+                );
             }
             (None, None) => {}
         }
@@ -319,6 +333,29 @@ fn cut(s: &str, n: usize) -> String {
     }
 }
 
+/// What an attempt does to the scanner's record: a port heard, or (an
+/// attempt in this session that heard nothing on the wire, or found no
+/// wire) the port shown is no longer known to be this one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Change {
+    Heard(Box<Heard>),
+    Gone,
+}
+
+/// Whether an attempt that named no port says the old one is stale: it
+/// listened and heard nothing, found no wired link, or lost the capture.
+/// Not one that couldn't listen at all, was stopped, or an SNMP ask.
+fn clears(last: &Last) -> bool {
+    matches!(
+        last,
+        Last::Listened(
+            listen::Outcome::Silent { .. }
+                | listen::Outcome::NoWire(_)
+                | listen::Outcome::Lost { .. }
+        )
+    )
+}
+
 /// What an attempt found, as the scanner's record.
 fn heard(last: &Last) -> Option<Heard> {
     match last {
@@ -328,6 +365,7 @@ fn heard(last: &Last) -> Option<Heard> {
             n: (**n).clone(),
             via: (*via).to_string(),
             adapter: adapter.clone(),
+            at: String::new(),
         }),
         Last::Asked(snmp::Lookup::Found(l)) => Some(Heard {
             n: Neighbor {
@@ -340,6 +378,7 @@ fn heard(last: &Last) -> Option<Heard> {
             },
             via: "SNMP".into(),
             adapter: String::new(),
+            at: String::new(),
         }),
         _ => None,
     }
@@ -353,6 +392,12 @@ fn problem(last: &Last) -> Option<String> {
             listen::Outcome::Silent { adapter, secs, .. } => listen::silent_text(adapter, *secs),
             listen::Outcome::NoWire(s) => s.clone(),
             listen::Outcome::Cannot { fix, .. } => fix.clone(),
+            listen::Outcome::Lost {
+                adapter, via, why, ..
+            } => format!(
+                "Listening on {adapter} ({via}) broke off: {why}. Check the cable (or the USB \
+                 adapter) and press Listen again."
+            ),
             listen::Outcome::Stopped => "Stopped before anything was heard.".into(),
         },
         Last::Asked(l) => match l {
@@ -393,6 +438,7 @@ fn record(last: &Last) -> (String, Vec<Vec<String>>) {
         Last::Listened(listen::Outcome::Silent { .. }) => "nothing heard",
         Last::Listened(listen::Outcome::NoWire(_)) => "no wired link",
         Last::Listened(listen::Outcome::Cannot { .. }) => "can't listen",
+        Last::Listened(listen::Outcome::Lost { .. }) => "capture error",
         Last::Listened(_) => "stopped",
         Last::Asked(snmp::Lookup::NotLearned { .. }) => "not learned",
         Last::Asked(_) => "failed",
@@ -451,7 +497,13 @@ pub fn from_log(l: &log::Log) -> Option<Heard> {
         .iter()
         .rev()
         .filter(|e| e.tool == TOOL)
-        .find_map(|e| e.table.as_ref().and_then(|t| Heard::from_rows(&t.rows)))
+        .find_map(|e| {
+            let h = Heard::from_rows(&e.table.as_ref()?.rows)?;
+            Some(Heard {
+                at: e.started.clone(),
+                ..h
+            })
+        })
 }
 
 /// The scene tour: a fictional switch heard on a fictional adapter.
@@ -493,9 +545,18 @@ mod tests {
         assert!(text.contains("Gi1/0/12"), "{text}");
         assert!(text.contains("after 23 s"), "{text}");
         assert_eq!(summary(&rows), "Gi1/0/12 on sw-example-01");
-        let h = p.take_heard().expect("kept for the scanner");
-        assert_eq!(Heard::from_rows(&rows), Some(h));
-        assert_eq!(p.take_heard(), None);
+        let Some(Change::Heard(h)) = p.take_change() else {
+            panic!("kept for the scanner")
+        };
+        assert!(!h.at.is_empty(), "when it was heard");
+        assert_eq!(
+            Heard::from_rows(&rows),
+            Some(Heard {
+                at: String::new(),
+                ..*h
+            })
+        );
+        assert_eq!(p.take_change(), None);
         assert_eq!(p.bar_text(None), "Which port?");
     }
 
@@ -512,7 +573,30 @@ mod tests {
         let rows = table.unwrap().rows;
         assert_eq!(summary(&rows), "can't listen");
         assert!(text.contains("install Npcap"));
-        assert_eq!(p.take_heard(), None);
+        // Couldn't listen: says nothing about the port shown.
+        assert_eq!(p.take_change(), None);
+        // Listened and heard nothing: the port shown is stale.
+        p.start(true);
+        p.done(Last::Listened(listen::Outcome::Silent {
+            adapter: "eth0".into(),
+            via: "raw socket",
+            secs: 65,
+            mac: None,
+        }));
+        assert_eq!(p.take_change(), Some(Change::Gone));
+        let _ = p.take_finished();
+        // So does a capture that broke off, logged as a capture error.
+        p.start(true);
+        p.done(Last::Listened(listen::Outcome::Lost {
+            adapter: "eth0".into(),
+            via: "raw socket",
+            why: "the capture stopped: Network is down".into(),
+            mac: None,
+        }));
+        assert_eq!(p.take_change(), Some(Change::Gone));
+        let (_, text, table) = p.take_finished().unwrap();
+        assert_eq!(summary(&table.unwrap().rows), "capture error");
+        assert!(text.contains("broke off"), "{text}");
         // SNMP that found it is a port too.
         p.start(false);
         p.done(Last::Asked(snmp::Lookup::Found(snmp::Learned {
@@ -524,6 +608,12 @@ mod tests {
         })));
         let (_, _, table) = p.take_finished().unwrap();
         assert_eq!(summary(&table.unwrap().rows), "Gi1/0/12 on sw-example-01");
-        assert_eq!(p.take_heard().unwrap().via, "SNMP");
+        let Some(Change::Heard(h)) = p.take_change() else {
+            panic!("a port")
+        };
+        assert_eq!(h.via, "SNMP");
+        p.switch_ip = "192.0.2.10".into();
+        p.reset();
+        assert!(p.switch_ip.is_empty(), "the last site's switch isn't kept");
     }
 }

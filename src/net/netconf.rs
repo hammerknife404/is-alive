@@ -183,6 +183,32 @@ const VPN_PREFIXES: &[&str] = &[
     "nordlynx",
 ];
 
+/// Words in a virtual Ethernet adapter's name or description (Windows):
+/// a hypervisor's switch or host-only network, a container's, a capture
+/// driver's loopback. Only used when Windows won't say whether an adapter
+/// is hardware.
+const VIRTUAL_WORDS: &[&str] = &[
+    "vethernet",
+    "hyper-v",
+    "virtual ethernet",
+    "vmware",
+    "vmnet",
+    "virtualbox",
+    "host-only",
+    "docker",
+    "wsl",
+    "loopback",
+    "parallels",
+];
+
+/// Whether an Ethernet adapter looks virtual, from its name and description.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn virtual_like(name: &str, desc: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    let d = desc.to_ascii_lowercase();
+    VIRTUAL_WORDS.iter().any(|w| n.contains(w) || d.contains(w))
+}
+
 /// Whether an adapter looks like a VPN's, from its name and description.
 pub fn vpn_like(name: &str, desc: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -513,7 +539,13 @@ mod win {
             }
             let name = unsafe { wide(ad.FriendlyName) };
             let desc = unsafe { wide(ad.Description) };
-            if super::vpn_like(&name, &desc) {
+            // Hyper-V's and WSL's vEthernet, VMware's VMnet and VirtualBox's
+            // host-only adapters are Ethernet too, and always up: listening
+            // there hears nothing and blames the switch. The system's own
+            // word first (a hardware interface), the name when it won't say.
+            let hardware =
+                hardware_interface(ad).unwrap_or_else(|| !super::virtual_like(&name, &desc));
+            if !hardware || super::vpn_like(&name, &desc) {
                 return;
             }
             let mac = (ad.PhysicalAddressLength == 6)
@@ -533,6 +565,16 @@ mod win {
             });
         });
         out
+    }
+
+    /// Whether Windows calls the adapter a hardware interface (MIB_IF_ROW2's
+    /// HardwareInterface, bit 0 of its flags); None if it can't be read.
+    fn hardware_interface(ad: &IP_ADAPTER_ADDRESSES_LH) -> Option<bool> {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+        let mut row: MIB_IF_ROW2 = unsafe { std::mem::zeroed() };
+        row.InterfaceLuid = ad.Luid;
+        (unsafe { GetIfEntry2(&mut row) } == 0)
+            .then_some(row.InterfaceAndOperStatusFlags._bitfield & 0x01 != 0)
     }
 
     /// Call `f` on every adapter.
@@ -743,6 +785,32 @@ mod tests {
                 let _ = parse_networkd_lease(t);
             },
         );
+    }
+
+    #[test]
+    fn virtual_ethernet_adapters_are_known_by_name() {
+        for (name, desc) in [
+            ("vEthernet (WSL)", "Hyper-V Virtual Ethernet Adapter"),
+            (
+                "vEthernet (Default Switch)",
+                "Hyper-V Virtual Ethernet Adapter #2",
+            ),
+            (
+                "VMware Network Adapter VMnet8",
+                "VMware Virtual Ethernet Adapter for VMnet8",
+            ),
+            ("Ethernet 3", "VirtualBox Host-Only Ethernet Adapter"),
+            ("Npcap Loopback Adapter", "Npcap Loopback Adapter"),
+        ] {
+            assert!(virtual_like(name, desc), "{name}");
+        }
+        for (name, desc) in [
+            ("Ethernet", "Intel(R) Ethernet Connection (13) I219-LM"),
+            ("Ethernet 2", "Realtek USB GbE Family Controller"),
+            ("eth0", ""),
+        ] {
+            assert!(!virtual_like(name, desc), "{name}");
+        }
     }
 
     #[test]

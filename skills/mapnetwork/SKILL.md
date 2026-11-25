@@ -255,8 +255,12 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   forwarding table learned the scanner's MAC on, which on an uplink is
   another switch's port, so trust it only on an edge switch. One that
   found nothing has `result` (*nothing heard*, *can't listen*, *no wired
-  link*, *not learned*, *failed*) and `detail`: never a finding about the
-  switch (an unmanaged switch, or LLDP and CDP off, look the same). The
+  link*, *capture error*, *not learned*, *failed*) and `detail`: never a
+  finding about the switch (an unmanaged switch, or LLDP and CDP off, look
+  the same). A `port_description` is whatever the switch's admin typed and
+  often names the person at that desk (*J. Smith desk*): use it to place
+  the drop, but never repeat a person's name in the map, its findings or
+  your reply; say *the port's label* instead. The
   newest one that found a port is also the inventory's
   `scanner.switch_port`.
 - **Several of a kind** (one visit, more than one controller or firewall):
@@ -388,8 +392,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   scanner was plugged into, as its newest `Switch port` run found it:
   `switch` and `port` (the switch's own names), `port_description`,
   `vlan`, `voice_vlan`, `vlan_names` (`id`, `name`), `management`, `poe`,
-  `model`, `chassis_id`, `adapter`, `protocol` and `heard_via` (read them
-  as that run's rows, above). Match `switch` (or `management`, or
+  `model`, `chassis_id`, `adapter`, `protocol`, `heard_via` (read them
+  as that run's rows, above) and `heard_at` (that run's start, local time:
+  an earlier visit's port may have changed since). Match `switch` (or `management`, or
   `chassis_id`) to a switch in the configs or inventory, and put the
   port, its VLAN and its label in that switch's `details` (*Scanner's
   drop: Gi1/0/12 "Room 2.14", VLAN 20*); the scanner itself stays off the

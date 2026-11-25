@@ -541,8 +541,10 @@ impl App {
         self.advanced.poll();
         self.netcheck.poll();
         self.port.poll();
-        if let Some(h) = self.port.take_heard() {
-            self.info.port = Some(h);
+        match self.port.take_change() {
+            Some(tools::whichport::Change::Heard(h)) => self.info.port = Some(*h),
+            Some(tools::whichport::Change::Gone) => self.info.port = None,
+            None => {}
         }
         self.join.poll();
         self.export.poll(ctx);

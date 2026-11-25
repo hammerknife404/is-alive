@@ -126,7 +126,7 @@ cleared; the gateway is never private), TTL, open management ports (null where a
 description URL as text, never fetched). DNS-SD and SSDP are multicast: the scanner's own segment only. \
 Names of phones, laptops and PCs follow client_names (in its summary and the file). scanner.switch_port is the \
 switch port the scanner was plugged into (switch, port, VLANs, management address), as its newest Switch port run \
-found it, null when not known. Observed state; complete false \
+found it, with when (heard_at), null when not known; its port_description can name a person. Observed state; complete false \
 when the sweep was stopped before it finished. Or, with imported set, an Advanced IP Scanner XML export the tech \
 imported (found_by ais, scanned on another computer at imported.scanned_at): its alive hosts with the scanner's \
 MAC, maker, name, NetBIOS name and workgroup, OS, web title, the FTP, HTTP, HTTPS and RDP it found (TLS version \

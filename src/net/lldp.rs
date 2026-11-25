@@ -597,6 +597,8 @@ pub struct Heard {
     pub via: String,
     /// The wired adapter it was heard on (empty for SNMP).
     pub adapter: String,
+    /// When: the Switch port run's start, as Results logs it.
+    pub at: String,
 }
 
 impl Heard {
@@ -657,6 +659,7 @@ impl Heard {
             n,
             via,
             adapter: get("adapter").unwrap_or_default(),
+            at: String::new(),
         })
     }
 
@@ -664,6 +667,7 @@ impl Heard {
     pub fn json(&self) -> serde_json::Value {
         let mut v = self.n.json(&self.via);
         v["adapter"] = serde_json::json!((!self.adapter.is_empty()).then_some(&self.adapter));
+        v["heard_at"] = serde_json::json!((!self.at.is_empty()).then_some(&self.at));
         v
     }
 }
@@ -808,6 +812,7 @@ mod tests {
                 n,
                 via: "raw socket".into(),
                 adapter: "eth0".into(),
+                at: String::new(),
             };
             assert_eq!(Heard::from_rows(&h.rows()), Some(h.clone()));
             assert_eq!(h.json()["port"], h.n.port.clone().unwrap().as_str());
