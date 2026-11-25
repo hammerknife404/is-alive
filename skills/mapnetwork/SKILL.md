@@ -306,8 +306,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   with nothing to say infrastructure: `vendor` null, not infrastructure.
   `virtual_mac: true` is infrastructure's own virtual address: the
   gateway's (never private, whatever its MAC), or a network-gear maker's
-  prefix with that bit set on a host that showed an open port or a web
-  page, such as a SonicWall LAN interface answering on `2e:b8:ed:…` for
+  prefix with that bit set on a host showing gear of its own (telnet,
+  541, 4433 or 8291 open, or a web page that names gear; a laptop's 445
+  or 3389 doesn't count), such as a SonicWall LAN interface answering on `2e:b8:ed:…` for
   SonicWall's `2c:b8:ed:…`. `vendor` then names that maker (null on a
   gateway whose maker isn't known). Match it to a firewall export's or
   UniFi's interface MAC with that bit cleared. Both are `false` for a
