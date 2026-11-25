@@ -949,17 +949,18 @@ fn printer(a: &mut Agent, r: &mut Reading) -> Result<(), Fail> {
     let Some((idx, st)) = status.rows.first().cloned() else {
         return Ok(());
     };
-    let mut err_oid = col(&HR_PRINTER, 2);
-    err_oid.extend(&idx);
-    let errors = match a.get(&[err_oid])?.first() {
-        Some((_, Value::Bytes(b))) => printer_errors(b),
-        _ => Vec::new(),
-    };
     r.printer = Some(Printer {
         status: st.int(),
-        errors,
+        errors: Vec::new(),
         supplies: Vec::new(),
     });
+    let mut err_oid = col(&HR_PRINTER, 2);
+    err_oid.extend(&idx);
+    if let Some((_, Value::Bytes(b))) = a.get(&[err_oid])?.first()
+        && let Some(p) = r.printer.as_mut()
+    {
+        p.errors = printer_errors(b);
+    }
     let names = a.walk(&col(&PRT_SUPPLIES, 6), SUPPLY_ROWS)?;
     note_cut(r, "Supplies", &names, Some(SUPPLY_ROWS));
     let rows: Vec<(Oid, Supply)> = names
@@ -1104,6 +1105,8 @@ pub fn enterprise(object_id: &str) -> Option<Enterprise> {
         .parse()
         .ok()?;
     let software = match n {
+        311 => Some("Microsoft's SNMP service (Windows; not the maker)"),
+        6876 => Some("VMware ESXi (the hypervisor's agent; not the maker)"),
         8072 => Some("Net-SNMP (agent software many makers use; not the maker)"),
         4413 => Some("Broadcom FASTPATH (switch software several makers use; not the maker)"),
         _ => None,
@@ -1117,7 +1120,6 @@ pub fn enterprise(object_id: &str) -> Option<Enterprise> {
         43 => "3Com",
         171 => "D-Link",
         253 => "Xerox",
-        311 => "Microsoft",
         367 => "Ricoh",
         641 => "Lexmark",
         674 => "Dell",
@@ -1130,7 +1132,6 @@ pub fn enterprise(object_id: &str) -> Option<Enterprise> {
         3375 => "F5",
         4526 => "Netgear",
         6574 => "Synology",
-        6876 => "VMware",
         8741 => "SonicWall",
         11863 => "TP-Link",
         12356 => "Fortinet",
@@ -1290,7 +1291,11 @@ impl Outcome {
             ..r.system.clone()
         };
         if logged == System::default() && r.chassis.is_none() {
-            s += "It answered, but with none of the system group.\n";
+            s += if r.system.contact.is_some() {
+                "It answered, but with only its contact (sysContact) of the system group, which isn't logged.\n"
+            } else {
+                "It answered, but with none of the system group.\n"
+            };
         }
         s
     }
@@ -1963,28 +1968,33 @@ mod tests {
 
     #[test]
     fn a_printer_cut_short_keeps_its_supplies_and_says_so() {
-        // Status (1 request), errors (1), the two supplies' names (3):
-        // then quiet, before their capacities.
+        // The system group (1 request), ENTITY-MIB (2 GETNEXTs to the
+        // chassis, 1 GET), the printer's status (1), errors (1) and the two
+        // supplies' names (3): then quiet, before their capacities.
         let (addr, _) = serve(Fake {
             mib: printer_mib(),
             community: b"public",
             version: 1,
-            answer_only: 5,
+            answer_only: 9,
             ..Fake::default()
         });
-        let cancel = quiet();
-        let mut a = Agent::new(
-            addr,
-            Version::V2c,
-            b"public",
-            Instant::now() + Duration::from_secs(20),
-            &cancel,
-        )
-        .unwrap();
-        let mut r = sample(addr.ip());
-        r.printer = None;
-        assert_eq!(printer(&mut a, &mut r), Err(Fail::Silent));
-        let p = r.printer.unwrap();
+        let out = read_at(addr, b"public", &quiet(), Duration::from_secs(30));
+        let Outcome::Read(r) = &out else {
+            panic!("{out:?}")
+        };
+        assert!(r.chassis.is_some());
+        assert_eq!(
+            r.notes,
+            ["It stopped answering while the printer MIB was read. Not read: LLDP."]
+        );
+        assert!(
+            out.report()
+                .contains("Note: It stopped answering while the printer MIB was read."),
+            "{}",
+            out.report()
+        );
+        let p = r.printer.clone().unwrap();
+        assert_eq!(p.errors, ["low toner", "jammed"]);
         assert_eq!(p.status, Some(3));
         let names: Vec<&str> = p.supplies.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Black Toner", "Drum"]);
@@ -2090,6 +2100,8 @@ mod tests {
     #[test]
     fn agent_software_isnt_called_the_maker() {
         for (id, says) in [
+            ("1.3.6.1.4.1.311.1.1.3.1.2", "Microsoft's SNMP service"),
+            ("1.3.6.1.4.1.6876.4.1", "VMware"),
             ("1.3.6.1.4.1.8072.3.2.10", "Net-SNMP"),
             ("1.3.6.1.4.1.4413.1.1", "Broadcom FASTPATH"),
         ] {
@@ -2122,6 +2134,24 @@ mod tests {
         assert!(!out.report().contains("IT desk"));
         // Only the contact differs.
         assert_eq!(on_screen.len(), out.rows().len() + 1);
+    }
+
+    #[test]
+    fn a_contact_alone_isnt_called_none_of_the_system_group() {
+        let mut r = sample("192.0.2.42".parse().unwrap());
+        r.system = System {
+            contact: Some("Example admin".into()),
+            ..System::default()
+        };
+        r.chassis = None;
+        let text = Outcome::Read(Box::new(r.clone())).report();
+        assert!(
+            text.contains("only its contact") && !text.contains("Example admin"),
+            "{text}"
+        );
+        r.system.contact = None;
+        let text = Outcome::Read(Box::new(r)).report();
+        assert!(text.contains("none of the system group"), "{text}");
     }
 
     #[test]

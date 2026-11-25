@@ -211,7 +211,8 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `name`, `description`, `object_id`, `maker` (from the object ID's
   enterprise number), `uptime` and `location`; sysContact is never in it
   (it shows on the technician's screen only). An `agent` row instead of
-  `maker` names software many makers ship (Net-SNMP, Broadcom FASTPATH):
+  `maker` names software, not hardware (Net-SNMP, Broadcom FASTPATH,
+  Microsoft's SNMP service on a Windows computer, VMware ESXi):
   it says what answered, never who made the device, so don't use it as
   the vendor. `chassis` rows are ENTITY-MIB's first chassis: `model`,
   `firmware` (its firmware revision) or, when it has none, `software` (its

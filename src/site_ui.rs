@@ -444,10 +444,16 @@ impl App {
             return;
         }
         self.remember_site_configs();
+        // A read that ended this frame is the old site's: logged first.
+        self.collect();
         self.keep_results();
         // SNMP readings are the last site's devices: an address here is
-        // another device there.
-        crate::tools::snmp::reset();
+        // another device there. Carried ("What's open now"), they go along
+        // with the sweep, map and Results, and a read under way finishes
+        // into the new site's Results with them.
+        if !carry {
+            crate::tools::snmp::reset();
+        }
         // A reload asked for here isn't the next site's.
         self.reloading = false;
         site::set_current(to);

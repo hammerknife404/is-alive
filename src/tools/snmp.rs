@@ -10,7 +10,8 @@
 //! (a person, often: on screen only).
 //!
 //! Readings belong to the open site: a site switch clears them (`reset`),
-//! and a read under way counts as a running tool, so the switch waits for it.
+//! and a read under way counts as a running tool, so the switch waits for
+//! it. Carrying what's open into a new site keeps them.
 
 use crate::inspector as insp;
 use crate::job::Job;
@@ -148,9 +149,12 @@ fn button_in(s: &State, ip: IpAddr) -> (bool, String) {
             false,
             format!("An SNMP read of {on} is under way: one device at a time"),
         ),
+        // Enabled with an empty community too: pressing it opens the
+        // section, where the community is typed (nothing is sent until then).
         None if s.community.is_empty() => (
-            false,
-            "Type a community in an SNMP section first (it's empty)".to_string(),
+            true,
+            "Open its SNMP section: the community is empty, so type one there and press Read"
+                .to_string(),
         ),
         None => (true, TIP.to_string()),
     }
@@ -321,11 +325,18 @@ mod tests {
     fn an_empty_community_reads_nothing_from_either_button() {
         let ip: IpAddr = "192.0.2.41".parse().unwrap();
         let mut s = State::new();
-        assert!(button_in(&s, ip).0);
+        assert_eq!(button_in(&s, ip), (true, TIP.to_string()));
         s.community.clear();
+        // Still pressable (else, with no section open anywhere, there'd be
+        // nowhere to type one), and it says why nothing will be sent yet.
         let (ok, tip) = button_in(&s, ip);
-        assert!(!ok && tip.contains("community"), "{tip}");
-        // Even if pressed: the section opens, nothing is sent.
+        assert!(ok && tip.contains("community is empty"), "{tip}");
+        // Pressed: the section opens, nothing is sent.
+        start_in(&mut s, &egui::Context::default(), ip);
+        assert!(s.open.contains(&ip) && s.running.is_none());
+        // And after a site switch, still.
+        reset_in(&mut s);
+        assert!(button_in(&s, ip).0);
         start_in(&mut s, &egui::Context::default(), ip);
         assert!(s.open.contains(&ip) && s.running.is_none());
     }
