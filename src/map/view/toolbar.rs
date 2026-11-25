@@ -921,6 +921,7 @@ mod tests {
                     legend: false,
                     redact: &ov,
                     animate: false,
+                    trace_hop: None,
                 };
                 let ctx = egui::Context::default();
                 let mut v = MapView::new(None);
@@ -1002,6 +1003,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         let mut shown = Vec::new();
@@ -1071,6 +1073,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         frame(&ctx, &mut v, &src, vec![]);
@@ -1130,6 +1133,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         let mut shown = Vec::new();
@@ -1189,6 +1193,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let size = vec2(1600.0, 900.0);
         let mut v = MapView::new(None);
@@ -1228,6 +1233,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         let mut shown = Vec::new();
@@ -1286,6 +1292,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         for size in [vec2(1280.0, 720.0), vec2(1600.0, 900.0)] {
             let mut v = MapView::new(None);
@@ -1327,6 +1334,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let small = vec2(1000.0, 700.0);
         let mut v = MapView::new(None);
@@ -1364,6 +1372,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let small = vec2(1000.0, 700.0);
         let mut v = MapView::new(None);
@@ -1402,6 +1411,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let tiny = vec2(700.0, 500.0);
         let mut v = MapView::new(None);

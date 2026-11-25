@@ -605,6 +605,7 @@ impl App {
                     legend: self.look.map_legend,
                     redact: self.notes.overrides(),
                     animate: self.look.moves(),
+                    trace_hop: self.trace.first_public_hop(),
                 })
             {
                 self.map_call.start(now, self.tab == Tab::Map);
@@ -895,6 +896,7 @@ impl App {
                     legend: self.look.map_legend,
                     redact: self.notes.overrides(),
                     animate: self.look.moves(),
+                    trace_hop: self.trace.first_public_hop(),
                 },
                 log: &self.log,
                 info: &self.info,
@@ -944,6 +946,7 @@ impl App {
                         legend: self.look.map_legend,
                         redact: self.notes.overrides(),
                         animate: self.look.moves(),
+                        trace_hop: self.trace.first_public_hop(),
                     },
                 );
                 self.map_action(ui.ctx(), act);

@@ -133,7 +133,10 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
 - **A `map.dc.html` is-alive wrote itself** (its SITE DATA starts with the
   comment *Exported from is-alive's Map*, and `META.subtitle` ends
   *from is-alive <version>*) is the app's own quick map, not one you drew. It
-  holds sites, zones, uplinks and ports, the app's findings and the
+  holds sites, zones, uplinks and ports, the app's findings (including its
+  topology ones: phones outside a voice network, which WAN the LAN leaves by,
+  whose link to the internet reads *LAN leaves by X1*, a backup WAN or a
+  public address on none of the WANs, and Wi-Fi outside the firewall) and the
   technician's card notes, and clients only if the app drew them (it stops at
   120 cards, leaving out clients first and then the cards furthest from the
   internet, and says how many of each in the subtitle). A subtitle that starts
@@ -181,7 +184,11 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   problem. A DHCP server that isn't the gateway is normal (a domain
   controller often hands out addresses), and one run can't show a rogue
   DHCP server, so never report either from these rows.
-  `Network checks` rows (`check`, `status`, `detail`): a `Captive portal`
+  `Network checks` rows (`check`, `status`, `detail`): `Default gateways`
+  `warn` means the scanner had two adapters up (wired and Wi-Fi) leading to
+  different gateways: the Wi-Fi network may leave by another router and skip
+  the firewall. Confirm it from the configs (which gateway serves the SSID)
+  before calling it a finding; `ok` is one way out. A `Captive portal`
   that fails means a portal answered instead of the internet, so that
   run's `HTTPS inspection`, `Clock` and `Path MTU` describe the portal,
   not the site's internet: say so rather than reporting them. `Path MTU`

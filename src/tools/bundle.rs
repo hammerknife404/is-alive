@@ -139,7 +139,8 @@ text gives. A site keeps its runs from one visit to the next, so they can span v
 check by its newest run. Host info and Domain join runs describe the computer is-alive ran on (its LAN, \
 and how it's joined: Active Directory, Entra ID, hybrid or a workgroup), not a device on the network; \
 Host info's dhcp_server, lease_obtained, lease_expires, dns_servers and dns_suffix are what that computer was \
-given, recorded, not judged. Network checks: a failing Captive portal row means a portal answered in the \
+given, recorded, not judged. Network checks: a Default gateways warning means wired and Wi-Fi led to \
+different gateways (Wi-Fi may skip the firewall); a failing Captive portal row means a portal answered in the \
 internet's place, so that run's internet-side checks judged the portal; a Path MTU warning is an MTU black hole; \
 the Wi-Fi row is one snapshot of the access point the scanner was on (its BSSID), with channel width and link \
 rates, not roaming; Nearby Wi-Fi lists other access points heard there (BSSIDs), those on its channel first, \

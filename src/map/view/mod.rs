@@ -117,6 +117,9 @@ pub struct Sources<'a> {
     pub redact: &'a crate::redact::Overrides,
     /// Settings' Animate: packets flow along lit links.
     pub animate: bool,
+    /// The first public hop of the last traceroute, for which WAN the LAN
+    /// leaves by.
+    pub trace_hop: Option<std::net::Ipv4Addr>,
 }
 
 /// Far enough out for Fit to show a wide Tree of a big map whole: its
@@ -650,6 +653,13 @@ impl MapView {
                 .sonicwalls()
                 .map(|(p, r)| loaded(p, &r.json))
                 .collect(),
+            meraki: src
+                .export
+                .merakis()
+                .map(|(p, r)| loaded(p, &r.json))
+                .collect(),
+            trace_hop: src.trace_hop,
+            voice_vlan: src.info.port.as_ref().and_then(|p| p.n.voice_vlan),
             mapnetwork: src.export.mapnetwork().map(|m| m.1),
             clients: self.clients,
             reveal: Some(&self.reveal),
@@ -679,6 +689,15 @@ impl MapView {
             (p, d.json.len()).hash(&mut h);
         }
         (src.info.gateway, src.info.lan, src.info.wan).hash(&mut h);
+        for (p, r) in src.export.merakis() {
+            (p, r.json.len()).hash(&mut h);
+        }
+        src.trace_hop.hash(&mut h);
+        src.info
+            .port
+            .as_ref()
+            .and_then(|p| p.n.voice_vlan)
+            .hash(&mut h);
         let key = h.finish();
         if key == self.key && !self.stale {
             self.hold = None;

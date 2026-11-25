@@ -13,6 +13,7 @@ pub mod import;
 pub mod layout;
 pub mod legend;
 pub mod runs;
+pub(crate) mod topology;
 pub mod view;
 
 use crate::net::mac::{self, Mac};
@@ -773,6 +774,14 @@ pub struct Input<'a> {
     /// firewall is its own gateway; the one opened last takes whatever
     /// can't be placed under another.
     pub sonicwall: Vec<Loaded<'a>>,
+    /// Every Meraki export open: not drawn, but its VLANs, uplinks and
+    /// access points feed the topology findings.
+    pub meraki: Vec<Loaded<'a>>,
+    /// The first public hop of this machine's last traceroute.
+    pub trace_hop: Option<Ipv4Addr>,
+    /// The voice VLAN the switch port this machine is plugged into
+    /// announced (LLDP-MED or CDP).
+    pub voice_vlan: Option<u16>,
     /// A /mapnetwork map: when loaded, it is the map.
     pub mapnetwork: Option<&'a crate::mapnetwork::Doc>,
     pub clients: Clients,
@@ -841,6 +850,8 @@ struct Unifi {
     sites: Vec<String>,
     /// (site `_id`, name), to name each device's site.
     site_ids: Vec<(String, String)>,
+    /// Networks, WANs and Wi-Fi for the topology findings.
+    topo: topology::UnifiTopo,
 }
 
 /// "10.0.0.1/24" as its address and prefix.
@@ -1024,7 +1035,9 @@ fn merge_unifi(mut all: Vec<Unifi>, names: &[&str]) -> Option<Unifi> {
     let mut devices = Vec::new();
     let mut clients = Vec::new();
     let mut networks = Vec::new();
+    let mut topo = topology::UnifiTopo::default();
     for u in all {
+        topo.append(u.topo);
         devices.push(u.devices);
         clients.push(u.clients);
         networks.push(u.networks);
@@ -1039,6 +1052,7 @@ fn merge_unifi(mut all: Vec<Unifi>, names: &[&str]) -> Option<Unifi> {
             .map(|(s, name)| (s.0.clone(), name.clone()))
             .collect(),
         sites: shown,
+        topo,
     })
 }
 
@@ -1067,6 +1081,7 @@ fn parse_unifi(json: &str) -> Unifi {
             coll = text(d, "collection").unwrap_or_default();
             continue;
         }
+        topology::unifi_doc(&mut u.topo, &coll, d);
         match coll.as_str() {
             "site" => {
                 if let Some(name) = text(d, "desc").or_else(|| text(d, "name")) {
@@ -1406,6 +1421,8 @@ const PHONES: &[(&str, &str, bool)] = &[
     ("grandstream", "GRANDSTREAM", true),
     ("mitel", "MITEL", true),
     ("avaya", "AVAYA", true),
+    ("sangoma", "SANGOMA", true),
+    ("digium", "SANGOMA", true),
 ];
 const CAMERAS: &[&str] = &[
     "hikvision",
@@ -3204,6 +3221,7 @@ pub fn build(input: &Input) -> Map {
         away = Input {
             unifi: input.unifi.clone(),
             sonicwall: input.sonicwall.clone(),
+            meraki: input.meraki.clone(),
             clients: input.clients,
             reveal: input.reveal,
             ..Default::default()
@@ -3263,6 +3281,13 @@ pub fn build(input: &Input) -> Map {
     b.sweep_findings(input, unifi.is_some(), &device_idx);
     b.gateway_sites(&sonic, &fw, unifi.as_ref());
     b.address_findings();
+    topology::findings(
+        &mut b,
+        input,
+        unifi.as_ref().map(|u| &u.topo),
+        local,
+        internet,
+    );
 
     let mut summary = summary(input, unifi.as_ref(), &sonic);
     if !local && had_sweep {

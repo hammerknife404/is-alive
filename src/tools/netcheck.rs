@@ -1,5 +1,7 @@
 //! Network checks, run by Full scan: whether a captive portal answers in
 //! the internet's place, whether HTTPS is inspected on the way out,
+//! whether more than one adapter has a default gateway (wired and Wi-Fi to
+//! different ones: a way round the firewall),
 //! whether this computer's clock is right, the path MTU to the internet,
 //! and a Wi-Fi snapshot with the access points nearby when the way out is
 //! Wi-Fi. No tab of its own: the run is logged to Results like the others.
@@ -76,6 +78,9 @@ impl NetCheck {
             });
             tx.send(checks::judge_portal(&portal));
             tx.send(checks::judge_https(&seen, &portal));
+            // Two ways out (wired and Wi-Fi to different gateways): read
+            // from the adapters, nothing sent.
+            tx.send(checks::judge_gateways(&netconf::gateways()));
             if tx.cancelled() {
                 return;
             }
