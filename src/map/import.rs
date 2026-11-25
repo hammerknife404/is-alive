@@ -226,32 +226,42 @@ fn mac_in(t: &str) -> Option<Mac> {
 }
 
 /// A card's own MAC from its text, for maps that don't write a `mac`
-/// field: the sub line, or a chip or detail that is the MAC outright
-/// ("MAC aa:bb:…", "MAC address: aa-bb-…", or the address alone, Cisco's
-/// dotted "aabb.ccdd.eeff" too, then at most a tag: "· ARP only"). Never
-/// one inside a sentence ("Uplink: Core port 7 (aa:bb:…)", "Default
-/// gateway MAC …"), or on a line that is a maybe or about another unit
-/// ("Candidate …", "HA peer", "Old MAC before RMA").
+/// field: a part of the sub line, a chip or a detail that is the MAC
+/// outright ("MAC aa:bb:…", "MAC address: aa-bb-…", "MAC-address: …",
+/// "MAC address (LAN): …", "LAN MAC: …", or the address alone, Cisco's
+/// dotted "aabb.ccdd.eeff" too), followed by nothing or a tag ("· ARP
+/// only", "(from the switch)"). Never one inside a sentence ("Uplink: Core
+/// port 7 (aa:bb:…)", "aa:bb:… belongs to the ISP router"), or on a line
+/// that is a maybe or about another unit ("Candidate …", "HA peer", "Old
+/// MAC before RMA").
 fn own_mac(sub: &str, lines: &[&str]) -> Option<Mac> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+    static LEAD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)^(?:(?:lan|wan|mgmt|management|wired|wireless|wi-?fi)\s+)?mac(?:[\s-]*addr(?:ess)?)?(?:\s*\([^)]{0,20}\))?\s*[:=]?\s*",
+        )
+        .unwrap()
+    });
     let plain = |t: &str| {
         let low = t.to_lowercase();
         !NOT_ITS_OWN.iter().any(|w| low.contains(w))
     };
     let explicit = |t: &str| {
         let t = t.trim();
-        let low = t.to_ascii_lowercase();
-        let rest = ["mac address", "mac addr", "mac"]
-            .iter()
-            .find(|p| low.starts_with(*p))
-            .map_or(t, |p| &t[p.len()..])
-            .trim_start_matches([':', '=', ' ', '\t']);
-        let first = rest.split_whitespace().next()?;
+        let rest = LEAD.find(t).map_or(t, |m| &t[m.end()..]);
+        let (first, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let tail = tail.trim();
+        // Nothing after it, or a tag: "· ARP only", "(from the switch)".
+        if !(tail.is_empty() || tail.starts_with(['·', '|', '(', '[', '-', '–'])) {
+            return None;
+        }
         mac_in(first.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')' | '[' | ']')))
     };
-    Some(sub)
-        .filter(|s| plain(s))
-        .and_then(mac_in)
-        .or_else(|| lines.iter().filter(|t| plain(t)).find_map(|t| explicit(t)))
+    sub.split(['·', '|'])
+        .chain(lines.iter().copied())
+        .filter(|t| plain(t))
+        .find_map(explicit)
 }
 
 /// What a /mapnetwork edge says about the card it leads to: how it's
@@ -284,16 +294,20 @@ fn port_in(text: &str) -> Option<String> {
         )
         .unwrap()
     });
-    // A stack/slot/port alone or in a label: "1/1/1", "1/0/24". The slot
-    // is 0-2, so a date ("3/4/25") isn't one.
+    // A stack/slot/port alone or in a label: "1/1/1", "1/0/24", an ICX's
+    // "1/3/1". A date ("3/4/25": a slot past 2 and a year) isn't one.
     static SLOT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?:^|\s)(\d{1,2}/[0-2]/\d{1,3})(?:\s|$)").unwrap());
-    // The whole label is the port: "24", "A1".
+        LazyLock::new(|| Regex::new(r"(?:^|\s)((\d{1,2})/(\d{1,2})/(\d{1,3}))(?:\s|$)").unwrap());
+    // The whole label is the port: "24", "A1", an HPE stack's "1/24".
     static ALONE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)^(?:\d{1,3}|[a-z]\d{1,2})$").unwrap());
-    // A speed or size right after it: "LAN 100 Mbps" is a link speed.
+        LazyLock::new(|| Regex::new(r"(?i)^(?:\d{1,3}(?:/\d{1,2})?|[a-z]\d{1,2})$").unwrap());
+    // A speed: "10/100", "100/1000".
+    static SPEED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^(?:10|100|1000)/(?:100|1000)(?:/1000)?$").unwrap());
+    // A speed or size right after it: "LAN 100 Mbps" is a link speed;
+    // "X1 GbE" names the port's kind, not a size.
     static UNIT: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)^\s*(?:[kmg]bps|[kmg]b/s|[kmg]bit|mb|gb|mhz|ghz|%)").unwrap()
+        Regex::new(r"(?i)^\s*(?:[kmg]bps|[kmg]b/s|[kmg]bit|mb|gb|mhz|ghz|%)(?:\b|$)").unwrap()
     });
     let t = text.trim();
     if let Some(c) = PORT.captures(t) {
@@ -304,17 +318,21 @@ fn port_in(text: &str) -> Option<String> {
         let m = c.get(0)?;
         let before = t[..m.start()].trim_end().to_ascii_lowercase();
         let last = before.rsplit(' ').next().unwrap_or("");
-        // "LAG x4" is a size: an "x" right after a link word or a number.
+        // "LAG x4" is a size: an "x" right after an aggregate's word or a
+        // number. "Trunk X2", "Fiber X1", "HA X3" are ports.
         let times = m.as_str().to_ascii_lowercase().starts_with('x')
-            && (LINK_WORDS.contains(&last) || last.ends_with(|c: char| c.is_ascii_digit()));
+            && (matches!(last, "lag" | "lacp" | "mlag" | "bond")
+                || last.ends_with(|c: char| c.is_ascii_digit()));
         // "Gi1/0/1-24" is a range too.
         return (c.get(1).is_none() && !times && !UNIT.is_match(&t[m.end()..]))
             .then(|| m.as_str().trim().to_string());
     }
     if let Some(c) = SLOT.captures(t) {
-        return Some(c[1].to_string());
+        let n = |k: usize| c[k].parse::<u16>().unwrap_or(0);
+        let date = n(3) > 2 && n(4) >= 13;
+        return (!date).then(|| c[1].to_string());
     }
-    if ALONE.is_match(t) {
+    if ALONE.is_match(t) && !SPEED.is_match(t) {
         return Some(match t.parse::<u16>() {
             Ok(n) => format!("Port {n}"),
             Err(_) => t.to_string(),
@@ -342,9 +360,10 @@ fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
     let cls = s(e, "cls");
     let mut notes = Vec::new();
     // "X2 → Port 24": the parent's port first, then the card's own.
-    // "port 1 - 24" is a range, not two ends.
-    static RANGE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"\d\s+[-–—]\s+\d").unwrap());
+    // "port 1 - 24" is a range, not two ends; "X2 - 24" is two ends.
+    static RANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b(?:ports?|p)\s*#?\s*\d{1,3}\s+[-–—]\s+\d").unwrap()
+    });
     let seps: &[&str] = if RANGE.is_match(label) {
         &["→", "<->", "->", "↔", " to "]
     } else {
@@ -445,9 +464,20 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         let zinfo = doc.zones.get(z);
         // The kind, then the zone, and the label last: a "DESKTOP-4QX"
         // in the OT zone is filed with the OT gear around it.
+        let zname = zinfo.and_then(|i| role(s(i, "name")));
+        // /mapnetwork's `access` zone is its access points, whatever it's
+        // named ("Access", "Access layer"), unless the name says switches.
+        let zrole = if z.eq_ignore_ascii_case("access") {
+            Some(
+                zname
+                    .filter(|r| *r == Zone::Switch)
+                    .unwrap_or(Zone::Wireless),
+            )
+        } else {
+            role(z).or(zname)
+        };
         role(s(v, "kind"))
-            .or_else(|| role(z))
-            .or_else(|| zinfo.and_then(|i| role(s(i, "name"))))
+            .or(zrole)
             .or_else(|| role(s(v, "label")))
             .unwrap_or(Zone::Unknown)
     };
@@ -856,15 +886,18 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
             // its own interfaces, or on a "+N more" line with no MAC and
             // no other name: that card, not a second. Anything else at a
             // card's address (a guest laptop on the firewall's, a stale
-            // phone on a printer's) is its own card, so the address clash
-            // is a finding.
+            // phone on a printer's) is its own card: on infrastructure's
+            // address, the address clash is a finding.
             if let Some(i) = c.ip.and_then(|ip| b.by_ip.get(&ip).copied()) {
                 let n = &b.nodes[i];
                 let gateway = n.zone == Zone::Gateway && !n.client;
                 if gateway && own_interface(n, c, &fw_macs) {
+                    let newest_here = c.ip.and_then(|ip| newest.get(&ip)) == Some(&c.mac);
                     let n = &mut b.nodes[i];
                     n.seen("UniFi");
-                    if n.mac.is_none() {
+                    // Its MAC only from the client seen there last: an old
+                    // box's record (before a swap) mustn't name it.
+                    if n.mac.is_none() && newest_here {
                         n.mac = Some(c.mac);
                         b.by_mac.entry(c.mac).or_insert(i);
                     } else if n.mac != Some(c.mac) {
@@ -878,7 +911,8 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
                 }
                 // A line with no name ("Host 192.0.2.77") takes any; a
                 // named one only the same name, not a client with none.
-                let names_agree = n.label.starts_with("Host ")
+                let unnamed = n.ip.is_some_and(|ip| n.label == format!("Host {ip}"));
+                let names_agree = unnamed
                     || c.name
                         .as_deref()
                         .is_some_and(|name| n.label.eq_ignore_ascii_case(name));
@@ -976,14 +1010,61 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     map
 }
 
+/// A gateway card's brand or product word, and the maker words its own
+/// interfaces' MACs carry: a "FortiGate 60F" is Fortinet's, a "Firebox"
+/// WatchGuard's, a "Starlink router" SpaceX's.
+const GATEWAY_BRANDS: &[(&str, &[&str])] = &[
+    ("fortigate", &["fortinet"]),
+    ("fortiwifi", &["fortinet"]),
+    ("fortinet", &["fortinet"]),
+    ("meraki", &["meraki"]),
+    ("pfsense", &["netgate"]),
+    ("netgate", &["netgate"]),
+    ("opnsense", &["deciso"]),
+    ("firebox", &["watchguard"]),
+    ("watchguard", &["watchguard"]),
+    ("sonicwall", &["sonicwall"]),
+    ("unifi", &["ubiquiti"]),
+    ("ubiquiti", &["ubiquiti"]),
+    ("udm", &["ubiquiti"]),
+    ("ucg", &["ubiquiti"]),
+    ("usg", &["ubiquiti"]),
+    ("uxg", &["ubiquiti"]),
+    ("edgerouter", &["ubiquiti"]),
+    ("mikrotik", &["mikrotik", "routerboard"]),
+    ("routerboard", &["mikrotik", "routerboard"]),
+    ("palo alto", &["palo alto"]),
+    ("sophos", &["sophos"]),
+    ("juniper", &["juniper"]),
+    ("srx", &["juniper"]),
+    ("asa", &["cisco"]),
+    ("cisco", &["cisco"]),
+    ("netgear", &["netgear"]),
+    ("orbi", &["netgear"]),
+    ("tp-link", &["tp-link"]),
+    ("omada", &["tp-link"]),
+    ("starlink", &["spacex", "space exploration"]),
+    ("draytek", &["draytek"]),
+    ("vigor", &["draytek"]),
+    ("zyxel", &["zyxel"]),
+    ("peplink", &["peplink", "pismo"]),
+    ("pepwave", &["peplink", "pismo"]),
+    ("cradlepoint", &["cradlepoint"]),
+    ("aruba", &["aruba", "hewlett packard"]),
+    ("barracuda", &["barracuda"]),
+    ("check point", &["check point"]),
+    ("eero", &["eero"]),
+    ("asus", &["asustek"]),
+];
+
 /// Whether the controller's client `c` is plausibly one of gateway `n`'s
 /// own interfaces: the same maker's prefix as the card's MAC (a
 /// SonicWall's LAN answers on its own MAC with the locally-administered
-/// bit set), or a MAC a config export lists. On a card with no MAC: a
-/// network-gear maker's wired, non-guest client (a "FortiGate 60F" card
-/// names no "Fortinet"),
-/// or a maker the card's own words name as a whole word (not "link" in
-/// "Starlink" for a TP-Link client).
+/// bit set), or a MAC a config export lists. On a card with no MAC, the
+/// maker the card's brand names (a "FortiGate 60F" card and a Fortinet
+/// MAC; whole words, so "link" isn't "Starlink"); a card that names no
+/// brand takes a network-gear maker's wired, non-guest client, unless its
+/// name says it's an endpoint (a Cisco desk phone "SEP…", an AP).
 fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
     let u = mac::universal(&c.mac);
     if fw_macs.contains(&u) {
@@ -1001,16 +1082,30 @@ fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
     let Some(maker) = maker else {
         return false;
     };
-    // A gear maker's wired, non-guest client: a TP-Link streaming stick
-    // on the Wi-Fi isn't the router's interface.
-    if super::gear_brand(Some(&maker)).is_some() && c.wired && !c.guest {
-        return true;
-    }
     let text = format!("{} {} {}", n.kind, n.label, n.sub);
-    maker
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .find(|w| w.len() >= 3)
-        .is_some_and(|w| super::word_in(&text, &w.to_ascii_lowercase()))
+    let named: Vec<&[&str]> = GATEWAY_BRANDS
+        .iter()
+        .filter(|(brand, _)| super::word_in(&text, brand))
+        .map(|(_, makers)| *makers)
+        .collect();
+    if !named.is_empty() {
+        return named
+            .iter()
+            .flat_map(|m| m.iter())
+            .any(|w| super::word_in(&maker, w));
+    }
+    let endpoint = c.name.as_deref().is_some_and(|name| {
+        super::cisco_phone_name(Some(name))
+            || matches!(
+                role(name),
+                Some(Zone::Client | Zone::Wireless | Zone::Device | Zone::Server)
+            )
+    });
+    super::gear_brand(Some(&maker)).is_some()
+        && super::phone_brand(Some(&maker)).is_none()
+        && c.wired
+        && !c.guest
+        && !endpoint
 }
 
 /// Whether a /mapnetwork card is the map's own "+7 more": the clients
@@ -1071,8 +1166,8 @@ fn is_count(f: &str) -> bool {
 }
 
 /// Whether a listed line's field reads as a maker ("Hangzhou Hikvision",
-/// "Dell Inc.", "3Com"): its first word starts a registered maker's name,
-/// and it isn't a VLAN, a band, a speed, an OS or a "key: value"
+/// "Hikvision", "Dell Inc.", "Epson"): a maker as people write one (see
+/// `written_maker`), and it isn't a VLAN, a band, a speed, an OS or a "key: value"
 /// ("VLAN-20", "5GHz", "1Gbps", "Win11", "Front desk").
 fn vendor_like(f: &str) -> bool {
     static NOT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -1086,7 +1181,7 @@ fn vendor_like(f: &str) -> bool {
         && words.len() <= 5
         && f.len() <= 48
         && !NOT.is_match(f)
-        && crate::net::mac::maker_word(f)
+        && super::written_maker(f)
 }
 
 /// "…and 121 more" (or "+121 more", "and 121 others"): devices the card
@@ -2533,6 +2628,17 @@ mod visits {
             ("3/4/25", None),
             ("LAN 100 Mbps", None),
             ("1/0/24", Some("1/0/24")),
+            ("1/24", Some("1/24")),
+            ("2/48", Some("2/48")),
+            ("1/3/1", Some("1/3/1")),
+            ("1/4/2", Some("1/4/2")),
+            ("Fiber X1", Some("X1")),
+            ("Trunk X2", Some("X2")),
+            ("HA X3", Some("X3")),
+            ("SFP X1", Some("X1")),
+            ("Gi1/0/24 GbE", Some("Gi1/0/24")),
+            ("X1 GbE", Some("X1")),
+            ("100/1000", None),
         ] {
             assert_eq!(port_in(label).as_deref(), port, "{label}");
         }
@@ -3061,6 +3167,9 @@ mod visits {
             "mac=02:00:00:00:00:46",
             "0200.0000.0046",
             "02:00:00:00:00:46 · ARP only",
+            "MAC-address: 02:00:00:00:00:46",
+            "MAC address (LAN): 02:00:00:00:00:46",
+            "LAN MAC: 02:00:00:00:00:46",
         ] {
             assert_eq!(own_mac("", &[line]), Some(m), "{line}");
         }
@@ -3073,9 +3182,15 @@ mod visits {
             "Connected to core-sw 0200.0000.0046",
             "Default gateway MAC 02:00:00:00:00:46",
             "Mgmt interface 0200.0000.0046 on VLAN 99",
+            "02:00:00:00:00:46 belongs to the ISP router",
+            "MAC 02:00:00:00:00:46 of the ISP router",
         ] {
             assert_eq!(own_mac("", &[line]), None, "{line}");
         }
+        assert_eq!(
+            own_mac("192.0.2.4 · Uplink: Core port 7 (02:00:00:00:00:46)", &[]),
+            None
+        );
         assert_eq!(
             own_mac("", &["Candidate identity: 0200.0000.0046 unconfirmed"]),
             None
@@ -3093,6 +3208,25 @@ mod visits {
         ];
         this.EDGES = [ { from:'inet', to:'ap' } ];"#);
         assert_eq!(by(&m, "ap").zone, Zone::Wireless);
+        // Named otherwise, or not at all: still access points, unless the
+        // name says switches.
+        for (name, zone) in [
+            ("", Zone::Wireless),
+            ("Access", Zone::Wireless),
+            ("Access layer", Zone::Wireless),
+            ("Access switches", Zone::Switch),
+        ] {
+            let m = all(&format!(
+                r#"
+        this.ZONES = {{ access:{{ name:'{name}' }} }};
+        this.NODES = [
+          {{ id:'inet', kind:'WAN', label:'Internet' }},
+          {{ id:'d', zone:'access', kind:'U6-LR', label:'Lobby' }},
+        ];
+        this.EDGES = [ {{ from:'inet', to:'d' }} ];"#
+            ));
+            assert_eq!(by(&m, "d").zone, zone, "{name}");
+        }
     }
 
     /// A MAC-less third-party firewall: a gear maker's wired client at its
@@ -3194,6 +3328,150 @@ mod visits {
         assert!(!pc.chips.contains(&"guest".to_string()));
         let scanner = m.nodes.iter().find(|n| n.label == "scanner-1").unwrap();
         assert_eq!(scanner.mac, None, "no hostname doesn't agree with a name");
+    }
+    fn gw_page(kind: &str, label: &str) -> String {
+        format!(
+            r#"
+        this.NODES = [
+          {{ id:'inet', kind:'WAN', label:'Internet' }},
+          {{ id:'fw', kind:'{kind}', label:'{label}', sub:'192.0.2.1' }},
+          {{ id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2', mac:'02:00:00:00:00:02' }},
+        ];
+        this.EDGES = [ {{ from:'inet', to:'fw' }}, {{ from:'fw', to:'sw' }} ];"#
+        )
+    }
+
+    fn high_clash(m: &Map) -> bool {
+        m.findings
+            .iter()
+            .any(|f| f.sev == Sev::High && f.text.starts_with("Address clash on 192.0.2.1"))
+    }
+
+    /// A box swapped out: the old Netgear's record and the FortiGate's at
+    /// one address, the old one first. The card takes the newest client's
+    /// MAC, the one its brand names, whatever the file order.
+    #[test]
+    fn a_mac_less_gateway_takes_its_own_newest_interface() {
+        let m = with_unifi(
+            &gw_page("FIREWALL", "FortiGate 60F"),
+            serde_json::json!([
+                {"mac": "06:00:00:00:00:c1", "last_ip": "192.0.2.1", "oui": "Netgear",
+                 "is_wired": true, "last_seen": 100},
+                {"mac": "06:00:00:00:00:c2", "last_ip": "192.0.2.1", "oui": "Fortinet, Inc.",
+                 "is_wired": true, "last_seen": 900},
+            ]),
+        );
+        assert_eq!(by(&m, "fw").mac, Some([6, 0, 0, 0, 0, 0xc2]));
+    }
+
+    /// A Cisco desk phone at a SonicWall's address isn't its interface:
+    /// the card names its brand, and Cisco isn't it. Named "SEP" and its
+    /// MAC, it's a phone, so the clash is a High finding.
+    #[test]
+    fn a_desk_phone_at_the_firewalls_address_stays_a_clash() {
+        let m = with_unifi(
+            &gw_page("FIREWALL", "SonicWall TZ370"),
+            serde_json::json!([
+                {"mac": "06:00:00:00:00:d1", "last_ip": "192.0.2.1", "hostname": "SEP0600000000D1",
+                 "oui": "Cisco Systems, Inc", "is_wired": true},
+            ]),
+        );
+        assert_eq!(by(&m, "fw").mac, None);
+        assert!(high_clash(&m));
+        // A card that names no brand: an endpoint's name keeps it out too.
+        let m = with_unifi(
+            &gw_page("FIREWALL", "Edge"),
+            serde_json::json!([
+                {"mac": "06:00:00:00:00:d2", "last_ip": "192.0.2.1", "hostname": "SEP0600000000D2",
+                 "oui": "Cisco Systems, Inc", "is_wired": true},
+            ]),
+        );
+        assert_eq!(by(&m, "fw").mac, None);
+    }
+
+    /// A device named "Host 5" is named: it doesn't take a stranger's MAC.
+    #[test]
+    fn a_host_named_host_is_named() {
+        let page = r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2', mac:'02:00:00:00:00:02' },
+          { id:'sw_overflow', kind:'ADDITIONAL DEVICES', label:'+2 more',
+            details:['Host 5 · 192.0.2.65', '192.0.2.66'] },
+        ];
+        this.EDGES = [ { from:'inet', to:'sw' }, { from:'sw', to:'sw_overflow' } ];"#;
+        let m = with_unifi(
+            page,
+            serde_json::json!([
+                {"mac": "06:00:00:00:00:e1", "last_ip": "192.0.2.65", "hostname": "guest-laptop",
+                 "is_guest": true},
+                {"mac": "06:00:00:00:00:e2", "last_ip": "192.0.2.66", "hostname": "printer-2"},
+            ]),
+        );
+        let named = m.nodes.iter().find(|n| n.label == "Host 5").unwrap();
+        assert_eq!(named.mac, None);
+        // A line with no name at all still takes the client there.
+        assert!(m.nodes.iter().any(|n| n.label == "printer-2"
+            && n.mac == Some([6, 0, 0, 0, 0, 0xe2])
+            && n.details.iter().any(|d| d.contains("/mapnetwork map"))));
+    }
+
+    /// The vendor on a listed line is a maker as people write one.
+    #[test]
+    fn listed_vendors_are_makers() {
+        let v = |line: &str| listed(line).and_then(|l| l.vendor);
+        // The skill's own example line.
+        assert_eq!(
+            v("client-0a1b2c3d · Hikvision · guest").as_deref(),
+            Some("Hikvision")
+        );
+        for maker in [
+            "Epson",
+            "Meraki",
+            "Aruba",
+            "Dahua",
+            "Supermicro",
+            "Gigabyte",
+            "Dell",
+        ] {
+            assert_eq!(v(&format!("dev-1 · {maker}")).as_deref(), Some(maker));
+        }
+        for not in [
+            "Living room",
+            "Main office",
+            "Home office",
+            "Second floor",
+            "Shop floor",
+            "Office",
+            "The lobby",
+            "Test",
+            "Galaxy S23",
+            "Pixel 8",
+            "Echo Dot",
+            "5GHz",
+            "VLAN-20",
+        ] {
+            assert_eq!(v(&format!("dev-1 · {not}")), None, "{not}");
+        }
+    }
+
+    /// "X2 - 24" is the parent's port and the card's own; "port 1 - 24" a
+    /// range.
+    #[test]
+    fn dashes_between_ports() {
+        for (label, port, own) in [
+            ("X2 - 24", Some("X2"), true),
+            ("X2 – 24", Some("X2"), true),
+            ("port 1 - 24", None, false),
+        ] {
+            let r = read_edge(&serde_json::json!({ "label": label }), false);
+            assert_eq!(r.port.as_deref(), port, "{label}");
+            assert_eq!(
+                r.notes.contains(&"Its own port: Port 24".to_string()),
+                own,
+                "{label}"
+            );
+        }
     }
 }
 

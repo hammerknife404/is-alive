@@ -114,25 +114,143 @@ fn is_format(c: char) -> bool {
         | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{00ad}')
 }
 
-/// Whether `word` (any case) is the first word of a registered maker's
-/// name ("dell", "hangzhou", "3com"): what tells a vendor written in
-/// text from a VLAN, a band or a place name. Built on first use.
+/// Place names and corporate prefixes a registry name starts with
+/// ("Hangzhou Hikvision", "Seiko Epson"): skipped to its maker's word.
+const NAME_PREFIXES: &[&str] = &[
+    "hangzhou",
+    "zhejiang",
+    "shenzhen",
+    "guangzhou",
+    "guangdong",
+    "beijing",
+    "shanghai",
+    "dongguan",
+    "xiamen",
+    "suzhou",
+    "nanjing",
+    "chengdu",
+    "wuhan",
+    "ningbo",
+    "qingdao",
+    "tianjin",
+    "fujian",
+    "jiangsu",
+    "sichuan",
+    "foshan",
+    "zhuhai",
+    "shandong",
+    "hefei",
+    "changsha",
+    "jinan",
+    "chongqing",
+    "kunshan",
+    "wuxi",
+    "taiwan",
+    "seiko",
+    "the",
+];
+
+/// Words that start a few registered names but are what people write for
+/// places, rooms and products: "Home office", "Pixel 8", "Echo Dot".
+const NOT_MAKERS: &[&str] = &[
+    "home",
+    "office",
+    "main",
+    "living",
+    "second",
+    "first",
+    "shop",
+    "test",
+    "galaxy",
+    "pixel",
+    "echo",
+    "smart",
+    "new",
+    "digital",
+    "global",
+    "general",
+    "international",
+    "network",
+    "networks",
+    "technology",
+    "technologies",
+    "data",
+    "power",
+    "open",
+    "mobile",
+    "star",
+    "sun",
+    "blue",
+    "green",
+    "red",
+    "golden",
+    "great",
+    "united",
+    "universal",
+    "advanced",
+    "micro",
+    "super",
+    "front",
+    "back",
+    "east",
+    "west",
+    "north",
+    "south",
+    "lab",
+    "guest",
+    "printer",
+    "camera",
+    "phone",
+    "tv",
+    "media",
+    "video",
+    "audio",
+    "wireless",
+    "computer",
+    "systems",
+    "electronics",
+    "industrial",
+    "intelligent",
+    "security",
+    "link",
+    "best",
+    "top",
+    "one",
+    "pro",
+    "max",
+    "air",
+    "wifi",
+    "cloud",
+    "auto",
+    "info",
+];
+
+/// Whether `word` (any case) is the maker's word of at least five
+/// registered names ("dell", "hikvision", "epson", "dahua"): past a place
+/// or corporate prefix, and not a word people write for a room or a
+/// product. What tells a vendor written in text from a place name.
 pub fn maker_word(word: &str) -> bool {
     static WORDS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
     let words = WORDS.get_or_init(|| {
-        registry()
-            .iter()
-            .flat_map(|t| &t.1)
-            .filter_map(|(_, v)| first_word(v))
+        let mut count: HashMap<String, usize> = HashMap::new();
+        for (_, v) in registry().iter().flat_map(|t| &t.1) {
+            if let Some(w) = words_of(v).find(|w| !NAME_PREFIXES.contains(&w.as_str())) {
+                *count.entry(w).or_default() += 1;
+            }
+        }
+        count
+            .into_iter()
+            .filter(|(w, n)| *n >= 5 && !NOT_MAKERS.contains(&w.as_str()))
+            .map(|(w, _)| w)
             .collect()
     });
-    first_word(word).is_some_and(|w| words.contains(&w))
+    words_of(word).next().is_some_and(|w| words.contains(&w))
 }
 
-/// The first word of a name, lowercased: letters, digits and dashes.
-fn first_word(v: &str) -> Option<String> {
+/// A name's words, lowercased: letters, digits and dashes.
+fn words_of(v: &str) -> impl Iterator<Item = String> + '_ {
     v.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-        .find(|w| w.len() >= 2)
+        .filter(|w| w.len() >= 2)
         .map(str::to_ascii_lowercase)
 }
 

@@ -1434,6 +1434,60 @@ fn gear_brand(vendor: Option<&str>) -> Option<&'static str> {
     GEAR.iter().find(|(k, _)| word_in(v, k)).map(|g| g.1)
 }
 
+/// Makers people write by a name the registry spells otherwise ("Super
+/// Micro Computer", "GIGA-BYTE", "Cisco Meraki").
+const WRITTEN_AS: &[&str] = &[
+    "supermicro",
+    "gigabyte",
+    "hpe",
+    "hp",
+    "meraki",
+    "asus",
+    "msi",
+    "google",
+    "amazon",
+    "nest",
+    "ring",
+    "sonos",
+    "roku",
+    "lg",
+    "vizio",
+    "hisense",
+    "tcl",
+    "wyze",
+    "ecobee",
+];
+
+/// Whether `field` names a maker the way people write one: a brand this
+/// app knows (gear, NAS, printers, phones, cameras, laptop and phone
+/// makers), or the maker's word of registered names ("Hikvision", "Dell",
+/// "Epson"). Not a room, a place or a product ("Main office", "Pixel 8").
+pub(super) fn written_maker(field: &str) -> bool {
+    let first = field
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .find(|w| w.len() >= 2)
+        .map(str::to_ascii_lowercase);
+    let Some(first) = first else {
+        return false;
+    };
+    let keys = GEAR
+        .iter()
+        .map(|g| g.0)
+        .chain(NAS.iter().copied())
+        .chain(PRINTERS.iter().copied())
+        .chain(PHONES.iter().map(|p| p.0))
+        .chain(CAMERAS.iter().copied())
+        .chain(CLIENT_NICS.iter().copied());
+    // The whole name, or its first word: "Brother" for "brother
+    // industries", not "Western" for "western digital".
+    let known = keys.into_iter().any(|k| {
+        word_in(field, k)
+            || (k.split(' ').next() == Some(first.as_str())
+                && !matches!(first.as_str(), "western" | "hon" | "the"))
+    });
+    known || WRITTEN_AS.contains(&first.as_str()) || mac::maker_word(&first)
+}
+
 /// A desk-phone maker's name, and whether it also makes gear.
 fn phone_brand(vendor: Option<&str>) -> Option<(&'static str, bool)> {
     let v = vendor?;
@@ -1956,11 +2010,23 @@ fn sweep_card(s: &Seen, this: bool) -> Node {
 
 /// A card for a UniFi client, not yet hung anywhere. Its name is what the
 /// backup holds: a client-xxxxxxxx token when Config Export anonymized it.
+/// Cisco names its desk phones "SEP" and their MAC ("SEP0A1B2C3D4E5F"):
+/// a phone, though Cisco's prefixes are mostly network gear.
+pub(super) fn cisco_phone_name(name: Option<&str>) -> bool {
+    name.and_then(|n| {
+        n.get(..3)
+            .filter(|p| p.eq_ignore_ascii_case("SEP"))
+            .map(|_| &n[3..])
+    })
+    .is_some_and(|rest| rest.len() == 12 && rest.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 fn unifi_client_card(c: &UClient) -> Node {
     let vendor = c.oui.as_deref();
     // Infrastructure hiding in the client table (an unadopted AP,
     // a NAS) is shown even with clients off.
     let (zone, kind, client) = match classify(vendor, false, &[]) {
+        _ if cisco_phone_name(c.name.as_deref()) => (Zone::Client, "CISCO PHONE".into(), true),
         (Zone::Client, _, _) if vendor.is_none() => (Zone::Client, "CLIENT".into(), true),
         r => r,
     };

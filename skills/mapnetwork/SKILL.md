@@ -416,8 +416,8 @@ data, by these rules, so write it to be read:
   no role word (`TA900`, `IPC-427`) leaves it to the zone.
 - **Zone words on re-import:** `gateway`/`edge`/`routing`/`firewall` →
   gateway; `distribution`/`switch` → switch (switch words win over edge
-  words: `EDGE SWITCH`, `USW EDGE` are switches); `access` ("Access
-  points"), `wifi`/`wireless` → access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
+  words: `EDGE SWITCH`, `USW EDGE` are switches); `access` (whatever
+  its name, unless the name says switches), `wifi`/`wireless` → access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
   printers, cameras, IoT; `workstations`/`trusted`/`guest` → clients;
   `voip`/`voice` → voice gear (a PBX, ATA or voice router), **not** a client
   unless its `kind` says `PHONE`; `external` → unidentified unless the
@@ -448,7 +448,8 @@ data, by these rules, so write it to be read:
   dashed edge rather than leaving it unlinked.
 - **A MAC belongs in `mac`** (or the `sub` line). A MAC in `details` or a
   chip counts only on a line that is the MAC outright: `MAC aa:bb:…`,
-  `MAC address: aa-bb-…`, or the address alone (`aabb.ccdd.eeff` too).
+  `MAC address: aa-bb-…`, `LAN MAC: …`, or the address alone
+  (`aabb.ccdd.eeff` too), then at most a tag (`· ARP only`).
   One inside a sentence (`Uplink: Core port 7 (…)`) is someone else's;
   write a candidate's, an HA peer's or an old one's as "candidate",
   "unconfirmed", "HA peer", "old MAC" so it's never taken for the node's own.
