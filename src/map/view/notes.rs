@@ -1178,6 +1178,7 @@ mod tests {
                 legend: true,
                 redact: &self.ov,
                 animate: false,
+                trace_hop: None,
             };
             v.refresh(ctx, &src);
             v.settle_edits();

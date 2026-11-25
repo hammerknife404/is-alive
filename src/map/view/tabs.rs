@@ -1518,6 +1518,7 @@ mod tests {
             legend: false,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let menu = t.tabs_menu(&src);
         assert_eq!(menu.others[0].0, "Acme HQ (October)");
@@ -1611,6 +1612,7 @@ mod tests {
                 legend: false,
                 redact: &ov,
                 animate: false,
+                trace_hop: None,
             };
             t.ui(ui, src);
         });
@@ -1826,6 +1828,7 @@ mod tests {
                         legend: false,
                         redact: &ov,
                         animate: false,
+                        trace_hop: None,
                     },
                 );
             });

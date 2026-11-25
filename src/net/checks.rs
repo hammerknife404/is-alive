@@ -38,6 +38,67 @@ pub struct Item {
     pub detail: String,
 }
 
+// ------------------------------------------------------------ gateways
+
+/// Every adapter with a default route, from `netconf::gateways`: two that
+/// lead to different gateways (wired and Wi-Fi) are two ways out, and the
+/// one that isn't the firewall's bypasses it. A VPN's own route is left
+/// out: that's a tunnel, not another way out.
+pub fn judge_gateways(routes: &[super::netconf::Route]) -> Item {
+    let check = "Default gateways";
+    let out: Vec<&super::netconf::Route> = routes.iter().filter(|r| !r.vpn).collect();
+    let mut gws: Vec<std::net::Ipv4Addr> = Vec::new();
+    for r in &out {
+        if !gws.contains(&r.gateway) {
+            gws.push(r.gateway);
+        }
+    }
+    let item = |status, detail| Item {
+        check,
+        status,
+        detail,
+    };
+    match (out.as_slice(), gws.len()) {
+        ([], _) => item(Status::Unknown, "No adapter has a default gateway".into()),
+        ([r], _) => item(
+            Status::Ok,
+            format!("One way out: {} on {}", r.gateway, r.name),
+        ),
+        (all, 1) => item(
+            Status::Ok,
+            format!(
+                "{} all use {}",
+                all.iter()
+                    .map(|r| r.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                gws[0]
+            ),
+        ),
+        (all, _) => {
+            let wired = all.iter().find(|r| !r.wifi);
+            let wifi = all
+                .iter()
+                .find(|r| r.wifi && wired.is_none_or(|w| w.gateway != r.gateway));
+            let detail = match (wired, wifi) {
+                (Some(w), Some(f)) => format!(
+                    "Wi-Fi uses {}, not the wired {}: Wi-Fi traffic may bypass the firewall \
+                     ({} and {} are both connected)",
+                    f.gateway, w.gateway, f.name, w.name
+                ),
+                _ => format!(
+                    "{}: traffic may leave by more than one way and bypass the firewall",
+                    all.iter()
+                        .map(|r| format!("{} uses {}", r.name, r.gateway))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            item(Status::Warn, detail)
+        }
+    }
+}
+
 // ------------------------------------------------------------- portal
 
 /// Cloudflare's connectivity check: plain HTTP, answered with an empty
@@ -651,6 +712,42 @@ mod tests {
             "{}",
             r.detail
         );
+    }
+
+    #[test]
+    fn two_gateways_on_wired_and_wifi_warn() {
+        use crate::net::netconf::Route;
+        let r = |name: &str, wifi, vpn, gw: &str| Route {
+            name: name.into(),
+            wifi,
+            vpn,
+            gateway: gw.parse().unwrap(),
+        };
+        let w = judge_gateways(&[
+            r("Ethernet", false, false, "192.0.2.1"),
+            r("Wi-Fi", true, false, "198.51.100.1"),
+        ]);
+        assert_eq!(w.status, Status::Warn);
+        assert!(
+            w.detail.starts_with(
+                "Wi-Fi uses 198.51.100.1, not the wired 192.0.2.1: Wi-Fi traffic may bypass the firewall"
+            ),
+            "{}",
+            w.detail
+        );
+        // One gateway for both, or a VPN's route beside the wired one: fine.
+        let same = judge_gateways(&[
+            r("Ethernet", false, false, "192.0.2.1"),
+            r("Wi-Fi", true, false, "192.0.2.1"),
+        ]);
+        assert_eq!(same.status, Status::Ok);
+        let vpn = judge_gateways(&[
+            r("Ethernet", false, false, "192.0.2.1"),
+            r("tun0", false, true, "10.8.0.1"),
+        ]);
+        assert_eq!(vpn.status, Status::Ok);
+        assert_eq!(vpn.detail, "One way out: 192.0.2.1 on Ethernet");
+        assert_eq!(judge_gateways(&[]).status, Status::Unknown);
     }
 
     #[test]

@@ -261,6 +261,15 @@ impl TraceTool {
         self.start(ctx);
     }
 
+    /// The first hop of the last run with a public address: the ISP's
+    /// side of the way out, to tell which WAN the LAN leaves by.
+    pub fn first_public_hop(&self) -> Option<std::net::Ipv4Addr> {
+        self.hops.iter().find_map(|h| match h.addr {
+            Some(IpAddr::V4(a)) if crate::map::topology::is_public(a) => Some(a),
+            _ => None,
+        })
+    }
+
     pub fn is_running(&self) -> bool {
         self.job.is_some()
     }

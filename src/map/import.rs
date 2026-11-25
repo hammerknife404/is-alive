@@ -996,6 +996,7 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
         summary += &format!(" · {only_counted} client(s) the map counts but doesn't list");
     }
     b.address_findings();
+    super::topology::voice_on_map(&mut b, doc);
     let mut map = limit(b, input);
     summary += &map.hidden_note();
     map.summary = summary;

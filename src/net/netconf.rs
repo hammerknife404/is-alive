@@ -39,6 +39,67 @@ pub struct Wired {
     pub lan: bool,
 }
 
+/// An adapter with a default route: where it sends what isn't local.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Route {
+    /// Its name: `wlan0`, or Windows' friendly name ("Wi-Fi").
+    pub name: String,
+    pub wifi: bool,
+    pub vpn: bool,
+    pub gateway: Ipv4Addr,
+}
+
+/// Every adapter that's up with a default gateway, from the routing table
+/// (Linux) or the adapters' own list (Windows): read, nothing sent.
+#[cfg(target_os = "linux")]
+pub fn gateways() -> Vec<Route> {
+    let Ok(table) = std::fs::read_to_string("/proc/net/route") else {
+        return Vec::new();
+    };
+    parse_default_routes(&table)
+        .into_iter()
+        .map(|(name, gateway)| {
+            let sys = std::path::Path::new("/sys/class/net").join(&name);
+            let kind: u32 = std::fs::read_to_string(sys.join("type"))
+                .ok()
+                .and_then(|t| t.trim().parse().ok())
+                .unwrap_or(1);
+            Route {
+                wifi: sys.join("wireless").exists() || sys.join("phy80211").exists(),
+                vpn: vpn_like(&name, "")
+                    || sys.join("tun_flags").exists()
+                    || matches!(kind, 65534 | 512 | 768 | 769 | 776 | 778),
+                name: super::sanitize(&name),
+                gateway,
+            }
+        })
+        .collect()
+}
+
+/// /proc/net/route's default routes through a gateway: (interface,
+/// gateway), each interface once, in the table's order.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn parse_default_routes(table: &str) -> Vec<(String, Ipv4Addr)> {
+    let mut out: Vec<(String, Ipv4Addr)> = Vec::new();
+    for l in table.lines().skip(1) {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        // Iface Destination Gateway Flags RefCnt Use Metric Mask …
+        if f.len() < 8 || f[1] != "00000000" || f[7] != "00000000" {
+            continue;
+        }
+        let flags = u32::from_str_radix(f[3], 16).unwrap_or(0);
+        let Ok(gw) = u32::from_str_radix(f[2], 16) else {
+            continue;
+        };
+        // RTF_UP and RTF_GATEWAY.
+        if flags & 0x3 != 0x3 || gw == 0 || out.iter().any(|r| r.0 == f[0]) {
+            continue;
+        }
+        out.push((f[0].to_string(), Ipv4Addr::from(gw.to_le_bytes())));
+    }
+    out
+}
+
 /// The wired adapter to listen on: the one with the LAN address and a
 /// link, else the first with a link, else (to say "no link") the first.
 pub fn pick_wired(all: &[Wired]) -> Option<&Wired> {
@@ -447,8 +508,8 @@ mod win {
     use super::{Adapter, Dhcp, NetConf};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses,
-        IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_DHCP_ENABLED,
+        GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST,
+        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_DHCP_ENABLED,
     };
     use windows_sys::Win32::Networking::WinSock::{
         AF_INET, AF_INET6, AF_UNSPEC, SOCKADDR_IN, SOCKADDR_IN6, SOCKET_ADDRESS,
@@ -567,6 +628,37 @@ mod win {
         out
     }
 
+    /// Every adapter that's up with an IPv4 default gateway.
+    pub fn gateways() -> Vec<super::Route> {
+        let mut out: Vec<super::Route> = Vec::new();
+        each_adapter(|ad| {
+            if ad.OperStatus != 1 || out.len() >= 64 {
+                return;
+            }
+            let mut g = ad.FirstGatewayAddress;
+            let mut gateway = None;
+            while !g.is_null() && gateway.is_none() {
+                let ga = unsafe { &*g };
+                if let Some(IpAddr::V4(a)) = unsafe { addr(&ga.Address) }
+                    && !a.is_unspecified()
+                {
+                    gateway = Some(a);
+                }
+                g = ga.Next;
+            }
+            let Some(gateway) = gateway else { return };
+            let name = unsafe { wide(ad.FriendlyName) };
+            let desc = unsafe { wide(ad.Description) };
+            out.push(super::Route {
+                wifi: ad.IfType == WIFI,
+                vpn: VIRTUAL_TYPES.contains(&ad.IfType) || super::vpn_like(&name, &desc),
+                name: crate::net::sanitize(&name),
+                gateway,
+            });
+        });
+        out
+    }
+
     /// Whether Windows calls the adapter a hardware interface (MIB_IF_ROW2's
     /// HardwareInterface, bit 0 of its flags); None if it can't be read.
     fn hardware_interface(ad: &IP_ADAPTER_ADDRESSES_LH) -> Option<bool> {
@@ -579,7 +671,8 @@ mod win {
 
     /// Call `f` on every adapter.
     fn each_adapter(mut f: impl FnMut(&IP_ADAPTER_ADDRESSES_LH)) {
-        let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST;
+        // Gateways too, for `gateways`: the rest don't read them.
+        let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_INCLUDE_GATEWAYS;
         // 15 KB is Microsoft's advice for the first try; grow if told to.
         let mut len: u32 = 15_000;
         let mut buf: Vec<u64>;
@@ -699,7 +792,7 @@ mod win {
 }
 
 #[cfg(windows)]
-pub use win::{adapter_to, read, wired};
+pub use win::{adapter_to, gateways, read, wired};
 
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn adapter_to(_: Ipv4Addr) -> Option<Adapter> {
@@ -712,6 +805,11 @@ pub fn wired(_: Option<Ipv4Addr>) -> Vec<Wired> {
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
+pub fn gateways() -> Vec<Route> {
+    Vec::new()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn read(_: Ipv4Addr) -> NetConf {
     NetConf::unknown()
 }
@@ -719,6 +817,22 @@ pub fn read(_: Ipv4Addr) -> NetConf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_routes_are_read_per_interface() {
+        let table = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n\
+eth0\t00000000\t010200C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n\
+eth0\t000200C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n\
+wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n\
+eth0\t00000000\t020200C0\t0003\t0\t0\t200\t00000000\t0\t0\t0\n";
+        assert_eq!(
+            parse_default_routes(table),
+            vec![
+                ("eth0".to_string(), "192.0.2.1".parse().unwrap()),
+                ("wlan0".to_string(), "192.168.1.1".parse().unwrap()),
+            ]
+        );
+    }
 
     #[test]
     fn networkmanager_says_where_the_lease_came_from() {

@@ -360,6 +360,7 @@ mod tests {
             legend: true,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         v.refresh(&ctx, &src);
@@ -425,6 +426,7 @@ mod tests {
             legend: true,
             redact: &ov,
             animate: false,
+            trace_hop: None,
         };
         let mut v = MapView::new(None);
         v.refresh(&ctx, &src);
