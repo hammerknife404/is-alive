@@ -221,11 +221,26 @@ pub fn negotiated(conn: &ClientConnection) -> (String, String) {
     (v, c)
 }
 
+/// Longest text kept from any one certificate field, and the most
+/// alternative names kept: a certificate is the server's own claim, and
+/// one built to be huge mustn't make a huge report.
+const FIELD_MAX: usize = 255;
+const NAMES_MAX: usize = 256;
+
+/// Biggest leaf certificate a device's handshake is read for: a device's
+/// own certificate is a kilobyte or two.
+pub const LEAF_MAX: usize = 16 * 1024;
+
 /// What one certificate says.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cert {
     /// Its subject's common name (or organisation).
     pub subject: String,
+    /// Its subject's common name (CN), organisation (O) and organisational
+    /// unit (OU), each as written, where it has one.
+    pub cn: Option<String>,
+    pub org: Option<String>,
+    pub unit: Option<String>,
     /// Its issuer's common name (or organisation).
     pub issuer: String,
     /// The names and addresses it's valid for (subject alternative names).
@@ -261,8 +276,19 @@ pub fn parse(der: &[u8]) -> Option<Cert> {
         .find(|(t, _)| *t == 0xa3)
         .map(|(_, e)| alt_names(e).unwrap_or_default())
         .unwrap_or_default();
+    let parts = name_parts(subject).unwrap_or_default();
+    let part = |want: &[u8]| {
+        parts
+            .iter()
+            .find(|(o, _)| *o == want)
+            .map(|(_, v)| v.clone())
+            .filter(|v| !v.is_empty())
+    };
     Some(Cert {
         subject: name_field(subject).unwrap_or_else(|| "?".into()),
+        cn: part(OID_CN),
+        org: part(OID_O),
+        unit: part(OID_OU),
         issuer: name_field(issuer).unwrap_or_else(|| "?".into()),
         names,
         not_before: parse_time(tag_b, before),
@@ -292,11 +318,11 @@ fn alt_names(ext: &[u8]) -> Option<Vec<String>> {
         }
         let (_, mut gn, _) = tlv(v)?;
         let mut out = Vec::new();
-        while !gn.is_empty() {
+        while !gn.is_empty() && out.len() < NAMES_MAX {
             let (tag, body, r) = tlv(gn)?;
             gn = r;
             match (tag, body.len()) {
-                (0x82, _) => out.push(sanitize(&String::from_utf8_lossy(body))),
+                (0x82, _) => out.push(field(body)),
                 (0x87, 4) => out.push(IpAddr::from(<[u8; 4]>::try_from(body).ok()?).to_string()),
                 (0x87, 16) => out.push(IpAddr::from(<[u8; 16]>::try_from(body).ok()?).to_string()),
                 _ => {}
@@ -307,21 +333,38 @@ fn alt_names(ext: &[u8]) -> Option<Vec<String>> {
     Some(Vec::new())
 }
 
-/// The CN of an X.509 Name, falling back to O.
-fn name_field(name: &[u8]) -> Option<String> {
-    const CN: &[u8] = &[0x55, 0x04, 0x03];
-    const O: &[u8] = &[0x55, 0x04, 0x0a];
+const OID_CN: &[u8] = &[0x55, 0x04, 0x03];
+const OID_O: &[u8] = &[0x55, 0x04, 0x0a];
+const OID_OU: &[u8] = &[0x55, 0x04, 0x0b];
+
+/// A certificate's text, controls taken out and cut to `FIELD_MAX`.
+fn field(raw: &[u8]) -> String {
+    sanitize(&String::from_utf8_lossy(raw))
+        .chars()
+        .take(FIELD_MAX)
+        .collect()
+}
+
+/// Each attribute of an X.509 Name (its OID and value), the first of each
+/// set, at most 32.
+fn name_parts(name: &[u8]) -> Option<Vec<(&[u8], String)>> {
     let mut found: Vec<(&[u8], String)> = Vec::new();
     let mut rest = name;
-    while !rest.is_empty() {
+    while !rest.is_empty() && found.len() < 32 {
         let (_, set, r) = tlv(rest)?;
         rest = r;
         let (_, atv, _) = tlv(set)?;
         let (_, oid, v) = tlv(atv)?;
         let (_, value, _) = tlv(v)?;
-        found.push((oid, sanitize(&String::from_utf8_lossy(value))));
+        found.push((oid, field(value)));
     }
-    [CN, O].iter().find_map(|want| {
+    Some(found)
+}
+
+/// The CN of an X.509 Name, falling back to O.
+fn name_field(name: &[u8]) -> Option<String> {
+    let found = name_parts(name)?;
+    [OID_CN, OID_O].iter().find_map(|want| {
         found
             .iter()
             .find(|(o, _)| o == want)
@@ -340,6 +383,81 @@ fn parse_time(tag: u8, t: &[u8]) -> Option<DateTime<Utc>> {
     chrono::NaiveDateTime::parse_from_str(s, fmt)
         .ok()
         .map(|n| n.and_utc())
+}
+
+impl Cert {
+    /// Its subject as a person reads it: "CN=FGT60F-LAB, OU=FortiGate,
+    /// O=Fortinet", the parts it has. None when it has none of them.
+    pub fn dn(&self) -> Option<String> {
+        let parts: Vec<String> = [("CN", &self.cn), ("OU", &self.unit), ("O", &self.org)]
+            .into_iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
+    }
+
+    /// Past its end date at `now`.
+    pub fn expired(&self, now: DateTime<Utc>) -> bool {
+        self.not_after.is_some_and(|t| t < now)
+    }
+
+    /// The low notes on a device's own certificate: "self-signed",
+    /// "expired 2024-03-01". Usual on management pages, so never findings.
+    pub fn notes(&self, now: DateTime<Utc>) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.self_signed {
+            v.push("self-signed".to_string());
+        }
+        if let Some(t) = self.not_after.filter(|_| self.expired(now)) {
+            v.push(format!("expired {}", t.format("%Y-%m-%d")));
+        }
+        v
+    }
+
+    /// Every word it says about who it's for, for a role guess: its
+    /// subject, its names and its issuer.
+    pub fn words(&self) -> String {
+        let mut v: Vec<&str> = [&self.cn, &self.unit, &self.org]
+            .into_iter()
+            .filter_map(|s| s.as_deref())
+            .collect();
+        v.extend(self.names.iter().map(String::as_str));
+        v.push(&self.issuer);
+        v.join(" ")
+    }
+}
+
+/// The leaf certificate a finished handshake was shown, read, with no
+/// more than `LEAF_MAX` bytes looked at and a few names kept. Nothing about
+/// it is trusted: it's what the device says it is.
+pub fn leaf_of(conn: &ClientConnection) -> Option<Cert> {
+    read_leaf(conn.peer_certificates()?.first()?.as_ref())
+}
+
+/// Names kept from a device's own certificate.
+const LEAF_NAMES: usize = 16;
+
+fn read_leaf(der: &[u8]) -> Option<Cert> {
+    if der.len() > LEAF_MAX {
+        return None;
+    }
+    let mut c = parse(der)?;
+    c.names.truncate(LEAF_NAMES);
+    Some(c)
+}
+
+/// One handshake with `addr`, taking whatever certificate it shows (see
+/// `Unjudged`), then goodbye: the device's own certificate. Nothing is
+/// sent after the handshake.
+pub fn leaf(addr: SocketAddr, timeout: Duration) -> io::Result<Option<Cert>> {
+    let tcp = TcpStream::connect_timeout(&addr, timeout)?;
+    let mut tcp = super::Timed::new(tcp, timeout, timeout * 3);
+    let mut conn = client_unjudged(&addr.ip().to_string())?;
+    handshake(&mut conn, &mut tcp)?;
+    let c = leaf_of(&conn);
+    conn.send_close_notify();
+    let _ = StreamOwned::new(conn, tcp).flush();
+    Ok(c)
 }
 
 /// Why this computer doesn't accept the certificate.
@@ -758,6 +876,138 @@ mod tests {
         crate::hostile::each(&p.leaf, |der| {
             let _ = parse(der);
         });
+    }
+
+    /// A device's own self-signed certificate, as a firewall or NAS makes
+    /// one: its model or serial in the CN, the maker in O and OU, a few
+    /// names. Fictional names throughout.
+    fn device_cert(
+        cn: &str,
+        ou: Option<&str>,
+        o: Option<&str>,
+        names: &[&str],
+        to: (i32, u8, u8),
+    ) -> (Vec<u8>, Vec<u8>) {
+        let key = KeyPair::generate().unwrap();
+        let mut p = CertificateParams::new(names.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .unwrap();
+        p.distinguished_name = rcgen::DistinguishedName::new();
+        p.distinguished_name.push(DnType::CommonName, cn);
+        if let Some(ou) = ou {
+            p.distinguished_name
+                .push(DnType::OrganizationalUnitName, ou);
+        }
+        if let Some(o) = o {
+            p.distinguished_name.push(DnType::OrganizationName, o);
+        }
+        p.not_before = date_time_ymd(2020, 1, 1);
+        p.not_after = date_time_ymd(to.0, to.1, to.2);
+        let c = p.self_signed(&key).unwrap();
+        (c.der().to_vec(), key.serialize_der())
+    }
+
+    #[test]
+    fn a_devices_subject_reads_part_by_part() {
+        let (der, _) = device_cert(
+            "FGT60FTK00000000",
+            Some("FortiGate"),
+            Some("Fortinet"),
+            &["fw.branch.example", "192.0.2.1"],
+            (2030, 1, 1),
+        );
+        let c = parse(&der).unwrap();
+        assert_eq!(c.cn.as_deref(), Some("FGT60FTK00000000"));
+        assert_eq!(c.unit.as_deref(), Some("FortiGate"));
+        assert_eq!(c.org.as_deref(), Some("Fortinet"));
+        assert_eq!(
+            c.dn().as_deref(),
+            Some("CN=FGT60FTK00000000, OU=FortiGate, O=Fortinet")
+        );
+        assert!(c.self_signed);
+        assert_eq!(c.names, ["fw.branch.example", "192.0.2.1"]);
+        let w = c.words();
+        for part in [
+            "FGT60FTK00000000",
+            "FortiGate",
+            "Fortinet",
+            "fw.branch.example",
+        ] {
+            assert!(w.contains(part), "{w}");
+        }
+        // Self-signed is a note; expired only once it is.
+        assert_eq!(c.notes(at(2026, 11, 9)), ["self-signed"]);
+        assert_eq!(
+            c.notes(at(2031, 1, 1)),
+            ["self-signed", "expired 2030-01-01"]
+        );
+        assert!(!c.expired(at(2029, 12, 31)) && c.expired(at(2030, 1, 2)));
+        // Only an O: that's the subject; no parts at all: no subject.
+        let (der, _) = device_cert("", None, Some("Acme NAS"), &[], (2030, 1, 1));
+        let c = parse(&der).unwrap();
+        assert_eq!(c.cn, None, "an empty CN isn't one");
+        assert_eq!(c.dn().as_deref(), Some("O=Acme NAS"));
+        assert_eq!(Cert::default().dn(), None);
+    }
+
+    /// A certificate built to be huge (a long CN, hundreds of names)
+    /// reads cut to size, and one over `LEAF_MAX` isn't read at all.
+    #[test]
+    fn a_huge_certificate_is_cut_to_size() {
+        let long = "x".repeat(2000);
+        let many: Vec<String> = (0..800).map(|i| format!("h{i}.test.example")).collect();
+        let names: Vec<&str> = many.iter().map(String::as_str).collect();
+        let (der, _) = device_cert(&long, None, None, &names, (2030, 1, 1));
+        let c = parse(&der).unwrap();
+        assert_eq!(c.cn.as_ref().unwrap().chars().count(), FIELD_MAX);
+        assert_eq!(c.names.len(), NAMES_MAX);
+        // As a device's leaf: over LEAF_MAX, not read at all.
+        assert!(der.len() > LEAF_MAX, "{}", der.len());
+        assert_eq!(read_leaf(&der), None);
+        // Under it, a few names kept.
+        let (der, _) = device_cert("ap", None, None, &names[..40], (2030, 1, 1));
+        assert!(der.len() <= LEAF_MAX);
+        assert_eq!(read_leaf(&der).unwrap().names.len(), LEAF_NAMES);
+    }
+
+    #[test]
+    fn hostile_device_certificates_never_panic() {
+        let (der, _) = device_cert(
+            "NAS-00\u{7}",
+            Some("Storage"),
+            Some("Acme"),
+            &["nas.test.example", "192.0.2.7"],
+            (2030, 1, 1),
+        );
+        crate::hostile::each(&der, |d| {
+            if let Some(c) = parse(d) {
+                let _ = (c.dn(), c.words(), c.notes(at(2026, 1, 1)));
+            }
+        });
+    }
+
+    /// One handshake, the device's certificate read, then goodbye; no
+    /// trust is asked of it (self-signed and expired here).
+    #[test]
+    fn leaf_reads_a_devices_certificate_and_closes() {
+        let (der, key) = device_cert(
+            "BRN00000000AB12",
+            None,
+            Some("Acme Printing"),
+            &["printer.test.example"],
+            (2021, 1, 1),
+        );
+        let addr = serve(vec![der], key);
+        let c = leaf(addr, SECS).unwrap().unwrap();
+        assert_eq!(c.cn.as_deref(), Some("BRN00000000AB12"));
+        assert!(c.self_signed && c.expired(at(2026, 1, 1)));
+        // Not TLS at all: an error, not a panic or a certificate.
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let plain = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = s.write_all(b"HTTP/1.0 400 Bad Request\r\n\r\n");
+        });
+        assert!(leaf(plain, SECS).is_err());
     }
 
     #[test]

@@ -47,6 +47,32 @@ pub fn get(
     path: &str,
     timeout: Duration,
 ) -> io::Result<Page> {
+    fetch(addr, host, https, path, timeout).0
+}
+
+/// As `get`, with the certificate the device showed in that same
+/// handshake (over TLS, once the handshake finished), even when what
+/// followed wasn't a page.
+pub fn fetch(
+    addr: SocketAddr,
+    host: &str,
+    https: bool,
+    path: &str,
+    timeout: Duration,
+) -> (io::Result<Page>, Option<tls::Cert>) {
+    let mut cert = None;
+    let page = fetch_into(addr, host, https, path, timeout, &mut cert);
+    (page, cert)
+}
+
+fn fetch_into(
+    addr: SocketAddr,
+    host: &str,
+    https: bool,
+    path: &str,
+    timeout: Duration,
+    cert: &mut Option<tls::Cert>,
+) -> io::Result<Page> {
     let tcp = TcpStream::connect_timeout(&addr, timeout)?;
     let mut tcp = super::Timed::new(tcp, timeout, timeout * WHOLE);
     let req = format!(
@@ -55,9 +81,11 @@ pub fn get(
     );
     let mut buf = Vec::new();
     if https {
-        // The page's title is wanted, not a judgement of its certificate.
+        // The page's title is wanted, not a judgement of its certificate:
+        // what it says is read, as the device's own claim, and nothing more.
         let mut conn = tls::client_unjudged(host)?;
         tls::handshake(&mut conn, &mut tcp)?;
+        *cert = tls::leaf_of(&conn);
         let mut s = StreamOwned::new(conn, tcp);
         s.write_all(req.as_bytes())?;
         read_some(&mut s, &mut buf);
@@ -218,10 +246,60 @@ pub fn same_device(location: &str, addr: SocketAddr, https: bool) -> Option<(boo
     (host == addr.ip().to_string()).then(|| (tls, port, path.to_string()))
 }
 
+/// What a device's web page and its certificate say about it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Named {
+    /// Its page's title, else its Server header.
+    pub label: Option<String>,
+    /// `label` is a real title, not a Server header standing in for a
+    /// placeholder or missing one.
+    pub titled: bool,
+    /// The certificate it showed on its HTTPS management port.
+    pub cert: Option<tls::Cert>,
+}
+
+/// The HTTPS management ports, in the order they're tried.
+const HTTPS_PORTS: [u16; 3] = [443, 8443, 4433];
+
 /// What a device's web page calls it: the first of its open web ports
 /// that answers with a title (or a server name), following one redirect
-/// on the device itself. HTTPS first.
-pub fn identify(addr: std::net::IpAddr, open: &[u16], timeout: Duration) -> Option<String> {
+/// on the device itself. HTTPS first. The certificate comes from the
+/// first of those GETs that went over TLS; where none did but an HTTPS
+/// port is open, one handshake reads it and closes.
+pub fn identify(addr: std::net::IpAddr, open: &[u16], timeout: Duration) -> Named {
+    let mut out = Named::default();
+    let mut over_tls = false;
+    let mut cert = None;
+    let host = addr.to_string();
+    let mut get = |at: SocketAddr, https: bool, path: &str| {
+        over_tls |= https;
+        let (page, c) = fetch(at, &host, https, path, timeout);
+        if cert.is_none() {
+            cert = c;
+        }
+        page
+    };
+    if let Some(page) = first_page(addr, open, &mut get) {
+        out.titled = page.title.is_some();
+        out.label = page.label();
+    }
+    out.cert = cert;
+    if out.cert.is_none()
+        && !over_tls
+        && let Some(&p) = HTTPS_PORTS.iter().find(|p| open.contains(p))
+    {
+        out.cert = tls::leaf(SocketAddr::new(addr, p), timeout).ok().flatten();
+    }
+    out
+}
+
+/// The page that names the device, by `get` (address, https, path):
+/// two ports at most, and one redirect on the device itself.
+fn first_page(
+    addr: std::net::IpAddr,
+    open: &[u16],
+    get: &mut impl FnMut(SocketAddr, bool, &str) -> io::Result<Page>,
+) -> Option<Page> {
     const ORDER: [(u16, bool); 6] = [
         (443, true),
         (8443, true),
@@ -230,11 +308,10 @@ pub fn identify(addr: std::net::IpAddr, open: &[u16], timeout: Duration) -> Opti
         (8080, false),
         (5000, false),
     ];
-    let host = addr.to_string();
     // Two ports at most: a device's page is on its first or second.
     for (port, https) in ORDER.into_iter().filter(|(p, _)| open.contains(p)).take(2) {
         let at = SocketAddr::new(addr, port);
-        let Ok(page) = get(at, &host, https, "/", timeout) else {
+        let Ok(page) = get(at, https, "/") else {
             continue;
         };
         if page.title.is_none()
@@ -243,13 +320,13 @@ pub fn identify(addr: std::net::IpAddr, open: &[u16], timeout: Duration) -> Opti
                 .location
                 .as_deref()
                 .and_then(|l| same_device(l, at, https))
-            && let Ok(next) = get(SocketAddr::new(addr, p), &host, tls, &path, timeout)
-            && let Some(l) = next.label()
+            && let Ok(next) = get(SocketAddr::new(addr, p), tls, &path)
+            && next.label().is_some()
         {
-            return Some(l);
+            return Some(next);
         }
-        if let Some(l) = page.label() {
-            return Some(l);
+        if page.label().is_some() {
+            return Some(page);
         }
     }
     None
@@ -347,6 +424,116 @@ mod tests {
             t.elapsed() < Duration::from_secs(2),
             "took {:?}",
             t.elapsed()
+        );
+    }
+
+    /// An HTTPS device on loopback with its own self-signed certificate
+    /// (fictional names), answering every connection with `reply`. Counts
+    /// the connections it took.
+    fn serve_tls(
+        reply: &'static str,
+    ) -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+        let key = KeyPair::generate().unwrap();
+        let mut p = CertificateParams::new(vec!["nas.test.example".to_string()]).unwrap();
+        p.distinguished_name = rcgen::DistinguishedName::new();
+        p.distinguished_name.push(DnType::CommonName, "DS-0000");
+        p.distinguished_name
+            .push(DnType::OrganizationName, "Synology Inc.");
+        let cert = p.self_signed(&key).unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(cert.der().to_vec())],
+            PrivateKeyDer::try_from(key.serialize_der()).unwrap(),
+        )
+        .unwrap();
+        let config = Arc::new(config);
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let n = count.clone();
+        std::thread::spawn(move || {
+            for tcp in l.incoming().flatten() {
+                n.fetch_add(1, Ordering::SeqCst);
+                let conn = rustls::ServerConnection::new(config.clone()).unwrap();
+                let mut s = StreamOwned::new(conn, tcp);
+                let mut b = [0u8; 1024];
+                if s.read(&mut b).is_ok() {
+                    let _ = s.write_all(reply.as_bytes());
+                    s.conn.send_close_notify();
+                    let _ = s.flush();
+                }
+            }
+        });
+        (addr, count)
+    }
+
+    /// The certificate comes from the GET's own handshake: one connection,
+    /// and a placeholder title leaves the Server header to name it.
+    #[test]
+    fn an_https_get_brings_its_certificate() {
+        use std::sync::atomic::Ordering;
+        let (addr, count) =
+            serve_tls("HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\n<html><title>Loading...</title>");
+        let (page, cert) = fetch(addr, "127.0.0.1", true, "/", Duration::from_secs(5));
+        let page = page.unwrap();
+        assert_eq!(page.title, None);
+        assert_eq!(page.label().as_deref(), Some("nginx"));
+        let c = cert.expect("the handshake's certificate");
+        assert_eq!(c.dn().as_deref(), Some("CN=DS-0000, O=Synology Inc."));
+        assert_eq!(c.names, ["nas.test.example"]);
+        assert!(c.self_signed);
+        assert_eq!(count.load(Ordering::SeqCst), 1, "no second connection");
+        // Plain HTTP: no certificate.
+        let plain = serve(|mut s| {
+            let mut b = [0u8; 512];
+            let _ = s.read(&mut b);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\n\r\n<title>x</title>");
+        });
+        assert_eq!(
+            fetch(plain, "x", false, "/", Duration::from_secs(2)).1,
+            None
+        );
+    }
+
+    /// What follows the handshake isn't a page: the certificate is still
+    /// kept.
+    #[test]
+    fn a_certificate_is_kept_when_the_page_isnt_one() {
+        let (addr, _) = serve_tls("SSH-2.0-nope\r\n");
+        let (page, cert) = fetch(addr, "127.0.0.1", true, "/", Duration::from_secs(5));
+        assert!(page.is_err());
+        assert_eq!(cert.unwrap().cn.as_deref(), Some("DS-0000"));
+    }
+
+    /// `first_page` tries two ports at most and follows one redirect on
+    /// the device; `identify` keeps the first certificate a GET brought.
+    #[test]
+    fn the_page_that_names_a_device_is_found_in_order() {
+        let ip: std::net::IpAddr = "192.0.2.5".parse().unwrap();
+        let mut asked = Vec::new();
+        let mut get = |at: SocketAddr, https: bool, path: &str| {
+            asked.push((at.port(), https, path.to_string()));
+            match (at.port(), path) {
+                (443, "/") => parse(b"HTTP/1.1 302 Found\r\nLocation: /ui\r\n\r\n")
+                    .ok_or_else(|| io::Error::other("x")),
+                (443, "/ui") => parse(b"HTTP/1.1 200 OK\r\nServer: Acme\r\n\r\n")
+                    .ok_or_else(|| io::Error::other("x")),
+                _ => Err(io::Error::other("closed")),
+            }
+        };
+        let page = first_page(ip, &[80, 443, 8443, 8080], &mut get).unwrap();
+        assert_eq!(page.label().as_deref(), Some("Acme"));
+        assert_eq!(
+            asked,
+            [(443, true, "/".to_string()), (443, true, "/ui".to_string())]
         );
     }
 

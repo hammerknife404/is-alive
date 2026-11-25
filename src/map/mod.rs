@@ -732,6 +732,12 @@ pub struct Seen {
     pub multicast: Option<String>,
     /// What it said over DNS-SD: a printer's model and services.
     pub dnssd: Option<crate::net::dnssd::Found>,
+    /// The certificate on its HTTPS management port.
+    pub cert: Option<crate::net::tls::Cert>,
+    /// `web` is a real page title (not a Server header standing in for a
+    /// placeholder or missing one): the certificate's subject is shown
+    /// only where it isn't.
+    pub titled: bool,
     /// From an imported Advanced IP Scanner scan, not pinged from here:
     /// its card's line, starting `IMPORTED`.
     pub imported: Option<String>,
@@ -1698,6 +1704,35 @@ fn page_role(page: &str) -> Option<(Zone, String, bool)> {
         .then(|| (Zone::Gear, "NETWORK DEVICE".into(), false))
 }
 
+/// Role from what a device's own certificate names (its subject, names
+/// and issuer, `Cert::words`): a model or serial its maker puts in the
+/// common name, else the words a page's title would carry. The device's
+/// own claim, and a weaker one than its page: used only where the page
+/// names nothing.
+fn cert_role(words: &str) -> Option<(Zone, String, bool)> {
+    let hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+    for w in words.split(|c: char| c.is_whitespace() || c == ',') {
+        let l = w.to_ascii_lowercase();
+        // FortiGate and FortiWiFi serials: FGT60F…, FWF40F…
+        if (l.starts_with("fgt") || l.starts_with("fwf")) && l.len() >= 8 {
+            return Some((Zone::Gear, "FORTINET DEVICE".into(), false));
+        }
+        // HP Jetdirect (NPI and six hex digits) and Brother (BRN or BRW
+        // and twelve) default printer names.
+        if (l.len() == 9 && l.starts_with("npi") && hex(&l[3..]))
+            || (l.len() == 15 && (l.starts_with("brn") || l.starts_with("brw")) && hex(&l[3..]))
+        {
+            return Some((Zone::Device, "PRINTER".into(), true));
+        }
+    }
+    page_role(words).or_else(|| {
+        ["axis", "vivotek", "hanwha", "uniview", "mobotix"]
+            .iter()
+            .any(|w| word_in(words, w))
+            .then(|| (Zone::Device, "CAMERA".into(), true))
+    })
+}
+
 /// A web page that names a desk phone: "PHONE" with its maker's name
 /// when the page gives one.
 fn page_phone(page: &str) -> Option<String> {
@@ -1759,6 +1794,9 @@ pub struct Said<'a> {
     pub page: Option<&'a str>,
     /// What it said over DNS-SD.
     pub dnssd: Option<&'a crate::net::dnssd::Found>,
+    /// What its HTTPS certificate names (`Cert::words`: subject, names,
+    /// issuer). A hint where the page names nothing.
+    pub cert: Option<&'a str>,
 }
 
 impl Said<'_> {
@@ -1790,7 +1828,11 @@ fn classify_with(
 ) -> (Zone, String, bool) {
     let r = classify_said(vendor, private, open, said);
     let weak = r.0 == Zone::Client || r.1 == "NETWORK DEVICE";
-    match said.page.and_then(page_role) {
+    match said
+        .page
+        .and_then(page_role)
+        .or_else(|| said.cert.and_then(cert_role))
+    {
         Some(p) if weak => p,
         _ => r,
     }
@@ -1803,7 +1845,15 @@ fn classify_with_page(
     open: &[u16],
     page: Option<&str>,
 ) -> (Zone, String, bool) {
-    classify_with(vendor, private, open, Said { page, dnssd: None })
+    classify_with(
+        vendor,
+        private,
+        open,
+        Said {
+            page,
+            ..Said::default()
+        },
+    )
 }
 
 /// Whether a device looks like a phone, laptop or PC (the Map's Clients
@@ -1939,6 +1989,23 @@ pub(crate) fn port_names(open: &[u16]) -> String {
         .join(", ")
 }
 
+/// A card's line for a device's own certificate, where its page has no
+/// real title to name it: "Certificate: CN=FGT60F-LAB, O=Fortinet
+/// (self-signed)". None where the title already names it, or the
+/// certificate names nothing.
+pub fn cert_line(c: &crate::net::tls::Cert, titled: bool) -> Option<String> {
+    if titled {
+        return None;
+    }
+    let dn = c.dn()?;
+    let notes = c.notes(chrono::Utc::now());
+    Some(if notes.is_empty() {
+        format!("Certificate: {dn}")
+    } else {
+        format!("Certificate: {dn} ({})", notes.join(", "))
+    })
+}
+
 /// A card's detail line listing its open ports (`port_names`), as the
 /// sweep and a `.dc.html` page write it.
 pub(crate) const OPEN_PORTS: &str = "Open ports: ";
@@ -1948,9 +2015,11 @@ pub(crate) const TECH_NOTE: &str = "Tech note: ";
 /// A card for a host the sweep found, not yet hung anywhere. `this`: the
 /// machine the sweep ran from.
 fn sweep_card(s: &Seen, this: bool) -> Node {
+    let words = s.cert.as_ref().map(crate::net::tls::Cert::words);
     let said = Said {
         page: s.web.as_deref(),
         dnssd: s.dnssd.as_ref(),
+        cert: words.as_deref(),
     };
     let made = s
         .mac
@@ -2250,6 +2319,11 @@ impl B {
             if !n.details.contains(&line) {
                 n.detail(at(line));
             }
+        }
+        if let Some(line) = s.cert.as_ref().and_then(|c| cert_line(c, s.titled))
+            && !n.details.contains(&line)
+        {
+            n.detail(at(line));
         }
         if !s.open.is_empty() {
             n.detail(at(format!("{OPEN_PORTS}{}", port_names(&s.open))));
@@ -3857,6 +3931,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -3939,6 +4015,8 @@ mod tests {
                 also: vec![],
                 web: Some("UniFi OS".into()),
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             }],
@@ -3971,6 +4049,8 @@ mod tests {
                 also: vec![mac::parse_mac("02:00:00:00:00:02").unwrap()],
                 web: None,
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             }],
@@ -4011,6 +4091,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -4233,6 +4315,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -4338,6 +4422,8 @@ mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             }],
@@ -4632,6 +4718,8 @@ mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             })
@@ -4782,6 +4870,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -4845,6 +4935,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -5301,6 +5393,7 @@ mod tests {
         let page = |p| Said {
             page: Some(p),
             dnssd: None,
+            cert: None,
         };
         for p in [
             "Lanier MP C3004",
@@ -5323,6 +5416,7 @@ mod tests {
         let said = Said {
             page: None,
             dnssd: Some(&found),
+            cert: None,
         };
         assert_eq!(c(None, &[23], said), "PRINTER");
         // A laptop sharing that printer is still a laptop, and so is a Mac
@@ -5431,5 +5525,70 @@ mod tests {
         assert_eq!(classify(Some("Ubiquiti Inc"), false, &[]).0, Zone::Gear);
         assert_eq!(classify(None, false, &[9100]).1, "PRINTER");
         assert_eq!(classify(None, true, &[]).1, "PRIVATE MAC");
+    }
+
+    /// A device's certificate names it where its page doesn't: a model or
+    /// serial in the CN, or a maker in O/OU. A real title still wins, and a
+    /// maker or port that already placed it isn't overridden.
+    #[test]
+    fn a_certificate_names_a_device_its_page_doesnt() {
+        let kind = |page: Option<&str>, cert: &str, open: &[u16]| {
+            classify_with(
+                None,
+                false,
+                open,
+                Said {
+                    page,
+                    dnssd: None,
+                    cert: Some(cert),
+                },
+            )
+            .1
+        };
+        // Server header only (the title was "Loading..."): the cert's
+        // FortiGate serial names it.
+        assert_eq!(
+            kind(
+                Some("xxxxxxxx-xxxxx"),
+                "FGT60FTK00000000 FortiGate Fortinet",
+                &[443]
+            ),
+            "FORTINET DEVICE"
+        );
+        assert_eq!(kind(None, "FWF40FTK00000000", &[443]), "FORTINET DEVICE");
+        assert_eq!(kind(None, "NPI0A1B2C", &[443]), "PRINTER");
+        assert_eq!(kind(None, "BRN00000000AB12", &[443]), "PRINTER");
+        assert_eq!(kind(None, "DS-0000 Synology Inc.", &[443]), "NAS");
+        assert_eq!(
+            kind(None, "cam-lobby Axis Communications AB", &[443]),
+            "CAMERA"
+        );
+        // A real title wins over the certificate.
+        assert_eq!(
+            kind(Some("Synology DiskStation"), "FGT60FTK00000000", &[443]),
+            "NAS"
+        );
+        // A certificate that names nothing changes nothing.
+        assert_eq!(kind(None, "localhost localhost", &[443]), "HOST");
+        // Short words aren't serials: "fgt" alone, a "brn" that isn't hex.
+        assert_eq!(kind(None, "fgt brnxxxxxxxxxxxx", &[443]), "HOST");
+        // It only fills in for a weak guess: 9100 already says printer.
+        assert_eq!(kind(None, "FGT60FTK00000000", &[9100]), "PRINTER");
+        // Not gear evidence for a virtual MAC: that takes a page or port.
+        assert!(!gear_evidence(&[443], None));
+
+        // The card shows the subject only where there's no real title.
+        let c = crate::net::tls::Cert {
+            cn: Some("FGT60FTK00000000".into()),
+            org: Some("Fortinet".into()),
+            self_signed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            cert_line(&c, false).as_deref(),
+            Some("Certificate: CN=FGT60FTK00000000, O=Fortinet (self-signed)")
+        );
+        assert_eq!(cert_line(&c, true), None);
+        assert_eq!(cert_line(&crate::net::tls::Cert::default(), false), None);
     }
 }

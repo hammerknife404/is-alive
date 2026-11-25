@@ -1989,6 +1989,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -2027,6 +2029,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -2122,6 +2126,8 @@ mod tests {
                     also: vec![],
                     web: None,
                     multicast: None,
+                    cert: None,
+                    titled: false,
                     dnssd: None,
                     imported: None,
                 }],
@@ -2199,6 +2205,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
@@ -2536,6 +2544,8 @@ mod visits {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         }
@@ -3644,6 +3654,8 @@ mod examples {
                 also: vec![],
                 web: None,
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             })

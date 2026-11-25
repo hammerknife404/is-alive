@@ -215,6 +215,8 @@ mod tests {
                 also: vec![],
                 web: None,
                 multicast: None,
+                cert: None,
+                titled: false,
                 dnssd: None,
                 imported: None,
             }],
@@ -344,6 +346,8 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            cert: None,
+            titled: false,
             dnssd: None,
             imported: None,
         };
