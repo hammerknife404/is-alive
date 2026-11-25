@@ -23,6 +23,9 @@ pub struct HostInfo {
     /// DHCP server, DNS servers and suffix of the LAN interface; read with
     /// the WAN address (`fetch`), not on every `local`.
     pub net: Option<super::netconf::NetConf>,
+    /// The switch port this computer was last heard plugged into (Which
+    /// port, or the site's newest Switch port run); kept across refreshes.
+    pub port: Option<super::lldp::Heard>,
 }
 
 impl HostInfo {
@@ -37,6 +40,7 @@ impl HostInfo {
             domain: domain(),
             mac: lan.and_then(|(ip, _)| mac_of(ip)),
             net: None,
+            port: None,
         }
     }
 

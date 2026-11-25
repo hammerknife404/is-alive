@@ -244,6 +244,25 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   community, an ACL or a v3-only agent look the same, so never report
   which, and never report a device as having no SNMP from it. No row
   ever holds the community.
+  A `Switch port` run says which switch port the scanner itself was
+  plugged into: rows are `field`, `value`. One that found it has `switch`,
+  `port`, often `port_description` (the patch-panel label), `vlan` (the
+  port's untagged VLAN), `voice_vlan`, `vlan_names` (*20 Staff, 30 Voice*),
+  `management` (the switch's address), `poe`, `model`, `chassis_id`, then
+  `protocol` and `heard_via`: `LLDP` or `CDP` heard on the wired `adapter`
+  (`raw socket`, `Npcap`, `lldpd`, `systemd-networkd`) is the switch's own
+  announcement, so it's observed fact; `SNMP` is the port a switch's
+  forwarding table learned the scanner's MAC on, which on an uplink is
+  another switch's port, so trust it only on an edge switch. One that
+  found nothing has `result` (*nothing heard*, *can't listen*, *no wired
+  link*, *capture error*, *not learned*, *failed*) and `detail`: never a
+  finding about the switch (an unmanaged switch, or LLDP and CDP off, look
+  the same). A `port_description` is whatever the switch's admin typed and
+  often names the person at that desk (*J. Smith desk*): use it to place
+  the drop, but never repeat a person's name in the map, its findings or
+  your reply; say *the port's label* instead. The
+  newest one that found a port is also the inventory's
+  `scanner.switch_port`.
 - **Several of a kind** (one visit, more than one controller or firewall):
   the first keeps its name and the next are numbered, `unifi-2.unifidump.json`,
   `sonicwall-2.json`, `meraki-2.json` and so on; `manifest.json`'s `files`
@@ -363,12 +382,23 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   network gear, often answering only ARP: the provider's demarc, not a
   client.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
-  is the default gateway. The top-level `scanner` (`lan`, `gateway`, `wan`)
+  is the default gateway. The top-level `scanner` (`lan`, `gateway`, `wan`, `switch_port`)
   says where the sweep ran from: the scanner's address and prefix, its
   default gateway, and the public address it left by. Use it to say which
   WAN this LAN leaves by (with several WANs or firewalls, the one whose LAN
   holds `scanner.lan` and whose public address is `scanner.wan`), and put
-  `wan` on the internet node (`sub: 'WAN 203.0.113.7'`). `ranges` lists every network swept;
+  `wan` on the internet node (`sub: 'WAN 203.0.113.7'`).
+  `scanner.switch_port` (null when not known) is the switch port the
+  scanner was plugged into, as its newest `Switch port` run found it:
+  `switch` and `port` (the switch's own names), `port_description`,
+  `vlan`, `voice_vlan`, `vlan_names` (`id`, `name`), `management`, `poe`,
+  `model`, `chassis_id`, `adapter`, `protocol`, `heard_via` (read them
+  as that run's rows, above) and `heard_at` (that run's start, local time:
+  an earlier visit's port may have changed since). Match `switch` (or `management`, or
+  `chassis_id`) to a switch in the configs or inventory, and put the
+  port, its VLAN and its label in that switch's `details` (*Scanner's
+  drop: Gi1/0/12 "Room 2.14", VLAN 20*); the scanner itself stays off the
+  map. It may come from an earlier visit than the sweep. `ranges` lists every network swept;
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
   only from the host itself (below) — a missing one there is **expected**,
   not an unidentified device.

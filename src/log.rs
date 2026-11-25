@@ -209,6 +209,10 @@ pub(crate) const TOOLS: &[(&str, &[&str])] = &[
         crate::tools::netcheck::SCAN,
         crate::tools::netcheck::SCAN_COLUMNS,
     ),
+    (
+        crate::tools::whichport::TOOL,
+        crate::tools::whichport::COLUMNS,
+    ),
     ("Domain join", crate::net::join::COLUMNS),
     (crate::tools::join::OTHERS, crate::net::joined::COLUMNS),
     (crate::tools::snmp::TOOL, crate::tools::snmp::COLUMNS),
