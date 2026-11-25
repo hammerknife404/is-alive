@@ -2594,6 +2594,89 @@ impl B {
         }
     }
 
+    /// Findings from the addresses on the cards, whatever they came from
+    /// (a sweep, a backup's clients, a /mapnetwork map): self-assigned
+    /// addresses, where DHCP failed, and a client on an infrastructure
+    /// device's address. Cards a person drew are left out.
+    fn address_findings(&mut self) {
+        let real = |n: &Node| !n.drawn && n.zone != Zone::Internet;
+        let selfie: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| {
+                real(&self.nodes[i]) && self.nodes[i].ip.is_some_and(|ip| ip.is_link_local())
+            })
+            .collect();
+        if !selfie.is_empty() {
+            self.finding(
+                Sev::Med,
+                format!(
+                    "{} device(s) on a self-assigned address (169.254.x.x): {}. {NO_DHCP}",
+                    selfie.len(),
+                    describe_some(&self.nodes, &selfie)
+                ),
+                &selfie,
+            );
+            for &i in &selfie {
+                self.nodes[i]
+                    .flags
+                    .push("Self-assigned address: no DHCP".into());
+            }
+        }
+        let infra = |n: &Node| {
+            !n.client
+                && matches!(
+                    n.zone,
+                    Zone::Gateway | Zone::Switch | Zone::Wireless | Zone::Gear | Zone::Server
+                )
+        };
+        let mut by_ip: BTreeMap<Ipv4Addr, Vec<usize>> = BTreeMap::new();
+        for (i, n) in self.nodes.iter().enumerate() {
+            if let Some(ip) = n.ip.filter(|_| real(n) && infra(n)) {
+                by_ip.entry(ip).or_default().push(i);
+            }
+        }
+        let mut clashes = Vec::new();
+        for (c, n) in self.nodes.iter().enumerate() {
+            if !real(n) || !n.client {
+                continue;
+            }
+            let Some(ip) = n.ip else { continue };
+            for &d in by_ip.get(&ip).into_iter().flatten() {
+                // The same network card twice is one device, not a clash.
+                let same = n.mac.is_some() && n.mac == self.nodes[d].mac;
+                if !same {
+                    clashes.push((ip, c, d));
+                }
+            }
+        }
+        for (ip, c, d) in clashes {
+            let (client, dev) = (&self.nodes[c], &self.nodes[d]);
+            let who = |n: &Node| match n.mac {
+                Some(m) => format!("{} [{}]", n.label, mac::fmt(&m)),
+                None => n.label.clone(),
+            };
+            let text = format!(
+                "Address clash on {ip}: client {} has the address of {} {}. Two devices on one \
+                 address cut both off by turns: fix the client's static address or its DHCP \
+                 reservation, and keep infrastructure addresses out of the DHCP scope.",
+                who(client),
+                dev.kind.to_lowercase(),
+                who(dev),
+            );
+            let sev = if dev.zone == Zone::Gateway {
+                Sev::High
+            } else {
+                Sev::Med
+            };
+            self.finding(sev, text, &[d, c]);
+            let flag = format!("Address clash on {ip}");
+            for i in [c, d] {
+                if !self.nodes[i].flags.contains(&flag) {
+                    self.nodes[i].flags.push(flag.clone());
+                }
+            }
+        }
+    }
+
     /// Findings the sweep's evidence supports.
     fn sweep_findings(&mut self, input: &Input, has_unifi: bool, device_idx: &[usize]) {
         for s in input.sweep.iter().filter(|s| !s.also.is_empty()) {
@@ -2632,6 +2715,24 @@ impl B {
         );
             for &i in &telnet {
                 self.nodes[i].flags.push("Telnet open".into());
+            }
+        }
+        let ftp: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| self.nodes[i].open.contains(&21))
+            .collect();
+        if !ftp.is_empty() {
+            self.finding(
+                Sev::Low,
+                format!(
+                    "FTP is open on {}: logins and files cross the network in clear text. \
+                     Printers and NAS often ship with it on (or use it for scan to folder): \
+                     turn it off where nothing needs it.",
+                    describe_some(&self.nodes, &ftp)
+                ),
+                &ftp,
+            );
+            for &i in &ftp {
+                self.nodes[i].flags.push("FTP open".into());
             }
         }
         let plain: Vec<usize> = (0..self.nodes.len())
@@ -2807,6 +2908,7 @@ pub fn build(input: &Input) -> Map {
     }
     b.sweep_findings(input, unifi.is_some(), &device_idx);
     b.gateway_sites(&sonic, &fw, unifi.as_ref());
+    b.address_findings();
 
     let mut summary = summary(input, unifi.as_ref(), &sonic);
     if !local && had_sweep {
@@ -2828,6 +2930,25 @@ pub fn build(input: &Input) -> Map {
     map.fill_sites(&site);
     map.summary += &map.hidden_note();
     map
+}
+
+/// What a self-assigned address (169.254.x.x) means, for the findings
+/// band, the report and the sweep's report.
+pub const NO_DHCP: &str =
+    "DHCP didn't answer these: check the DHCP server/scope and the switch port.";
+
+/// Cards by `describe`, the first `LIST_MAX` of them, then how many more.
+fn describe_some(nodes: &[Node], at: &[usize]) -> String {
+    const LIST_MAX: usize = 8;
+    let mut v: Vec<String> = at
+        .iter()
+        .take(LIST_MAX)
+        .map(|&i| describe(&nodes[i]))
+        .collect();
+    if at.len() > LIST_MAX {
+        v.push(format!("and {} more", at.len() - LIST_MAX));
+    }
+    v.join(", ")
 }
 
 fn describe(n: &Node) -> String {
@@ -3439,6 +3560,148 @@ mod tests {
             "{}",
             f.text
         );
+    }
+
+    /// A swept host on 169.254.x.x is a finding with the DHCP hint, and
+    /// FTP open is one too (printers and NAS leave it on).
+    #[test]
+    fn a_self_assigned_host_and_open_ftp_are_findings() {
+        let seen = |ip: &str, mac: &str, open: Vec<u16>| Seen {
+            ip: ip.parse().unwrap(),
+            mac: mac::parse_mac(mac),
+            name: None,
+            rtt: Some(1.0),
+            open,
+            checked: true,
+            also: vec![],
+            web: None,
+            multicast: None,
+        };
+        let input = Input {
+            sweep: vec![
+                seen("192.0.2.1", "02:00:00:00:00:01", vec![443]),
+                seen("192.0.2.30", "02:00:00:00:00:30", vec![21, 80, 9100]),
+                seen("169.254.7.9", "02:00:00:00:00:09", vec![]),
+            ],
+            gateway: Some("192.0.2.1".parse().unwrap()),
+            ports_checked: true,
+            clients: Clients::All,
+            ..Default::default()
+        };
+        let m = build(&input);
+        let f = m
+            .findings
+            .iter()
+            .find(|f| f.text.contains("self-assigned"))
+            .expect("a finding");
+        assert_eq!(f.sev, Sev::Med);
+        assert!(f.text.starts_with("1 device(s)"), "{}", f.text);
+        assert!(f.text.contains("169.254.7.9") && f.text.ends_with(NO_DHCP));
+        let card = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == Some([169, 254, 7, 9].into()))
+            .unwrap();
+        assert!(card.flags.iter().any(|f| f.contains("no DHCP")));
+        assert_eq!(
+            f.nodes,
+            [m.nodes.iter().position(|n| n.id == card.id).unwrap()]
+        );
+
+        let ftp = m
+            .findings
+            .iter()
+            .find(|f| f.text.starts_with("FTP is open on"))
+            .expect("FTP open");
+        assert_eq!(ftp.sev, Sev::Low);
+        assert!(ftp.text.contains("192.0.2.30"), "{}", ftp.text);
+        // Still a printer with FTP open: 9100 decides it.
+        let mfp = m.nodes.iter().find(|n| n.open.contains(&21)).unwrap();
+        assert_eq!(mfp.kind, "PRINTER");
+        assert!(mfp.flags.iter().any(|f| f == "FTP open"));
+    }
+
+    /// FTP open moves no role: a printer or a NAS stays one, network gear
+    /// stays gear, and a host with only FTP open is still a client.
+    #[test]
+    fn ftp_open_keeps_printers_and_nas_where_they_were() {
+        let role = |open: &[u16]| {
+            let (z, k, _) = classify(None, false, open);
+            (z, k)
+        };
+        assert_eq!(role(&[21, 80, 9100]), (Zone::Device, "PRINTER".into()));
+        assert_eq!(role(&[21, 80, 443, 5000]), (Zone::Server, "NAS".into()));
+        assert_eq!(role(&[21, 22, 23]), (Zone::Gear, "NETWORK DEVICE".into()));
+        assert_eq!(role(&[21]).0, Zone::Client);
+        assert_eq!(
+            classify(None, false, &[21, 80]),
+            classify(None, false, &[80])
+        );
+    }
+
+    /// A client on an infrastructure card's address is a clash; the same
+    /// network card known twice isn't, nor is a card a person drew.
+    #[test]
+    fn a_client_on_an_infrastructure_address_is_a_clash() {
+        let ip: Ipv4Addr = "198.51.100.2".parse().unwrap();
+        let node = |id: &str, zone, client, mac: Option<&str>| Node {
+            id: id.into(),
+            label: id.into(),
+            kind: if client {
+                "CLIENT".into()
+            } else {
+                "SWITCH".into()
+            },
+            zone,
+            client,
+            ip: Some(ip),
+            mac: mac.and_then(mac::parse_mac),
+            ..Default::default()
+        };
+        let run = |nodes: Vec<Node>| {
+            let mut b = B::default();
+            for n in nodes {
+                b.add(n);
+            }
+            b.address_findings();
+            b
+        };
+        let b = run(vec![
+            node("sw", Zone::Switch, false, Some("02:00:00:00:00:02")),
+            node("pc", Zone::Client, true, Some("02:00:00:00:00:44")),
+        ]);
+        assert_eq!(b.findings.len(), 1);
+        let (sev, text, ids) = &b.findings[0];
+        assert_eq!(*sev, Sev::Med);
+        assert_eq!(ids, &["sw", "pc"]);
+        assert!(
+            text.contains("Address clash on 198.51.100.2: client pc"),
+            "{text}"
+        );
+        assert!(text.contains("switch sw [02:00:00:00:00:02]"), "{text}");
+        assert!(
+            b.nodes
+                .iter()
+                .all(|n| n.flags == ["Address clash on 198.51.100.2"])
+        );
+
+        // One network card twice: not a clash.
+        let b = run(vec![
+            node("sw", Zone::Switch, false, Some("02:00:00:00:00:02")),
+            node("pc", Zone::Client, true, Some("02:00:00:00:00:02")),
+        ]);
+        assert!(b.findings.is_empty());
+        // Two clients, or a printer and a client: not this finding.
+        let b = run(vec![
+            node("a", Zone::Client, true, None),
+            node("b", Zone::Device, false, None),
+        ]);
+        assert!(b.findings.is_empty());
+        // A drawn card is a plan, not evidence.
+        let mut drawn = node("pc", Zone::Client, true, None);
+        drawn.drawn = true;
+        let b = run(vec![node("sw", Zone::Switch, false, None), drawn]);
+        assert!(b.findings.is_empty());
     }
 
     /// `depths` is `path(i).len()` for every card, loops included.
