@@ -1391,6 +1391,12 @@ impl SweepTool {
         (self.total > 0 && self.job.is_none()).then(|| (self.ran.clone(), self.alive.len()))
     }
 
+    /// Where the last finished run was made from: this machine's LAN and
+    /// gateway when it started (not now: the laptop may have moved since).
+    pub fn scanned_from(&self) -> Option<&HostInfo> {
+        self.finished().map(|_| &self.local)
+    }
+
     /// Whether the last run checked management ports.
     pub fn checked_ports(&self) -> bool {
         self.ran_ports != PortCheck::Off
