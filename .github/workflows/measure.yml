@@ -1,0 +1,72 @@
+name: measure
+
+# What the release binary is made of, on Windows and Linux (#146, #163):
+# code by crate, the biggest functions, sections and the files built in,
+# in the job summary and as an artifact. Runs on pull requests that change
+# dependencies, so a bump shows what it costs, and by hand.
+#
+# On Windows the same build then runs scripts/perf.ps1, the laptop timing
+# script, so it's known to work before the owner runs it. A runner has no
+# GPU (Direct3D 12 on Microsoft's software renderer), so its timings mean
+# nothing; real numbers come from a laptop.
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - scripts/size.sh
+      - scripts/perf.ps1
+      - src/perf.rs
+      - .github/workflows/measure.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: measure-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  size:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Third-party actions are pinned to commit SHAs (tags are mutable).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.99.1
+          components: llvm-tools
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: measure
+      - run: cargo install cargo-bloat --locked --version 0.12.1
+      - name: Size report
+        shell: bash
+        run: |
+          scripts/size.sh size-report.md
+          cat size-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Timing script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/perf.ps1 -Exe target/release/is-alive.exe -Renderers wgpu -Label ci-runner -OutDir perf
+          $d = Get-Content perf/perf-wgpu.json -Raw | ConvertFrom-Json
+          if ($d.error) { Write-Error "probe: $($d.error)"; exit 1 }
+          if (@($d.phases).Count -ne 3) { Write-Error "probe: $(@($d.phases).Count) phases"; exit 1 }
+          "`n## Timing script on the runner (software rendering: not real numbers)`n" >> $env:GITHUB_STEP_SUMMARY
+          Get-Content perf/perf-report.md >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: measure-${{ runner.os }}
+          path: |
+            size-report.md
+            perf/
+          if-no-files-found: ignore

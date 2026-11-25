@@ -299,6 +299,20 @@ impl MapTabs {
         self.view().explode_for_shots(split, three_d)
     }
 
+    /// For the performance probe: packets flowing (as if just touched) or
+    /// held still (as if left alone), and the 3D view spinning or not.
+    pub fn flow_for_perf(&mut self, flowing: bool, spin: bool, now: f64) {
+        self.view().flow_for_perf(flowing, spin, now);
+    }
+
+    /// Cards on the map showing.
+    pub fn cards(&self) -> usize {
+        match self.shown {
+            Some(i) => self.saved[i].view.cards(),
+            None => self.live.cards(),
+        }
+    }
+
     /// For the screenshot tour: back to the map's own layout.
     pub fn default_layout_for_shots(&mut self) {
         self.view().default_layout_for_shots();

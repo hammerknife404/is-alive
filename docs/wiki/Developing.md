@@ -28,6 +28,21 @@ IS_ALIVE_SHOTS=shots ./is-alive demo.dc.html
 
 `IS_ALIVE_SHOTS_SELECT=<card id>` picks the card selected for the Map inspector shot, and `IS_ALIVE_SHOTS_CLIENTS=some` (or `all`) starts the Map with clients shown. On a pull request that touches `src/`, the **screenshots** workflow runs the tour in Dark and Light and attaches the images as an artifact.
 
+## Measuring speed, memory and size
+
+`IS_ALIVE_PERF=<file.json>` makes the app open the Contoso example map at 1280 × 720, time three phases of 15 seconds (the map left alone, a card picked with packets flowing, the 3D view spinning), write what it measured and close. A phase records each frame's gap on screen and its CPU time (eframe's, without the wait for vsync), the process's CPU use, and memory after each phase. Animate is on for the run, whatever Settings says. Nothing is saved: not the window size, not the site, not the results. GPU time and memory a dedicated GPU holds aren't seen.
+
+On a Windows laptop, `scripts/perf.ps1` does it all. It runs a portable copy of the `.exe` from a temporary folder (so the user's settings stay as they are and an open is-alive can stay open), once with OpenGL and once with Direct3D 12. It then writes `perf-report.md` with the machine's CPU, GPU, screen and power, puts it on the clipboard, and opens its folder on the Desktop:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File perf.ps1 -Exe .\is-alive.exe
+powershell -ExecutionPolicy Bypass -File perf.ps1 -Exe .\is-alive.exe -Label battery
+```
+
+Keep the window in front and hands off while it runs: the map's packets stop when the window loses focus, and the report flags any phase where that happened or where the mouse or keys were used.
+
+`scripts/size.sh` (Linux, or Git Bash on Windows; it needs `cargo-bloat` 0.12.1 and `rustup component add llvm-tools`) writes `size-report.md`: the shipped binary's size, code by crate, the biggest functions, the sections over 64 KB, and the files built in.
+
 ## Linux AppImage
 
 ```sh
@@ -56,6 +71,7 @@ On other platforms (macOS etc.) ICMP falls back to the system `ping` command (de
 | **build** | every push and PR | fmt (Windows), clippy `-D warnings`, tests, the Windows `.exe` and Linux `.AppImage` as artifacts; on `main` with a new version, the release |
 | **screenshots** | PRs touching `src/` | the screenshot tour in Dark and Light from the demo map, as an artifact |
 | **weekly** | Mondays, by hand, and PRs touching `Cargo.*` | `cargo audit` (fails on a vulnerability), and a probe of every Speed Test preset server (`cargo test -- --ignored presets_answer`) |
+| **measure** | by hand, and PRs touching `Cargo.*` or the measuring scripts | `scripts/size.sh` on Windows and Linux, in the job summary and as an artifact; on Windows, `scripts/perf.ps1` on the runner's software renderer, to check the script works (its timings mean nothing) |
 | **wiki** | pushes to `main` and PRs touching `docs/wiki/` | publishes this wiki (below); a PR runs it all but the push |
 
 ## This wiki
