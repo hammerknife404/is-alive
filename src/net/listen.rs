@@ -531,10 +531,17 @@ mod npcap {
     pub struct Capture<'a> {
         lib: &'a Npcap,
         p: *mut c_void,
+        /// `all_multicast` took: put the filter back before closing.
+        widened: std::cell::Cell<bool>,
     }
 
     impl Drop for Capture<'_> {
         fn drop(&mut self) {
+            if self.widened.get() {
+                // DIRECTED | MULTICAST | BROADCAST: Npcap's own filter for
+                // a capture that isn't promiscuous.
+                self.packet_filter(0x1 | 0x2 | 0x8);
+            }
             unsafe { (self.lib.close)(self.p) };
         }
     }
@@ -610,7 +617,11 @@ mod npcap {
                 let e = unsafe { CStr::from_ptr(err.as_ptr()) }.to_string_lossy();
                 return Err(crate::net::sanitize(&e));
             }
-            let cap = Capture { lib: self, p };
+            let cap = Capture {
+                lib: self,
+                p,
+                widened: std::cell::Cell::new(false),
+            };
             let expr = c"ether dst 01:80:c2:00:00:0e or ether dst 01:00:0c:cc:cc:cc";
             let mut prog = BpfProgram {
                 len: 0,
@@ -636,25 +647,36 @@ mod npcap {
         /// multicast and broadcast as before), since the adapter otherwise
         /// drops multicast to addresses no program asked for, and CDP's
         /// 01:00:0c:cc:cc:cc (and LLDP's, without Windows' LLDP driver) is
-        /// one. Npcap keeps the filter per capture and drops it when the
-        /// capture closes. Not promiscuous: frames to other computers'
-        /// addresses still aren't received. Best effort: an Npcap without
-        /// pcap_oid_set_request, or one that refuses, listens as it is.
+        /// one. Only for the listen: dropping the capture (the first
+        /// announcement, 65 s, Stop) sets the filter back first, and Npcap
+        /// drops a capture's filter when it closes anyway. Not promiscuous:
+        /// frames to other computers' addresses still aren't received.
+        /// Best effort: an Npcap without pcap_oid_set_request, or one that
+        /// refuses, listens as it is. (The owner chose this over
+        /// promiscuous capture; removing this call removes the change.)
         pub fn all_multicast(&self) {
-            const OID_GEN_CURRENT_PACKET_FILTER: u32 = 0x0001_010e;
             // DIRECTED | MULTICAST | ALL_MULTICAST | BROADCAST.
-            let filter: u32 = 0x1 | 0x2 | 0x4 | 0x8;
-            if let Some(set) = self.lib.oid_set {
-                let mut len = size_of::<u32>();
-                let _ = unsafe {
-                    set(
-                        self.p,
-                        OID_GEN_CURRENT_PACKET_FILTER,
-                        (&raw const filter).cast(),
-                        &mut len,
-                    )
-                };
+            if self.packet_filter(0x1 | 0x2 | 0x4 | 0x8) {
+                self.widened.set(true);
             }
+        }
+
+        /// Set this capture's NDIS packet filter; whether Npcap took it.
+        fn packet_filter(&self, filter: u32) -> bool {
+            const OID_GEN_CURRENT_PACKET_FILTER: u32 = 0x0001_010e;
+            let Some(set) = self.lib.oid_set else {
+                return false;
+            };
+            let mut len = size_of::<u32>();
+            let r = unsafe {
+                set(
+                    self.p,
+                    OID_GEN_CURRENT_PACKET_FILTER,
+                    (&raw const filter).cast(),
+                    &mut len,
+                )
+            };
+            r == 0
         }
 
         pub fn listen(
