@@ -215,7 +215,15 @@ impl ReportTool {
             || (self.use_results && runs > 0);
         // Notes aren't scanned when they're redacted: say what's still in
         // them before the page is saved.
-        let risky = risks(&mut self.risk_memo, self.use_notes, src, map);
+        let map_key = self.preview.as_ref().map_or(0, |(k, _)| *k);
+        let risky = risks(
+            &mut self.risk_memo,
+            self.use_notes,
+            &parts,
+            src,
+            map,
+            map_key,
+        );
         if !risky.is_empty() {
             ui.separator();
             ui.label(
@@ -333,34 +341,54 @@ fn scanned_from(src: &Sources) -> (Vec<(&'static str, String)>, bool) {
 
 /// What in the notes going in still looks like it shouldn't (full MACs,
 /// DOMAIN\\user logons, pasted scan XML): the technician notes as they'd
-/// be written, and the card notes.
+/// be written, and the notes of the cards that will be saved (none when
+/// Infrastructure and Clients are both unticked). Looked at again only
+/// when the notes, the map or the ticks change, not every frame: the key
+/// is the notes' redaction cache key and the map preview's key, so no
+/// text is copied or hashed while nothing changes.
 fn risks(
     memo: &mut Option<(u64, Vec<String>)>,
     use_notes: bool,
+    parts: &Parts,
     src: &Sources,
     map: Option<&MapPart>,
+    map_key: u64,
 ) -> Vec<String> {
     use std::hash::{Hash, Hasher};
-    let mut text = String::new();
-    if use_notes && !src.notes.is_empty() {
-        text += &src.notes.sanitized_plain();
+    let notes = use_notes && !src.notes.is_empty();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        notes.then(|| src.notes.clean_key()),
+        map.is_some().then_some(map_key),
+        parts.infra,
+        parts.clients,
+    )
+        .hash(&mut h);
+    let key = h.finish();
+    if let Some((k, r)) = memo
+        && *k == key
+    {
+        return r.clone();
     }
-    for d in map.map(|m| m.devices.as_slice()).unwrap_or_default() {
+    let mut text = String::new();
+    if notes {
+        // The words, each photo still its marker: a photo's data isn't
+        // notes, and copying it every change would cost megabytes.
+        text += &crate::theme::strip_emoji_styles(&src.notes.sanitized_words());
+    }
+    let saved = |d: &&report::Device| if d.client { parts.clients } else { parts.infra };
+    for d in map
+        .map(|m| m.devices.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(saved)
+    {
         text.push('\n');
         text += &d.note;
     }
-    // Looked for again only when the text changes, not every frame.
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    let key = h.finish();
-    match memo {
-        Some((k, r)) if *k == key => r.clone(),
-        _ => {
-            let r = report::note_risks(&text);
-            *memo = Some((key, r.clone()));
-            r
-        }
-    }
+    let r = report::note_risks(&text);
+    *memo = Some((key, r.clone()));
+    r
 }
 
 fn clients_in(map: Option<&MapPart>) -> usize {

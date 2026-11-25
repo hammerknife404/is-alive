@@ -385,7 +385,8 @@ data, by these rules, so write it to be read:
   first, then the zone's key and name, and the `label` last. A `kind` with
   no role word (`TA900`, `IPC-427`) leaves it to the zone.
 - **Zone words on re-import:** `gateway`/`edge`/`routing`/`firewall` →
-  gateway; `distribution`/`access`/`switch` → switch; `wifi`/`wireless` →
+  gateway; `distribution`/`access`/`switch` → switch (switch words win
+  over edge words: `EDGE SWITCH`, `USW EDGE` are switches); `wifi`/`wireless` →
   access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
   printers, cameras, IoT; `workstations`/`trusted`/`guest` → clients;
   `voip`/`voice` → voice gear (a PBX, ATA or voice router), **not** a client
@@ -397,10 +398,13 @@ data, by these rules, so write it to be read:
   Say why in the edge's `label`, since is-alive shows the reason: `·
   reciprocal` (uplink data points both ways), `last seen` (where the
   controller last saw it, not live), or nothing extra (you inferred it).
-  A dashed edge whose label names a port is read as wired on that port.
+  A dashed edge whose label names a port keeps that port, but stays
+  unconfirmed: draw a link you read from a backup or a config solid.
   `wifi` links are wireless whether dashed or not. A tunnel is not dashed:
   `cls:'wired'`, `label:'IPsec to Branch'`.
-- **An edge `label` is the parent's port** (`Port 7`, `Gi1/0/7`, `X2`).
+- **An edge `label` is the parent's port** (`Port 7`, `Gi1/0/7`, `1/1/7`,
+  `X2`, or just `7`). A range (`port 1-24`) or a size (`LAG x 4`) isn't
+  one.
   When you know both ends, write the parent's first: `X2 → Port 24`. A
   label that isn't a port (`21 wired`, `VLAN 10 gw`, `LAG`) is kept as a
   note, not a port; put a VLAN after the port (`Port 14 · VLAN 40`).
@@ -408,20 +412,26 @@ data, by these rules, so write it to be read:
   from the firewall's LAN port to the core switch is read as LAN backbone
   with its port: label it with the firewall's port (`X0 → Port 24`).
 - **Every node needs an edge into it.** A gateway with none is put on the
-  internet; anything else goes under *Not linked*, placement unknown. Hang
+  internet; anything else goes under *Not linked*, placement unknown (under
+  the gateway only when it is confirmed and at the same site). Hang
   a device whose uplink you can't find under its likely parent with a
   dashed edge rather than leaving it unlinked.
-- **A MAC belongs in `mac`** (or the `sub` line). A MAC in `details` counts
-  only on a line that is the MAC (`MAC aa:bb:…`); write a candidate's MAC as
-  "candidate"/"unconfirmed" so it's never taken for the node's own.
+- **A MAC belongs in `mac`** (or the `sub` line). A MAC in `details` or a
+  chip counts as the node's own (`MAC aa:bb:…`, `MAC address: aa-bb-…`,
+  `aabb.ccdd.eeff`) unless its line says "candidate"/"unconfirmed"/
+  "possibly", or that it's about another device ("behind", "seen on"):
+  write a candidate's MAC that way so it's never taken for the node's own.
   Speculative infrastructure carries the `inferred` (or `scan-only`) chip:
   is-alive never places a sweep's hosts under it ahead of a confirmed
   switch.
 - **"+N more" cards:** one `details` line per device, name first, then
   what's known, `·`-separated: `client-0a1b2c3d · Hikvision · guest`,
   `front-desk · 192.0.2.40`. Each line becomes its own client card with
-  that vendor and guest tag. Devices you only count go in one line,
-  `…and 121 more`, kept as a count. Never repeat a device on two lines.
+  that vendor and guest tag; only a maker counts as the vendor (`VLAN 20`,
+  `Win11` don't). Devices you only count go in one line, `…and 121 more`,
+  kept as a count; a per-kind count (`Wireless · 8`) is read as a note, not
+  a device. Never repeat a device on two lines; two names on one address
+  are two devices (an address clash).
 
 ## Step 1 — one pre-build ask
 
