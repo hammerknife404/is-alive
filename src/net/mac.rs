@@ -114,6 +114,28 @@ fn is_format(c: char) -> bool {
         | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{00ad}')
 }
 
+/// Whether `word` (any case) is the first word of a registered maker's
+/// name ("dell", "hangzhou", "3com"): what tells a vendor written in
+/// text from a VLAN, a band or a place name. Built on first use.
+pub fn maker_word(word: &str) -> bool {
+    static WORDS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+    let words = WORDS.get_or_init(|| {
+        registry()
+            .iter()
+            .flat_map(|t| &t.1)
+            .filter_map(|(_, v)| first_word(v))
+            .collect()
+    });
+    first_word(word).is_some_and(|w| words.contains(&w))
+}
+
+/// The first word of a name, lowercased: letters, digits and dashes.
+fn first_word(v: &str) -> Option<String> {
+    v.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .find(|w| w.len() >= 2)
+        .map(str::to_ascii_lowercase)
+}
+
 pub fn vendor(m: &Mac) -> Option<&'static str> {
     let v = m.iter().fold(0u64, |a, &b| a << 8 | b as u64);
     registry().iter().find_map(|(digits, t)| {

@@ -67,12 +67,9 @@ fn role(text: &str) -> Option<Zone> {
         "UXG",
     ]) {
         Some(Zone::Gateway)
-    } else if any(&["SWITCH", "SWITCHES", "USW", "IDF", "MDF", "DISTRIBUTION"])
-        || (words.contains("ACCESS") && !phrase(&["ACCESS POINT", "ACCESS CONTROL"]))
-    {
+    } else if any(&["SWITCH", "SWITCHES", "USW", "IDF", "MDF", "DISTRIBUTION"]) {
         // Before EDGE and ROUTING: an "EDGE SWITCH", a "USW EDGE" or a
-        // "ROUTING SWITCH" is a switch; an "access" zone is the access
-        // switches (an access point or access control says so).
+        // "ROUTING SWITCH" is a switch.
         Some(Zone::Switch)
     } else if any(&["EDGE", "ROUTING"]) {
         // A "voice edge" is the carrier's router, before VOICE below.
@@ -198,6 +195,12 @@ const NOT_ITS_OWN: &[&str] = &[
     "neighbo",
     "seen on",
     "via ",
+    "peer",
+    "standby",
+    "previous",
+    "old mac",
+    "before rma",
+    "replaced",
 ];
 
 /// A MAC anywhere in `t`: "aa:bb:cc:dd:ee:ff", "aa-bb-…" or Cisco's
@@ -223,19 +226,32 @@ fn mac_in(t: &str) -> Option<Mac> {
 }
 
 /// A card's own MAC from its text, for maps that don't write a `mac`
-/// field: the sub line, or a chip or detail that names one ("MAC
-/// aa:bb:…", "MAC address: aa-bb-…", "aabb.ccdd.eeff", the address
-/// alone). Never one in a line that is a maybe or about another device
-/// ("Candidate identity: … unconfirmed", "seen behind …").
+/// field: the sub line, or a chip or detail that is the MAC outright
+/// ("MAC aa:bb:…", "MAC address: aa-bb-…", or the address alone, Cisco's
+/// dotted "aabb.ccdd.eeff" too, then at most a tag: "· ARP only"). Never
+/// one inside a sentence ("Uplink: Core port 7 (aa:bb:…)", "Default
+/// gateway MAC …"), or on a line that is a maybe or about another unit
+/// ("Candidate …", "HA peer", "Old MAC before RMA").
 fn own_mac(sub: &str, lines: &[&str]) -> Option<Mac> {
     let plain = |t: &str| {
         let low = t.to_lowercase();
         !NOT_ITS_OWN.iter().any(|w| low.contains(w))
     };
-    std::iter::once(sub)
-        .chain(lines.iter().copied())
-        .filter(|t| plain(t))
-        .find_map(mac_in)
+    let explicit = |t: &str| {
+        let t = t.trim();
+        let low = t.to_ascii_lowercase();
+        let rest = ["mac address", "mac addr", "mac"]
+            .iter()
+            .find(|p| low.starts_with(*p))
+            .map_or(t, |p| &t[p.len()..])
+            .trim_start_matches([':', '=', ' ', '\t']);
+        let first = rest.split_whitespace().next()?;
+        mac_in(first.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')' | '[' | ']')))
+    };
+    Some(sub)
+        .filter(|s| plain(s))
+        .and_then(mac_in)
+        .or_else(|| lines.iter().filter(|t| plain(t)).find_map(|t| explicit(t)))
 }
 
 /// What a /mapnetwork edge says about the card it leads to: how it's
@@ -252,8 +268,9 @@ struct EdgeRead {
 /// "Gi1/0/21", "1/1/1", "eth0", "X1", "LAN2", "LAN 2", "SFP+ 1", and a
 /// label that is only a port ("24", "A1"). A count ("21 wired"), a range
 /// ("port 1-24"), a VLAN ("VLAN 10 gw"), a name ("AT&T", "Building IX
-/// 2") or a size ("LAG x 4") isn't one: a short prefix (x, ix, em, po…)
-/// counts only joined to its number.
+/// 2"), a size ("LAG x 4", "LAG x4"), a speed ("10/100", "LAN 100 Mbps")
+/// or a date ("3/4/25") isn't one: a short prefix (x, ix, em, po…) counts
+/// only joined to its number.
 fn port_in(text: &str) -> Option<String> {
     use regex::Regex;
     use std::sync::LazyLock;
@@ -267,20 +284,32 @@ fn port_in(text: &str) -> Option<String> {
         )
         .unwrap()
     });
-    // A stack/slot/port alone or in a label: "1/1/1".
+    // A stack/slot/port alone or in a label: "1/1/1", "1/0/24". The slot
+    // is 0-2, so a date ("3/4/25") isn't one.
     static SLOT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?:^|\s)(\d{1,2}/\d{1,2}/\d{1,3})(?:\s|$)").unwrap());
-    // The whole label is the port: "24", "1/24", "A1".
+        LazyLock::new(|| Regex::new(r"(?:^|\s)(\d{1,2}/[0-2]/\d{1,3})(?:\s|$)").unwrap());
+    // The whole label is the port: "24", "A1".
     static ALONE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)^(?:\d{1,3}(?:/\d{1,3}){0,2}|[a-z]\d{1,2})$").unwrap());
+        LazyLock::new(|| Regex::new(r"(?i)^(?:\d{1,3}|[a-z]\d{1,2})$").unwrap());
+    // A speed or size right after it: "LAN 100 Mbps" is a link speed.
+    static UNIT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^\s*(?:[kmg]bps|[kmg]b/s|[kmg]bit|mb|gb|mhz|ghz|%)").unwrap()
+    });
     let t = text.trim();
     if let Some(c) = PORT.captures(t) {
         // "port 1-24" is a range of ports, not one.
         return c.get(2).is_none().then(|| format!("Port {}", &c[1]));
     }
     if let Some(c) = IFACE.captures(t) {
+        let m = c.get(0)?;
+        let before = t[..m.start()].trim_end().to_ascii_lowercase();
+        let last = before.rsplit(' ').next().unwrap_or("");
+        // "LAG x4" is a size: an "x" right after a link word or a number.
+        let times = m.as_str().to_ascii_lowercase().starts_with('x')
+            && (LINK_WORDS.contains(&last) || last.ends_with(|c: char| c.is_ascii_digit()));
         // "Gi1/0/1-24" is a range too.
-        return c.get(1).is_none().then(|| c[0].trim().to_string());
+        return (c.get(1).is_none() && !times && !UNIT.is_match(&t[m.end()..]))
+            .then(|| m.as_str().trim().to_string());
     }
     if let Some(c) = SLOT.captures(t) {
         return Some(c[1].to_string());
@@ -313,9 +342,15 @@ fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
     let cls = s(e, "cls");
     let mut notes = Vec::new();
     // "X2 → Port 24": the parent's port first, then the card's own.
-    let split = ["→", "<->", "->", "↔", " to ", " – ", " — ", " - "]
-        .iter()
-        .find_map(|sep| label.split_once(sep));
+    // "port 1 - 24" is a range, not two ends.
+    static RANGE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\d\s+[-–—]\s+\d").unwrap());
+    let seps: &[&str] = if RANGE.is_match(label) {
+        &["→", "<->", "->", "↔", " to "]
+    } else {
+        &["→", "<->", "->", "↔", " to ", " – ", " — ", " - "]
+    };
+    let split = seps.iter().find_map(|sep| label.split_once(sep));
     let (port, own) = match split {
         Some((a, b)) => (port_in(a), port_in(b)),
         // "Port 24 uplink": the card's own uplink port, not the parent's.
@@ -691,9 +726,20 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
     }
 
     // The map's own "+7 more" cards, one card for each device they list.
+    // The cards made from their lines: the only cards a controller's
+    // client may join by address alone.
     let mut only_counted = 0usize;
+    let mut listed_cards: HashSet<usize> = HashSet::new();
     for &c in &card {
+        if !is_overflow(&b.nodes[c]) {
+            continue;
+        }
+        let before = b.nodes.len();
         only_counted = only_counted.saturating_add(expand_overflow(&mut b, c, src.len() as u64));
+        listed_cards.extend(before..b.nodes.len());
+        if !is_overflow(&b.nodes[c]) {
+            listed_cards.insert(c);
+        }
     }
 
     for a in &doc.actions {
@@ -830,10 +876,13 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
                     }
                     continue;
                 }
-                let names_agree = c.name.as_deref().is_none_or(|name| {
-                    n.label.starts_with("Host ") || n.label.eq_ignore_ascii_case(name)
-                });
-                if n.client
+                // A line with no name ("Host 192.0.2.77") takes any; a
+                // named one only the same name, not a client with none.
+                let names_agree = n.label.starts_with("Host ")
+                    || c.name
+                        .as_deref()
+                        .is_some_and(|name| n.label.eq_ignore_ascii_case(name));
+                if listed_cards.contains(&i)
                     && n.mac.is_none()
                     && names_agree
                     && c.ip.and_then(|ip| newest.get(&ip)) == Some(&c.mac)
@@ -930,29 +979,38 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
 /// Whether the controller's client `c` is plausibly one of gateway `n`'s
 /// own interfaces: the same maker's prefix as the card's MAC (a
 /// SonicWall's LAN answers on its own MAC with the locally-administered
-/// bit set), a MAC a config export lists, or, on a card with no MAC, a
-/// maker the card's own words name.
+/// bit set), or a MAC a config export lists. On a card with no MAC: a
+/// network-gear maker's wired, non-guest client (a "FortiGate 60F" card
+/// names no "Fortinet"),
+/// or a maker the card's own words name as a whole word (not "link" in
+/// "Starlink" for a TP-Link client).
 fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
     let u = mac::universal(&c.mac);
     if fw_macs.contains(&u) {
         return true;
     }
-    match n.mac {
-        Some(m) => mac::universal(&m)[..3] == u[..3],
-        None => {
-            let maker = mac::vendor(&c.mac)
-                .or_else(|| mac::universal_vendor(&c.mac))
-                .map(str::to_string)
-                .or_else(|| c.oui.clone());
-            let first = maker.as_deref().and_then(|v| {
-                v.split(|ch: char| !ch.is_ascii_alphanumeric())
-                    .find(|w| w.len() >= 3)
-                    .map(str::to_lowercase)
-            });
-            let text = format!("{} {} {}", n.kind, n.label, n.sub).to_lowercase();
-            first.is_some_and(|w| text.contains(&w))
-        }
+    if let Some(m) = n.mac {
+        return mac::universal(&m)[..3] == u[..3];
     }
+    // The registry, then the controller's own lookup, then the guess a
+    // locally administered MAC's cleared prefix gives.
+    let maker = mac::vendor(&c.mac)
+        .map(str::to_string)
+        .or_else(|| c.oui.clone())
+        .or_else(|| mac::universal_vendor(&c.mac).map(str::to_string));
+    let Some(maker) = maker else {
+        return false;
+    };
+    // A gear maker's wired, non-guest client: a TP-Link streaming stick
+    // on the Wi-Fi isn't the router's interface.
+    if super::gear_brand(Some(&maker)).is_some() && c.wired && !c.guest {
+        return true;
+    }
+    let text = format!("{} {} {}", n.kind, n.label, n.sub);
+    maker
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .find(|w| w.len() >= 3)
+        .is_some_and(|w| super::word_in(&text, &w.to_ascii_lowercase()))
 }
 
 /// Whether a /mapnetwork card is the map's own "+7 more": the clients
@@ -1013,31 +1071,22 @@ fn is_count(f: &str) -> bool {
 }
 
 /// Whether a listed line's field reads as a maker ("Hangzhou Hikvision",
-/// "Dell Inc.", "3Com"): not a VLAN or a port ("VLAN 20"), an OS or a
-/// model ("Win11", "iOS 17"), a count, or a "key: value". Short and made
-/// of words, none a number.
+/// "Dell Inc.", "3Com"): its first word starts a registered maker's name,
+/// and it isn't a VLAN, a band, a speed, an OS or a "key: value"
+/// ("VLAN-20", "5GHz", "1Gbps", "Win11", "Front desk").
 fn vendor_like(f: &str) -> bool {
-    const NOT: &[&str] = &[
-        "vlan", "ssid", "port", "os", "windows", "win", "macos", "ios", "ipados", "android",
-        "linux", "ubuntu", "chromeos", "firmware", "fw", "build", "version", "ver", "uptime",
-        "signal", "rssi", "channel", "band", "ghz", "mbps", "gbps", "dbm", "up", "down",
-    ];
+    static NOT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:vlan|ssid|port|ghz|mhz|[kmg]bps|dbm|win\d*|windows|macos|ios|ipados|android|linux|firmware|version|uptime|printers?|cameras?|phones?|laptops?|desktops?|tablets?|tv|servers?|kiosks?)\b|\d(?:\.\d+)?\s*(?:ghz|mhz|[kmg]bps|[kmg]b/s)\b|[:=/%@]",
+        )
+        .unwrap()
+    });
     let words: Vec<&str> = f.split_whitespace().collect();
-    let digits = |w: &str| w.chars().filter(char::is_ascii_digit).count();
     !words.is_empty()
         && words.len() <= 5
         && f.len() <= 48
-        && !f.contains([':', '=', '/', '%', '@'])
-        && words.iter().all(|w| {
-            let low = w
-                .trim_matches(|c: char| !c.is_ascii_alphanumeric())
-                .to_lowercase();
-            let alpha = low.trim_end_matches(|c: char| c.is_ascii_digit());
-            // "Win11", "802.11ac", "20": an OS, a standard, a number.
-            !NOT.contains(&low.as_str())
-                && !NOT.contains(&alpha)
-                && digits(&low) * 2 <= low.len().max(1)
-        })
+        && !NOT.is_match(f)
+        && crate::net::mac::maker_word(f)
 }
 
 /// "…and 121 more" (or "+121 more", "and 121 others"): devices the card
@@ -1108,6 +1157,83 @@ fn listed(line: &str) -> Option<Listed> {
     })
 }
 
+/// Where a "+N more" card's devices are, to find a line's device again:
+/// by MAC; by address, when the names agree (or one is missing); by
+/// name, when the address and MAC don't disagree.
+#[derive(Default)]
+struct Known {
+    mac: HashMap<Mac, usize>,
+    /// The first device at each address.
+    ip: HashMap<Ipv4Addr, usize>,
+    ip_named: HashMap<(Ipv4Addr, String), usize>,
+    /// A device at the address with no name yet; dropped once it has one,
+    /// so a second name there is a second device.
+    ip_unnamed: HashMap<Ipv4Addr, usize>,
+    name: HashMap<String, usize>,
+}
+
+impl Known {
+    fn find(&self, hosts: &[Listed], h: &Listed) -> Option<usize> {
+        let agree = |a: Option<Mac>, b: Option<Mac>| a.is_none() || b.is_none() || a == b;
+        if let Some(&k) = h.mac.and_then(|m| self.mac.get(&m)) {
+            return Some(k);
+        }
+        let name = h.name.as_deref().map(str::to_lowercase);
+        if let Some(ip) = h.ip {
+            let at = match &name {
+                None => self.ip.get(&ip),
+                Some(n) => self
+                    .ip_named
+                    .get(&(ip, n.clone()))
+                    .or_else(|| self.ip_unnamed.get(&ip)),
+            };
+            if let Some(&k) = at.filter(|&&k| agree(hosts[k].mac, h.mac)) {
+                return Some(k);
+            }
+        }
+        let &k = self.name.get(name.as_ref()?)?;
+        let o = &hosts[k];
+        ((o.ip.is_none() || h.ip.is_none() || o.ip == h.ip) && agree(o.mac, h.mac)).then_some(k)
+    }
+
+    /// Index device `k` by what it has now.
+    fn index(&mut self, hosts: &[Listed], k: usize) {
+        let o = &hosts[k];
+        if let Some(m) = o.mac {
+            self.mac.entry(m).or_insert(k);
+        }
+        let name = o.name.as_deref().map(str::to_lowercase);
+        if let Some(ip) = o.ip {
+            self.ip.entry(ip).or_insert(k);
+            match &name {
+                Some(n) => {
+                    self.ip_named.entry((ip, n.clone())).or_insert(k);
+                    if self.ip_unnamed.get(&ip) == Some(&k) {
+                        self.ip_unnamed.remove(&ip);
+                    }
+                }
+                None => {
+                    self.ip_unnamed.entry(ip).or_insert(k);
+                }
+            }
+        }
+        if let Some(n) = name {
+            self.name.entry(n).or_insert(k);
+        }
+    }
+}
+
+/// A second line about the same device fills in what the first left out.
+fn merge_listed(o: &mut Listed, h: Listed) {
+    o.vendor = o.vendor.take().or(h.vendor);
+    o.guest |= h.guest;
+    o.mac = o.mac.or(h.mac);
+    o.ip = o.ip.or(h.ip);
+    if o.name.is_none() {
+        o.name = h.name;
+    }
+}
+
 /// Whether a line of a card's details is about its link (said where the
 /// card hangs), not a note to copy onto each device it lists.
 fn about_its_link(line: &str) -> bool {
@@ -1115,7 +1241,6 @@ fn about_its_link(line: &str) -> bool {
         "Link on the map:",
         "Its own port:",
         "Uplink ",
-        "Drawn dashed",
         "Placement unknown",
         "Linked by a tunnel",
     ]
@@ -1157,15 +1282,10 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
         .saturating_add(usize::from(!keep_card))
         .min(OVERFLOW_HOSTS);
     let mut unlisted = 0usize;
-    let mut hosts: Vec<Listed> = Vec::new();
-    // Each device once, found by its MAC, its address (when the names
-    // agree) or, with neither, its name: maps, not a scan of every line.
-    let mut by_mac: HashMap<Mac, usize> = HashMap::new();
-    let mut by_ip: HashMap<Ipv4Addr, usize> = HashMap::new();
-    let mut by_ip_named: HashMap<(Ipv4Addr, String), usize> = HashMap::new();
-    let mut by_ip_unnamed: HashMap<Ipv4Addr, usize> = HashMap::new();
-    let mut by_name: HashMap<String, usize> = HashMap::new();
-    let mut left_out = 0usize;
+    // The devices drawn, and those past the cap (only counted, but once
+    // each), each found again by `Known`: maps, not a scan per line.
+    let (mut hosts, mut known) = (Vec::<Listed>::new(), Known::default());
+    let (mut extra, mut known_extra) = (Vec::<Listed>::new(), Known::default());
     let mut notes: Vec<String> = Vec::new();
     let mut notes_left_out = 0usize;
     let mut elsewhere: Vec<(usize, String)> = Vec::new();
@@ -1183,52 +1303,9 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
             }
             continue;
         };
-        let name_key = h.name.as_deref().map(str::to_lowercase);
-        let same = h
-            .mac
-            .and_then(|m| by_mac.get(&m).copied())
-            .or_else(|| {
-                // The same address and name, or one of them unnamed.
-                let ip = h.ip?;
-                match &name_key {
-                    None => by_ip.get(&ip),
-                    Some(nk) => by_ip_named
-                        .get(&(ip, nk.clone()))
-                        .or_else(|| by_ip_unnamed.get(&ip)),
-                }
-                .copied()
-            })
-            .or_else(|| {
-                (h.mac.is_none() && h.ip.is_none())
-                    .then(|| by_name.get(name_key.as_ref()?).copied())
-                    .flatten()
-            });
-        if let Some(k) = same {
-            let o = &mut hosts[k];
-            o.vendor = o.vendor.take().or(h.vendor);
-            o.guest |= h.guest;
-            if o.mac.is_none()
-                && let Some(m) = h.mac
-            {
-                o.mac = Some(m);
-                by_mac.entry(m).or_insert(k);
-            }
-            if o.ip.is_none()
-                && let Some(ip) = h.ip
-            {
-                o.ip = Some(ip);
-                by_ip.entry(ip).or_insert(k);
-                match o.name.as_deref().map(str::to_lowercase) {
-                    Some(nk) => by_ip_named.entry((ip, nk)).or_insert(k),
-                    None => by_ip_unnamed.entry(ip).or_insert(k),
-                };
-            }
-            if o.name.is_none() {
-                o.name = h.name;
-                if let (Some(ip), Some(nk)) = (o.ip, name_key) {
-                    by_ip_named.entry((ip, nk)).or_insert(k);
-                }
-            }
+        if let Some(k) = known.find(&hosts, &h) {
+            merge_listed(&mut hosts[k], h);
+            known.index(&hosts, k);
             continue;
         }
         if let Some(j) = b.find(h.mac, h.ip).filter(|&j| {
@@ -1248,30 +1325,23 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
             }
             continue;
         }
-        // Past the cap a line is only counted, never kept to compare.
-        if hosts.len() >= room {
-            left_out += 1;
-            continue;
+        let (list, idx) = if hosts.len() < room {
+            (&mut hosts, &mut known)
+        } else {
+            (&mut extra, &mut known_extra)
+        };
+        match idx.find(list, &h) {
+            Some(k) => {
+                merge_listed(&mut list[k], h);
+                idx.index(list, k);
+            }
+            None => {
+                list.push(h);
+                idx.index(list, list.len() - 1);
+            }
         }
-        let k = hosts.len();
-        if let Some(m) = h.mac {
-            by_mac.entry(m).or_insert(k);
-        }
-        if let Some(ip) = h.ip {
-            by_ip.entry(ip).or_insert(k);
-            match &name_key {
-                Some(nk) => by_ip_named.entry((ip, nk.clone())).or_insert(k),
-                None => by_ip_unnamed.entry(ip).or_insert(k),
-            };
-        }
-        if h.mac.is_none()
-            && h.ip.is_none()
-            && let Some(nk) = name_key
-        {
-            by_name.entry(nk).or_insert(k);
-        }
-        hosts.push(h);
     }
+    let left_out = extra.len();
     let label = n.label.clone();
     for (j, line) in elsewhere {
         b.nodes[j].detail(format!(
@@ -2458,6 +2528,11 @@ mod visits {
             ("port 1-24", None),
             ("Gi1/0/1-24", None),
             ("Group 2", None),
+            ("10/100", None),
+            ("LAG x4", None),
+            ("3/4/25", None),
+            ("LAN 100 Mbps", None),
+            ("1/0/24", Some("1/0/24")),
         ] {
             assert_eq!(port_in(label).as_deref(), port, "{label}");
         }
@@ -2770,14 +2845,15 @@ mod visits {
         let page = r#"
         this.NODES = [
           { id:'inet', kind:'WAN', label:'Internet' },
-          { id:'fw', kind:'FIREWALL', label:'FW', sub:'192.0.2.1', mac:'00:17:c5:00:00:01' },
+          { id:'fw', kind:'FIREWALL', label:'FW', sub:'192.0.2.1', mac:'02:12:34:00:00:01' },
           { id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2', mac:'02:00:00:00:00:02' },
         ];
         this.EDGES = [ { from:'inet', to:'fw' }, { from:'fw', to:'sw' } ];"#;
-        // The LAN's virtual MAC: the same prefix, locally administered.
+        // Another of its interfaces: the same prefix (fictional, locally
+        // administered).
         let m = with_unifi(
             page,
-            serde_json::json!([{"mac": "02:17:c5:00:00:02", "last_ip": "192.0.2.1"}]),
+            serde_json::json!([{"mac": "02:12:34:00:00:02", "last_ip": "192.0.2.1"}]),
         );
         assert_eq!(
             m.nodes
@@ -2908,6 +2984,8 @@ mod visits {
         let lines: Vec<String> = (0..30_000)
             .map(|k| format!("'host-{k} · 192.0.2.50'"))
             .chain((0..30_000).map(|k| format!("'other-{k}'")))
+            // Each past the cap again: counted once.
+            .chain((0..30_000).map(|k| format!("'other-{k}'")))
             .collect();
         let page = format!(
             r#"
@@ -2947,16 +3025,22 @@ mod visits {
         assert_eq!(ids.len(), b.nodes.len(), "ids are unique");
     }
 
-    /// Switch words win over EDGE and ROUTING; an "access" zone is
-    /// switches, an access point or access control isn't.
+    /// Switch words win over EDGE and ROUTING. "Access" alone is no
+    /// role word: /mapnetwork's `access` zone is "Access points", and
+    /// door, badge, guest or remote access aren't switches.
     #[test]
     fn switch_words_win() {
         for (text, zone) in [
             ("EDGE SWITCH", Some(Zone::Switch)),
             ("USW EDGE", Some(Zone::Switch)),
             ("ROUTING SWITCH", Some(Zone::Switch)),
-            ("access", Some(Zone::Switch)),
+            ("access", None),
+            ("Access points", Some(Zone::Wireless)),
             ("Access switches", Some(Zone::Switch)),
+            ("DOOR ACCESS", Some(Zone::Device)),
+            ("BADGE ACCESS", Some(Zone::Device)),
+            ("GUEST ACCESS", Some(Zone::Client)),
+            ("REMOTE ACCESS SERVER", Some(Zone::Server)),
             ("ACCESS POINT", Some(Zone::Wireless)),
             ("ACCESS CONTROL", Some(Zone::Device)),
             ("Voice edge", Some(Zone::Gateway)),
@@ -2974,16 +3058,142 @@ mod visits {
         for line in [
             "MAC address: 02-00-00-00-00-46",
             "MAC: 02:00:00:00:00:46 (from the switch)",
+            "mac=02:00:00:00:00:46",
             "0200.0000.0046",
-            "Mgmt interface 0200.0000.0046 on VLAN 99",
+            "02:00:00:00:00:46 · ARP only",
         ] {
             assert_eq!(own_mac("", &[line]), Some(m), "{line}");
+        }
+        // Another unit's MAC, named in a sentence or a hedged line.
+        for line in [
+            "Uplink: Core port 7 (02:00:00:00:00:46)",
+            "Standby unit: 02:00:00:00:00:46",
+            "MAC of the HA peer: 02:00:00:00:00:46",
+            "Old MAC before RMA: 02:00:00:00:00:46",
+            "Connected to core-sw 0200.0000.0046",
+            "Default gateway MAC 02:00:00:00:00:46",
+            "Mgmt interface 0200.0000.0046 on VLAN 99",
+        ] {
+            assert_eq!(own_mac("", &[line]), None, "{line}");
         }
         assert_eq!(
             own_mac("", &["Candidate identity: 0200.0000.0046 unconfirmed"]),
             None
         );
         assert_eq!(own_mac("192.0.2.4 · 0200.0000.0046", &[]), Some(m));
+    }
+    /// /mapnetwork's `access` zone is its access points.
+    #[test]
+    fn the_access_zone_is_access_points() {
+        let m = all(r#"
+        this.ZONES = { access:{ name:'Access points', vlan:'wireless' } };
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'ap', zone:'access', kind:'U6-LR', label:'Lobby' },
+        ];
+        this.EDGES = [ { from:'inet', to:'ap' } ];"#);
+        assert_eq!(by(&m, "ap").zone, Zone::Wireless);
+    }
+
+    /// A MAC-less third-party firewall: a gear maker's wired client at its
+    /// address is its interface (no clash); a maker's name must be a whole
+    /// word of the card's ("link" isn't "Starlink"), and a streaming stick
+    /// on the Wi-Fi isn't the router's interface.
+    #[test]
+    fn a_mac_less_gateway_and_its_interfaces() {
+        let page = |kind: &str, label: &str| {
+            format!(
+                r#"
+        this.NODES = [
+          {{ id:'inet', kind:'WAN', label:'Internet' }},
+          {{ id:'fw', kind:'{kind}', label:'{label}', sub:'192.0.2.1' }},
+          {{ id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2', mac:'02:00:00:00:00:02' }},
+        ];
+        this.EDGES = [ {{ from:'inet', to:'fw' }}, {{ from:'fw', to:'sw' }} ];"#
+            )
+        };
+        let clash = |m: &Map| {
+            m.findings
+                .iter()
+                .any(|f| f.text.starts_with("Address clash"))
+        };
+        let forti = with_unifi(
+            &page("FIREWALL", "FortiGate 60F"),
+            serde_json::json!([{"mac": "06:00:00:00:00:a1", "last_ip": "192.0.2.1",
+                                "oui": "Fortinet, Inc.", "is_wired": true}]),
+        );
+        assert!(!clash(&forti));
+        assert_eq!(by(&forti, "fw").mac, Some([6, 0, 0, 0, 0, 0xa1]));
+        let star = with_unifi(
+            &page("ROUTER", "Starlink router"),
+            serde_json::json!([{"mac": "06:00:00:00:00:a2", "last_ip": "192.0.2.1",
+                                "hostname": "tv-stick", "oui": "TP-Link Systems Inc"}]),
+        );
+        // Its own card (filed as a gear maker's), not merged into the router.
+        assert_eq!(
+            star.nodes
+                .iter()
+                .filter(|n| n.ip == Some([192, 0, 2, 1].into()))
+                .count(),
+            2
+        );
+        assert_eq!(by(&star, "fw").mac, None);
+    }
+
+    /// Within one card: a name given to an unnamed address doesn't let a
+    /// second name in; a bare name and the same name with an address are
+    /// one device.
+    #[test]
+    fn listed_lines_merge_only_when_they_agree() {
+        let page = r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2' },
+          { id:'sw_overflow', kind:'ADDITIONAL DEVICES', label:'+5 more',
+            details:['192.0.2.40', 'front-desk · 192.0.2.40', 'front-desk-2 · 192.0.2.40 · Dell',
+                     'kiosk-7', 'kiosk-7 · 192.0.2.77'] },
+        ];
+        this.EDGES = [ { from:'inet', to:'sw' }, { from:'sw', to:'sw_overflow' } ];"#;
+        let m = all(page);
+        let named = |l: &str| -> Vec<&Node> { m.nodes.iter().filter(|n| n.label == l).collect() };
+        assert_eq!(named("front-desk").len(), 1);
+        assert_eq!(crate::map::export::vendor(named("front-desk")[0]), None);
+        assert_eq!(
+            crate::map::export::vendor(named("front-desk-2")[0]).as_deref(),
+            Some("Dell")
+        );
+        let kiosk = named("kiosk-7");
+        assert_eq!(kiosk.len(), 1, "one kiosk");
+        assert_eq!(kiosk[0].ip, Some([192, 0, 2, 77].into()));
+    }
+
+    /// Only a "+N more" line joins a controller client by address, and a
+    /// named card never takes a client with no name.
+    #[test]
+    fn only_listed_lines_take_a_clients_mac() {
+        let page = r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2', mac:'02:00:00:00:00:02' },
+          { id:'pc', kind:'WORKSTATION', label:'Reception PC', sub:'192.0.2.60' },
+          { id:'sw_overflow', kind:'ADDITIONAL DEVICES', label:'+1 more',
+            details:['scanner-1 · 192.0.2.61'] },
+        ];
+        this.EDGES = [ { from:'inet', to:'sw' }, { from:'sw', to:'pc' },
+                       { from:'sw', to:'sw_overflow' } ];"#;
+        let m = with_unifi(
+            page,
+            serde_json::json!([
+                {"mac": "06:00:00:00:00:b1", "last_ip": "192.0.2.60", "is_guest": true,
+                 "oui": "Fictional Phones"},
+                {"mac": "06:00:00:00:00:b2", "last_ip": "192.0.2.61"},
+            ]),
+        );
+        let pc = by(&m, "pc");
+        assert_eq!(pc.mac, None);
+        assert!(!pc.chips.contains(&"guest".to_string()));
+        let scanner = m.nodes.iter().find(|n| n.label == "scanner-1").unwrap();
+        assert_eq!(scanner.mac, None, "no hostname doesn't agree with a name");
     }
 }
 

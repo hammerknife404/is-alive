@@ -385,9 +385,9 @@ data, by these rules, so write it to be read:
   first, then the zone's key and name, and the `label` last. A `kind` with
   no role word (`TA900`, `IPC-427`) leaves it to the zone.
 - **Zone words on re-import:** `gateway`/`edge`/`routing`/`firewall` →
-  gateway; `distribution`/`access`/`switch` → switch (switch words win
-  over edge words: `EDGE SWITCH`, `USW EDGE` are switches); `wifi`/`wireless` →
-  access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
+  gateway; `distribution`/`switch` → switch (switch words win over edge
+  words: `EDGE SWITCH`, `USW EDGE` are switches); `access` ("Access
+  points"), `wifi`/`wireless` → access point; `servers` → server; `iot`, `ot`, `cameras`, `printers` →
   printers, cameras, IoT; `workstations`/`trusted`/`guest` → clients;
   `voip`/`voice` → voice gear (a PBX, ATA or voice router), **not** a client
   unless its `kind` says `PHONE`; `external` → unidentified unless the
@@ -417,21 +417,22 @@ data, by these rules, so write it to be read:
   a device whose uplink you can't find under its likely parent with a
   dashed edge rather than leaving it unlinked.
 - **A MAC belongs in `mac`** (or the `sub` line). A MAC in `details` or a
-  chip counts as the node's own (`MAC aa:bb:…`, `MAC address: aa-bb-…`,
-  `aabb.ccdd.eeff`) unless its line says "candidate"/"unconfirmed"/
-  "possibly", or that it's about another device ("behind", "seen on"):
-  write a candidate's MAC that way so it's never taken for the node's own.
+  chip counts only on a line that is the MAC outright: `MAC aa:bb:…`,
+  `MAC address: aa-bb-…`, or the address alone (`aabb.ccdd.eeff` too).
+  One inside a sentence (`Uplink: Core port 7 (…)`) is someone else's;
+  write a candidate's, an HA peer's or an old one's as "candidate",
+  "unconfirmed", "HA peer", "old MAC" so it's never taken for the node's own.
   Speculative infrastructure carries the `inferred` (or `scan-only`) chip:
   is-alive never places a sweep's hosts under it ahead of a confirmed
   switch.
 - **"+N more" cards:** one `details` line per device, name first, then
   what's known, `·`-separated: `client-0a1b2c3d · Hikvision · guest`,
   `front-desk · 192.0.2.40`. Each line becomes its own client card with
-  that vendor and guest tag; only a maker counts as the vendor (`VLAN 20`,
-  `Win11` don't). Devices you only count go in one line, `…and 121 more`,
+  that vendor and guest tag; only a maker's name counts as the vendor
+  (`VLAN 20`, `5GHz`, `Win11` don't). Devices you only count go in one line, `…and 121 more`,
   kept as a count; a per-kind count (`Wireless · 8`) is read as a note, not
   a device. Never repeat a device on two lines; two names on one address
-  are two devices (an address clash).
+  are two devices.
 
 ## Step 1 — one pre-build ask
 
