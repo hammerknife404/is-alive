@@ -19,7 +19,7 @@ What goes in the zip:
 | `unifi.unifidump.json` | the UniFi backup open in Config Export, converted again with the bundle's client setting; a second is `unifi-2.unifidump.json`, and so on | /unifidump |
 | `sonicwall.json` | the SonicWall export open in Config Export; a second is `sonicwall-2.json`, and so on | /mapnetwork (firewall config) |
 | `meraki.json` | the Meraki export open in Config Export; a second is `meraki-2.json`, and so on | /mapnetwork (firewall config) |
-| `inventory.json` | the last finished Subnet Sweep, phones', laptops' and PCs' names as **Client names** says (its `client_names`) | /mapnetwork (scan) |
+| `inventory.json` | the last finished Subnet Sweep, or an imported Advanced IP Scanner scan (`imported`; logged-on users and share names never included), phones', laptops' and PCs' names (and NetBIOS names) as **Client names** says (its `client_names`) | /mapnetwork (scan) |
 | `results.json` | the Results log, off by default: it holds every run since the app opened, which can include other clients' hosts and domains. The row lists the targets it covers so you can check before ticking it | /mapnetwork |
 | `map.dc.html` | the `/mapnetwork` map open in Config Export, from an earlier visit; the prompt asks for it to be updated rather than rebuilt, under its original name | /mapnetwork (update) |
 | `notes.md` | the Notes tab, off by default, redacted as Notes redacts it: what you marked and the loaded configs' secrets, nothing else (the row says how many values were redacted, and warns when something still looks secret) | /mapnetwork (context and findings) |
