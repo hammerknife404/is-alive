@@ -137,7 +137,13 @@ the Wi-Fi row is one snapshot of the access point the scanner was on (its BSSID)
 rates, not roaming; Nearby Wi-Fi lists other access points heard there (BSSIDs), those on its channel first, \
 reported, not judged. A Wi-Fi scan run is the same list from an active scan, one row per access point \
 (connected = yes on the scanner's own). A Domain join (others) run is about other computers: one row each, saying whether it named an Active \
-Directory domain when asked without credentials (an Entra ID join doesn't show that way).";
+Directory domain when asked without credentials (an Entra ID join doesn't show that way). An SNMP run is one \
+device's own answer over SNMP, read when the technician asked (never by a sweep): rows of section, field and \
+value for its system group (sysContact left out), ENTITY-MIB chassis (model, firmware or else software revision, \
+serial), a printer's status, errors and supplies, and its LLDP neighbours (its own port, then the switch and \
+port at the far end). An agent row (Net-SNMP, Broadcom FASTPATH, Microsoft's SNMP service, VMware) names \
+software, not the device's maker. A note row says what was cut short and what wasn't read; \"no answer\" doesn't say why. The \
+community is never in it.";
 const PROBLEMS_ID: &str = "bundle_known_problems";
 
 const MAP_WHAT: &str = "The /mapnetwork map from an earlier visit, as it was opened here. \

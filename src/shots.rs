@@ -297,6 +297,18 @@ const SCENES: &[Scene] = &[
         },
         at_once,
     ),
+    // The same sweep, the printer picked after an SNMP read: a fictional
+    // reading (made-up serial, documentation address), nothing sent.
+    scene(
+        "subnet-sweep-snmp",
+        Tab::Sweep,
+        |a, _| {
+            a.sweep.sample_for_shots();
+            a.sweep.pick_for_shots(40);
+            crate::tools::snmp::sample_for_shots(std::net::Ipv4Addr::new(192, 0, 2, 40).into());
+        },
+        at_once,
+    ),
     scene(
         "dns-lookup",
         Tab::Dns,
