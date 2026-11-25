@@ -40,7 +40,7 @@ if [[ $os == Linux ]]; then
 fi
 bytes() { wc -c < "$1" | tr -d ' '; }
 mb() { awk -v b="$1" 'BEGIN { printf "%.2f MB", b / 1048576 }'; }
-sections=$("$bin/llvm-size" -A -d "$shipped" | awk 'NR > 2 && $2 > 65536 { printf "| %s | %s |\n", $1, $2 }' | sort -t'|' -k3 -rn)
+sections=$("$bin/llvm-size" -A -d "$shipped" | awk 'NR > 2 && $1 != "Total" && $2 > 65536 { printf "| %s | %s |\n", $1, $2 }' | sort -t'|' -k3 -rn)
 
 # Files built into the binary (include_bytes!/include_str! and build.rs's
 # skills/ list). Their bytes sit in the data sections, which cargo-bloat's
@@ -55,7 +55,7 @@ assets=$(
 {
   echo "# is-alive $(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1): size on $os"
   echo
-  echo "Shipped binary: **$(mk=$(bytes "$shipped"); mb "$mk")** ($(bytes "$shipped") bytes). Crates in the build: $(cargo tree --locked -e normal --prefix none 2>/dev/null | sed 's/ (\*)$//' | sort -u | wc -l | tr -d ' ')."
+  echo "Shipped binary: **$(mb "$(bytes "$shipped")")** ($(bytes "$shipped") bytes). Crates in the build: $(cargo tree --locked -e normal --prefix none 2>/dev/null | sed 's/ (\*)$//' | sort -u | wc -l | tr -d ' ')."
   echo
   echo "## Code by crate"
   echo
