@@ -297,6 +297,14 @@ const SCENES: &[Scene] = &[
         },
         at_once,
     ),
+    // A fictional Advanced IP Scanner export imported, the PC picked: its
+    // NetBIOS name, OS, RDP and share count, no user or share names.
+    scene(
+        "subnet-sweep-import",
+        Tab::Sweep,
+        |a, _| a.sweep.sample_import_for_shots(),
+        at_once,
+    ),
     scene(
         "dns-lookup",
         Tab::Dns,

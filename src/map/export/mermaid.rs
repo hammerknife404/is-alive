@@ -225,6 +225,7 @@ mod tests {
                     also: vec![],
                     web: None,
                     multicast: None,
+                    imported: None,
                 })
                 .collect(),
             gateway: Some("10.0.0.1".parse().unwrap()),
