@@ -244,11 +244,29 @@ impl MapTabs {
         match self.shown {
             Some(i) => {
                 let t = self.saved.get(i)?;
-                t.view
-                    .report(src, format!("Saved map “{}”", t.name), picture)
+                let mut part = t
+                    .view
+                    .report(src, format!("Saved map “{}”", t.name), picture)?;
+                part.stamp = std::fs::read(&t.path)
+                    .ok()
+                    .map(|bytes| crate::report::stamp(&t.path, &bytes));
+                Some(part)
             }
-            None => self.live.report(src, "Live map".into(), picture),
+            None => {
+                let mut part = self.live.report(src, "Live map".into(), picture)?;
+                // Built from a /mapnetwork map: which file, and which version.
+                part.stamp = src
+                    .export
+                    .mapnetwork()
+                    .map(|(path, doc)| crate::report::stamp(path, doc.html.as_bytes()));
+                Some(part)
+            }
         }
+    }
+
+    /// The Map tab shows the live map, not a saved one.
+    pub fn showing_live(&self) -> bool {
+        self.shown.is_none()
     }
 
     /// Changes when what the report would take from the map showing does.

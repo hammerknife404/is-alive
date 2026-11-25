@@ -31,6 +31,76 @@ pub struct MapPart {
     pub devices: Vec<Device>,
     /// The live map compared with a saved one.
     pub since: Option<Since>,
+    /// Which map file it was, for telling versions apart: "Acme.dc.html ·
+    /// saved 2026-11-20 14:03 · #1f2e3d4c" (`stamp`). None for a live map
+    /// built from scans alone.
+    pub stamp: Option<String>,
+}
+
+/// A map file's name, when it was last saved and a short hash of what it
+/// holds: two reports that name different hashes used different maps.
+pub fn stamp(path: &std::path::Path, bytes: &[u8]) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "map".into());
+    let saved = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            chrono::DateTime::<chrono::Local>::from(t)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        });
+    match saved {
+        Some(t) => format!("{name} · saved {t} · #{}", short_hash(bytes)),
+        None => format!("{name} · #{}", short_hash(bytes)),
+    }
+}
+
+/// Eight hex digits of FNV-1a over `bytes`: the same file, the same digits,
+/// on any machine and in any version.
+pub fn short_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", (h >> 32) as u32 ^ h as u32)
+}
+
+/// What in the notes (after redaction) still looks like what a report
+/// shouldn't carry: full MACs, DOMAIN\\user logons, a pasted scan's XML.
+/// Each with a count, for a warning before saving; empty when none.
+pub fn note_risks(text: &str) -> Vec<String> {
+    use std::sync::LazyLock;
+    static MAC: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b[0-9a-f]{2}(?::[0-9a-f]{2}){5}\b|\b[0-9a-f]{2}(?:-[0-9a-f]{2}){5}\b|\b[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}\b",
+        )
+        .unwrap()
+    });
+    static LOGON: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\b[A-Za-z][A-Za-z0-9-]{1,14}\\[A-Za-z0-9._$-]{1,64}").unwrap()
+    });
+    static XML: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)<nmaprun\b|<\?xml\b|<host\b[^>]*>|<address\s+addr=").unwrap()
+    });
+    let mut out = Vec::new();
+    let macs = MAC.find_iter(text).count();
+    if macs > 0 {
+        out.push(format!("{macs} full MAC address(es)"));
+    }
+    // A logon (CONTOSO\\jdoe) or a share (\\\\fs01\\scans): both name things
+    // the client may not want in a report.
+    let logons = LOGON.find_iter(text).count();
+    if logons > 0 {
+        out.push(format!("{logons} DOMAIN\\user logon(s) or share path(s)"));
+    }
+    if XML.is_match(text) {
+        out.push("pasted scan output (XML)".into());
+    }
+    out
 }
 
 pub struct Finding {
@@ -102,6 +172,12 @@ pub struct Report {
     pub made: String,
     /// Where is-alive ran from: (LAN, "192.168.1.50/24"), Gateway, WAN.
     pub from: Vec<(&'static str, String)>,
+    /// `from` is where the sweep on the map ran from; false: only where
+    /// this computer was when the report was made.
+    pub from_scan: bool,
+    /// What the technician marked for redaction in the notes ("2 picked by
+    /// hand"); empty when nothing was. The footer says so exactly.
+    pub redacted: String,
     pub map: Option<MapPart>,
     pub parts: Parts,
     /// The notes, redacted (Markdown).
@@ -173,6 +249,9 @@ pub fn html(r: &Report) -> String {
         escape(&r.made),
         crate::VERSION
     );
+    if let Some(st) = r.map.as_ref().and_then(|m| m.stamp.as_deref()) {
+        let _ = writeln!(body, "<p class=\"meta\">Map used: {}</p>", escape(st));
+    }
     if let Some(c) = r.map.as_ref().and_then(|m| m.caption.as_deref()) {
         let _ = writeln!(body, "<p class=\"caption\">{}</p>", escape(c));
     }
@@ -230,13 +309,30 @@ pub fn html(r: &Report) -> String {
     if !r.runs.is_empty() {
         runs(&mut body, &r.runs);
     }
+    let has_notes = r.notes.as_deref().is_some_and(|n| !n.trim().is_empty())
+        || r.map
+            .as_ref()
+            .is_some_and(|m| m.devices.iter().any(|d| !d.note.trim().is_empty()));
+    let notes_line = if !has_notes {
+        String::new()
+    } else if r.redacted.is_empty() {
+        " Technician notes are as the technician wrote them: they aren't scanned, and \
+         nothing in them was marked for redaction."
+            .to_string()
+    } else {
+        format!(
+            " Technician notes are as the technician wrote them, except the values they marked \
+             for redaction ({}): notes aren't scanned for anything else.",
+            escape(&r.redacted)
+        )
+    };
     let _ = writeln!(
         body,
-        "<footer>Made with is-alive {} on the technician's computer. Configs were sanitized \
-         and notes redacted there before anything was written. Devices and links come from \
-         what was observed and the config files opened. A role or an uplink marked \
-         <i class=\"inferred\">inferred</i> wasn't in any of them: is-alive worked it out, and \
-         pointing at the word says from what.</footer>",
+        "<footer>Made with is-alive {} on the technician's computer. The config files opened \
+         were sanitized there (passwords, keys and other secrets removed) before anything was \
+         written.{notes_line} Devices and links come from what was observed and the config \
+         files opened. A role or an uplink marked <i class=\"inferred\">inferred</i> wasn't in \
+         any of them: is-alive worked it out, and pointing at the word says from what.</footer>",
         crate::VERSION
     );
     format!(
@@ -299,7 +395,14 @@ fn glance(body: &mut String, r: &Report) {
     }
     if !r.from.is_empty() {
         let v: Vec<String> = r.from.iter().map(|(k, v)| format!("{k} {v}")).collect();
-        tiles.push(("Scanned from".into(), v.join(" · ")));
+        // Where the scan ran, or only where this computer is now: a
+        // report saved back at the office isn't from the site's LAN.
+        let head = if r.from_scan {
+            "Scanned from"
+        } else {
+            "This report was made on"
+        };
+        tiles.push((head.into(), v.join(" · ")));
     }
     if tiles.is_empty() {
         return;
@@ -606,6 +709,8 @@ mod tests {
                 ("LAN", "10.0.0.50/24".into()),
                 ("Gateway", "10.0.0.1".into()),
             ],
+            from_scan: true,
+            redacted: String::new(),
             map,
             parts: Parts {
                 picture: true,
@@ -632,6 +737,7 @@ mod tests {
             }],
             devices: vec![device("usw-office", false), device("frontdesk-pc", true)],
             since: None,
+            stamp: None,
         }
     }
 
@@ -651,6 +757,60 @@ mod tests {
         assert!(h.contains("1 high"));
         assert!(h.contains("fc:ec:da:01:02:03"));
         assert!(h.contains("LAN 10.0.0.50/24 · Gateway 10.0.0.1"));
+    }
+
+    /// The header names the map file used, and where the data came from
+    /// only when a scan says so; otherwise where the report was made.
+    #[test]
+    fn the_header_says_which_map_and_where_from() {
+        let mut m = map();
+        m.stamp = Some("Harbor.dc.html · saved 2026-11-08 17:02 · #0badf00d".into());
+        let h = html(&report(Some(m)));
+        assert!(h.contains("Map used: Harbor.dc.html · saved 2026-11-08 17:02 · #0badf00d"));
+        assert!(h.contains("<b>Scanned from</b>LAN 10.0.0.50/24"));
+        let mut r = report(Some(map()));
+        r.from_scan = false;
+        let h = html(&r);
+        assert!(
+            h.contains("<b>This report was made on</b>LAN 10.0.0.50/24"),
+            "{h}"
+        );
+        assert!(!h.contains("Scanned from") && !h.contains("Map used"));
+        // The same bytes, the same digits; others differ.
+        assert_eq!(short_hash(b"map v1"), short_hash(b"map v1"));
+        assert_ne!(short_hash(b"map v1"), short_hash(b"map v2"));
+        assert_eq!(short_hash(b"").len(), 8);
+    }
+
+    /// The footer says exactly what was redacted in the notes, and says
+    /// nothing about notes when there are none.
+    #[test]
+    fn the_footer_says_what_was_redacted() {
+        let h = html(&report(Some(map())));
+        assert!(!h.contains("notes redacted") && !h.contains("Technician notes are"));
+        let mut r = report(Some(map()));
+        r.notes = Some("Spare switch in the closet.".into());
+        let h = html(&r);
+        assert!(
+            h.contains("nothing in them was marked for redaction"),
+            "{h}"
+        );
+        r.redacted = "2 picked by hand".into();
+        let h = html(&r);
+        assert!(h.contains("except the values they marked for redaction (2 picked by hand)"));
+    }
+
+    /// What a report shouldn't carry, found before saving.
+    #[test]
+    fn risky_notes_are_found() {
+        let notes = "Front desk PC 02-00-5e-10-00-01, NAS 0200.5e10.0002\n\
+                     Logged in as CONTOSO\\administrator; share \\\\fs01\\scans\n\
+                     <?xml version=\"1.0\"?><nmaprun><host><address addr=\"192.0.2.9\"/>";
+        let r = note_risks(notes);
+        assert!(r.contains(&"2 full MAC address(es)".to_string()), "{r:?}");
+        assert!(r.iter().any(|x| x.starts_with("2 DOMAIN\\user")), "{r:?}");
+        assert!(r.contains(&"pasted scan output (XML)".to_string()));
+        assert!(note_risks("Switch at 192.0.2.10, OUI 02:00:5e only.").is_empty());
     }
 
     /// One mark, the same for a role and an uplink, each saying on hover

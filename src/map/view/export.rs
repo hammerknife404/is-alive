@@ -331,6 +331,7 @@ impl MapView {
             findings,
             devices,
             since,
+            stamp: None,
         })
     }
 }
@@ -433,6 +434,8 @@ mod tests {
                 title: m.title.clone(),
                 made: "2026-11-09 20:41".into(),
                 from: vec![("LAN", "10.0.0.50/24".into())],
+                from_scan: true,
+                redacted: String::new(),
                 map: Some(v.report(&src, "Live map".into(), true).expect("a map")),
                 parts: Parts {
                     picture: true,

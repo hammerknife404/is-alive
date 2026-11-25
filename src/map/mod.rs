@@ -3167,7 +3167,7 @@ fn limit(b: B, input: &Input) -> Map {
         .enumerate()
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
-    let mut findings: Vec<Finding> = findings
+    let findings: Vec<Finding> = findings
         .into_iter()
         .map(|(sev, text, ids)| Finding {
             sev,
@@ -3178,7 +3178,7 @@ fn limit(b: B, input: &Input) -> Map {
                 .collect(),
         })
         .collect();
-    findings.sort_by_key(|f| f.sev);
+    let findings = sort_findings(findings);
     Map {
         title: String::new(),
         nodes: out,
@@ -3193,10 +3193,83 @@ fn limit(b: B, input: &Input) -> Map {
     }
 }
 
+/// Findings worst first. A finding that points at its neighbour ("see the
+/// next finding", "(previous finding)") would point at another once
+/// sorted: the reference becomes the start of the finding it meant.
+fn sort_findings(mut findings: Vec<Finding>) -> Vec<Finding> {
+    static NEAR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:the\s+)?(next|previous|following|preceding)\s+finding\b|\b(?:the\s+)?finding\s+(above|below)\b",
+        )
+        .unwrap()
+    });
+    let heads: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            let words: Vec<&str> = f.text.split_whitespace().collect();
+            let head = words.iter().take(8).copied().collect::<Vec<_>>().join(" ");
+            let head = head.trim_end_matches(['.', ',', ';', ':']);
+            if words.len() > 8 {
+                format!("“{head}…”")
+            } else {
+                format!("“{head}”")
+            }
+        })
+        .collect();
+    let n = findings.len();
+    for (i, f) in findings.iter_mut().enumerate() {
+        f.text = NEAR
+            .replace_all(&f.text, |c: &regex::Captures| {
+                let word = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
+                let to = match word.to_ascii_lowercase().as_str() {
+                    "next" | "following" | "below" => i.checked_add(1).filter(|&j| j < n),
+                    _ => i.checked_sub(1),
+                };
+                match to {
+                    Some(j) => format!("the finding {}", heads[j]),
+                    None => c[0].to_string(),
+                }
+            })
+            .into_owned();
+    }
+    findings.sort_by_key(|f| f.sev);
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Sorted worst first, "(next finding)" still means the one it did.
+    #[test]
+    fn sorting_findings_keeps_what_they_point_at() {
+        let f = |sev, text: &str| Finding {
+            sev,
+            text: text.into(),
+            nodes: vec![],
+        };
+        let out = sort_findings(vec![
+            f(Sev::Low, "Printer firmware is old (see the next finding)."),
+            f(Sev::Med, "Spare switch is unpatched."),
+            f(
+                Sev::High,
+                "Admin page open to the internet; fix before the finding above.",
+            ),
+        ]);
+        assert_eq!(out[0].sev, Sev::High);
+        assert_eq!(
+            out[0].text,
+            "Admin page open to the internet; fix before the finding “Spare switch is unpatched”."
+        );
+        assert_eq!(
+            out[2].text,
+            "Printer firmware is old (see the finding “Spare switch is unpatched”)."
+        );
+        // Nothing next to point at: left as written.
+        let last = sort_findings(vec![f(Sev::Low, "See the next finding.")]);
+        assert_eq!(last[0].text, "See the next finding.");
+    }
 
     fn unifi(devices: &[Value], users: &[Value]) -> String {
         let mut v = vec![

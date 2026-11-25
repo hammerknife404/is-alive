@@ -53,8 +53,7 @@ pub const UPLINK: &str = "Uplink inferred: it answered here, but no backup or co
                           port it's on";
 
 /// A /mapnetwork map drew the link dashed: it worked it out.
-pub const UPLINK_MAP: &str =
-    "Uplink inferred on the /mapnetwork map (drawn dashed): nothing it was made from shows this link";
+pub const UPLINK_MAP: &str = "Uplink inferred on the /mapnetwork map (drawn dashed): nothing it was made from shows this link";
 
 /// A /mapnetwork map's reciprocal pair: the direction is the map's pick.
 pub const UPLINK_RECIPROCAL: &str = "Uplink direction inferred: the controller's uplink data \

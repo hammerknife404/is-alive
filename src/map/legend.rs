@@ -650,7 +650,9 @@ mod tests {
                 ]
             );
             // Clinics' own lines to the internet, and switches the data
-            // doesn't place: wired and assumed links, nothing wireless.
+            // doesn't place: wired and assumed links, nothing wireless. The
+            // discovered devices nothing links to wait under "Not linked"
+            // (one more inferred link), not on the internet.
             let links: Vec<(Swatch, Option<usize>)> = e
                 .iter()
                 .filter(|x| matches!(x.swatch, Swatch::Line(_)))
@@ -661,7 +663,7 @@ mod tests {
                 [
                     (Swatch::Line(Link::Backbone), Some(2)),
                     (Swatch::Line(Link::Wired), Some(55)),
-                    (Swatch::Line(Link::Assumed), Some(24))
+                    (Swatch::Line(Link::Assumed), Some(25))
                 ],
                 "{mode:?}"
             );

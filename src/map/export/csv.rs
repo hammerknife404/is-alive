@@ -64,7 +64,10 @@ fn link_name(l: Link) -> &'static str {
 pub fn vendor(n: &Node) -> Option<String> {
     n.details
         .iter()
-        .find_map(|d| d.strip_prefix("Vendor").filter(|r| r.starts_with([' ', ':'])))
+        .find_map(|d| {
+            d.strip_prefix("Vendor")
+                .filter(|r| r.starts_with([' ', ':']))
+        })
         .and_then(clean_vendor)
         .or_else(|| {
             n.mac
@@ -91,7 +94,17 @@ pub fn clean_vendor(text: &str) -> Option<String> {
     }
     let low = v.to_lowercase();
     let none = low.is_empty()
-        || ["none", "unknown", "n/a", "na", "-", "?", "not known", "null"].contains(&low.as_str())
+        || [
+            "none",
+            "unknown",
+            "n/a",
+            "na",
+            "-",
+            "?",
+            "not known",
+            "null",
+        ]
+        .contains(&low.as_str())
         || low.starts_with("unknown")
         || low.starts_with("none ");
     (!none).then(|| v.to_string())
@@ -102,6 +115,39 @@ mod tests {
     use super::super::tests::with_acme;
     use super::*;
     use crate::map::Map;
+
+    /// The maker's name, not how a line worded it; "none" falls back to
+    /// the app's own OUI table.
+    #[test]
+    fn vendor_cells_are_clean() {
+        let card = |line: &str, mac: Option<crate::net::mac::Mac>| Node {
+            details: vec![line.to_string()],
+            mac,
+            ..Default::default()
+        };
+        assert_eq!(
+            vendor(&card(
+                "Vendor from controller client OUI: Hangzhou Hikvision",
+                None
+            ))
+            .as_deref(),
+            Some("Hangzhou Hikvision")
+        );
+        assert_eq!(
+            vendor(&card("Vendor Ubiquiti (UniFi)", None)).as_deref(),
+            Some("Ubiquiti")
+        );
+        assert_eq!(vendor(&card("Vendor none", None)), None);
+        // A prefix the app's table knows.
+        let known = crate::net::mac::parse_mac("fc:ec:da:00:00:01");
+        let from_table = known
+            .as_ref()
+            .and_then(crate::net::mac::vendor)
+            .map(str::to_string);
+        assert!(from_table.is_some());
+        assert_eq!(vendor(&card("Vendor none", known)), from_table);
+        assert_eq!(vendor(&card("Vendor: unknown", known)), from_table);
+    }
     use crate::map::layout::{self, Mode};
 
     /// Split on commas outside quotes, one record per CRLF line.

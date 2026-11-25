@@ -278,7 +278,9 @@ fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
     if let Some(p) = &own {
         notes.push(format!("Its own port: {p}"));
     }
-    let tunnel = TUNNEL.iter().any(|t| words.iter().any(|w| w.starts_with(t)));
+    let tunnel = TUNNEL
+        .iter()
+        .any(|t| words.iter().any(|w| w.starts_with(t)));
     let link_word = LINK_WORDS.iter().any(|t| words.contains(t));
     // The label stays the link's when it's a port, a tunnel, a kind of
     // link, or the WAN's (the ISP); otherwise it goes in the details.
@@ -299,7 +301,9 @@ fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
         "backbone" => Link::Backbone,
         "wifi" => Link::Wireless,
         _ if tunnel => {
-            notes.push(format!("Linked by a tunnel on the map ({label}), not a cable"));
+            notes.push(format!(
+                "Linked by a tunnel on the map ({label}), not a cable"
+            ));
             Link::Wired
         }
         _ if !dashed => Link::Wired,
@@ -592,7 +596,9 @@ pub fn build(doc: &Doc, input: &Input) -> Map {
             up: Some((home, Link::Assumed, None)),
             ..Default::default()
         });
-        b.nodes[nl].details.push(crate::inferred::UPLINK_NONE.into());
+        b.nodes[nl]
+            .details
+            .push(crate::inferred::UPLINK_NONE.into());
         for c in unlinked {
             b.nodes[c].details.push(crate::inferred::UPLINK_NONE.into());
             b.nodes[c].up = Some((nl, Link::Assumed, None));
@@ -901,9 +907,7 @@ fn listed(line: &str) -> Option<Listed> {
         return None;
     }
     let names_it = |f: &str| first_ip(f).is_some() || first_mac([f]).is_some();
-    let name = Some(head)
-        .filter(|h| !names_it(h))
-        .map(str::to_string);
+    let name = Some(head).filter(|h| !names_it(h)).map(str::to_string);
     let mut vendor = None;
     let mut guest = false;
     for f in fields.iter().skip(usize::from(name.is_some())) {
@@ -913,7 +917,10 @@ fn listed(line: &str) -> Option<Listed> {
         }
         if low == "guest" || low.starts_with("guest ") {
             guest = true;
-        } else if LISTED_TAGS.iter().any(|t| low == *t || low.starts_with(&format!("{t} "))) {
+        } else if LISTED_TAGS
+            .iter()
+            .any(|t| low == *t || low.starts_with(&format!("{t} ")))
+        {
         } else if vendor.is_none() {
             vendor = crate::map::export::clean_vendor(f);
         }
@@ -977,13 +984,7 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
         }
         match listed(d) {
             Some(h) => {
-                let key_of = |x: &Listed| {
-                    (
-                        x.mac,
-                        x.ip,
-                        x.name.as_deref().map(str::to_lowercase),
-                    )
-                };
+                let key_of = |x: &Listed| (x.mac, x.ip, x.name.as_deref().map(str::to_lowercase));
                 let same = hosts.iter_mut().find(|o| {
                     let (a, b2) = (key_of(o), key_of(&h));
                     (a.0.is_some() && a.0 == b2.0)
@@ -1007,7 +1008,9 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
     }
     let label = n.label.clone();
     for (j, line) in elsewhere {
-        b.nodes[j].detail(format!("Also listed in \"{label}\" on the /mapnetwork map: {line}"));
+        b.nodes[j].detail(format!(
+            "Also listed in \"{label}\" on the /mapnetwork map: {line}"
+        ));
     }
     let n = &b.nodes[c];
     // The first device takes the card's own place, so it costs nothing.
@@ -1078,7 +1081,9 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
         .collect();
     let mut lines = Vec::new();
     if left_out > 0 {
-        lines.push(format!("{left_out} more listed in \"{label}\" aren't drawn"));
+        lines.push(format!(
+            "{left_out} more listed in \"{label}\" aren't drawn"
+        ));
     }
     if notes_left_out > 0 {
         lines.push(format!(
@@ -1089,7 +1094,8 @@ fn expand_overflow(b: &mut B, c: usize, after: u64) -> usize {
         let listed_n = devices.len();
         let card = &mut b.nodes[c];
         card.label = format!("+{unlisted} not listed");
-        card.details.retain(|d| unlisted_count(d).is_none() && listed(d).is_none());
+        card.details
+            .retain(|d| unlisted_count(d).is_none() && listed(d).is_none());
         card.details.insert(
             0,
             format!(
@@ -1975,9 +1981,359 @@ mod tests {
         );
         let pc = by(&m, "pc");
         assert_eq!(pc.link(), Some(Link::Assumed));
-        assert_eq!(pc.up.as_ref().unwrap().2.as_deref(), Some("inferred"));
+        // "inferred" isn't a port: it says why, in the card's details.
+        assert_eq!(pc.up.as_ref().unwrap().2, None);
+        assert!(pc.details.iter().any(|d| d == "Link on the map: inferred"));
+        assert_eq!(
+            crate::inferred::uplink_why(&pc.details),
+            crate::inferred::UPLINK_MAP
+        );
         assert_eq!(by(&m, "ap").link(), Some(Link::Wired));
         assert_eq!(by(&m, "ph").link(), Some(Link::Wireless));
+    }
+}
+
+/// Bugs from two site visits, each on a fictional map: documentation
+/// addresses, made-up names, locally administered MACs.
+#[cfg(test)]
+mod visits {
+    use super::*;
+    use crate::map::{Clients, Seen};
+
+    fn by<'a>(m: &'a Map, id: &str) -> &'a Node {
+        m.nodes.iter().find(|n| n.id == id).expect(id)
+    }
+
+    fn all(page: &str) -> Map {
+        build(
+            &crate::mapnetwork::parse(page.as_bytes()).unwrap(),
+            &Input {
+                clients: Clients::All,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn host(ip: [u8; 4], mac: Option<Mac>) -> Seen {
+        Seen {
+            ip: ip.into(),
+            mac,
+            name: None,
+            rtt: Some(1.0),
+            open: Vec::new(),
+            checked: true,
+            also: vec![],
+            web: None,
+            multicast: None,
+        }
+    }
+
+    /// 1, 2: every client a "+N more" card lists becomes a card, with
+    /// the vendor and guest tag its line names, once each; "…and N more"
+    /// stays a count that says so; none takes the parent's port.
+    #[test]
+    fn a_more_card_keeps_every_listed_client() {
+        let m = all(r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'sw', kind:'SWITCH', label:'Core', sub:'192.0.2.2' },
+          { id:'sw_overflow', kind:'ADDITIONAL DEVICES', label:'+9 more', sub:'via Core',
+            details:['client-0a1b2c3d · Hangzhou Hikvision · guest',
+                     'client-0a1b2c3d · Hangzhou Hikvision',
+                     'front-desk · 192.0.2.40', 'front-desk-2 · 192.0.2.40 · Dell',
+                     'kiosk-7', 'Seen in the controller over the last week',
+                     '…and 4 more'] },
+        ];
+        this.EDGES = [ { from:'inet', to:'sw', cls:'backbone' },
+                       { from:'sw', to:'sw_overflow', cls:'wired', label:'21 wired' } ];"#);
+        let under: Vec<&Node> = m
+            .nodes
+            .iter()
+            .filter(|n| n.parent().is_some_and(|p| m.nodes[p].id == "sw"))
+            .collect();
+        let labels: Vec<&str> = under.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["+4 not listed", "client-0a1b2c3d", "front-desk", "kiosk-7"],
+            "one card per client, the count kept"
+        );
+        let cam = under[1];
+        assert!(cam.chips.contains(&"guest".to_string()));
+        assert_eq!(
+            crate::map::export::vendor(cam).as_deref(),
+            Some("Hangzhou Hikvision")
+        );
+        assert_eq!(
+            crate::map::export::vendor(under[2]).as_deref(),
+            Some("Dell")
+        );
+        // "21 wired" is a count, not a port: no client hangs off port 21.
+        for n in &under {
+            assert_eq!(n.up.as_ref().unwrap().2, None, "{}", n.label);
+        }
+        assert!(under[0].details[0].contains("counts 4 more device(s) it doesn't list"));
+        assert!(
+            m.summary
+                .contains("4 client(s) the map counts but doesn't list")
+        );
+        assert!(
+            under[3]
+                .details
+                .iter()
+                .any(|d| d.starts_with("Seen in the controller"))
+        );
+    }
+
+    #[test]
+    fn only_a_port_is_read_as_a_port() {
+        for (label, port) in [
+            ("Port 21", Some("Port 21")),
+            ("p21", Some("Port 21")),
+            ("port #7", Some("Port 7")),
+            ("Gi1/0/21", Some("Gi1/0/21")),
+            ("X1", Some("X1")),
+            ("eth0", Some("eth0")),
+            ("21 wired", None),
+            ("VLAN 10 gw", None),
+            ("AT&T", None),
+            ("LAG", None),
+        ] {
+            assert_eq!(port_in(label).as_deref(), port, "{label}");
+        }
+    }
+
+    /// 4, 5, 15, 16: a switch nothing links to waits under "Not linked",
+    /// not on the internet; each dashed link says why in its own words;
+    /// "X2 → Port 24" is the parent's port then the card's own; a backbone
+    /// from the firewall's LAN keeps its port; the scanner's public
+    /// address stays on the map's own internet card.
+    #[test]
+    fn links_say_what_is_known() {
+        let doc = crate::mapnetwork::parse(
+            r#"
+        this.NODES = [
+          { id:'inet', kind:'INTERNET', label:'Internet', sub:'Carrier fibre' },
+          { id:'fw', kind:'FIREWALL', label:'Edge FW', sub:'192.0.2.1' },
+          { id:'sw', kind:'CORE SWITCH', label:'Core', sub:'192.0.2.2' },
+          { id:'ap', kind:'AP', label:'AP', sub:'192.0.2.3' },
+          { id:'old', kind:'SWITCH', label:'Old switch', sub:'192.0.2.4' },
+          { id:'rfw', kind:'FIREWALL', label:'Branch FW', sub:'198.51.100.1' },
+          { id:'idf', kind:'SWITCH', label:'IDF', sub:'192.0.2.5' },
+          { id:'lost', kind:'SWITCH', label:'Mystery switch', sub:'192.0.2.9' },
+          { id:'pc', kind:'WORKSTATION', label:'Behind mystery', sub:'192.0.2.60' },
+        ];
+        this.EDGES = [
+          { from:'inet', to:'fw', cls:'backbone', label:'ISP A' },
+          { from:'fw', to:'sw', cls:'backbone', label:'X2 → Port 24' },
+          { from:'sw', to:'ap', cls:'wired', dashed:true, label:'Port 7' },
+          { from:'sw', to:'old', cls:'wired', dashed:true, label:'Port 9 · reciprocal' },
+          { from:'fw', to:'rfw', cls:'wired', dashed:true, label:'IPsec to branch' },
+          { from:'sw', to:'idf', cls:'wired', dashed:true, label:'VLAN 10 gw' },
+          { from:'lost', to:'pc', cls:'wired' },
+        ];"#
+            .as_bytes(),
+        )
+        .unwrap();
+        let m = build(
+            &doc,
+            &Input {
+                clients: Clients::All,
+                wan: Some([203, 0, 113, 7].into()),
+                ..Default::default()
+            },
+        );
+        let up = |id: &str| by(&m, id).up.clone().unwrap();
+        let why = |id: &str| crate::inferred::uplink_why(&by(&m, id).details).to_string();
+        // 4: placement unknown, under the firewall, with its subtree.
+        let lost = by(&m, "lost");
+        assert_eq!(m.nodes[lost.parent().unwrap()].id, "mapnetwork:not-linked");
+        assert_eq!(m.nodes[up("mapnetwork:not-linked").0].id, "fw");
+        assert_eq!(why("lost"), crate::inferred::UPLINK_NONE);
+        assert_eq!(m.nodes[by(&m, "pc").parent().unwrap()].id, "lost");
+        // 15: the parent's port, and the card's own in its details.
+        let sw = up("sw");
+        assert_eq!((sw.1, sw.2.as_deref()), (Link::Backbone, Some("X2")));
+        assert!(
+            by(&m, "sw")
+                .details
+                .contains(&"Its own port: Port 24".to_string())
+        );
+        // 5: dashed with a port from the backup: wired, port kept.
+        assert_eq!(
+            (up("ap").1, up("ap").2.as_deref()),
+            (Link::Wired, Some("Port 7"))
+        );
+        assert_eq!(up("old").1, Link::Assumed);
+        assert_eq!(why("old"), crate::inferred::UPLINK_RECIPROCAL);
+        // A tunnel isn't "it answered here".
+        assert_eq!(up("rfw").1, Link::Wired);
+        assert!(by(&m, "rfw").details.iter().any(|d| d.contains("tunnel")));
+        // "VLAN 10 gw" isn't a port; the map's dashed link says why.
+        assert_eq!(up("idf").2, None);
+        assert_eq!(why("idf"), crate::inferred::UPLINK_MAP);
+        // 16: the public address on the map's own internet card.
+        assert!(
+            by(&m, "inet")
+                .details
+                .iter()
+                .any(|d| d.contains("203.0.113.7"))
+        );
+    }
+
+    /// 5, 6, 11: the role from the kind, then the zone, the label last;
+    /// network words before voice words; no "inferred" twice.
+    #[test]
+    fn roles_from_kind_then_zone() {
+        let m = all(r#"
+        this.ZONES = { voip:{ name:'Voice' }, vedge:{ name:'Voice edge' },
+                       vdev:{ name:'Voice & devices' }, ext:{ name:'Unidentified / external' },
+                       ot:{ name:'OT devices' } };
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'gw', kind:'SONICWALL INFERRED', label:'Edge', sub:'192.0.2.1' },
+          { id:'vr', zone:'vedge', kind:'TA900', label:'Carrier voice' },
+          { id:'copier', zone:'vdev', kind:'COPIER', label:'Copier 2F' },
+          { id:'ata', zone:'voip', kind:'GRANDSTREAM', label:'Fax ATA' },
+          { id:'phone', zone:'voip', kind:'DESK PHONE', label:'Reception' },
+          { id:'carrier', zone:'ext', kind:'CARRIER ROUTER', label:'Carrier CPE' },
+          { id:'ot1', zone:'ot', kind:'IPC-427', label:'DESKTOP-4QX7' },
+          { id:'ot2', zone:'ot', kind:'IPC-427', label:'Line 2 box' },
+          { id:'door', zone:'ot', kind:'ACCESS CONTROL', label:'Front door' },
+        ];
+        this.EDGES = [ { from:'inet', to:'gw' }, { from:'gw', to:'vr' }, { from:'gw', to:'copier' },
+          { from:'gw', to:'ata' }, { from:'gw', to:'phone' }, { from:'gw', to:'carrier' },
+          { from:'gw', to:'ot1' }, { from:'gw', to:'ot2' }, { from:'gw', to:'door' } ];"#);
+        for (id, zone) in [
+            ("gw", Zone::Gateway),
+            ("vr", Zone::Gateway),
+            ("copier", Zone::Device),
+            ("ata", Zone::Gear),
+            ("phone", Zone::Client),
+            ("carrier", Zone::Gateway),
+            ("ot1", Zone::Device),
+            ("ot2", Zone::Device),
+            ("door", Zone::Device),
+        ] {
+            assert_eq!(by(&m, id).zone, zone, "{id}");
+        }
+        // Drawn whatever the Clients level: not clients.
+        assert!(!by(&m, "copier").client && !by(&m, "vr").client);
+        let gw = by(&m, "gw");
+        assert_eq!(gw.kind, "SONICWALL");
+        assert!(gw.role_inferred());
+        assert_eq!(gw.inferred_why(), crate::inferred::ROLE_MAP);
+        assert_eq!(Zone::Device.name(), "Printers, cameras, IoT");
+    }
+
+    /// 12, 13: a candidate's MAC isn't the card's, so the sweep doesn't
+    /// merge that device into it; a speculative switch doesn't outvote the
+    /// confirmed core for where the subnet's hosts hang.
+    #[test]
+    fn maybes_stay_maybes() {
+        let doc = crate::mapnetwork::parse(
+            r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'fw', kind:'FIREWALL', label:'FW', sub:'192.0.2.1', mac:'02:00:00:00:00:01' },
+          { id:'core', kind:'SWITCH', label:'Core', sub:'192.0.2.2' },
+          { id:'guess', kind:'SWITCH', label:'Likely switch', chips:['inferred','scan-only'],
+            details:['Candidate identity: Dell 02:00:00:00:00:44 unconfirmed'] },
+          { id:'a', kind:'PRINTER', label:'P1', sub:'192.0.2.21' },
+          { id:'b', kind:'PRINTER', label:'P2', sub:'192.0.2.22' },
+          { id:'c', kind:'PRINTER', label:'P3', sub:'192.0.2.23' },
+        ];
+        this.EDGES = [ { from:'inet', to:'fw' }, { from:'fw', to:'core' }, { from:'core', to:'guess' },
+          { from:'guess', to:'a', dashed:true }, { from:'guess', to:'b', dashed:true },
+          { from:'guess', to:'c', dashed:true } ];"#
+                .as_bytes(),
+        )
+        .unwrap();
+        let dell = [2, 0, 0, 0, 0, 0x44];
+        let m = build(
+            &doc,
+            &Input {
+                sweep: vec![
+                    host([192, 0, 2, 1], Some([2, 0, 0, 0, 0, 1])),
+                    host([192, 0, 2, 44], Some(dell)),
+                    host([192, 0, 2, 99], None),
+                ],
+                clients: Clients::All,
+                ..Default::default()
+            },
+        );
+        let guess = by(&m, "guess");
+        assert_eq!(guess.mac, None);
+        assert!(!guess.seen_by.contains(&"sweep"));
+        assert!(
+            m.nodes
+                .iter()
+                .any(|n| n.mac == Some(dell) && n.id != "guess")
+        );
+        let stray = m
+            .nodes
+            .iter()
+            .find(|n| n.ip == Some([192, 0, 2, 99].into()))
+            .unwrap();
+        assert_ne!(m.nodes[stray.parent().unwrap()].id, "guess");
+        assert!(!own_mac("", &["MAC 02:00:00:00:00:44 · possibly the NAS"]).is_some());
+        assert!(own_mac("", &["MAC 02:00:00:00:00:45"]).is_some());
+    }
+
+    /// 17, 1: the controller's client at the firewall's address, with
+    /// another MAC, is the firewall (no second card); a "+N more" line's
+    /// address the controller knows is one card, with its MAC.
+    #[test]
+    fn the_controller_doesnt_double_a_card() {
+        let doc = crate::mapnetwork::parse(
+            r#"
+        this.NODES = [
+          { id:'inet', kind:'WAN', label:'Internet' },
+          { id:'fw', kind:'FIREWALL', label:'FW', sub:'192.0.2.1', mac:'02:00:00:00:00:01' },
+          { id:'sw', kind:'SWITCH', label:'USW-24', sub:'192.0.2.2', mac:'02:00:00:00:00:02' },
+          { id:'sw_overflow', kind:'ADDITIONAL DEVICES', label:'+1 more', details:['192.0.2.77'] },
+        ];
+        this.EDGES = [ { from:'inet', to:'fw' }, { from:'fw', to:'sw' }, { from:'sw', to:'sw_overflow' } ];"#
+                .as_bytes(),
+        )
+        .unwrap();
+        let unifi = serde_json::json!([
+            {"__cmd": "select", "collection": "device"},
+            {"name": "USW-24", "type": "usw", "mac": "02:00:00:00:00:02", "ip": "192.0.2.2"},
+            {"__cmd": "select", "collection": "user"},
+            {"mac": "02:00:00:00:00:a1", "last_ip": "192.0.2.1", "hostname": "fw-lan"},
+            {"mac": "02:00:00:00:00:77", "last_ip": "192.0.2.77", "hostname": "client-77777777",
+             "oui": "Fictional Devices"},
+        ])
+        .to_string();
+        let m = build(
+            &doc,
+            &Input {
+                unifi: crate::map::one(&unifi),
+                clients: Clients::All,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            m.nodes
+                .iter()
+                .filter(|n| n.ip == Some([192, 0, 2, 1].into()))
+                .count(),
+            1
+        );
+        assert!(
+            by(&m, "fw")
+                .details
+                .iter()
+                .any(|d| d.contains("02:00:00:00:00:a1"))
+        );
+        let at77: Vec<&Node> = m
+            .nodes
+            .iter()
+            .filter(|n| n.ip == Some([192, 0, 2, 77].into()))
+            .collect();
+        assert_eq!(at77.len(), 1);
+        assert_eq!(at77[0].label, "client-77777777");
+        assert!(at77[0].mac.is_some());
     }
 }
 
