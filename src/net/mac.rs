@@ -244,7 +244,10 @@ pub fn maker_word(word: &str) -> bool {
             .map(|(w, _)| w)
             .collect()
     });
-    words_of(word).next().is_some_and(|w| words.contains(&w))
+    // Past the same prefixes: "Shenzhen Bilian Electronic" is Bilian's.
+    words_of(word)
+        .find(|w| !NAME_PREFIXES.contains(&w.as_str()))
+        .is_some_and(|w| words.contains(&w))
 }
 
 /// A name's words, lowercased: letters, digits and dashes.

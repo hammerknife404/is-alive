@@ -360,11 +360,16 @@ fn read_edge(e: &Value, from_root: bool) -> EdgeRead {
     let cls = s(e, "cls");
     let mut notes = Vec::new();
     // "X2 → Port 24": the parent's port first, then the card's own.
-    // "port 1 - 24" is a range, not two ends; "X2 - 24" is two ends.
-    static RANGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)\b(?:ports?|p)\s*#?\s*\d{1,3}\s+[-–—]\s+\d").unwrap()
+    // A number, a spaced dash and a number is a range ("1 - 24", "port 1 -
+    // 24", "Gi1/0/1 - 24", "VLAN 10 - 20"), not two ends; unless what's
+    // before the dash is one named port alone: "X2 - 24" is X2, then the
+    // card's Port 24.
+    static RANGE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\d\s+[-–—]\s+\d").unwrap());
+    static NAMED: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\s*[A-Za-z]{1,3}\d{1,3}\s+[-–—]\s+\d").unwrap()
     });
-    let seps: &[&str] = if RANGE.is_match(label) {
+    let seps: &[&str] = if RANGE.is_match(label) && !NAMED.is_match(label) {
         &["→", "<->", "->", "↔", " to "]
     } else {
         &["→", "<->", "->", "↔", " to ", " – ", " — ", " - "]
@@ -1063,8 +1068,9 @@ const GATEWAY_BRANDS: &[(&str, &[&str])] = &[
 /// bit set), or a MAC a config export lists. On a card with no MAC, the
 /// maker the card's brand names (a "FortiGate 60F" card and a Fortinet
 /// MAC; whole words, so "link" isn't "Starlink"); a card that names no
-/// brand takes a network-gear maker's wired, non-guest client, unless its
-/// name says it's an endpoint (a Cisco desk phone "SEP…", an AP).
+/// brand takes a network-gear maker's wired, non-guest client. Never a
+/// client whose name says it's an endpoint (a Cisco desk phone "SEP…",
+/// an AP), on any card.
 fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
     let u = mac::universal(&c.mac);
     if fw_macs.contains(&u) {
@@ -1082,6 +1088,19 @@ fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
     let Some(maker) = maker else {
         return false;
     };
+    // A client named as an endpoint (a Cisco desk phone "SEP…", an AP)
+    // is never the gateway's interface, whatever its maker: a Cisco phone
+    // at a Cisco ASA's address is a clash.
+    let endpoint = c.name.as_deref().is_some_and(|name| {
+        super::cisco_phone_name(Some(name))
+            || matches!(
+                role(name),
+                Some(Zone::Client | Zone::Wireless | Zone::Device | Zone::Server)
+            )
+    });
+    if endpoint {
+        return false;
+    }
     let text = format!("{} {} {}", n.kind, n.label, n.sub);
     let named: Vec<&[&str]> = GATEWAY_BRANDS
         .iter()
@@ -1094,18 +1113,10 @@ fn own_interface(n: &Node, c: &super::UClient, fw_macs: &HashSet<Mac>) -> bool {
             .flat_map(|m| m.iter())
             .any(|w| super::word_in(&maker, w));
     }
-    let endpoint = c.name.as_deref().is_some_and(|name| {
-        super::cisco_phone_name(Some(name))
-            || matches!(
-                role(name),
-                Some(Zone::Client | Zone::Wireless | Zone::Device | Zone::Server)
-            )
-    });
     super::gear_brand(Some(&maker)).is_some()
         && super::phone_brand(Some(&maker)).is_none()
         && c.wired
         && !c.guest
-        && !endpoint
 }
 
 /// Whether a /mapnetwork card is the map's own "+7 more": the clients
@@ -2900,9 +2911,10 @@ mod visits {
         )
     }
 
-    /// A guest laptop on the firewall's address, or a stale phone on a
-    /// printer's, is its own card and the clash is a finding: the
-    /// firewall takes no vendor, guest tag or MAC from it.
+    /// A guest laptop on the firewall's address is its own card and the
+    /// clash is a High finding: the firewall takes no vendor, guest tag or
+    /// MAC from it. A stale phone on a printer's address is its own card
+    /// too (a printer's address isn't checked for clashes).
     #[test]
     fn a_stranger_at_a_cards_address_is_a_clash() {
         let page = r#"
@@ -3378,6 +3390,18 @@ mod visits {
         );
         assert_eq!(by(&m, "fw").mac, None);
         assert!(high_clash(&m));
+        // At a Cisco gateway too: the maker agrees, the name says phone.
+        for label in ["Cisco ASA 5506-X", "Cisco RV340"] {
+            let m = with_unifi(
+                &gw_page("FIREWALL", label),
+                serde_json::json!([
+                    {"mac": "06:00:00:00:00:d3", "last_ip": "192.0.2.1",
+                     "hostname": "SEP0600000000D3", "oui": "Cisco Systems, Inc", "is_wired": true},
+                ]),
+            );
+            assert_eq!(by(&m, "fw").mac, None, "{label}");
+            assert!(high_clash(&m), "{label}");
+        }
         // A card that names no brand: an endpoint's name keeps it out too.
         let m = with_unifi(
             &gw_page("FIREWALL", "Edge"),
@@ -3433,6 +3457,11 @@ mod visits {
             "Supermicro",
             "Gigabyte",
             "Dell",
+            // Registered names that start with a city or province.
+            "Shenzhen Bilian Electronic",
+            "Guangdong Oppo Mobile",
+            "Beijing Xiaomi Mobile",
+            "Hangzhou Ezviz Software",
         ] {
             assert_eq!(v(&format!("dev-1 · {maker}")).as_deref(), Some(maker));
         }
@@ -3463,14 +3492,22 @@ mod visits {
             ("X2 - 24", Some("X2"), true),
             ("X2 – 24", Some("X2"), true),
             ("port 1 - 24", None, false),
+            ("1 - 24", None, false),
+            ("Gi1/0/1 - 24", None, false),
+            ("LAN 1 - 24 wired", None, false),
+            ("VLAN 10 - 20", None, false),
         ] {
             let r = read_edge(&serde_json::json!({ "label": label }), false);
             assert_eq!(r.port.as_deref(), port, "{label}");
-            assert_eq!(
-                r.notes.contains(&"Its own port: Port 24".to_string()),
-                own,
-                "{label}"
-            );
+            let own_port: Vec<&String> = r
+                .notes
+                .iter()
+                .filter(|n| n.starts_with("Its own port"))
+                .collect();
+            match own {
+                true => assert_eq!(own_port, ["Its own port: Port 24"], "{label}"),
+                false => assert!(own_port.is_empty(), "{label}: {own_port:?}"),
+            }
         }
     }
 }

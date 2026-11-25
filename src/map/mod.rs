@@ -1485,7 +1485,7 @@ pub(super) fn written_maker(field: &str) -> bool {
             || (k.split(' ').next() == Some(first.as_str())
                 && !matches!(first.as_str(), "western" | "hon" | "the"))
     });
-    known || WRITTEN_AS.contains(&first.as_str()) || mac::maker_word(&first)
+    known || WRITTEN_AS.contains(&first.as_str()) || mac::maker_word(field)
 }
 
 /// A desk-phone maker's name, and whether it also makes gear.
