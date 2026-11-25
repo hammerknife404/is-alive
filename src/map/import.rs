@@ -1069,6 +1069,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let look_alike = Input {
             sweep: vec![host([10, 0, 0, 2], Some([2, 0, 0, 0, 0, 9]))],
@@ -1105,6 +1106,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         let laptop = [2, 0, 0, 0, 0, 0x99];
         let sweep = vec![
@@ -1198,6 +1200,7 @@ mod tests {
                     also: vec![],
                     web: None,
                     multicast: None,
+                    dnssd: None,
                 }],
                 clients: Clients::All,
                 ..Default::default()
@@ -1273,6 +1276,7 @@ mod tests {
             also: vec![],
             web: None,
             multicast: None,
+            dnssd: None,
         };
         // Swept at the branch: its firewall answers by MAC.
         let input = Input {
@@ -1686,6 +1690,7 @@ mod examples {
                 also: vec![],
                 web: None,
                 multicast: None,
+                dnssd: None,
             })
             .collect();
         let open: HashMap<String, usize> = [("gateway".to_string(), usize::MAX)].into();

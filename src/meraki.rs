@@ -70,7 +70,8 @@ impl Report {
                 },
                 crate::net::mac::fmt,
             );
-            let client = crate::map::looks_like_client(mac.as_ref(), &[], None);
+            let client =
+                crate::map::looks_like_client(mac.as_ref(), &[], crate::map::Said::default());
             let name = a
                 .get("name")
                 .and_then(Value::as_str)

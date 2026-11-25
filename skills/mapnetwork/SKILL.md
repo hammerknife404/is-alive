@@ -235,7 +235,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   routed network can never produce one. (Inventories from before 0.33.0 have
   `found_by` as a single string, `"ping"` or `"arp"`: read it as a one-item
   list.) `open_ports` is role evidence for the
-  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera). It is
+  infra test (22/443/8443 on a vendor's gear, 9100 printer, 554 camera;
+  telnet 23 alone is not gear when the maker, `web_title` or `dnssd` says
+  printer, since many copiers leave it open). It is
   `null` where that host wasn't checked (the default Smart check skips phones
   and laptops: a private MAC, or a laptop or phone network card's maker) and
   `[]` where it was and nothing answered: null is no evidence either way.
@@ -243,7 +245,9 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   finished: hosts it hadn't reached are missing and some ports weren't
   checked, so don't read a missing host as gone since the last visit.
   `web_title` is what the host's own web page calls itself (its `<title>`,
-  else its `Server` header), read where a management web port answered: a
+  else its `Server` header; a placeholder title such as "Loading...",
+  "Login" or "Redirecting" counts as none, so the `Server` header shows
+  instead), read where a management web port answered: a
   strong role and model hint ("UniFi OS", "SonicWall - Authentication", an
   HP printer's page), the device's own claim rather than proof.
   `dnssd` is what the host said over DNS-SD (Bonjour), `null` if it said
@@ -296,7 +300,28 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   findings when it reopens the map, client lines of a "+N more" card
   included. `open_ports` includes 21 (`ftp`) when checked: printers and NAS
   often leave FTP on, clear text, worth a low item.
-  `private_mac: true` is a phone, laptop or VM, never infrastructure.
+  `vendor` is the registered owner of the MAC prefix. A locally
+  administered MAC (the `0x02` bit of the first octet set) is one of two
+  things. `private_mac: true` is a phone, laptop or VM's private address
+  with nothing to say infrastructure: `vendor` null, not infrastructure.
+  `virtual_mac: true` is infrastructure's own virtual address: the
+  gateway's (never private, whatever its MAC), or a network-gear maker's
+  prefix with that bit set on a host showing gear of its own (telnet,
+  541, 4433 or 8291 open, or a web page that names gear; a laptop's 445
+  or 3389 doesn't count), such as a SonicWall LAN interface answering on `2e:b8:ed:…` for
+  SonicWall's `2c:b8:ed:…`. `vendor` then names that maker (null on a
+  gateway whose maker isn't known). Match it to a firewall export's or
+  UniFi's interface MAC with that bit cleared. Both are `false` for a
+  registered MAC and `null` when `mac` is. (Inventories from before 0.35.0
+  have no `virtual_mac` and called every locally administered MAC private,
+  the gateway's included: trust `is_gateway` over `private_mac` there.)
+  `vendor: "HP"` covers HP printers, HP PCs and, since HP bought Poly, Poly
+  desk phones on HP's newer prefixes: decide by `web_title` (a Poly or VVX
+  page is a phone, a LaserJet page a printer), `dnssd` and `open_ports`,
+  and call it an HP device only when nothing else says. Carrier and voice
+  edge boxes (Adtran, EdgeMarc, AudioCodes, Ribbon/Sonus, Patton) are
+  network gear, often answering only ARP: the provider's demarc, not a
+  client.
   `is_this_machine` is the scanner itself: leave it off the map. `is_gateway`
   is the default gateway. `ranges` lists every network swept;
   `on_scanner_lan: false` marks a host on a routed network, where a MAC comes
@@ -320,7 +345,7 @@ the is-alive app, made on the technician's machine. Read `manifest.json` first:
   `name_from` still says where the real name came from. A token is not a
   name: label the node by role and vendor instead, never invent a person.
 - **Every `inventory.json` host field:** `ip`, `mac`, `mac_from`, `vendor`,
-  `private_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
+  `private_mac`, `virtual_mac`, `name`, `name_from`, `found_by`, `rtt_ms`, `ttl`,
   `open_ports`, `other_macs`, `web_title`, `dnssd`, `ssdp`, `is_gateway`,
   `is_this_machine`, `on_scanner_lan`.
 - **`card-notes.json`**: each note names its card by `name`, `ip` and `mac`;
