@@ -24,6 +24,7 @@ mod markdown_out;
 mod meraki;
 mod nav;
 mod net;
+mod perf;
 mod photos;
 mod power;
 mod redact;
@@ -210,6 +211,8 @@ struct App {
     /// The user manual, built in: Help and F1 open it.
     manual: manual::Manual,
     shots: Option<shots::Shots>,
+    /// The performance probe (IS_ALIVE_PERF).
+    perf: Option<perf::Perf>,
     /// The screenshot tour's last steps: Settings open, then Help.
     shots_settings: bool,
     shots_help: bool,
@@ -253,7 +256,7 @@ fn close_question(notes: bool, maps: &[String]) -> &'static str {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         startup::running(ui.ctx(), &mut self.look);
         theme::set_moves(ui.ctx(), self.look.moves());
         // Notes with autosave off, or a saved map, with changes not saved:
@@ -268,6 +271,7 @@ impl eframe::App for App {
         }
         self.tab_keys(ui);
         self.shots_step(ui.ctx());
+        self.perf_step(ui.ctx(), frame);
         let now = ui.input(|i| i.time);
         self.group_last[nav::group_of(self.tab)] = self.tab;
         if self.tab != self.shown_tab {
@@ -319,6 +323,10 @@ impl eframe::App for App {
         self.notes.set_elsewhere(self.map.note_texts());
         self.notes.flush();
         widgets::clear_own_clipboard();
+        // The probe sized the window for its run; the user's size stays.
+        if self.perf.is_some() {
+            return;
+        }
         let size = self
             .size
             .map(|s| (s.x.round() as u32, s.y.round() as u32))
@@ -330,6 +338,12 @@ impl eframe::App for App {
             theme::save(&self.look);
         }
     }
+}
+
+/// A screenshot tour (IS_ALIVE_SHOTS) or the performance probe
+/// (IS_ALIVE_PERF) will drive the app: it opens as a new user sees it.
+fn automated_env() -> bool {
+    std::env::var_os("IS_ALIVE_SHOTS").is_some() || std::env::var_os("IS_ALIVE_PERF").is_some()
 }
 
 /// A screen the first window (1120 × 720 points and a title bar) doesn't
@@ -403,6 +417,7 @@ impl App {
             reloading: false,
             manual: manual::Manual::new(manual_window),
             shots: shots::Shots::from_env(),
+            perf: perf::Perf::from_env(),
             shots_settings: false,
             shots_help: false,
             close_asked: false,
@@ -417,6 +432,12 @@ impl App {
             site_missing: Vec::new(),
             scratch_carried: None,
         }
+    }
+
+    /// A screenshot tour or the performance probe is driving the app: the
+    /// user's site, results and window aren't touched.
+    fn automated(&self) -> bool {
+        self.shots.is_some() || self.perf.is_some()
     }
 
     /// Note the window's size (as a normal window) and whether it's
@@ -435,7 +456,7 @@ impl App {
         if maximized == Some(false) {
             self.size = inner;
         }
-        if self.fitted || self.shots.is_some() {
+        if self.fitted || self.automated() {
             return;
         }
         // Maximised last time: asked again on the first frame, since some
@@ -1315,7 +1336,7 @@ impl App {
     /// site off.
     pub(crate) fn keep_results(&mut self) {
         let stamp = self.log.stamp();
-        if stamp == self.log_saved || !self.look.results_keep || self.shots.is_some() {
+        if stamp == self.log_saved || !self.look.results_keep || self.automated() {
             return;
         }
         let Some(path) = log::site_file() else { return };
@@ -1551,11 +1572,7 @@ fn main() {
     let look = theme::load();
     // The site open last time (none for the screenshot tours, which show
     // the app as a new user sees it).
-    site::set_current(
-        look.site
-            .clone()
-            .filter(|_| std::env::var_os("IS_ALIVE_SHOTS").is_none()),
-    );
+    site::set_current(look.site.clone().filter(|_| !automated_env()));
     let plan = match startup::plan(look.renderer) {
         Ok(p) => p,
         Err(e) => startup::bad_arguments(&e),
@@ -1593,8 +1610,7 @@ fn main() {
             net::clock::warm();
             // The screenshot tour only sees the app's window: the manual
             // stays over it there.
-            let look_manual_window =
-                look.manual_window && std::env::var_os("IS_ALIVE_SHOTS").is_none();
+            let look_manual_window = look.manual_window && !automated_env();
             let mut app = App::fresh(look, cc.gl.as_ref(), look_manual_window);
             app.notes.set_autosave(app.look.notes_autosave);
             app.export.set_clients(app.look.unifi_clients);
@@ -1603,7 +1619,7 @@ fn main() {
             app.load_results();
             // The site opens as it was left: its configs read again (and
             // then any files it was opened with, below, which join them).
-            if app.shots.is_none() {
+            if !app.automated() {
                 app.reopen_site_configs(&cc.egui_ctx);
                 site::touch();
             }
@@ -1616,10 +1632,10 @@ fn main() {
             if app.look.wan_on_start || app.look.updates_on_start {
                 app.join.check(&cc.egui_ctx, false);
             }
-            if app.look.wan_on_start && app.shots.is_none() {
+            if app.look.wan_on_start && !app.automated() {
                 app.refresh_info(&cc.egui_ctx);
             }
-            if app.look.updates_on_start && app.shots.is_none() {
+            if app.look.updates_on_start && !app.automated() {
                 app.check_updates(&cc.egui_ctx, false);
             }
             // Files named on the command line ("Open with") go to Config

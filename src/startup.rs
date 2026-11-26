@@ -343,6 +343,16 @@ pub fn created(cc: &eframe::CreationContext<'_>) {
     }
 }
 
+/// The renderer drawing and what it draws on, as startup.log names them.
+pub fn renderer_line() -> Option<String> {
+    let s = STATE.lock().ok()?;
+    let s = s.as_ref()?;
+    Some(match &s.device {
+        Some(d) => format!("{}: {d}", name(s.renderer)),
+        None => name(s.renderer).to_string(),
+    })
+}
+
 /// Call every frame: once the first frame is on screen, note that it
 /// worked and remember which renderer did it.
 pub fn running(ctx: &eframe::egui::Context, look: &mut theme::Settings) {
@@ -361,7 +371,7 @@ pub fn running(ctx: &eframe::egui::Context, look: &mut theme::Settings) {
     let Some((renderer, device)) = STATE.lock().ok().and_then(|mut s| {
         let s = s.as_mut()?;
         s.open = true;
-        Some((s.renderer, s.device.take()))
+        Some((s.renderer, s.device.clone()))
     }) else {
         return;
     };

@@ -9,7 +9,7 @@
 //! gzip readers here tolerate trailing bytes. Format is sniffed from content,
 //! not the extension, so a `.zip` wrapping a `.unf` or a bare `db.gz` work too.
 
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::NoPadding};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::NoPadding};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use std::io::{self, Read};
 
@@ -92,7 +92,7 @@ fn peel(data: Vec<u8>, d: &mut Dump, depth: u8) -> Result<Vec<u8>, String> {
 /// first block is decrypted, so a wrong guess costs nothing.
 fn starts_with_after<C>(key: &[u8], iv: &[u8], data: &[u8], magic: &[u8]) -> bool
 where
-    C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
+    C: aes::cipher::BlockCipherDecrypt + aes::cipher::KeyInit,
     cbc::Decryptor<C>: KeyIvInit,
 {
     if data.len() < 16 || !data.len().is_multiple_of(16) {
@@ -105,7 +105,7 @@ where
 /// AES-CBC, no padding, in place: a large backup isn't held twice.
 fn decrypt<C>(key: &[u8], iv: &[u8], mut data: Vec<u8>) -> Result<Vec<u8>, String>
 where
-    C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
+    C: aes::cipher::BlockCipherDecrypt + aes::cipher::KeyInit,
     cbc::Decryptor<C>: KeyIvInit,
 {
     decrypt_in_place::<C>(key, iv, &mut data)?;
@@ -114,12 +114,12 @@ where
 
 fn decrypt_in_place<C>(key: &[u8], iv: &[u8], buf: &mut [u8]) -> Result<(), String>
 where
-    C: aes::cipher::BlockDecrypt + aes::cipher::KeyInit + aes::cipher::BlockCipher,
+    C: aes::cipher::BlockCipherDecrypt + aes::cipher::KeyInit,
     cbc::Decryptor<C>: KeyIvInit,
 {
     cbc::Decryptor::<C>::new_from_slices(key, iv)
         .map_err(|_| "bad key length")?
-        .decrypt_padded_mut::<NoPadding>(buf)
+        .decrypt_padded::<NoPadding>(buf)
         .map(|_| ())
         .map_err(|_| "decryption failed".to_string())
 }
@@ -498,7 +498,7 @@ pub mod tests {
             t.elapsed()
         );
     }
-    use aes::cipher::BlockEncryptMut;
+    use aes::cipher::BlockModeEncrypt;
     use flate2::{Compression, write::GzEncoder};
     use std::io::Write;
 
@@ -574,7 +574,7 @@ pub mod tests {
         let mut b = pad(plain);
         let n = b.len();
         cbc::Encryptor::<aes::Aes128>::new(UNF_KEY.into(), UNF_IV.into())
-            .encrypt_padded_mut::<NoPadding>(&mut b, n)
+            .encrypt_padded::<NoPadding>(&mut b, n)
             .unwrap();
         b
     }
@@ -584,9 +584,55 @@ pub mod tests {
         let mut b = pad(plain);
         let n = b.len();
         cbc::Encryptor::<aes::Aes256>::new(&UNIFI_KEY.into(), &iv.into())
-            .encrypt_padded_mut::<NoPadding>(&mut b, n)
+            .encrypt_padded::<NoPadding>(&mut b, n)
             .unwrap();
         [&iv[..], &b].concat()
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Ciphertext from OpenSSL, not from the crates under test, so a
+    /// cipher upgrade that breaks both directions the same way still fails
+    /// here. The round-trip tests below can't catch that.
+    ///   printf 'PK\x03\x04is-alive known answer, 2 blk' |
+    ///     openssl enc -aes-128-cbc -nopad -K <UNF_KEY hex> -iv <UNF_IV hex>
+    ///   printf '\x1f\x8b\x08\x00is-alive known answer, 2 blk' |
+    ///     openssl enc -aes-256-cbc -nopad -K <UNIFI_KEY hex> -iv 0707…07
+    /// (the IV `unifi` below writes at the head of its test files).
+    #[test]
+    fn aes_cbc_matches_openssl() {
+        let tail = b"is-alive known answer, 2 blk";
+        let unf_plain = [ZIP_LOCAL, tail].concat();
+        let unf_ct = unhex("e39f29748a2d96b326fa66d385a0c42d2c1a1d0f5a0f53849b70a20b71fddc52");
+        assert_eq!(unf(unf_plain.clone()), unf_ct);
+        assert_eq!(
+            decrypt::<aes::Aes128>(UNF_KEY, UNF_IV, unf_ct.clone()).unwrap(),
+            unf_plain
+        );
+        assert!(starts_with_after::<aes::Aes128>(
+            UNF_KEY, UNF_IV, &unf_ct, ZIP_LOCAL
+        ));
+
+        // A whole .unifi file as the console writes it: its IV, then the
+        // ciphertext. Split where `peel` splits it, so the layout is checked
+        // as well as the cipher.
+        let unifi_plain = [&[0x1f, 0x8b, 0x08, 0x00][..], tail].concat();
+        let file = unhex(concat!(
+            "07070707070707070707070707070707",
+            "be34318870a6ebe749545f743b0d72327e1ffd2edf95a1ac64c198f34f48de17",
+        ));
+        assert_eq!(unifi(unifi_plain.clone()), file);
+        let (iv, body) = file.split_at(16);
+        assert!(starts_with_after::<aes::Aes256>(&UNIFI_KEY, iv, body, GZIP));
+        assert_eq!(
+            decrypt::<aes::Aes256>(&UNIFI_KEY, iv, body.to_vec()).unwrap(),
+            unifi_plain
+        );
     }
 
     const BSON: &[u8] = b"\x05\0\0\0\0";

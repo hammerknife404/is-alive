@@ -944,6 +944,15 @@ impl MapView {
     }
 
     /// For the screenshot tour: the map's own layout again, nothing selected.
+    pub fn flow_for_perf(&mut self, flowing: bool, spin: bool, now: f64) {
+        self.input_at = if flowing { now } else { f64::NEG_INFINITY };
+        self.ex_spin = spin;
+    }
+
+    pub fn cards(&self) -> usize {
+        self.map.nodes.len()
+    }
+
     pub fn default_layout_for_shots(&mut self) {
         self.mode = None;
         self.select(None);
